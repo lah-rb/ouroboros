@@ -1613,6 +1613,14 @@ async def action_gate_author_test(step_input: StepInput) -> StepOutput:
         return _skip("no goal (warning-channel diagnosis)")
     if getattr(goal, "type", "") != "functional":
         return _skip(f"goal type {getattr(goal, 'type', '?')!r} — not functional")
+    # A goal whose SUBJECT is a test file is never a behaviour worth pinning
+    # with another test. Without this the arm writes tests about tests: on
+    # gpt-oss-medium the chain reached
+    # test_save_command_… → test_fix_failing_test__… → …_regression.py
+    # before the test_gate guard cut the generator. Belt to that brace —
+    # either alone stops the recursion, and both are one comparison.
+    if str(getattr(goal, "origin", "") or "") == "test_gate":
+        return _skip("test_gate goal — its subject is a test, not a behaviour")
     if getattr(goal, "authored_test", None):
         return _skip("goal already has an authored test")
     attempts = int(getattr(goal, "authored_test_attempts", 0) or 0)

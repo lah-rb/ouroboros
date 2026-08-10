@@ -4689,6 +4689,37 @@ async def action_run_test_suite_gate(step_input: StepInput) -> StepOutput:
     if rc == 0 and not failing_nodes:
         return _pass(f"suite passed ({len(test_files)} file(s))")
 
+    # AUTHORED TESTS ARE NOT HARVESTABLE FAILURES. A quarantined authored
+    # test is red ON PURPOSE — it is evidence awaiting a human's judgement
+    # (the code is wrong, or the test is), retained rather than deleted so it
+    # stays readable. Harvesting it as "Fix failing test: <path>" creates a
+    # goal whose subject is a test file, which the author arm then writes
+    # ANOTHER test for — and that test is red too, so the next gate pass
+    # harvests IT.
+    #
+    # Live on gpt-oss-medium (2026-08-09), reached depth 3 before this guard:
+    #   test_save_command_… (quarantined)
+    #     → test_fix_failing_test__tests_test_save_command_create.py
+    #       → …_create_regression.py
+    # Each level terminates individually via the quarantine; the GENERATOR
+    # does not, so goals and test files grow without bound.
+    authored_paths = {
+        str((getattr(g, "authored_test", None) or {}).get("path") or "")
+        for g in mission.goals
+    }
+    authored_paths.discard("")
+    if authored_paths:
+        kept = [n for n in failing_nodes if n.split("::")[0] not in authored_paths]
+        if len(kept) != len(failing_nodes):
+            logger.info(
+                "Test gate: ignoring %d authored test(s) — red by design, not a "
+                "failure to harvest",
+                len(failing_nodes) - len(kept),
+            )
+        failing_nodes = kept
+    if not failing_nodes:
+        return _pass("only authored tests failing — red by design, standing down")
+
     # Harvest fix goals from failing nodes, idempotent by signature.
     by_sig = {
         getattr(g, "finding_signature", ""): g

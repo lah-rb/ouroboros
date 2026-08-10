@@ -1149,3 +1149,43 @@ async def test_the_ceiling_does_not_fire_twice():
 
     warn = [w for w in m.pending_warnings if w.kind == "authored_test_unsatisfied"]
     assert len(warn) == 1, "a demoted check must not re-raise on every pass"
+
+
+# ══════════════════════════════════════════════════════════════════════
+# The recursion guard — tests about tests
+# ══════════════════════════════════════════════════════════════════════
+#
+# LIVE ON gpt-oss-medium (2026-08-09), depth 3 before it was cut:
+#   test_save_command_… (quarantined, red BY DESIGN)
+#     → test_gate harvests "Fix failing test: <path>"
+#       → the author arm arms a test for THAT goal
+#         → that test is red too → the next gate pass harvests it → …
+# Each level terminates individually via the quarantine. The GENERATOR did
+# not, so goals and test files grew without bound. Two guards, either of
+# which alone stops it.
+
+
+@pytest.mark.asyncio
+async def test_the_author_gate_refuses_a_goal_whose_subject_is_a_test():
+    m = _mission(_goal(origin="test_gate"))
+    fx = _gate_effects(m)
+    out = await action_gate_author_test(
+        _si(fx, {"recommended_flow": "file_ops", "target_file": "game.py"})
+    )
+    assert out.result["should_author"] is False
+    assert "test_gate" in out.observations
+
+
+def test_the_test_gate_ignores_authored_tests_when_harvesting():
+    """A quarantined authored test is evidence awaiting judgement, not a
+    failure to chase."""
+    import inspect
+
+    from agent.actions import mission_actions
+
+    src = inspect.getsource(mission_actions.action_run_test_suite_gate)
+    assert "authored_paths" in src, (
+        "the harvester must filter authored test paths, or the recursion "
+        "restarts on the next run that quarantines a test"
+    )
+    assert "red by design" in src
