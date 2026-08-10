@@ -1542,6 +1542,29 @@ async def action_goal_search_gate(step_input: StepInput) -> StepOutput:
 
 _AUTHORED_TEST_MAX_ATTEMPTS = 2
 
+# Packaging and tooling manifests. They are data files by extension and the
+# program does not read ANY of them while running, so naming them as its input
+# actively misleads the test author.
+_NOT_RUNTIME_DATA = frozenset(
+    {
+        "pyproject.toml",
+        "uv.lock",
+        "poetry.lock",
+        "setup.cfg",
+        "tox.ini",
+        "ruff.toml",
+        "mypy.ini",
+        "pytest.ini",
+        "package.json",
+        "package-lock.json",
+        "tsconfig.json",
+        "compiled.json",
+    }
+)
+_SKIP_DIRS = frozenset(
+    {"node_modules", "__pycache__", "site-packages", "dist", "build"}
+)
+
 
 async def _input_data_files(effects, transients: list[str]) -> list[str]:
     """Data files the program READS, as opposed to the ones it writes.
@@ -1554,14 +1577,21 @@ async def _input_data_files(effects, transients: list[str]) -> list[str]:
     ran; the quarantine then read the red as "the test is wrong" and disarmed
     all three.
 
-    Data extension, at the workspace root, minus anything already known to be a
-    runtime output. Best-effort — an empty list degrades the rule to its generic
-    form rather than failing the gate.
+    RECURSIVE, and the path is kept. The first version scanned the root only
+    and returned ``['pyproject.toml']`` for a project whose world file sat in
+    ``data/world.yaml`` — naming the packaging manifest as the program's
+    runtime input, which is worse than saying nothing, and missing the one file
+    the rule exists to name. Caught before it reached a model.
+
+    Excluded: the packaging/tooling manifests (nothing reads those at run time),
+    anything already known to be a runtime OUTPUT, and the usual non-source
+    trees. Best-effort — an empty list degrades the rule to its generic wording
+    rather than failing the gate.
     """
     if effects is None:
         return []
     try:
-        listing = await effects.list_directory(".", recursive=False)
+        listing = await effects.list_directory(".", recursive=True)
     except Exception:  # noqa: BLE001 — brief detail is best-effort
         return []
     out: list[str] = []
@@ -1569,10 +1599,15 @@ async def _input_data_files(effects, transients: list[str]) -> list[str]:
     for e in getattr(listing, "entries", None) or []:
         if not getattr(e, "is_file", False):
             continue
-        name = str(getattr(e, "name", "") or "")
+        path = str(getattr(e, "path", "") or getattr(e, "name", "") or "").lstrip("./")
+        name = path.rsplit("/", 1)[-1]
+        if not path or name.lower() in _NOT_RUNTIME_DATA:
+            continue
+        if any(part in _SKIP_DIRS or part.startswith(".") for part in path.split("/")):
+            continue
         ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
-        if languages.is_data(ext) and name not in transient_set:
-            out.append(name)
+        if languages.is_data(ext) and path not in transient_set:
+            out.append(path)
     return sorted(out)[:12]
 
 

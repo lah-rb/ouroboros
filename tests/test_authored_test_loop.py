@@ -1396,3 +1396,63 @@ def test_the_brief_degrades_without_a_data_file_list():
     text = _render_prompt({"goal_description": "g", "target_file": "game.py"})
     assert "{data_files}" not in text
     assert "its data files" in text
+
+
+# ── rule 8 needs the RIGHT data files ─────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_input_data_files_finds_nested_data_and_skips_manifests(tmp_path):
+    """First version scanned the root only and returned ['pyproject.toml'] for
+    a project whose world file was at data/world.yaml — it named the packaging
+    manifest as the program's runtime input and missed the one file the rule
+    exists to name."""
+    from agent.actions.diagnosis_session_actions import _input_data_files
+    from agent.effects.local import LocalEffects
+
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "world.yaml").write_text("rooms: []\n")
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n")
+    (tmp_path / "uv.lock").write_text("")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "game.py").write_text("x = 1\n")
+
+    found = await _input_data_files(LocalEffects(working_directory=str(tmp_path)), [])
+    assert found == ["data/world.yaml"]
+
+
+@pytest.mark.asyncio
+async def test_input_data_files_excludes_known_runtime_outputs(tmp_path):
+    """A savegame is something the program WRITES. Naming it as input invites
+    exactly the assert-on-a-runtime-file mistake rule 1 exists to stop."""
+    from agent.actions.diagnosis_session_actions import _input_data_files
+    from agent.effects.local import LocalEffects
+
+    (tmp_path / "world.yaml").write_text("rooms: []\n")
+    (tmp_path / "savegame.json").write_text("{}")
+
+    fx = LocalEffects(working_directory=str(tmp_path))
+    assert await _input_data_files(fx, ["savegame.json"]) == ["world.yaml"]
+
+
+@pytest.mark.asyncio
+async def test_input_data_files_degrades_quietly(tmp_path):
+    from agent.actions.diagnosis_session_actions import _input_data_files
+
+    assert await _input_data_files(None, []) == []
+
+
+def test_the_env_brief_does_not_contradict_itself_on_install_style():
+    """LIVE 2026-08-10: install_command forbids editable installs and bare
+    `pip`; test_install_command demonstrated `pip install -e '.[test]'`, doing
+    both. The model resolved the conflict by omitting the field, so a project
+    that HAD correctly declared pytest in a dev extra shipped without it
+    installed and the authored-test arm stayed off for the whole run."""
+    from agent.loader import load_prompt_text
+
+    brief = " ".join(load_prompt_text("set_env/detect_tooling_rules").split())
+    head, _, tail = brief.partition("`test_install_command`")
+    assert tail, "the test-install field vanished from the brief"
+    assert "do NOT use bare `pip`" in head, "the install_command rule moved"
+    assert "pip install -e" not in tail, "the contradicting example is back"
+    assert "uv pip install -r pyproject.toml --extra" in tail

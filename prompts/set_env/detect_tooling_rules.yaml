@@ -15,14 +15,25 @@ content: |
     makes the project's own test suite runnable — missing test plugins are a
     classic silent killer (a pytest run that ERRORS on a missing `mocker`
     fixture because pytest-mock was never installed). Read the project
-    config for where test deps are declared and emit the matching command:
-    a `[test]`/`[dev]` extra (`pip install -e '.[test]'`), a dev
-    requirements file (`pip install -r requirements-dev.txt`), a Poetry/uv
-    dev group (`poetry install --with dev`), Node dev deps
-    (`npm install --include=dev`), etc. Also scan the tests' conftest/
-    imports for pytest plugins the config forgot (`pytest-mock`,
-    `pytest-asyncio`, …) and append them. Omit only when the project
-    declares no test dependencies anywhere.
+    config for where test deps are declared and emit the matching command.
+    **Use the SAME tool and style as `install_command` above** — the two
+    examples used to contradict each other (that one forbids editable
+    installs and bare `pip`, this one demonstrated both), and a model
+    resolving the conflict safely omitted the field, so a project that had
+    correctly declared `pytest` in a `dev` extra shipped without it
+    installed and its whole test suite was unrunnable.
+      * Python + pyproject extras — `uv pip install -r pyproject.toml --extra dev`
+        (repeat `--extra` per group; the group name is whatever the file
+        actually uses — `dev`, `test`, `tests`)
+      * a dev requirements file — `uv pip install -r requirements-dev.txt`
+      * a Poetry/uv dev GROUP rather than an extra — `uv pip install
+        --group dev -r pyproject.toml`
+      * Node dev deps — `npm install --include=dev`
+    Also scan the tests' conftest/imports for pytest plugins the config
+    forgot (`pytest-mock`, `pytest-asyncio`, …) and append them. Omit ONLY
+    when the project declares no test dependencies anywhere — if
+    `[project.optional-dependencies]` names pytest in any group, this field
+    is required.
   - `formatter` — auto-format the file (optional but strongly recommended).
     Python: `black` or `ruff format`.
   - `syntax` — does the file parse/compile? **Required for every extension.**
