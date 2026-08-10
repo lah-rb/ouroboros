@@ -221,14 +221,41 @@ _ENVIRONMENT_ERRORS = frozenset(
 )
 
 
+# Message fragments that mean "the test could not reach the behaviour", for
+# harness failures whose EXCEPTION TYPE is too broad to blanket-list. Matching
+# the message keeps the judgement precise: a bare `OSError` in the set would
+# swallow real product defects, while this exact sentence is emitted by pytest
+# itself and never by a program under test.
+#
+# Earned 2026-08-10, minutes after the type-based set shipped: an authored test
+# stepped the game one room north to reach the item it wanted to examine, that
+# room started combat, and combat blocks on input(). The test was WELL SHAPED —
+# real dispatch, captured output, an invariant assertion — and it never reached
+# any of it. The model's own comment on the offending line read
+# "(combat handled internally)".
+_HARNESS_SIGNATURES = (
+    "reading from stdin while output is captured",
+    "OSError: pytest: reading from stdin",
+)
+
+
 def _environment_red(output: str) -> str:
-    """Name the environment error a red was actually caused by, if any."""
-    for _path, exc in _FAIL_LOCATION_RE.findall(output or ""):
+    """Name the harness failure a red was actually caused by, if any.
+
+    Two detectors, because the failures have two shapes: an exception TYPE that
+    is unambiguous on its own (FileNotFoundError), and a MESSAGE that is
+    unambiguous while its type is not (pytest's stdin capture, an OSError).
+    """
+    text = output or ""
+    for _path, exc in _FAIL_LOCATION_RE.findall(text):
         if exc in _ENVIRONMENT_ERRORS:
             return exc
     for exc in _ENVIRONMENT_ERRORS:
-        if f"E       {exc}:" in (output or ""):
+        if f"E       {exc}:" in text:
             return exc
+    for sig in _HARNESS_SIGNATURES:
+        if sig in text:
+            return "blocked reading stdin"
     return ""
 
 

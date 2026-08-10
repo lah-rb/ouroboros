@@ -1456,3 +1456,82 @@ def test_the_env_brief_does_not_contradict_itself_on_install_style():
     assert "do NOT use bare `pip`" in head, "the install_command rule moved"
     assert "pip install -e" not in tail, "the contradicting example is back"
     assert "uv pip install -r pyproject.toml --extra" in tail
+
+
+# ── a test blocked on stdin asserted nothing either ───────────────────
+#
+# LIVE 2026-08-10, minutes after the type-based environment set shipped. The
+# authored test was WELL SHAPED — real dispatch, captured output, an invariant
+# assertion. Its setup stepped one room north to reach the item under test,
+# that room started combat, and combat blocks on input(). Under pytest that is
+# an OSError, not a listed environment type, so it armed AND it was counted as
+# three behaviour contradictions and quarantined.
+
+_STDIN_OUTPUT = """\
+tests/test_examine.py:48: in test_examine_generic_item_name_shows_description
+    execute_command(game, "go north")
+.venv/lib/python3.12/site-packages/_pytest/capture.py:229: in read
+    raise OSError(
+E       OSError: pytest: reading from stdin while output is captured!  Consider using `-s`.
+=========================== short test summary info ============================
+FAILED tests/test_examine.py::test_examine_generic_item_name_shows_description
+"""
+
+
+def test_a_stdin_block_is_recognised_as_a_harness_failure():
+    from agent.actions.authored_test_actions import _environment_red
+
+    assert _environment_red(_STDIN_OUTPUT) == "blocked reading stdin"
+
+
+def test_arming_refuses_a_test_that_blocks_on_stdin():
+    from agent.actions.authored_test_actions import _classify
+
+    verdict, _nodes, detail = _classify(
+        1, _STDIN_OUTPUT, False, "tests/test_examine.py"
+    )
+    assert verdict == "broken" and "stdin" in detail
+
+
+@pytest.mark.asyncio
+async def test_a_stdin_block_never_counts_as_a_contradiction():
+    check = {
+        "command": TEST_CMD,
+        "name": "authored regression test",
+        "required": True,
+        "source": "authored",
+    }
+    goal = _goal(
+        acceptance_checks=[check],
+        authored_test={"path": TEST_PATH, "command": TEST_CMD},
+    )
+    m = _mission(goal)
+    fx = MockEffects(mission=m)
+    for _ in range(_AUTHORED_QUARANTINE_K + 1):
+        await action_reconcile_acceptance(
+            _reconcile_si_out(m, fx, TEST_CMD, _STDIN_OUTPUT)
+        )
+    assert goal.acceptance_conflicts.get(TEST_CMD, 0) == 0
+    assert goal.acceptance_checks[0]["required"] is True
+    assert "authored_test_harness_broken" in [w.kind for w in m.pending_warnings]
+
+
+def test_a_bare_oserror_from_product_code_still_arms():
+    """OSError is too broad to blanket-list — a program that legitimately
+    raises one is a real defect and must still be a usable negative control."""
+    from agent.actions.authored_test_actions import _classify
+
+    out = (
+        "src/save.py:12: in save\n    open(path)\n"
+        "E       OSError: [Errno 28] No space left on device\n"
+        "FAILED tests/test_x.py::test_x\n"
+    )
+    verdict, _n, _d = _classify(1, out, False, "tests/test_x.py")
+    assert verdict == "red"
+
+
+def test_the_brief_covers_the_stdin_trap():
+    from agent.actions.authored_test_actions import AUTHOR_PROMPT
+
+    assert "IF THE PROGRAM READS STDIN" in AUTHOR_PROMPT
+    assert "monkeypatch.setattr" in AUTHOR_PROMPT
