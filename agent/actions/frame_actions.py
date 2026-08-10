@@ -187,6 +187,26 @@ def _ctx(step_input, key, default=""):
     return step_input.params.get(key) or step_input.context.get(key) or default
 
 
+# Declarative config formats: data, not code. A "module-level line" is
+# meaningless in all of them. Shell/Dockerfile are deliberately ABSENT —
+# a shebang, `source`, or `set -e` IS a frame line there, which is exactly
+# what the module-fix path was extended to handle.
+_DECLARATIVE_CONFIG_SUFFIXES = (
+    ".toml",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".ini",
+    ".cfg",
+    ".lock",
+    ".md",
+)
+
+
+def _is_declarative_config(path: str) -> bool:
+    return str(path or "").lower().endswith(_DECLARATIVE_CONFIG_SUFFIXES)
+
+
 def _not_module_fix(observation: str) -> StepOutput:
     return StepOutput(
         result={"is_module_fix": False},
@@ -227,6 +247,30 @@ async def action_check_module_fix(step_input: StepInput) -> StepOutput:
     target = _ctx(step_input, "target_file_path")
     file_content = _ctx(step_input, "file_content")
     stmt = _ctx(step_input, "module_statement").strip()
+
+    # THE FRAME EDITOR IS FOR CODE. A DECLARATIVE MANIFEST HAS NO FRAME.
+    # Its whole vocabulary is "add a module-level line", which in a config
+    # file means appending a bare top-level key — syntactically valid and
+    # semantically meaningless.
+    #
+    # Live twice, same shape, different files:
+    #   * 2026-08-03 — "ensure the environment provides python and ruff" was
+    #     reified as `assert shutil.which('python')` in parser.py.
+    #   * 2026-08-10 — a Poetry dependency became the literal line
+    #     `pytest = "^7.4"` appended AFTER [project.optional-dependencies] in
+    #     a PEP 621 pyproject.toml. It parses as TOML, so the scaffold floor
+    #     passed it, and it declares nothing. The correct manifest — clean
+    #     PEP 621 with pytest in `dependencies` — had been written by
+    #     project_ops and was never the thing that landed.
+    #
+    # Routing was taught to prefer project_ops for these (structural sweep
+    # 08-03, functional b75, quality 08-10), but routing is a preference and
+    # this is the floor: a config file never reaches the frame editor.
+    if _is_declarative_config(target):
+        return _not_module_fix(
+            f"module fix declined — {target} is a declarative config, not code; "
+            f"it has no module frame (route to project_ops)"
+        )
 
     # Diagnoses smuggle multi-part instructions into module_statement as
     # comment lines ("# Inside GameEngine.__init__: ..."). Comments parse
