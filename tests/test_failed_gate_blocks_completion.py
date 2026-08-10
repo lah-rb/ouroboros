@@ -145,3 +145,81 @@ class TestTheReasonSurvivesTheSubflowBoundary:
 
     def test_the_gate_returns_it(self):
         assert "gate_failure_reason" in self._compiled()["quality_gate"]["returns"]
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Fix in place, or stop reopening — the two ways out of a failed gate
+# ══════════════════════════════════════════════════════════════════════
+#
+# Operator, 2026-08-10: "there is no meaningful distinction between a
+# 'quality' goal and a functional goal. The standard is to take care of the
+# problem in place, or wholesale the finding to the functional phase."
+#
+# _fileops_dispatch_from_quality_diagnosis returned None for project_ops, so a
+# quality finding whose fix is NOT code (a manifest, tooling, the environment)
+# had nowhere to go. Invisible while a failed gate ended the mission; once the
+# failure persisted as a goal it became a spin:
+#   gate fails → files goal → diagnose says project_ops → dropped → gate fails…
+
+
+def test_a_project_ops_verdict_dispatches_in_place_instead_of_being_dropped():
+    from agent.actions.mission_actions import _fileops_dispatch_from_quality_diagnosis
+
+    cfg = _fileops_dispatch_from_quality_diagnosis(
+        {
+            "recommended_flow": "project_ops",
+            "summary": "pytest is imported by tests/ but absent from pyproject",
+            "target_file": "",
+        },
+        goal_id="g1",
+        goal_description="Quality gate failed: undeclared dependencies — pytest",
+    )
+    assert cfg is not None, "project_ops used to return None — the spin"
+    assert cfg["flow"] == "project_ops"
+    # No file target: project_ops owns the manifest, and a target only misleads
+    # the module-frame editor (the "assert shutil.which('python')" incident).
+    assert cfg["target_file_path"] == ""
+    assert "pytest" in cfg["flow_directive"]
+
+
+def test_a_code_verdict_still_dispatches_file_ops():
+    from agent.actions.mission_actions import _fileops_dispatch_from_quality_diagnosis
+
+    cfg = _fileops_dispatch_from_quality_diagnosis(
+        {"recommended_flow": "file_ops", "target_file": "game.py", "summary": "x"},
+        goal_id="g1",
+    )
+    assert cfg["flow"] == "file_ops"
+    assert cfg["target_file_path"] == "game.py"
+
+
+@pytest.mark.asyncio
+async def test_an_unfixable_finding_stops_reopening_and_raises_the_dispute():
+    """Even with project_ops wired, a finding nothing can dispatch must not
+    reopen forever. Past the ceiling the mission finishes and the finding
+    survives as a warning — the authored-test quarantine's contract."""
+    from agent.persistence.models import FailedAttempt
+
+    from agent.actions.mission_actions import _GATE_GOAL_REOPEN_CEILING
+
+    m = _mission()
+    ctx = {"mission": m, "gate_failure_reason": "something nothing can fix"}
+    await action_harvest_quality_findings(_si(ctx))
+    goal = m.goals[0]
+    goal.status = "complete"
+    goal.failed_attempts = [
+        FailedAttempt(
+            target_file="",
+            flow="diagnose_issue",
+            reason="no dispatchable fix",
+            diagnosis_summary="s",
+        )
+        for _ in range(_GATE_GOAL_REOPEN_CEILING)
+    ]
+
+    out = await action_harvest_quality_findings(_si(ctx))
+
+    assert out.result["done"] is True, "the mission must be allowed to finish"
+    assert goal.status == "complete", "it must not be reopened again"
+    warn = [w for w in m.pending_warnings if w.kind == "quality_gate_unfixable"]
+    assert warn, "the finding must survive as a warning, not vanish"

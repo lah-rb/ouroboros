@@ -4119,12 +4119,36 @@ def _diag_dispatch_from_quality_finding(
     }
 
 
+# How many fruitless rounds a gate-failure goal gets before the mission stops
+# reopening it and raises the dispute instead. A gate that keeps failing with
+# no dispatchable fix must not spin the mission forever — the finding is
+# preserved as a warning, which is the same contract the authored-test
+# quarantine uses.
+_GATE_GOAL_REOPEN_CEILING = 3
+
+
 def _fileops_dispatch_from_quality_diagnosis(
     report: Any, *, goal_id: str = "", goal_description: str = ""
 ) -> dict | None:
-    """Map a diagnose_issue report (dict OR DirectiveReport) to a file_ops
-    dispatch_config for a quality goal. None when diagnose produced no actionable
-    file target (junk token / no target / project_ops)."""
+    """Map a diagnose_issue report (dict OR DirectiveReport) to a dispatch_config
+    for a quality goal — file_ops for a code fix, project_ops for an
+    environment/manifest one. None only when there is nothing actionable.
+
+    PROJECT_OPS USED TO RETURN NONE HERE (fixed 2026-08-10, operator: "there
+    is no meaningful distinction between a 'quality' goal and a functional
+    goal — take care of the problem in place, or wholesale the finding to the
+    functional phase"). The structural sweep has honored project_ops since the
+    env.json title-match round and the functional sweep since b75; this path
+    alone could dispatch only file_ops, so a quality finding whose fix is NOT
+    code had nowhere to go: the sweep completed with nothing dispatched.
+
+    That was invisible while a failed gate simply ended the mission. Once a
+    gate failure became a persistent goal (2a042b8), it turned into a visible
+    spin — gate fails → files goal → diagnose says project_ops → dropped →
+    gate fails → … Live on gpt-oss-medium: an undeclared `pytest` (imported
+    by our OWN authored tests) is exactly this shape, since the fix edits
+    pyproject.toml, not code.
+    """
     recommended = (str(_rget(report, "recommended_flow", "")) or "file_ops").strip()
     target_file = str(_rget(report, "target_file", "") or "").strip()
     target_symbol = str(_rget(report, "target_symbol", "") or "").strip()
@@ -4132,7 +4156,28 @@ def _fileops_dispatch_from_quality_diagnosis(
         target_file = ""
     if target_symbol.lower() in _JUNK_TARGET_TOKENS:
         target_symbol = ""
-    if recommended == "project_ops" or not target_file:
+    summary_txt = str(_rget(report, "summary", "") or "") or "no details"
+    if recommended == "project_ops":
+        # Fix in place. No target_file: project_ops owns the manifest,
+        # tooling and environment, and a file target would only mislead the
+        # module-frame editor (the failure mode that reified "ensure the
+        # environment provides python" as an assert in parser.py).
+        return {
+            "goal_id": goal_id,
+            "goal_description": goal_description or "quality finding",
+            "goal_type": "quality",
+            "goal_files": [],
+            "flow": "project_ops",
+            "target_file_path": "",
+            "flow_directive": (
+                "Fix the environment/tooling/manifest issue behind this "
+                "quality finding — the diagnosis found no code defect.\n"
+                f"Finding: {(goal_description or '')[:200]}\n"
+                f"Diagnosis: {summary_txt[:500]}"
+            ),
+            "recent_reports": [],
+        }
+    if not target_file:
         return None
     summary = str(_rget(report, "summary", ""))
     return {
@@ -4224,6 +4269,48 @@ async def action_harvest_quality_findings(step_input: StepInput) -> StepOutput:
             None,
         )
         if existing is not None:
+            # REOPEN CEILING. A gate failure whose fix nothing can dispatch
+            # would otherwise reopen every round forever — the mission spins
+            # on the gate instead of completing OR progressing. Past the
+            # ceiling, leave it complete and raise the dispute instead: the
+            # finding is on the record and a reader decides, which is the
+            # same contract the authored-test quarantine uses.
+            spent = len(getattr(existing, "failed_attempts", None) or [])
+            if spent >= _GATE_GOAL_REOPEN_CEILING:
+                from agent.persistence.models import WarningRecord
+
+                mission.pending_warnings.append(
+                    WarningRecord(
+                        kind="quality_gate_unfixable",
+                        subject=reason[:120],
+                        evidence=(
+                            f"The quality gate has failed {spent + 1} times with "
+                            f"the same finding and no dispatchable fix: {reason}. "
+                            f"The mission is no longer reopening it."
+                        ),
+                        prescribed_fix=(
+                            "Resolve it by hand, or teach the sweep to dispatch "
+                            "this class of fix."
+                        ),
+                        source_flow="harvest_quality_findings",
+                    )
+                )
+                if effects:
+                    await effects.save_mission(mission)
+                logger.warning(
+                    "Quality harvest: gate finding unfixable after %d rounds — "
+                    "recorded as a warning, not reopened: %s",
+                    spent,
+                    reason[:120],
+                )
+                return StepOutput(
+                    result={"done": True},
+                    observations=(
+                        f"Quality gate finding unfixable after {spent} rounds — "
+                        f"raised as a warning: {reason[:140]}"
+                    ),
+                    context_updates={"mission": mission},
+                )
             reopened = existing.status == "complete"
             existing.status = "incomplete"
         else:
@@ -4960,7 +5047,23 @@ async def action_quality_sweep_next(step_input: StepInput) -> StepOutput:
             )
         # Diagnose found no actionable target. Best-effort complete to avoid a
         # within-sweep spin; the next gate run re-reports it and the harvester
-        # re-opens it for a fresh attempt (budget-bounded across rounds).
+        # re-opens it for a fresh attempt.
+        #
+        # RECORD THE EFFORT (2026-08-10). "Budget-bounded across rounds" was
+        # true only while a failed gate ended the mission. Now that a gate
+        # failure persists as a goal, an undispatchable finding would reopen
+        # forever — so each fruitless round is logged as a failed attempt,
+        # which is what the harvester's reopen ceiling counts.
+        from agent.persistence.models import FailedAttempt
+
+        goal.failed_attempts.append(
+            FailedAttempt(
+                target_file="",
+                flow="diagnose_issue",
+                reason="diagnosis produced no dispatchable fix",
+                diagnosis_summary=str(_rget(last, "summary", "") or "")[:300],
+            )
+        )
         goal.status = "complete"
         if effects:
             await effects.save_mission(mission)
