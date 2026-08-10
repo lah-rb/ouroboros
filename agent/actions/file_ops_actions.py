@@ -17,6 +17,7 @@ import logging
 import os
 import re
 import tomllib
+from typing import Any
 
 from agent.models import StepInput, StepOutput
 
@@ -58,17 +59,67 @@ def _parse_config(path: str, content: str) -> str | None:
         return f"{type(e).__name__}: {e}"
 
 
+# One prefix, applied once. Callers that want to name the file themselves must
+# not add their own — the gate did, and shipped "pyproject.toml: pyproject.toml
+# optional-dependencies…" to a model as its repair brief.
+_MANIFEST_DEFECT = "pyproject.toml "
+
+
+def _not_pep508(entries: Any) -> str | None:
+    """The first entry that is not a valid PEP 508 requirement, quoted; else None.
+
+    SHAPE IS NOT THE BAR EITHER. The check below used to stop at "each extras
+    group must be a LIST", and that sentence went to the model as its brief.
+    It complied exactly — `pytest = "^7.4"` became `pytest = ["^7.4"]` — which
+    is a list, passes the shape check, and still stops `uv` dead:
+
+        configuration error: `project.optional-dependencies.pytest[0]`
+        must be pep508.  GIVEN VALUE: "^7.4"
+
+    A necessary condition stated as if it were sufficient is an instruction to
+    do the minimum. Validate the CONTENTS, and say the whole rule in the
+    message, with an example that is itself a repair.
+    """
+    from packaging.requirements import InvalidRequirement, Requirement
+
+    if not isinstance(entries, list):
+        return None  # the shape checks own this case
+    for e in entries:
+        if not isinstance(e, str):
+            return repr(e)
+        try:
+            Requirement(e)
+        except InvalidRequirement:
+            return f'"{e}"'
+    return None
+
+
+def _suggest_req(name: str, version: Any) -> str:
+    """A copyable PEP 508 requirement for a mangled `name = "version"` pair.
+
+    Poetry's `^7.4` / `~=7.4` / bare `7.4` all mean "this version or near it",
+    and the caret's exact upper bound does not survive translation — so the
+    suggestion uses `>=`, which is what a PEP 621 manifest would have said
+    anyway. Falls back to the bare name when the value is not a version.
+    """
+    v = str(version).strip().lstrip("^~=<> ").strip('"')
+    return f'"{name}>={v}"' if re.match(r"^\d[\w.\-+!]*$", v) else f'"{name}"'
+
+
 def _pyproject_coherence_error(path: str, content: str) -> str | None:
     """PARSING IS NOT THE BAR FOR A MANIFEST. `pyproject.toml` has a schema,
-    and the two ways we have broken it both parse cleanly:
+    and every way we have broken it parses cleanly:
 
       * a stray top-level key — `pytest = "^7.4"` appended after
         [project.optional-dependencies] by the module-frame editor, which can
         only express "add a module-level line". Valid TOML, declares nothing.
       * a Poetry/PEP 621 hybrid — [tool.poetry.dependencies] in a file whose
         [project] table and setuptools backend mean nothing reads it.
+      * a well-SHAPED declaration whose contents are not requirements —
+        `pytest = ["^7.4"]`, which is what the model wrote when this check
+        told it only that the value had to be a list.
 
-    Both shipped live (2026-08-10) and both passed the parse floor.
+    All three shipped live (2026-08-10) and all three passed the parse floor.
     """
     if os.path.basename(path).lower() != "pyproject.toml":
         return None
@@ -79,15 +130,15 @@ def _pyproject_coherence_error(path: str, content: str) -> str | None:
     # Top-level keys must be tables. PEP 621 defines no scalar at the root.
     scalars = [k for k, v in doc.items() if not isinstance(v, dict)]
     if scalars:
-        return (
-            f"pyproject.toml has top-level key(s) {', '.join(sorted(scalars))} — "
+        return _MANIFEST_DEFECT + (
+            f"has top-level key(s) {', '.join(sorted(scalars))} — "
             f"PEP 621 defines only tables at the root ([project], [tool], "
             f"[build-system]). A dependency belongs in [project] dependencies "
             f"or optional-dependencies, not as a bare key."
         )
     project = doc.get("project") or {}
     if not isinstance(project, dict):
-        return "pyproject.toml [project] is not a table"
+        return _MANIFEST_DEFECT + "[project] is not a table"
     # THE SHAPE THAT ACTUALLY SHIPPED. A bare `pytest = "^7.4"` appended to
     # the file does NOT become a top-level key — TOML folds a trailing
     # key into the LAST OPEN TABLE, so it landed inside
@@ -96,20 +147,47 @@ def _pyproject_coherence_error(path: str, content: str) -> str | None:
     # requirement strings, so this is checkable exactly.
     deps = project.get("dependencies")
     if deps is not None and not isinstance(deps, list):
-        return "pyproject.toml [project] dependencies must be a list"
+        return _MANIFEST_DEFECT + (
+            "[project] dependencies must be a list of PEP 508 requirement "
+            'strings, e.g. dependencies = ["pytest>=7.4"].'
+        )
+    if isinstance(deps, list) and (bad := _not_pep508(deps)):
+        return _MANIFEST_DEFECT + (
+            f"[project] dependencies contains {bad} which is not a PEP 508 "
+            f"requirement. Write the package NAME with its version specifier "
+            f'as one string, e.g. "pytest>=7.4" — not a bare version, and not '
+            f"Poetry's caret syntax."
+        )
     extras = project.get("optional-dependencies")
     if extras is not None:
         if not isinstance(extras, dict):
-            return "pyproject.toml [project.optional-dependencies] must be a table"
-        bad = sorted(k for k, v in extras.items() if not isinstance(v, list))
-        if bad:
-            return (
-                f"pyproject.toml optional-dependencies group(s) "
-                f"{', '.join(bad)} map to a scalar — each extras group must be "
-                f'a LIST of requirements. A bare `name = "version"` line '
-                f"appended to the file lands here, which declares an empty "
-                f"extra named after the package rather than the dependency."
+            return _MANIFEST_DEFECT + "[project.optional-dependencies] must be a table"
+        scalar = sorted(k for k, v in extras.items() if not isinstance(v, list))
+        if scalar:
+            # Spell the repair out with the OFFENDING name in it. The generic
+            # form ("each group must be a list") is what produced
+            # `pytest = ["^7.4"]` — technically compliant, still broken.
+            g = scalar[0]
+            return _MANIFEST_DEFECT + (
+                f"optional-dependencies group(s) {', '.join(scalar)} map to a "
+                f"scalar. Each group must be a list of PEP 508 requirement "
+                f'strings, e.g. dev = ["ruff>=0.4.0"]. A bare '
+                f'`name = "version"` line appended to the file lands here and '
+                f"declares an extra named after the package instead of the "
+                f"dependency. If {g} is meant to be a dependency, DELETE the "
+                f"{g} group and add {_suggest_req(g, extras[g])} to [project] "
+                f"dependencies — do not merely wrap the version in a list."
             )
+        for group in sorted(extras):
+            if bad := _not_pep508(extras[group]):
+                return _MANIFEST_DEFECT + (
+                    f"optional-dependencies group {group} contains {bad} which "
+                    f"is not a PEP 508 requirement. Each entry is a package "
+                    f'NAME with its specifier, e.g. "pytest>=7.4". A group '
+                    f"named after a package whose only entry is a bare version "
+                    f"is a mangled dependency: remove the group and add the "
+                    f"package to [project] dependencies."
+                )
     # [build-system] has a tiny fixed schema (PEP 517/518), so an unknown key
     # there is unambiguous. It is also a common landing spot: TOML folds a
     # trailing appended key into the LAST OPEN TABLE, and build-system is
@@ -118,16 +196,16 @@ def _pyproject_coherence_error(path: str, content: str) -> str | None:
     if isinstance(bs, dict):
         unknown = sorted(set(bs) - {"requires", "build-backend", "backend-path"})
         if unknown:
-            return (
-                f"pyproject.toml [build-system] has unknown key(s) "
+            return _MANIFEST_DEFECT + (
+                f"[build-system] has unknown key(s) "
                 f"{', '.join(unknown)} — PEP 518 defines only requires, "
                 f'build-backend and backend-path. A bare `name = "version"` '
                 f"line appended to the file lands in whichever table is last, "
                 f"which declares nothing."
             )
     if "project" in doc and "poetry" in (doc.get("tool") or {}):
-        return (
-            "pyproject.toml mixes PEP 621 ([project]) with [tool.poetry] — "
+        return _MANIFEST_DEFECT + (
+            "mixes PEP 621 ([project]) with [tool.poetry] — "
             "the two declare dependencies differently and only one is read. "
             "Pick the one the build-system backend matches."
         )

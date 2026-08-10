@@ -1350,8 +1350,10 @@ async def action_check_dependency_coverage(step_input: StepInput) -> StepOutput:
     # signature, and the reopen/attempt ceilings end it.
     from agent.actions.file_ops_actions import _pyproject_coherence_error
 
+    # No path prefix: the message already names the file, and adding one shipped
+    # "pyproject.toml: pyproject.toml optional-dependencies…" to a model.
     manifest_defects = [
-        f"{mf}: {err}"
+        err
         for mf, content in manifest_contents.items()
         if (err := _pyproject_coherence_error(mf, content))
     ]

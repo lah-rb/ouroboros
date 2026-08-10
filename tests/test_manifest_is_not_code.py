@@ -156,6 +156,85 @@ def test_other_toml_files_are_untouched_by_the_coherence_check():
     assert scaffold_parse_error("ruff.toml", "line-length = 100\n", None) is None
 
 
+# ── shape is not the bar either ───────────────────────────────────────
+#
+# LIVE, 2026-08-10, on the resumed run. The check above told the model only
+# that the value had to be a LIST, and that sentence went to it as the repair
+# brief. It complied exactly:  pytest = "^7.4"  ->  pytest = ["^7.4"]
+# — a list, which passed this check, and which uv still refuses:
+#     configuration error: `project.optional-dependencies.pytest[0]`
+#     must be pep508.  GIVEN VALUE: "^7.4"
+# A necessary condition stated as if it were sufficient is an instruction to
+# do the minimum.
+
+
+def test_a_well_shaped_group_of_non_requirements_is_rejected():
+    """The bytes the model actually wrote when told 'must be a LIST'."""
+    listed = _PEP621 + '\npytest = ["^7.4"]\n'
+    err = scaffold_parse_error("pyproject.toml", listed, _PEP621)
+    assert err is not None, "shape-only checking accepted this and uv did not"
+    assert "PEP 508" in err and '"^7.4"' in err
+
+
+def test_the_message_names_the_whole_rule_not_just_the_shape():
+    """Regression on the BRIEF, not just the check: a model that complies
+    literally with this sentence must end up with a working manifest."""
+    from agent.actions.file_ops_actions import _pyproject_coherence_error
+
+    err = _pyproject_coherence_error("pyproject.toml", _PEP621 + '\npytest = "^7.4"\n')
+    assert err and "PEP 508" in err  # not merely "must be a list"
+    assert '"pytest>=7.4"' in err  # an example that IS the repair
+    assert "DELETE the pytest group" in err  # what to do with the mangled one
+    # and the literal-compliance escape is closed off by name
+    assert "do not merely wrap the version in a list" in err
+
+
+def test_the_suggested_requirement_is_itself_valid_pep508():
+    """The message hands the model a string to copy. If that string were not a
+    valid requirement the brief would be teaching the next defect."""
+    from packaging.requirements import Requirement
+
+    from agent.actions.file_ops_actions import _suggest_req
+
+    for name, ver in [("pytest", "^7.4"), ("ruff", "~=0.4.0"), ("x", "1.0")]:
+        Requirement(_suggest_req(name, ver).strip('"'))
+    assert _suggest_req("pytest", "*") == '"pytest"'  # unparseable → bare name
+    Requirement(_suggest_req("pytest", "*").strip('"'))
+
+
+def test_bad_requirements_in_the_main_dependency_list_are_rejected():
+    bad = _PEP621.replace(
+        'dependencies = ["PyYAML>=6.0"]', 'dependencies = ["PyYAML ^6.0"]'
+    )
+    err = scaffold_parse_error("pyproject.toml", bad, None)
+    assert err is not None and "PEP 508" in err
+
+
+def test_real_requirement_syntax_is_accepted():
+    from agent.actions.file_ops_actions import _pyproject_coherence_error
+
+    ok = _PEP621.replace(
+        'dependencies = ["PyYAML>=6.0"]',
+        'dependencies = ["PyYAML>=6.0", "requests[security]>=2,<3", "tomli; '
+        "python_version < '3.11'\"]",
+    )
+    assert _pyproject_coherence_error("pyproject.toml", ok) is None
+
+
+def test_the_defect_message_names_the_file_exactly_once():
+    """It shipped as "pyproject.toml: pyproject.toml optional-dependencies…"
+    because the gate added a prefix the message already carried."""
+    from agent.actions.file_ops_actions import _pyproject_coherence_error
+
+    for content in (
+        _PEP621 + '\npytest = "^7.4"\n',
+        _PEP621 + '\npytest = ["^7.4"]\n',
+        _PEP621 + '\n[tool.poetry.dependencies]\npytest = "^7.4"\n',
+    ):
+        err = _pyproject_coherence_error("pyproject.toml", content)
+        assert err and err.count("pyproject.toml") == 1, err
+
+
 # ══════════════════════════════════════════════════════════════════════
 # Floor 2: a file edit goes to the flow that can edit files
 # ══════════════════════════════════════════════════════════════════════
