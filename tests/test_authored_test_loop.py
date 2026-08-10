@@ -1619,3 +1619,86 @@ def test_no_prompt_teaches_the_benchmark_domain():
                 {h or "boss fight" for h in hits}
             )
     assert not offenders, f"prompts leak the benchmark's domain: {offenders}"
+
+
+# ── the arm provisions its own instrument ─────────────────────────────
+#
+# Availability used to depend on the ARTIFACT volunteering a test dependency
+# for a program that has no tests yet, and nothing in the objective asks for
+# one. Two consecutive gpt-oss runs on the same brief went both ways: the
+# first declared pytest>=8.0.0 in a dev extra, the second declared nothing.
+# Same model, same prompt — and whether the run's primary testing instrument
+# existed came down to that.
+
+_PYTEST_PROBE = ["python", "-m", "pytest", "--version"]
+
+
+class _ProvisionFX(MockEffects):
+    """Workspace with no pytest until something installs it."""
+
+    def __init__(self, *a, installable: bool = True, **kw):
+        super().__init__(*a, **kw)
+        self.installed = False
+        self.installable = installable
+        self.cmds: list[list[str]] = []
+
+    async def run_command(self, command, working_dir=None, timeout=30):
+        cmd = list(command)
+        self.cmds.append(cmd)
+        if cmd == _PYTEST_PROBE:
+            return CommandResult(
+                return_code=0 if self.installed else 1,
+                stdout="pytest 9.0.0" if self.installed else "",
+                stderr="",
+                command=" ".join(cmd),
+            )
+        if "install" in cmd and "pytest" in cmd:
+            if self.installable:
+                self.installed = True
+            return CommandResult(
+                return_code=0 if self.installable else 1,
+                stdout="",
+                stderr="",
+                command=" ".join(cmd),
+            )
+        return CommandResult(return_code=0, stdout="", stderr="", command=" ".join(cmd))
+
+
+@pytest.mark.asyncio
+async def test_the_arm_installs_pytest_when_the_workspace_lacks_it():
+    from agent.actions.diagnosis_session_actions import _pytest_available
+
+    fx = _ProvisionFX()
+    assert await _pytest_available(fx) is True
+    assert any("install" in c and "pytest" in c for c in fx.cmds)
+    # verified by a FRESH probe, not by the installer's exit code
+    assert fx.cmds[-1] == _PYTEST_PROBE
+
+
+@pytest.mark.asyncio
+async def test_provisioning_never_touches_the_manifest():
+    """pytest is OUR instrument. Writing it into a scored artifact's manifest
+    would both corrupt the file and mislead whoever reads it."""
+    from agent.actions.diagnosis_session_actions import _pytest_available
+
+    fx = _ProvisionFX(files={"pyproject.toml": "[project]\nname='x'\n"})
+    await _pytest_available(fx)
+    assert fx._files["pyproject.toml"] == "[project]\nname='x'\n"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_install_leaves_the_arm_off_rather_than_claiming_success():
+    from agent.actions.diagnosis_session_actions import _pytest_available
+
+    fx = _ProvisionFX(installable=False)
+    assert await _pytest_available(fx) is False
+
+
+@pytest.mark.asyncio
+async def test_an_already_equipped_workspace_installs_nothing():
+    from agent.actions.diagnosis_session_actions import _pytest_available
+
+    fx = _ProvisionFX()
+    fx.installed = True
+    assert await _pytest_available(fx) is True
+    assert not any("install" in c for c in fx.cmds)

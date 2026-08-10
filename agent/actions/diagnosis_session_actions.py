@@ -1785,10 +1785,59 @@ async def _pytest_available(effects) -> bool:
     if available:
         _PYTEST_AVAILABLE = True
         return True
+
+    # THE ARM PROVISIONS ITS OWN TOOL. Availability used to depend on the
+    # artifact volunteering a test dependency for a program that has no tests
+    # yet — and nothing in the objective asks for one. Across two consecutive
+    # gpt-oss runs on the same brief it went both ways: the first declared
+    # `pytest>=8.0.0` in a dev extra (which the env phase then never installed,
+    # a separate bug), the second declared nothing at all. Same model, same
+    # prompt, and whether the run's primary testing instrument existed came
+    # down to that coin flip.
+    #
+    # pytest is OUR requirement, not the artifact's: it is the runner the
+    # authored-test loop classifies red and green with. So install it into the
+    # workspace's own interpreter rather than wait, and do NOT touch the
+    # manifest — the artifact does not owe a dependency on our instrument, and
+    # writing one in would both corrupt a scored file and mislead its reader.
+    if await _provision_pytest(effects):
+        _PYTEST_AVAILABLE = True
+        return True
+
     logger.info(
-        "author-test gate: pytest is not runnable in this workspace right "
-        "now — authoring skips this round (re-probed on the next)"
+        "author-test gate: pytest is not runnable in this workspace and could "
+        "not be installed — authoring skips this round (re-probed on the next)"
     )
+    return False
+
+
+async def _provision_pytest(effects) -> bool:
+    """Install pytest into the workspace interpreter. True only if it then runs.
+
+    Best-effort and self-verifying: the install claiming success is not the
+    claim that matters (the lesson project_ops' verify_env already encodes), so
+    the return value is a fresh `pytest --version`, not the installer's exit
+    code. Bounded, and a failure just leaves the arm off for this round.
+    """
+    for cmd in (
+        ["uv", "pip", "install", "pytest"],
+        ["python", "-m", "pip", "install", "pytest"],
+    ):
+        try:
+            await effects.run_command(cmd, timeout=120)
+            probe = await effects.run_command(
+                ["python", "-m", "pytest", "--version"], timeout=20
+            )
+            if int(getattr(probe, "return_code", 1) or 0) == 0:
+                logger.info(
+                    "author-test gate: provisioned pytest into the workspace "
+                    "via `%s` — the arm is the reason it is needed, so it is "
+                    "NOT added to the project's manifest",
+                    " ".join(cmd),
+                )
+                return True
+        except Exception:  # noqa: BLE001 — an installer miss is not fatal
+            continue
     return False
 
 
