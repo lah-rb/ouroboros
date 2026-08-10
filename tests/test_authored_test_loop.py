@@ -1535,3 +1535,87 @@ def test_the_brief_covers_the_stdin_trap():
 
     assert "IF THE PROGRAM READS STDIN" in AUTHOR_PROMPT
     assert "monkeypatch.setattr" in AUTHOR_PROMPT
+
+
+# ── the brief must not teach the artifact ─────────────────────────────
+#
+# This brief is rendered on EVERY mission, and the tier benchmark's whole
+# objective is a text adventure. Examples drawn from that domain do two bad
+# things: they hand the model design decisions it is being SCORED on inventing
+# (rubric axes B5 ambition and B6 imagination), and on a non-game mission they
+# are just confusing — a model repairing a data pipeline was being told about
+# monsters.
+#
+# Caught by the operator on 2026-08-10, after I introduced most of it in the
+# same afternoon: room x3, combat x3, monster x2, herb x2, parser x1.
+
+_ARTIFACT_DOMAIN_WORDS = (
+    "room",
+    "monster",
+    "combat",
+    "inventory",
+    "sword",
+    "dungeon",
+    "npc",
+    "boss",
+    "weapon",
+    "potion",
+    "herb",
+    "quest",
+    "adventure",
+    "flee",
+    "player",
+)
+
+
+def test_the_authoring_brief_is_domain_neutral():
+    """Its examples must not come from the artifact the model is building."""
+    import re
+
+    from agent.actions.authored_test_actions import AUTHOR_PROMPT
+
+    low = AUTHOR_PROMPT.lower()
+    hits = [w for w in _ARTIFACT_DOMAIN_WORDS if re.search(rf"\b{w}s?\b", low)]
+    assert not hits, (
+        f"the authoring brief leaks the benchmark's own domain: {hits}. "
+        f"Examples must be concrete — that is what makes the rules work — but "
+        f"drawn from a domain we never benchmark."
+    )
+
+
+def test_the_brief_is_still_concrete_after_neutralising():
+    """Neutral must not mean vague: the rules failed BECAUSE they were generic
+    ('must be a LIST' produced a list and nothing else), so every rule that
+    earned its place keeps a copyable example."""
+    from agent.actions.authored_test_actions import AUTHOR_PROMPT
+
+    for needle in ("R-17", "Northern Line (weekday)", "north_wd", "unverified"):
+        assert needle in AUTHOR_PROMPT, f"lost the concrete example {needle!r}"
+
+
+def test_no_prompt_teaches_the_benchmark_domain():
+    """Repo-wide, not just the authoring brief.
+
+    The tier objective is a text adventure and the rubric scores AMBITION and
+    IMAGINATION — so a prompt that hands the model the artifact's own nouns is
+    marking its own exam. The worst instance found was in deep_search, whose
+    example of a good search phrase was "turn-based two-phase boss fight
+    structure", which is close to verbatim a scored requirement of the brief
+    ("The final boss has two phases").
+
+    'boss' is deliberately NOT in the word list: it is the framework's name for
+    the escalation model (prompts/escalate/boss_consult.yaml, boss-sonnet.yaml)
+    and means something real here. The game sense is caught by 'boss fight'.
+    """
+    import re
+
+    words = ("monster", "dungeon", "npc", "sword", "potion", "inventory")
+    pattern = re.compile(rf"\b({'|'.join(words)})s?\b|boss fight", re.I)
+    offenders = {}
+    for path in sorted((ROOT / "prompts").rglob("*.yaml")):
+        hits = pattern.findall(path.read_text(errors="ignore"))
+        if hits:
+            offenders[str(path.relative_to(ROOT))] = sorted(
+                {h or "boss fight" for h in hits}
+            )
+    assert not offenders, f"prompts leak the benchmark's domain: {offenders}"

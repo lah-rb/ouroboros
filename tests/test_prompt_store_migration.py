@@ -44,12 +44,16 @@ MIGRATED = [
     # round showed zero retest uptake — the model instead kept extending a
     # self-playing command script inside main.py (charter choreography
     # accreting into the product).
+    # Re-frozen 2026-08-10: DOMAIN NEUTRALITY. The example named the tier
+    # benchmark's own artifact, and the rubric scores ambition and
+    # imagination — a prompt that hands the model those nouns marks its own
+    # exam. Text change only; the pinned KV must follow it.
     (
         "diagnose/conclude",
         "diagnosis_session_actions",
         "CONCLUDE_PROMPT",
-        8273,
-        "6760d08ea1",
+        8277,
+        "59f691704e",
     ),
     (
         "diagnose/systemic_scan",
@@ -83,12 +87,16 @@ MIGRATED = [
     ),
     # Re-frozen 2026-08-07: gained the project-fiction guard (never query
     # invented nouns; generalize to the pattern — the Persona 3 safari).
+    # Re-frozen 2026-08-10: DOMAIN NEUTRALITY. The example named the tier
+    # benchmark's own artifact, and the rubric scores ambition and
+    # imagination — a prompt that hands the model those nouns marks its own
+    # exam. Text change only; the pinned KV must follow it.
     (
         "personas/deep_search_seed",
         "deep_search_actions",
         "SEARCH_SYSTEM_PROMPT",
-        1021,
-        "9c3263e074",
+        1033,
+        "cf2c13f887",
     ),
     (
         "deep_search/condense",

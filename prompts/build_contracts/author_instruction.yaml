@@ -47,17 +47,17 @@ content: |
     command set from it and will stub the loop. You have the objective;
     the worker does not, so the full command vocabulary lives HERE.
   - The entry module's import block must be COMPLETE for the dispatch —
-    if `main` calls combat/save/parser symbols, those modules MUST be
+    if `main` calls symbols from sibling modules, those modules MUST be
     imported in `main`'s stub (the worker cannot add the import).
   - ATTRIBUTE/METHOD DISCIPLINE: a symbol may access only attributes and
-    methods that the target type's OWN contract declares. If `combat`
-    reads `monster.attack`, then the `Monster`/`MonsterState` stub must
-    declare an `attack` field. Do not reference a field on a type whose
+    methods that the target type's OWN contract declares. If one module
+    reads `record.weight`, then the `Record` stub must declare a
+    `weight` field. Do not reference a field on a type whose
     stub does not define it — that contradiction ships as a runtime
     crash the isolated workers cannot detect.
   - DATA SHAPE ACROSS MODULES: data passed between modules must have ONE
     declared shape. If a loader returns parsed OBJECTS (e.g.
-    `list[Room]`), annotate that exactly and do not let a consumer treat
+    `list[Record]`), annotate that exactly and do not let a consumer treat
     it as raw dicts; if it returns raw dicts, annotate `dict`/`list[dict]`
     and the consumer must use `d["key"]`, not `d.attr`. Do NOT return a
     bare `dict` that a consumer then treats as an object with attributes

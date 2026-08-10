@@ -15,7 +15,7 @@ content: |
   Project-internal inventions — fictional entities, in-game mechanics, invented
   names from the project's own design — do NOT exist on the web. Never query
   the invented nouns themselves; generalize to the underlying engineering or
-  design pattern (e.g. "turn-based two-phase boss fight structure", not the
-  boss's name). If the brief is answerable only from the project's own files,
+  design pattern (e.g. "multi-stage state machine with a guarded
+  transition", not the entity's name). If the brief is answerable only from the project's own files,
   say so and finish instead of searching.
   ---END---

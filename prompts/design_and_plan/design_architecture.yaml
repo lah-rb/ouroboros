@@ -85,7 +85,7 @@ sections:
        running program — every field that changes during a run, whether one
        module touches it or many — plus the schema of any state the program
        persists (save files). For each, pick ONE canonical representation
-       and state it exactly — e.g. does an inventory hold id strings or
+       and state it exactly — e.g. does a collection hold id strings or
        full objects? Every module must conform to it.
        Include:
        - Shared mutable state: the type of each field, exactly
