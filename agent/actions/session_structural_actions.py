@@ -293,6 +293,22 @@ def _roundtrip_keys(
                     and n.value.func.id in readers
                 ):
                     payload_vars.add(tgt.id)
+                # THE MIRROR OF direct_write, and the shape that produced a
+                # LIVE FALSE POSITIVE: `data = json.load(f)` in the same
+                # method that then subscripts it. The assignment is an
+                # Attribute call, not a bare reader Name, so the branch above
+                # never fired and every `data["k"]` went uncounted — the
+                # commonest loader in Python read as "no reader consumes the
+                # loaded payload at all". It cost three repair turns against
+                # a save/load pair that was already symmetric.
+                elif (
+                    isinstance(n.value, stdlib_ast.Call)
+                    and isinstance(n.value.func, stdlib_ast.Attribute)
+                    and isinstance(n.value.func.value, stdlib_ast.Name)
+                    and n.value.func.value.id == "json"
+                    and n.value.func.attr in ("load", "loads")
+                ):
+                    payload_vars.add(tgt.id)
 
         for n in stdlib_ast.walk(fn):
             # writer_fn(payload) — the cross-module hop

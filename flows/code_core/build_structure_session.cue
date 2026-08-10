@@ -208,9 +208,19 @@ build_structure_session: #FlowDefinition & {
 				type: "rule"
 				rules: [
 					{condition: "result.file_ok == true", transition: "next_file"},
-					// meta.attempt is the HARD stop, duplicating the Python
-					// cap — the cycle terminates even if that check regresses.
-					{condition: "result.repairs_left > 0 and meta.attempt <= 8", transition: "repair_file"},
+					// repairs_left is THE bound: per-file, reset by next_file,
+					// decremented in Python, so the cycle cannot spin.
+					//
+					// meta.attempt is only a runaway backstop and MUST stay far
+					// above normal operation. It counts step_visits for THIS
+					// STEP ACROSS THE WHOLE FLOW RUN — not per file — so the
+					// first version's `<= 8` was not "the same cap twice": it
+					// was a global budget of 8 checks that silently revoked the
+					// repair budget of every file after it. Measured live on a
+					// 9-file walk: files 8 and 9 both failed their checkpoint
+					// holding 2 repairs each and were never offered one.
+					// Ceiling = files x (1 check + repairs) with wide margin.
+					{condition: "result.repairs_left > 0 and meta.attempt <= 200", transition: "repair_file"},
 					// Repairs spent: keep what is written, leave the goal
 					// incomplete carrying its failed report, and walk on.
 					{condition: "true", transition: "next_file"},

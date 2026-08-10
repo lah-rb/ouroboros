@@ -689,3 +689,90 @@ def load_game(path):
     out = _serialized_roundtrip_violations({"state.py": opaque, "game.py": _OTHER})
     assert len(out) == 1
     assert "UNVERIFIED" in out[0]
+
+
+# ══════════════════════════════════════════════════════════════════════
+# The direct-read shape — a LIVE false positive, verbatim
+#
+# Lifted from tier_20260810-173519 game.py, which the checkpoint flagged
+# for writing six keys that "no reader consumes at all" while the loader
+# three lines down read every one of them. The model spent three repair
+# turns trying to fix a save/load pair that was already correct.
+#
+# The cause was an asymmetry in this module, not in the artifact:
+# direct_write (one function builds the dict AND dumps it) was handled
+# from the start; its mirror, one method that calls json.load AND
+# subscripts the result, was not — because the assignment is an
+# Attribute call, not a bare reader Name.
+# ══════════════════════════════════════════════════════════════════════
+
+_REAL_DIRECT = """
+import json, os
+SAVE_FILE = "save.json"
+
+class Game:
+    def _save_state(self) -> None:
+        data = {
+            "location": self.player.location,
+            "stats": self.player.stats,
+            "inventory": self.player.inventory,
+            "equipment": self.player.equipment,
+            "defeated_monsters": self.defeated_monsters,
+            "npc_progress": self.npc_dialogue_progress,
+        }
+        with open(SAVE_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+
+    def _load_state(self) -> None:
+        if not os.path.isfile(SAVE_FILE):
+            raise FileNotFoundError("No saved game to load.")
+        with open(SAVE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        self.player.location = data["location"]
+        self.player.stats = data["stats"]
+        self.player.inventory = data["inventory"]
+        self.player.equipment = data["equipment"]
+        self.defeated_monsters = data["defeated_monsters"]
+        self.npc_dialogue_progress = data["npc_progress"]
+"""
+
+
+def test_the_direct_read_shape_is_not_a_false_positive():
+    """The exact artifact the checkpoint wrongly failed. Symmetric."""
+    srcs = {"game.py": _REAL_DIRECT, "world.py": "def load_world():\n    return {}\n"}
+    writers, readers = _serializer_functions(srcs)
+    assert writers == {"_save_state"} and readers == {"_load_state"}
+    w, r = _roundtrip_keys(_REAL_DIRECT, writers, readers, *_payload_methods(srcs))
+    assert len(w) == 6, "writer keys must still be found"
+    assert w == r, f"loader reads every key it writes; unread={sorted(w - r)}"
+    assert _serialized_roundtrip_violations(srcs) == []
+
+
+def test_the_direct_read_shape_still_catches_a_real_orphan():
+    """The fix must not blind the check: drop one read and it fires."""
+    broken = _REAL_DIRECT.replace(
+        '        self.defeated_monsters = data["defeated_monsters"]\n', ""
+    )
+    out = _serialized_roundtrip_violations(
+        {"game.py": broken, "world.py": "def load_world():\n    return {}\n"}
+    )
+    assert len(out) == 1 and "defeated_monsters" in out[0]
+
+
+def test_the_repair_backstop_cannot_revoke_a_files_budget():
+    """meta.attempt counts step_visits for the step across the WHOLE flow
+    run, not per file. At <= 8 a 9-file walk lost every repair after the
+    8th check — files 8 and 9 failed holding 2 repairs and got none."""
+    rules = _steps()["check_file"]["resolver"]["rules"]
+    repair = [r for r in rules if r.get("transition") == "repair_file"]
+    assert len(repair) == 1
+    cond = repair[0]["condition"]
+    assert "repairs_left > 0" in cond, "per-file budget must remain the real bound"
+    import re
+
+    m = re.search(r"meta\.attempt\s*<=\s*(\d+)", cond)
+    assert m, "a runaway backstop must still exist"
+    # files x (1 check + 2 repairs) for any plausible walk, with margin.
+    assert (
+        int(m.group(1)) >= 100
+    ), f"backstop {m.group(1)} is low enough to revoke a real repair budget"

@@ -896,7 +896,7 @@
               "transition": "next_file"
             },
             {
-              "condition": "result.repairs_left > 0 and meta.attempt <= 8",
+              "condition": "result.repairs_left > 0 and meta.attempt <= 200",
               "transition": "repair_file"
             },
             {
