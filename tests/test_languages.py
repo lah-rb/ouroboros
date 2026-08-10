@@ -193,11 +193,24 @@ def test_classification_sets_reproduced():
     )
     assert {e for e in cand if L.is_source(e)} == OLD_SOURCE_EXTENSIONS
     assert {e for e in cand if L.is_data(e)} == OLD_DATA_EXTENSIONS
-    assert {e for e in cand if L.is_data_patch(e)} == OLD_DATA_PATCH_EXTS
     # the documented irregularities are preserved:
     assert L.is_source("sh") is False and L.is_source("scala") is False
     assert L.is_source("mjs") is False and L.is_source("php") is True
-    assert L.is_data_patch("json") is False and L.is_data("json") is True
+
+
+def test_data_patch_set_grew_deliberately_past_the_migrated_one():
+    """The one classification that is NO LONGER the pre-migration answer.
+
+    ``OLD_DATA_PATCH_EXTS`` was YAML-only because YAML was the only round-trip
+    write backend. data_ops gained tomlkit and a style-preserving JSON writer on
+    2026-08-10, so the set is now every structured-data format — asserted
+    against DATA_EXTENSIONS rather than a literal, because "editable" and
+    "structured data" are the same answer again and should stay in step.
+    """
+    assert L.DATA_PATCH_EXTENSIONS == L.DATA_EXTENSIONS
+    assert OLD_DATA_PATCH_EXTS < L.DATA_PATCH_EXTENSIONS  # strict superset
+    assert L.is_data_patch("toml") is True and L.is_data_patch("json") is True
+    assert L.is_data_patch("py") is False
 
 
 def test_keying_dot_normalization():

@@ -48,12 +48,11 @@ def _ensure_parsed(value: Any) -> Any:
 # ── extract_symbol_bodies ─────────────────────────────────────────────
 
 
-# File extensions eligible for the surgical data-patch path (data_ops). v1 is
-# YAML-only; extend to json/toml when those round-trip backends land. A data
-# file yields zero tree-sitter symbols, so it reaches the "no editable symbols"
-# return below — that's where this flag routes file_ops to data_patch instead
-# of a full rewrite.
-# The data-patchable set now lives in agent/languages.py (languages.is_data_patch).
+# File extensions eligible for the surgical data-patch path (data_ops):
+# YAML, TOML and JSON. A data file yields zero tree-sitter symbols, so it
+# reaches the "no editable symbols" return below — that's where this flag routes
+# file_ops to data_patch instead of a full rewrite.
+# The data-patchable set lives in agent/languages.py (languages.is_data_patch).
 
 
 def _data_patch_eligible(path: str) -> bool:

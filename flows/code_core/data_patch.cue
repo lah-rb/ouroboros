@@ -1,14 +1,18 @@
-// data_patch.cue — Surgical path-scoped editing of a YAML data file.
+// data_patch.cue — Surgical path-scoped editing of a data file (YAML/TOML/JSON).
 //
 // Part of the file_ops family:
 //   file_ops (orchestrator) → create | patch | add_symbol | data_patch | rewrite
 //
-// Called by file_ops when the target is a YAML data file (no AST symbols, so
+// Called by file_ops when the target is a data file (no AST symbols, so
 // patch/add_symbol don't apply). Instead of regenerating the whole file (the
 // rewrite path — a 16KB world_data.yaml cost ~160s × 7 in one run), this turns
 // the prose change_spec into a few path-scoped data_ops and applies them with
 // comments/order preserved. STRICTLY ADDITIVE: any miss publishes
 // full_rewrite_requested and file_ops falls back to the existing rewrite.
+//
+// TOML and JSON joined YAML on 2026-08-10, after a manifest edit routed to the
+// module-frame editor for want of a data backend and spliced `pytest = "^7.4"`
+// into a PEP 621 pyproject.toml.
 
 package ouroboros
 
@@ -16,7 +20,7 @@ data_patch: #FlowDefinition & {
 	flow:    "data_patch"
 	version: 1
 	description: """
-		Surgical path-scoped edit of a YAML data file via data_ops. Translates
+		Surgical path-scoped edit of a data file via data_ops. Translates
 		the prose change_spec into structured operations (set/add/remove/move at
 		RFC-6901 pointers), dry-runs them, and writes the result — preserving
 		comments and key order. Falls back to full rewrite on any miss.

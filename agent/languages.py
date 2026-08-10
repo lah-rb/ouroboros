@@ -259,9 +259,12 @@ SOURCE_EXTENSIONS: frozenset[str] = frozenset(
 # "Is this a structured-data file?" (was pipeline_actions._DATA_EXTENSIONS).
 DATA_EXTENSIONS: frozenset[str] = frozenset({"yaml", "yml", "json", "toml"})
 
-# "Is this surgically data-patchable?" (was ast_actions._DATA_PATCH_EXTS). A
-# STRICT SUBSET of DATA_EXTENSIONS — only YAML has a surgical patch backend.
-DATA_PATCH_EXTENSIONS: frozenset[str] = frozenset({"yaml", "yml"})
+# "Is this surgically data-patchable?" (was ast_actions._DATA_PATCH_EXTS).
+# Equal to DATA_EXTENSIONS since 2026-08-10: data_ops round-trips TOML (tomlkit)
+# and JSON (stdlib + detected style) as well as YAML (ruamel). Kept as its own
+# name rather than aliased — "is structured data" and "has a write backend" are
+# different questions, and they were different answers for two months.
+DATA_PATCH_EXTENSIONS: frozenset[str] = frozenset({"yaml", "yml", "json", "toml"})
 
 # "Is this a declarative config rather than code?" (was
 # frame_actions._DECLARATIVE_CONFIG_SUFFIXES). A SUPERSET of DATA_EXTENSIONS:

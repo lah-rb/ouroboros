@@ -1,12 +1,17 @@
-"""Actions for the ``data_patch`` sub-flow — surgical YAML edits via ``data_ops``.
+"""Actions for the ``data_patch`` sub-flow — surgical data edits via ``data_ops``.
 
-When ``file_ops`` sees a YAML data file (no AST symbols), it routes here instead
-of a full-file rewrite. ``translate_data_ops_turn`` turns the prose
-``change_spec`` + the file's data shape + its current content into structured
-``DataOp``s and dry-runs them; ``apply_data_ops`` writes the patched text. Any
-miss (non-YAML, unparseable, no valid ops, patch won't re-apply, write fails)
-publishes ``full_rewrite_requested`` so the parent falls back to today's rewrite
-— the path is strictly additive.
+When ``file_ops`` sees a data file (no AST symbols), it routes here instead of a
+full-file rewrite. ``translate_data_ops_turn`` turns the prose ``change_spec`` +
+the file's data shape + its current content into structured ``DataOp``s and
+dry-runs them; ``apply_data_ops`` writes the patched text. Any miss
+(unparseable, no valid ops, patch won't re-apply, result won't parse, write
+fails) publishes ``full_rewrite_requested`` so the parent falls back to the
+rewrite — the path is strictly additive.
+
+YAML, TOML and JSON all round-trip. The format is decided by ``detect_fmt`` and
+carried into the prompt, because the ops a model should reach for differ: a TOML
+table and a YAML mapping address identically but do not LOOK alike, and the
+model is shown the real file.
 """
 
 from __future__ import annotations
@@ -14,7 +19,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from agent.data_ops import DataOp, Fmt, detect_fmt, patch_text
+from agent.data_ops import DataOp, detect_fmt, patch_text
 from agent.llm_json import parse_llm_json
 from agent.models import StepInput, StepOutput
 from agent.schema_extract import extract_data_skeleton
@@ -81,9 +86,6 @@ async def action_translate_data_ops_turn(step_input: StepInput) -> StepOutput:
     )
 
     fmt = detect_fmt(path)
-    if fmt is not Fmt.YAML:
-        return _defer(f"{fmt.value} not supported in v1 (YAML only)")
-
     content = str(_param(step_input, "file_content"))
     if not content and effects is not None and path:
         try:

@@ -1,4 +1,4 @@
-"""data_ops — the data-file analogue of the AST patcher (v1: YAML).
+"""data_ops — the data-file analogue of the AST patcher (YAML, TOML, JSON).
 
 These tests prove the load-bearing properties: round-trip + comment/order
 preservation under a surgical edit (so a one-key fix never regenerates the
@@ -6,6 +6,11 @@ file), the op matrix (set/add/remove/move × object/list, append, predicate),
 the JSONPointer grammar, the jsonpath-ng query + full_path→pointer adapter, and
 the edge cases (anchors, merge keys, multi-doc, missing path, type mismatch).
 ``patch_text.ok`` is the strict gate the flow falls back on.
+
+The op matrix and pointer grammar are exercised on YAML because they are
+FORMAT-INDEPENDENT — navigation and mutation never learn a format, since every
+backend's containers are dict/list subclasses. What each backend section below
+proves is only what differs: parse, serialize, and value wrapping.
 """
 
 from __future__ import annotations
@@ -54,11 +59,6 @@ def test_detect_fmt():
     assert detect_fmt("noext", '{"a":1}') is Fmt.JSON
 
 
-def test_non_yaml_edit_rejected_in_v1():
-    with pytest.raises(DataOpsError):
-        Document.load('{"a":1}', Fmt.JSON)
-
-
 # ── read-only loader (trace path: YAML/JSON/TOML, never writable) ──────
 
 
@@ -80,10 +80,25 @@ def test_read_is_readonly_dumps_rejected():
 
 
 def test_read_yaml_still_readonly():
-    """A read() Document is read-only even for YAML — the flag, not the format,
-    gates the write path, so a non-YAML root can never be obtained writable."""
+    """A read() Document is read-only for every format — the FLAG gates the
+    write path, not the format. It used to be load() that refused non-YAML,
+    which made the restriction structural; now that all three are editable,
+    read() is the only thing standing between the trace and a write."""
     with pytest.raises(DataOpsError):
         Document.read("a: 1\n", Fmt.YAML).dumps()
+
+
+@pytest.mark.parametrize(
+    "content,fmt",
+    [
+        ('{"a": 1}', Fmt.JSON),
+        ("a = 1\n", Fmt.TOML),
+        ("a: 1\n", Fmt.YAML),
+    ],
+)
+def test_read_never_yields_a_writable_document(content, fmt):
+    with pytest.raises(DataOpsError):
+        Document.read(content, fmt).dumps()
 
 
 def test_apply_rejected_on_readonly():
@@ -276,3 +291,222 @@ def test_patch_text_ok_false_on_bad_op():
         WORLD, Fmt.YAML, [DataOp(op="set", path="/npcs/martha/name/x", value=1)]
     )
     assert not r.ok and r.failed
+
+
+# ══════════════════════════════════════════════════════════════════════
+# TOML backend (tomlkit)
+# ══════════════════════════════════════════════════════════════════════
+#
+# The manifest from the gpt-oss-medium artifact, verbatim as project_ops wrote
+# it. For want of this backend the pass routed to the module-frame editor, which
+# spliced `pytest = "^7.4"` after [project.optional-dependencies] — valid TOML,
+# meaningless as a manifest, and it broke every `uv` call for the rest of the run.
+
+MANIFEST = """\
+[project]
+name = "text-adventure"
+version = "0.1.0"
+
+# Core dependencies needed for the game to run.
+dependencies = [
+    "PyYAML>=6.0",   # For loading world.yaml
+]
+
+# Optional development dependencies.
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.4.0",   # Linter / formatter
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+"""
+
+
+def test_toml_roundtrip_stable():
+    assert Document.load(MANIFEST, Fmt.TOML).dumps() == MANIFEST
+
+
+def test_toml_declares_the_dependency_that_broke_the_run():
+    """The edit the framework could not make, made surgically."""
+    r = patch_text(
+        MANIFEST,
+        Fmt.TOML,
+        [DataOp(op="add", path="/project/dependencies/-", value="pytest>=7.4")],
+    )
+    assert r.ok
+    assert '"pytest>=7.4",' in r.text
+    # It lands INSIDE the dependencies array, not as a stray top-level key —
+    # the whole defect being repaired here.
+    deps = r.text.index("dependencies = [")
+    assert deps < r.text.index("pytest>=7.4") < r.text.index("# Optional development")
+    # and it is a real PEP 621 declaration, not Poetry syntax
+    assert 'pytest = "^' not in r.text
+
+
+def test_toml_preserves_comments_and_table_order():
+    r = patch_text(
+        MANIFEST, Fmt.TOML, [DataOp(op="set", path="/project/version", value="0.2.0")]
+    )
+    assert r.ok and 'version = "0.2.0"' in r.text
+    assert "# Core dependencies needed for the game to run." in r.text
+    assert "# For loading world.yaml" in r.text  # INLINE comment survives
+    assert "# Linter / formatter" in r.text
+    assert r.text.index("[project]") < r.text.index("[build-system]")
+
+
+def test_toml_creates_intermediate_tables():
+    r = patch_text(
+        MANIFEST,
+        Fmt.TOML,
+        [DataOp(op="set", path="/tool/pytest/ini_options/testpaths", value=["tests"])],
+    )
+    assert r.ok
+    assert "[tool.pytest.ini_options]" in r.text
+    assert 'testpaths = ["tests"]' in r.text
+
+
+def test_toml_remove_and_move():
+    r = patch_text(
+        MANIFEST,
+        Fmt.TOML,
+        [DataOp(op="remove", path="/project/version")],
+    )
+    assert r.ok and 'version = "0.1.0"' not in r.text and "[project]" in r.text
+
+
+def test_toml_predicate_and_index_addressing():
+    r = patch_text(
+        MANIFEST,
+        Fmt.TOML,
+        [DataOp(op="set", path="/project/dependencies/0", value="PyYAML>=6.0.3")],
+    )
+    assert r.ok and "PyYAML>=6.0.3" in r.text
+
+
+def test_toml_unrepresentable_value_defers():
+    """TOML has no null. The op fails cleanly so file_ops falls back to rewrite
+    rather than writing a file the toolchain cannot read."""
+    r = patch_text(
+        MANIFEST, Fmt.TOML, [DataOp(op="set", path="/project/nope", value=None)]
+    )
+    assert not r.ok and r.failed
+
+
+def test_toml_unparseable_source_defers():
+    r = patch_text("nope = = 1", Fmt.TOML, [DataOp(op="set", path="/a", value=1)])
+    assert not r.ok
+
+
+# ══════════════════════════════════════════════════════════════════════
+# JSON backend (stdlib + detected style)
+# ══════════════════════════════════════════════════════════════════════
+
+PKG = """\
+{
+  "name": "app",
+  "scripts": {
+    "test": "jest"
+  },
+  "dependencies": {
+    "yaml": "^2.0.0"
+  }
+}
+"""
+
+
+def test_json_roundtrip_stable_on_canonical_formatting():
+    """Files as tools emit them — npm's package.json, anything already written
+    by json.dumps(indent=…) — come back byte-identical."""
+    assert Document.load(PKG, Fmt.JSON).dumps() == PKG
+
+
+def test_json_edit_is_a_one_line_diff():
+    r = patch_text(
+        PKG, Fmt.JSON, [DataOp(op="set", path="/dependencies/jest", value="^29.0.0")]
+    )
+    assert r.ok
+    before, after = PKG.splitlines(), r.text.splitlines()
+    assert len(after) - len(before) == 1  # the added key, and nothing else moved
+    assert '"jest": "^29.0.0"' in r.text
+
+
+@pytest.mark.parametrize(
+    "raw,indent",
+    [
+        ('{\n    "a": 1\n}\n', "    "),
+        ('{\n  "a": 1\n}\n', "  "),
+        ('{\n\t"a": 1\n}\n', "\t"),
+    ],
+)
+def test_json_indent_style_is_detected_not_assumed(raw, indent):
+    r = patch_text(raw, Fmt.JSON, [DataOp(op="set", path="/b", value=2)])
+    assert r.ok and f'\n{indent}"b": 2' in r.text
+
+
+def test_json_compact_file_stays_compact():
+    r = patch_text('{"a": 1}', Fmt.JSON, [DataOp(op="set", path="/b", value=2)])
+    assert r.ok and r.text == '{"a": 1, "b": 2}'
+
+
+def test_json_trailing_newline_policy_is_preserved():
+    assert patch_text(
+        '{\n  "a": 1\n}', Fmt.JSON, [DataOp(op="set", path="/a", value=2)]
+    ).text.endswith("}")
+    assert patch_text(
+        '{\n  "a": 1\n}\n', Fmt.JSON, [DataOp(op="set", path="/a", value=2)]
+    ).text.endswith("}\n")
+
+
+def test_json_ascii_policy_follows_the_file():
+    """An ASCII file stays ASCII; a file that already holds UTF-8 keeps it
+    readable rather than escaping what was there."""
+    ascii_out = patch_text(
+        '{"a": 1}', Fmt.JSON, [DataOp(op="set", path="/b", value="café")]
+    )
+    assert ascii_out.ok and "caf\\u00e9" in ascii_out.text
+    utf8_out = patch_text(
+        '{"t": "café"}', Fmt.JSON, [DataOp(op="set", path="/u", value="naïve")]
+    )
+    assert utf8_out.ok and '"naïve"' in utf8_out.text
+
+
+def test_json_inline_container_is_expanded():
+    """THE known divergence, pinned. stdlib json applies its indent to every
+    container, so a hand-written inline array in an otherwise multi-line file
+    comes back expanded. Documented in the module header; the alternative is a
+    round-trip JSON parser we do not have."""
+    hand = '{\n  "keywords": ["cli", "game"]\n}\n'
+    r = patch_text(hand, Fmt.JSON, [DataOp(op="set", path="/name", value="app")])
+    assert r.ok
+    assert '"keywords": [\n    "cli",\n    "game"\n  ]' in r.text
+
+
+def test_json_list_ops_and_predicate():
+    src = '{\n  "rooms": [\n    {\n      "id": "hall"\n    }\n  ]\n}\n'
+    r = patch_text(
+        src,
+        Fmt.JSON,
+        [DataOp(op="set", path="/rooms/[id=hall]/exit", value="north")],
+    )
+    assert r.ok and '"exit": "north"' in r.text
+
+
+def test_json_unparseable_source_defers():
+    assert not patch_text("{oops", Fmt.JSON, [DataOp(op="set", path="/a", value=1)]).ok
+
+
+# ── the no-change guard, every format ─────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "src,fmt",
+    [(WORLD, Fmt.YAML), (MANIFEST, Fmt.TOML), (PKG, Fmt.JSON)],
+)
+def test_nothing_applied_returns_the_original_bytes(src, fmt):
+    """A no-op must leave the file alone, not reserialize it. Only JSON could
+    actually differ, but 'we changed nothing' has to mean untouched."""
+    assert patch_text(src, fmt, []).text == src
+    failed = patch_text(src, fmt, [DataOp(op="remove", path="/definitely/missing")])
+    assert failed.text == src and not failed.ok

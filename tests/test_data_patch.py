@@ -1,9 +1,9 @@
-"""data_patch — the surgical YAML edit sub-flow + its file_ops routing.
+"""data_patch — the surgical data-edit sub-flow (YAML/TOML/JSON) + its routing.
 
 Proves the routing seam (a data file reaches data_patch, not rewrite) and the
 strictly-additive property: a valid translation yields a surgical write; any
-miss (garbage, non-YAML, ops that don't apply, write failure) yields
-``full_rewrite_requested`` and writes nothing — i.e. never worse than today's
+miss (garbage, an unparseable file, ops that don't apply, write failure) yields
+``full_rewrite_requested`` and writes nothing — i.e. never worse than the
 rewrite. The translation turn is exercised with canned inference (no live model).
 """
 
@@ -197,15 +197,51 @@ async def test_translate_garbage_defers_to_rewrite():
 
 
 @pytest.mark.asyncio
-async def test_translate_non_yaml_defers_without_inference():
+@pytest.mark.parametrize(
+    "path,content,ops",
+    [
+        (
+            "config.json",
+            '{"rooms": []}',
+            {"ops": [{"op": "add", "path": "/rooms/-", "value": {"id": "hall"}}]},
+        ),
+        (
+            "pyproject.toml",
+            '[project]\ndependencies = ["PyYAML>=6.0"]\n',
+            {
+                "ops": [
+                    {
+                        "op": "add",
+                        "path": "/project/dependencies/-",
+                        "value": "pytest>=7.4",
+                    }
+                ]
+            },
+        ),
+    ],
+)
+async def test_translate_handles_json_and_toml(path, content, ops):
+    """These used to bail before spending a turn — there was no write backend
+    to bail toward. Both now translate and dry-run like YAML."""
+    eff = MockEffects(inference_responses=[json.dumps(ops)])
+    out = await action_translate_data_ops_turn(
+        _si(eff, target_file_path=path, file_content=content, change_spec="x")
+    )
+    assert out.result.get("ops_ready") is True
+    assert "data_patched_text" in out.context_updates
+
+
+@pytest.mark.asyncio
+async def test_translate_unparseable_data_file_defers():
+    """The format is supported; THIS file is broken. Still deferred, and the
+    turn is still spent — the parse failure surfaces at the dry-run, which is
+    where a patch that cannot apply is supposed to be caught."""
     eff = MockEffects(inference_responses=[GOOD_OPS])
     out = await action_translate_data_ops_turn(
-        _si(
-            eff, target_file_path="config.json", file_content='{"a":1}', change_spec="x"
-        )
+        _si(eff, target_file_path="config.json", file_content="{oops", change_spec="x")
     )
     assert out.result.get("status") == "full_rewrite_requested"
-    assert eff.call_count("run_inference") == 0  # bailed before spending a turn
+    assert "data_patched_text" not in out.context_updates
 
 
 @pytest.mark.asyncio

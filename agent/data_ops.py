@@ -1,4 +1,4 @@
-"""data_ops — walk, query, slice, and surgically EDIT data files (v1: YAML).
+"""data_ops — walk, query, slice, and surgically EDIT data files (YAML/TOML/JSON).
 
 Code edits in the framework are AST-surgical (tree-sitter patch). Data edits had
 no equivalent, so any change to a YAML/JSON/TOML file routed to a full-file LLM
@@ -10,23 +10,44 @@ lossy. This module is the data-file analogue of the AST patcher:
     addressing uses RFC-6901 JSONPointer (+ ``-`` append, ``[key=value]``
     predicate) so a write targets exactly one node.
   - Tier 2 — apply: set / add / remove / move at a pointer, mutating the LIVE
-    round-trip object (ruamel CommentedMap/Seq) so comments, key order, and
-    formatting survive. ``patch_text`` is the deterministic seam callers use.
+    round-trip object so comments, key order, and formatting survive.
+    ``patch_text`` is the deterministic seam callers use.
 
-v1 implements the YAML backend (ruamel.yaml). The applier is format-parametric;
-TOML (tomlkit) / JSON backends drop in later. The module is PURE — no effects,
-no flows — so it is unit-tested in isolation.
+Three write backends, one applier. The navigation and mutation code is shared
+because every backend's containers ARE ``dict``/``list`` subclasses — ruamel's
+CommentedMap/Seq, tomlkit's Table/Array, and plain JSON dicts — so
+``resolve_pointer`` and ``_place`` never learn a format. What differs is only
+parse, serialize, and how a plain value from LLM JSON is wrapped:
+
+  YAML  ruamel.yaml round-trip — comments, key order, quoting, anchors
+  TOML  tomlkit round-trip     — comments, key order, table layout, spacing
+  JSON  stdlib json + style detected from the source (indent, ASCII policy,
+        trailing newline). JSON has no comments to lose.
+
+The JSON backend has ONE known divergence, measured rather than assumed:
+``json.dumps`` applies its indent to every container, so a hand-written inline
+array inside an otherwise multi-line file (``"keywords": ["cli", "game"]``) comes
+back expanded. Files as tools emit them — npm's package.json, anything already
+written by ``json.dumps(indent=…)`` — round-trip byte-identical, and a one-key
+edit there is a one-line diff. ``test_json_inline_container_is_expanded`` pins
+the divergence so it stays a known cost and not a surprise.
+
+The module is PURE — no effects, no flows — so it is unit-tested in isolation.
 """
 
 from __future__ import annotations
 
 import io
+import json as _json
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Literal
 
+import tomlkit
+from tomlkit.container import Container as _TomlContainer
+from tomlkit.items import Item as _TomlItem
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
@@ -176,18 +197,27 @@ def _seq_index(seq: list, tok: str, *, allow_append: bool) -> int:
     return idx + len(seq) if idx < 0 else idx
 
 
-def _new_container(next_tok: str) -> Any:
+def _new_container(next_tok: str, fmt: Fmt) -> Any:
+    """The container an intermediate token implies — a list if the NEXT token
+    indexes/appends/predicates, else a map. Format-aware so a created subtree is
+    as round-trippable as the document it lands in."""
     if next_tok == "-" or _PRED_RE.match(next_tok) or _is_int_token(next_tok):
-        return CommentedSeq()
-    return CommentedMap()
+        return _empty_seq(fmt)
+    return _empty_map(fmt)
 
 
 def resolve_pointer(
-    root: Any, pointer: str, *, create: bool = False, allow_append: bool = False
+    root: Any,
+    pointer: str,
+    *,
+    create: bool = False,
+    allow_append: bool = False,
+    fmt: Fmt = Fmt.YAML,
 ) -> tuple[Any, Any, bool]:
     """Navigate to the target's PARENT. Returns ``(parent, key, exists)`` where
     ``key`` is a dict key or an int index. ``(None, None, True)`` for the root.
-    With ``create``, missing intermediate containers are made."""
+    With ``create``, missing intermediate containers are made — ``fmt`` decides
+    what kind, and is read ONLY on that path."""
     tokens = _parse_pointer(pointer)
     if not tokens:
         return (None, None, True)
@@ -207,14 +237,19 @@ def resolve_pointer(
             if tok not in node:
                 if not create:
                     raise PathError(f"missing key {tok!r} in {pointer}")
-                node[tok] = _new_container(tokens[i + 1])
+                node[tok] = _new_container(tokens[i + 1], fmt)
             node = node[tok]
         else:
             raise PathError(f"cannot descend into a scalar at {tok!r}")
     raise PathError("empty navigation")  # unreachable
 
 
-# ── YAML backend helpers ───────────────────────────────────────────────
+# ── Format backends ────────────────────────────────────────────────────
+#
+# Each backend answers four questions and nothing else: how to parse, how to
+# serialize, how to wrap a plain value so it round-trips, and what an empty
+# container looks like. Everything else in this module is shared, which is only
+# possible because all three backends' containers subclass dict/list.
 
 
 def _yaml() -> YAML:
@@ -225,34 +260,108 @@ def _yaml() -> YAML:
     return y
 
 
-def _coerce_yaml(value: Any) -> Any:
-    """Wrap plain dict/list (e.g. from LLM JSON) into ruamel Commented* so nested
-    inserts stay round-trippable. Already-Commented nodes (e.g. a moved subtree)
-    pass through untouched so their comments survive. Scalars pass through."""
+@dataclass(frozen=True)
+class _JsonStyle:
+    """How the source file was written, so an edit does not restyle it.
+
+    Detected, not assumed: reformatting a 2-space file to 4 turns a one-key
+    change into a whole-file diff, which is the exact cost the surgical path
+    exists to avoid.
+    """
+
+    indent: str | None  # None → the file is on one line; keep it that way
+    ensure_ascii: bool  # an ASCII file stays ASCII; a UTF-8 one stays readable
+    trailing_newline: bool
+
+    @classmethod
+    def detect(cls, raw: str) -> "_JsonStyle":
+        m = re.search(r"\n([ \t]+)\S", raw or "")
+        return cls(
+            indent=m.group(1) if m else None,
+            ensure_ascii=(raw or "").isascii(),
+            trailing_newline=(raw or "").endswith("\n"),
+        )
+
+
+def _load_root(content: str, fmt: Fmt) -> Any:
+    """Parse into the backend's LIVE round-trip object."""
+    if fmt is Fmt.YAML:
+        root = _yaml().load(content)
+        return CommentedMap() if root is None else root
+    if fmt is Fmt.TOML:
+        return tomlkit.parse(content)
+    return _json.loads(content)
+
+
+def _dumps_root(root: Any, fmt: Fmt, raw: str) -> str:
+    if fmt is Fmt.YAML:
+        buf = io.StringIO()
+        _yaml().dump(root, buf)
+        return buf.getvalue()
+    if fmt is Fmt.TOML:
+        return tomlkit.dumps(root)
+    style = _JsonStyle.detect(raw)
+    text = _json.dumps(root, indent=style.indent, ensure_ascii=style.ensure_ascii)
+    return text + "\n" if style.trailing_newline else text
+
+
+def _coerce(value: Any, fmt: Fmt) -> Any:
+    """Wrap a plain dict/list (as LLM JSON delivers it) in the backend's
+    round-trip types, so a NESTED insert is as editable as the rest of the
+    document. Values already native to the backend — a subtree lifted by
+    ``move`` — pass through untouched so their comments survive."""
+    if fmt is Fmt.JSON:
+        return value  # plain containers already ARE the JSON backend's types
+    if fmt is Fmt.TOML:
+        if isinstance(value, _TomlItem | _TomlContainer):
+            return value
+        try:
+            return tomlkit.item(value)
+        except Exception as e:  # noqa: BLE001 — e.g. None, which TOML cannot hold
+            raise OpError(f"value is not representable in TOML: {e}") from e
     if isinstance(value, CommentedMap | CommentedSeq):
         return value
     if isinstance(value, dict):
         m = CommentedMap()
         for k, v in value.items():
-            m[k] = _coerce_yaml(v)
+            m[k] = _coerce(v, fmt)
         return m
     if isinstance(value, list):
         s = CommentedSeq()
         for v in value:
-            s.append(_coerce_yaml(v))
+            s.append(_coerce(v, fmt))
         return s
     return value
 
 
+def _empty_map(fmt: Fmt) -> Any:
+    if fmt is Fmt.TOML:
+        return tomlkit.table()
+    return {} if fmt is Fmt.JSON else CommentedMap()
+
+
+def _empty_seq(fmt: Fmt) -> Any:
+    if fmt is Fmt.TOML:
+        return tomlkit.array()
+    return [] if fmt is Fmt.JSON else CommentedSeq()
+
+
 def _dump_value(value: Any, fmt: Fmt) -> str:
-    if fmt != Fmt.YAML:
-        return str(value)
+    """Re-serialize ONE subtree for prompt display (Slice.text)."""
     if not isinstance(value, dict | list):
         return str(value).rstrip()
-    y = _yaml()
-    buf = io.StringIO()
-    y.dump(value, buf)
-    return buf.getvalue().rstrip()
+    try:
+        if fmt is Fmt.YAML:
+            buf = io.StringIO()
+            _yaml().dump(value, buf)
+            return buf.getvalue().rstrip()
+        if fmt is Fmt.TOML:
+            # A bare Array is not a document; tomlkit.dumps needs a mapping.
+            body = value if isinstance(value, dict) else {"value": value}
+            return tomlkit.dumps(body).rstrip()
+        return _json.dumps(value, indent=2, ensure_ascii=False).rstrip()
+    except Exception:  # noqa: BLE001 — display only; never fail a read
+        return str(value).rstrip()
 
 
 # ── jsonpath-ng → JSONPointer adapter ──────────────────────────────────
@@ -295,52 +404,38 @@ class Document:
 
     @classmethod
     def load(cls, content: str, fmt: Fmt) -> "Document":
-        if fmt is not Fmt.YAML:
-            raise DataOpsError(
-                f"{fmt.value} editing is not supported in v1 (YAML only)"
-            )
+        """Writable round-trip parse. Every format the module claims is editable
+        loads through here, so ``dumps`` after a no-op ``apply`` is the identity
+        on a well-formed file."""
         try:
-            root = _yaml().load(content)
+            root = _load_root(content, fmt)
         except Exception as e:  # noqa: BLE001 - any parse failure is the diagnosis
             raise ParseError(f"{type(e).__name__}: {e}") from e
-        if root is None:
-            root = CommentedMap()
         return cls(fmt=fmt, root=root, _raw=content)
 
     @classmethod
     def read(cls, content: str, fmt: Fmt) -> "Document":
-        """Read-only parse for trace/inspection — supports YAML/JSON/TOML.
+        """Read-only parse for trace/inspection.
 
         The result is traversable (slice/query/walk) but NOT writable: ``dumps``
-        and ``apply`` refuse a read-only Document. This keeps the YAML-only write
-        invariant structural — the only way to obtain a non-YAML root is ``read``,
-        which marks it read-only — while letting the data-aware trace slice the
-        REAL subtree of any data file instead of reconstructing a pruned copy."""
-        try:
-            if fmt is Fmt.JSON:
-                import json
-
-                root = json.loads(content)
-            elif fmt is Fmt.TOML:
-                import tomllib
-
-                root = tomllib.loads(content)
-            else:  # YAML — reuse the round-trip loader so YAML reads are uniform
-                root = _yaml().load(content)
-        except Exception as e:  # noqa: BLE001 - any parse failure is the diagnosis
-            raise ParseError(f"{type(e).__name__}: {e}") from e
-        if root is None:
-            root = {}
-        return cls(fmt=fmt, root=root, _raw=content, readonly=True)
+        and ``apply`` refuse a read-only Document. It used to be the ONLY way to
+        get a non-YAML root, which is what made the YAML-only write restriction
+        structural; now that all three formats are editable it means what it
+        says — the data-aware trace inspects files it has no business writing.
+        Same loaders as ``load``, so a read and a load see identical shapes."""
+        doc = cls.load(content, fmt)
+        doc.readonly = True
+        return doc
 
     def dumps(self) -> str:
         if self.readonly:
             raise DataOpsError("cannot serialize a read-only Document")
-        if self.fmt is not Fmt.YAML:
-            raise DataOpsError(f"{self.fmt.value} serialization not supported in v1")
-        buf = io.StringIO()
-        _yaml().dump(self.root, buf)
-        return buf.getvalue()
+        try:
+            return _dumps_root(self.root, self.fmt, self._raw)
+        except DataOpsError:
+            raise
+        except Exception as e:  # noqa: BLE001 — e.g. a value the format can't hold
+            raise DataOpsError(f"{self.fmt.value} serialization failed: {e}") from e
 
     # ── Tier 1 ─────────────────────────────────────────────────────────
 
@@ -414,9 +509,9 @@ class Document:
 
     def _apply_one(self, op: DataOp) -> None:
         if op.op == "set":
-            self._place(op.path, _coerce_yaml(op.value), insert=False)
+            self._place(op.path, _coerce(op.value, self.fmt), insert=False)
         elif op.op == "add":
-            self._place(op.path, _coerce_yaml(op.value), insert=True)
+            self._place(op.path, _coerce(op.value, self.fmt), insert=True)
         elif op.op == "remove":
             parent, key, exists = resolve_pointer(self.root, op.path)
             if parent is None:
@@ -438,7 +533,7 @@ class Document:
 
     def _place(self, path: str, value: Any, *, insert: bool) -> None:
         parent, key, exists = resolve_pointer(
-            self.root, path, create=True, allow_append=True
+            self.root, path, create=True, allow_append=True, fmt=self.fmt
         )
         if parent is None:
             raise OpError("cannot set the document root")
@@ -495,6 +590,14 @@ def patch_text(content: str, fmt: Fmt, ops: list[DataOp]) -> PatchTextResult:
             text=content, applied=[], failed=[(o, str(e)) for o in ops], ok=False
         )
     res = doc.apply(ops)
+    if not res.changed:
+        # NOTHING APPLIED — hand back the original bytes, never a reserialization.
+        # Only JSON could actually differ here (stdlib json has no way to keep an
+        # inline array inline), but "we changed nothing" must mean the file is
+        # untouched in every format, not merely semantically equal.
+        return PatchTextResult(
+            text=content, applied=[], failed=res.failed, ok=not res.failed and not ops
+        )
     try:
         text = doc.dumps()
     except DataOpsError as e:

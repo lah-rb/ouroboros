@@ -650,21 +650,58 @@ def _render_within_budget(label: str | None, value: Any, budget: int) -> str:
     return full[:budget].rstrip() + "\n… (truncated)"
 
 
+def _plain(value: Any) -> Any:
+    """Strip a node down to plain dict/list/scalar.
+
+    ruamel represents what it knows (its own CommentedMap/Seq, and stdlib
+    types); it raises RepresenterError on anything else. tomlkit's Table/Array
+    are dict/list SUBCLASSES, so they traverse fine but do not dump — which is
+    how a TOML trace slice degraded to a Python repr, `{'host': 'h'}`, the day
+    Document.read started returning round-trip nodes. Rebuilding as plain
+    containers costs the comments, which TOML slices never had here anyway.
+    """
+    if isinstance(value, dict):
+        return {str(k): _plain(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_plain(v) for v in value]
+    if isinstance(value, str):
+        return str(value)
+    if isinstance(value, bool):  # before int — bool IS an int
+        return bool(value)
+    if isinstance(value, int):
+        return int(value)
+    if isinstance(value, float):
+        return float(value)
+    return value
+
+
+def _dump_yaml(payload: Any) -> str:
+    y = YAML()
+    y.indent(mapping=2, sequence=4, offset=2)
+    buf = io.StringIO()
+    y.dump(payload, buf)
+    return buf.getvalue().rstrip()
+
+
 def _render_subtree(label: str | None, value: Any) -> str:
     """Serialize a sliced value as YAML via ruamel — handles round-trip nodes
     (comments preserved) and plain dict/list (JSON/TOML reads). Wraps under
-    ``label`` when it is a mapping key, so the key name shows."""
+    ``label`` when it is a mapping key, so the key name shows.
+
+    Tries the node AS-IS first, because that is the only way ruamel emits a
+    YAML slice's comments; falls back to a plain rebuild for backends ruamel
+    cannot represent. `str()` is the last resort, not the second one — a
+    Python repr in a trace is evidence the model has to decode."""
     payload: Any = {label: value} if label is not None else value
-    try:
-        if isinstance(payload, (dict, list)):
-            y = YAML()
-            y.indent(mapping=2, sequence=4, offset=2)
-            buf = io.StringIO()
-            y.dump(payload, buf)
-            return buf.getvalue().rstrip()
+    if not isinstance(payload, (dict, list)):
         return str(payload).rstrip()
-    except Exception:  # noqa: BLE001 - rendering must never break the trace
-        return str(value).rstrip()
+    try:
+        return _dump_yaml(payload)
+    except Exception:  # noqa: BLE001 — a node type ruamel has no representer for
+        try:
+            return _dump_yaml(_plain(payload))
+        except Exception:  # noqa: BLE001 - rendering must never break the trace
+            return str(value).rstrip()
 
 
 def _esc_token(token: str) -> str:

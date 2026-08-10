@@ -1523,7 +1523,7 @@
   "data_patch": {
     "flow": "data_patch",
     "version": 1,
-    "description": "Surgical path-scoped edit of a YAML data file via data_ops. Translates\nthe prose change_spec into structured operations (set/add/remove/move at\nRFC-6901 pointers), dry-runs them, and writes the result \u2014 preserving\ncomments and key order. Falls back to full rewrite on any miss.",
+    "description": "Surgical path-scoped edit of a data file via data_ops. Translates\nthe prose change_spec into structured operations (set/add/remove/move at\nRFC-6901 pointers), dry-runs them, and writes the result \u2014 preserving\ncomments and key order. Falls back to full rewrite on any miss.",
     "context_tier": "session_task",
     "returns": {
       "files_changed": {
@@ -5164,7 +5164,7 @@
       },
       "run_data_patch": {
         "action": "flow",
-        "description": "YAML data file \u2014 surgical path-scoped patch (data_ops)",
+        "description": "Data file \u2014 surgical path-scoped patch (data_ops)",
         "context": {
           "required": [],
           "optional": []

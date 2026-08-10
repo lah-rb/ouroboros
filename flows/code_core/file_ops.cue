@@ -256,7 +256,7 @@ file_ops: #FlowDefinition & {
 					// (cfe3a21a run: a symbol-less structural fix
 					// looped patch-bail for 44 cycles).
 					{condition: "result.target_symbol_named == true and result.symbols_extracted > 0", transition: "run_patch"},
-					// YAML data file (no AST symbols) → surgical data_ops
+					// Data file (no AST symbols) → surgical data_ops
 					// patch instead of regenerating the whole file. Falls
 					// back to run_rewrite on any miss, so this is additive.
 					{condition: "result.data_patch_eligible == true", transition: "run_data_patch"},
@@ -381,14 +381,14 @@ file_ops: #FlowDefinition & {
 			publishes: ["files_changed", "edit_summary"]
 		}
 
-		// YAML data file — surgical path-scoped patch via data_ops. On any
+		// Data file — surgical path-scoped patch via data_ops. On any
 		// miss the sub-flow returns full_rewrite_requested and we fall back to
 		// run_rewrite, so the worst case is one cheap translation turn before
 		// today's behavior. The inherited lookup_env → run_data_check parse
 		// gate validates the result.
 		run_data_patch: #StepDefinition & {
 			action:      "flow"
-			description: "YAML data file — surgical path-scoped patch (data_ops)"
+			description: "Data file — surgical path-scoped patch (data_ops)"
 			flow:        "data_patch"
 			input_map: {
 				target_file_path:  {$ref: "input.target_file_path"}
