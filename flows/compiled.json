@@ -10908,7 +10908,8 @@
         },
         "publishes": [
           "dep_check_imports",
-          "dep_check_manifest"
+          "dep_check_manifest",
+          "dep_manifest_defects"
         ],
         "effects": [],
         "terminal": false
@@ -10961,7 +10962,9 @@
           "required": [
             "inference_response"
           ],
-          "optional": []
+          "optional": [
+            "dep_manifest_defects"
+          ]
         },
         "params": {},
         "config": {},

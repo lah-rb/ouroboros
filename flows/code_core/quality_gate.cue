@@ -233,7 +233,7 @@ quality_gate: #FlowDefinition & {
 					{condition: "true", transition: "analyze_deps"},
 				]
 			}
-			publishes: ["dep_check_imports", "dep_check_manifest"]
+			publishes: ["dep_check_imports", "dep_check_manifest", "dep_manifest_defects"]
 		}
 
 		analyze_deps: #StepDefinition & {
@@ -259,7 +259,14 @@ quality_gate: #FlowDefinition & {
 		parse_dep_result: #StepDefinition & {
 			action:      "parse_dep_check_result"
 			description: "Parse dependency analysis — route based on coverage"
-			context: required: ["inference_response"]
+			context: {
+				required: ["inference_response"]
+				// The DETERMINISTIC manifest verdict from gather_dep_info.
+				// Optional because the rung is reachable when it published
+				// nothing; undeclared, the runtime filters it out and the
+				// action silently loses its veto over the LLM's reading.
+				optional: ["dep_manifest_defects"]
+			}
 			resolver: {
 				type: "rule"
 				rules: [

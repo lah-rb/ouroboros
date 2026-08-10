@@ -1332,13 +1332,39 @@ async def action_check_dependency_coverage(step_input: StepInput) -> StepOutput:
         manifest_text_parts.append(content)
     manifest_text = "\n".join(manifest_text_parts)
 
+    # IS THE MANIFEST A DECLARATION SET AT ALL? Asked deterministically, here,
+    # because the rung below asks an LLM to read the manifest TEXT and answer
+    # "is pytest covered?" — and a manifest can answer yes to that while being
+    # unusable. `pytest = "^7.4"` folded into [project.optional-dependencies]
+    # contains the substring the LLM is looking for, parses as TOML, satisfies
+    # the artifact's own `tomllib.load` syntax check, and stops `uv` dead.
+    #
+    # This is the write floor's blind spot by design: scaffold_parse_error
+    # stands down when the file on disk is ALREADY incoherent, so that a broken
+    # manifest never becomes unfixable. Standing down must not also mean
+    # ceasing to notice — otherwise a repair that adds the right line without
+    # removing the wrong one passes every check and the mission completes over
+    # a manifest no toolchain can install.
+    #
+    # Costs no inference. Bounded like any gate failure: it files ONE goal by
+    # signature, and the reopen/attempt ceilings end it.
+    from agent.actions.file_ops_actions import _pyproject_coherence_error
+
+    manifest_defects = [
+        f"{mf}: {err}"
+        for mf, content in manifest_contents.items()
+        if (err := _pyproject_coherence_error(mf, content))
+    ]
+
     return StepOutput(
         result={"dep_check_skipped": False, "files_scanned": len(import_map)},
         observations=f"Extracted imports from {len(import_map)} files, "
-        f"found {len(manifest_contents)} manifest(s)",
+        f"found {len(manifest_contents)} manifest(s)"
+        + (f"; {len(manifest_defects)} incoherent" if manifest_defects else ""),
         context_updates={
             "dep_check_imports": imports_text,
             "dep_check_manifest": manifest_text,
+            "dep_manifest_defects": manifest_defects,
             "dep_check_skipped": False,
         },
     )
@@ -1542,6 +1568,27 @@ async def action_parse_dep_check_result(step_input: StepInput) -> StepOutput:
     """
 
     raw = step_input.context.get("inference_response", "")
+
+    # THE DETERMINISTIC VERDICT OUTRANKS THE READ ONE. gather_dep_info already
+    # decided whether each manifest is a usable declaration set; an LLM's
+    # "pytest is covered" cannot overrule "this file declares nothing", and a
+    # missing/unparseable LLM answer cannot suppress it either. Checked FIRST,
+    # ahead of every fail-open below, because those are the paths a broken
+    # manifest would otherwise slip through.
+    defects = list(step_input.context.get("dep_manifest_defects") or [])
+    if defects:
+        head = defects[0]
+        return StepOutput(
+            result={"deps_ok": False, "missing_count": len(defects)},
+            observations="\n".join(
+                ["Manifest is not a valid declaration set:", *defects]
+            ),
+            context_updates={
+                "dep_coverage_result": {"missing_dependencies": [], "defects": defects},
+                "dep_coverage_issues": defects,
+                "gate_failure_reason": f"manifest is not a valid declaration set — {head}",
+            },
+        )
 
     # Parse JSON response
     from agent.llm_json import parse_llm_json

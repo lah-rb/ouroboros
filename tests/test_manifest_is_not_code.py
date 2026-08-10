@@ -26,9 +26,10 @@ itself rerouted to file_ops, which is when the frame editor got its chance:
   08:50:55  patch_module spliced it in                          (manifest BROKEN)
   08:53:02  uv: "TOML parse error at line 21"                   — and every run after
 
-So there are three floors here, not one: never frame-edit a manifest; never
-route a file edit to a flow that cannot write files; and never let a flow that
-changed nothing count as a fix.
+So there are four floors here, not one: never frame-edit a manifest; never
+route a file edit to a flow that cannot write files; never let a flow that
+changed nothing count as a fix; and never let a manifest that declares nothing
+pass the gate that exists to check declarations.
 """
 
 from __future__ import annotations
@@ -323,3 +324,97 @@ async def test_a_project_ops_report_never_falls_through_to_re_diagnosis():
     )
     out = await _sweep(goal)
     assert not out.result.get("needs_fix"), "re-dispatching here is the spin"
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Floor 4: the gate checks the manifest, not just an LLM's reading of it
+# ══════════════════════════════════════════════════════════════════════
+#
+# The write floor STANDS DOWN on an already-incoherent file, deliberately, so a
+# broken manifest never becomes unfixable. That leaves a false-success path: a
+# repair that adds the right line without removing the wrong one is accepted by
+# the floor, satisfies the artifact's own `tomllib.load` syntax check, and
+# contains the substring the dep-coverage LLM is looking for. Nothing in the
+# loop runs a packaging tool, so the mission would complete over a manifest
+# `uv` cannot read.
+
+_BROKEN = _PEP621 + '\npytest = "^7.4"\n'
+
+
+async def _dep_parse(defects, llm='{"missing_dependencies": []}'):
+    from agent.actions.pipeline_actions import action_parse_dep_check_result
+
+    return await action_parse_dep_check_result(
+        StepInput(
+            context={"inference_response": llm, "dep_manifest_defects": defects},
+            params={},
+            meta=FlowMeta(flow_name="quality_gate", step_id="parse_dep_result"),
+            effects=None,
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_incoherent_manifest_fails_the_gate_whatever_the_llm_says():
+    """`pytest = "^7.4"` IS the string the coverage prompt hunts for, so the
+    read verdict is 'covered'. The deterministic verdict outranks it."""
+    err = scaffold_parse_error("pyproject.toml", _BROKEN, _PEP621)
+    assert err, "precondition: the coherence checker sees this file"
+
+    out = await _dep_parse([f"pyproject.toml: {err}"])
+    assert out.result["deps_ok"] is False
+    reason = out.context_updates["gate_failure_reason"]
+    assert "declaration set" in reason and "optional-dependencies" in reason
+
+
+@pytest.mark.asyncio
+async def test_the_defect_veto_survives_an_unparseable_llm_answer():
+    """The 'could not parse — assuming OK' fail-open is the other way a broken
+    manifest reached a passing gate. The veto is checked ahead of it."""
+    out = await _dep_parse(["pyproject.toml: bad"], llm="not json at all")
+    assert out.result["deps_ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_a_coherent_manifest_is_unaffected():
+    assert (await _dep_parse([])).result["deps_ok"] is True
+    assert (await _dep_parse(None)).result["deps_ok"] is True
+    # and a real missing dependency still fails the way it always did
+    out = await _dep_parse([], llm='{"missing_dependencies": ["pyyaml"]}')
+    assert out.result["deps_ok"] is False
+    assert "undeclared dependencies" in out.context_updates["gate_failure_reason"]
+
+
+@pytest.mark.asyncio
+async def test_the_repair_that_only_adds_is_still_caught():
+    """THE false-success path, end to end. Adding pytest to [project]
+    dependencies without removing the stray key satisfies every other check."""
+    from agent.actions.file_ops_actions import _pyproject_coherence_error
+    from agent.data_ops import DataOp, Fmt, patch_text
+
+    half = patch_text(
+        _BROKEN,
+        Fmt.TOML,
+        [DataOp(op="add", path="/project/dependencies/-", value="pytest>=7.4")],
+    )
+    assert half.ok
+    assert (
+        scaffold_parse_error("pyproject.toml", half.text, _BROKEN) is None
+    )  # accepted
+    out = await _dep_parse(
+        [f"x: {_pyproject_coherence_error('pyproject.toml', half.text)}"]
+    )
+    assert out.result["deps_ok"] is False, "a half-repair must not pass the gate"
+
+    # The WHOLE repair passes.
+    whole = patch_text(
+        _BROKEN,
+        Fmt.TOML,
+        [
+            DataOp(op="remove", path="/project/optional-dependencies/pytest"),
+            DataOp(op="add", path="/project/dependencies/-", value="pytest>=7.4"),
+        ],
+    )
+    assert whole.ok
+    assert _pyproject_coherence_error("pyproject.toml", whole.text) is None
+    assert (await _dep_parse([])).result["deps_ok"] is True
