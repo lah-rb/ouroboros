@@ -106,110 +106,164 @@ def _suggest_req(name: str, version: Any) -> str:
     return f'"{name}>={v}"' if re.match(r"^\d[\w.\-+!]*$", v) else f'"{name}"'
 
 
-def _pyproject_coherence_error(path: str, content: str) -> str | None:
-    """PARSING IS NOT THE BAR FOR A MANIFEST. `pyproject.toml` has a schema,
-    and every way we have broken it parses cleanly:
-
-      * a stray top-level key — `pytest = "^7.4"` appended after
-        [project.optional-dependencies] by the module-frame editor, which can
-        only express "add a module-level line". Valid TOML, declares nothing.
-      * a Poetry/PEP 621 hybrid — [tool.poetry.dependencies] in a file whose
-        [project] table and setuptools backend mean nothing reads it.
-      * a well-SHAPED declaration whose contents are not requirements —
-        `pytest = ["^7.4"]`, which is what the model wrote when this check
-        told it only that the value had to be a list.
-
-    All three shipped live (2026-08-10) and all three passed the parse floor.
-    """
-    if os.path.basename(path).lower() != "pyproject.toml":
-        return None
-    try:
-        doc = tomllib.loads(content)
-    except Exception:
-        return None  # the parse floor owns this case
-    # Top-level keys must be tables. PEP 621 defines no scalar at the root.
+def _defect_root_scalars(doc: dict) -> str | None:
+    """Top-level keys must be tables. PEP 621 defines no scalar at the root."""
     scalars = [k for k, v in doc.items() if not isinstance(v, dict)]
-    if scalars:
-        return _MANIFEST_DEFECT + (
-            f"has top-level key(s) {', '.join(sorted(scalars))} — "
-            f"PEP 621 defines only tables at the root ([project], [tool], "
-            f"[build-system]). A dependency belongs in [project] dependencies "
-            f"or optional-dependencies, not as a bare key."
-        )
-    project = doc.get("project") or {}
-    if not isinstance(project, dict):
+    if not scalars:
+        return None
+    return _MANIFEST_DEFECT + (
+        f"has top-level key(s) {', '.join(sorted(scalars))} — "
+        f"PEP 621 defines only tables at the root ([project], [tool], "
+        f"[build-system]). A dependency belongs in [project] dependencies "
+        f"or optional-dependencies, not as a bare key."
+    )
+
+
+def _defect_dependencies(doc: dict) -> str | None:
+    project = doc.get("project")
+    if project is not None and not isinstance(project, dict):
         return _MANIFEST_DEFECT + "[project] is not a table"
-    # THE SHAPE THAT ACTUALLY SHIPPED. A bare `pytest = "^7.4"` appended to
-    # the file does NOT become a top-level key — TOML folds a trailing
-    # key into the LAST OPEN TABLE, so it landed inside
-    # [project.optional-dependencies] as an extras group named "pytest"
-    # whose value is a string. PEP 621 says every extras value is a LIST of
-    # requirement strings, so this is checkable exactly.
-    deps = project.get("dependencies")
-    if deps is not None and not isinstance(deps, list):
+    deps = (project or {}).get("dependencies")
+    if deps is None:
+        return None
+    if not isinstance(deps, list):
         return _MANIFEST_DEFECT + (
             "[project] dependencies must be a list of PEP 508 requirement "
             'strings, e.g. dependencies = ["pytest>=7.4"].'
         )
-    if isinstance(deps, list) and (bad := _not_pep508(deps)):
+    if bad := _not_pep508(deps):
         return _MANIFEST_DEFECT + (
             f"[project] dependencies contains {bad} which is not a PEP 508 "
             f"requirement. Write the package NAME with its version specifier "
             f'as one string, e.g. "pytest>=7.4" — not a bare version, and not '
             f"Poetry's caret syntax."
         )
-    extras = project.get("optional-dependencies")
-    if extras is not None:
-        if not isinstance(extras, dict):
-            return _MANIFEST_DEFECT + "[project.optional-dependencies] must be a table"
-        scalar = sorted(k for k, v in extras.items() if not isinstance(v, list))
-        if scalar:
-            # Spell the repair out with the OFFENDING name in it. The generic
-            # form ("each group must be a list") is what produced
-            # `pytest = ["^7.4"]` — technically compliant, still broken.
-            g = scalar[0]
-            return _MANIFEST_DEFECT + (
-                f"optional-dependencies group(s) {', '.join(scalar)} map to a "
-                f"scalar. Each group must be a list of PEP 508 requirement "
-                f'strings, e.g. dev = ["ruff>=0.4.0"]. A bare '
-                f'`name = "version"` line appended to the file lands here and '
-                f"declares an extra named after the package instead of the "
-                f"dependency. If {g} is meant to be a dependency, DELETE the "
-                f"{g} group and add {_suggest_req(g, extras[g])} to [project] "
-                f"dependencies — do not merely wrap the version in a list."
-            )
-        for group in sorted(extras):
-            if bad := _not_pep508(extras[group]):
-                return _MANIFEST_DEFECT + (
-                    f"optional-dependencies group {group} contains {bad} which "
-                    f"is not a PEP 508 requirement. Each entry is a package "
-                    f'NAME with its specifier, e.g. "pytest>=7.4". A group '
-                    f"named after a package whose only entry is a bare version "
-                    f"is a mangled dependency: remove the group and add the "
-                    f"package to [project] dependencies."
-                )
-    # [build-system] has a tiny fixed schema (PEP 517/518), so an unknown key
-    # there is unambiguous. It is also a common landing spot: TOML folds a
-    # trailing appended key into the LAST OPEN TABLE, and build-system is
-    # conventionally last in the file.
-    bs = doc.get("build-system")
-    if isinstance(bs, dict):
-        unknown = sorted(set(bs) - {"requires", "build-backend", "backend-path"})
-        if unknown:
-            return _MANIFEST_DEFECT + (
-                f"[build-system] has unknown key(s) "
-                f"{', '.join(unknown)} — PEP 518 defines only requires, "
-                f'build-backend and backend-path. A bare `name = "version"` '
-                f"line appended to the file lands in whichever table is last, "
-                f"which declares nothing."
-            )
-    if "project" in doc and "poetry" in (doc.get("tool") or {}):
-        return _MANIFEST_DEFECT + (
-            "mixes PEP 621 ([project]) with [tool.poetry] — "
-            "the two declare dependencies differently and only one is read. "
-            "Pick the one the build-system backend matches."
-        )
     return None
+
+
+def _defect_extras(doc: dict) -> str | None:
+    """THE SHAPE THAT ACTUALLY SHIPPED. A bare `pytest = "^7.4"` appended to the
+    file does NOT become a top-level key — TOML folds a trailing key into the
+    LAST OPEN TABLE, so it landed inside [project.optional-dependencies] as an
+    extras group named "pytest" whose value is a string. PEP 621 says every
+    extras value is a LIST of requirement strings, and every entry in that list
+    is a requirement — both halves are checkable exactly, and checking only the
+    first half is what produced `pytest = ["^7.4"]`."""
+    project = doc.get("project")
+    extras = (
+        (project or {}).get("optional-dependencies")
+        if isinstance(project, dict)
+        else None
+    )
+    if extras is None:
+        return None
+    if not isinstance(extras, dict):
+        return _MANIFEST_DEFECT + "[project.optional-dependencies] must be a table"
+    scalar = sorted(k for k, v in extras.items() if not isinstance(v, list))
+    if scalar:
+        # Spell the repair out with the OFFENDING name in it. The generic form
+        # ("each group must be a list") is what produced `pytest = ["^7.4"]` —
+        # technically compliant, still broken.
+        g = scalar[0]
+        return _MANIFEST_DEFECT + (
+            f"optional-dependencies group(s) {', '.join(scalar)} map to a "
+            f"scalar. Each group must be a list of PEP 508 requirement "
+            f'strings, e.g. dev = ["ruff>=0.4.0"]. A bare '
+            f'`name = "version"` line appended to the file lands here and '
+            f"declares an extra named after the package instead of the "
+            f"dependency. If {g} is meant to be a dependency, DELETE the "
+            f"{g} group and add {_suggest_req(g, extras[g])} to [project] "
+            f"dependencies — do not merely wrap the version in a list."
+        )
+    for group in sorted(extras):
+        if bad := _not_pep508(extras[group]):
+            return _MANIFEST_DEFECT + (
+                f"optional-dependencies group {group} contains {bad} which "
+                f"is not a PEP 508 requirement. Each entry is a package "
+                f'NAME with its specifier, e.g. "pytest>=7.4". A group '
+                f"named after a package whose only entry is a bare version "
+                f"is a mangled dependency: DELETE the {group} group and add "
+                f"{_suggest_req(group, (extras[group] or [''])[0])} to "
+                f"[project] dependencies."
+            )
+    return None
+
+
+def _defect_build_system(doc: dict) -> str | None:
+    """[build-system] has a tiny fixed schema (PEP 517/518), so an unknown key
+    there is unambiguous. It is also a common landing spot: TOML folds a
+    trailing appended key into the LAST OPEN TABLE, and build-system is
+    conventionally last in the file."""
+    bs = doc.get("build-system")
+    if not isinstance(bs, dict):
+        return None
+    unknown = sorted(set(bs) - {"requires", "build-backend", "backend-path"})
+    if not unknown:
+        return None
+    return _MANIFEST_DEFECT + (
+        f"[build-system] has unknown key(s) "
+        f"{', '.join(unknown)} — PEP 518 defines only requires, "
+        f'build-backend and backend-path. A bare `name = "version"` '
+        f"line appended to the file lands in whichever table is last, "
+        f"which declares nothing."
+    )
+
+
+def _defect_poetry_hybrid(doc: dict) -> str | None:
+    if "project" not in doc or "poetry" not in (doc.get("tool") or {}):
+        return None
+    return _MANIFEST_DEFECT + (
+        "mixes PEP 621 ([project]) with [tool.poetry] — the two declare "
+        "dependencies differently and only one is read. This project's "
+        "build-backend is setuptools, which reads [project]: DELETE the whole "
+        "[tool.poetry] section and put the dependency in [project] dependencies."
+    )
+
+
+_PYPROJECT_CHECKS = (
+    _defect_root_scalars,
+    _defect_dependencies,
+    _defect_extras,
+    _defect_build_system,
+    _defect_poetry_hybrid,
+)
+
+
+def _pyproject_defects(path: str, content: str) -> list[str]:
+    """EVERY coherence defect, not merely the first.
+
+    PARSING IS NOT THE BAR FOR A MANIFEST. `pyproject.toml` has a schema, and
+    every way we have broken it parses cleanly:
+
+      * a stray top-level key — `pytest = "^7.4"` appended after
+        [project.optional-dependencies] by the module-frame editor, which can
+        only express "add a module-level line". Valid TOML, declares nothing.
+      * a well-SHAPED declaration whose contents are not requirements —
+        `pytest = ["^7.4"]`, which is what the model wrote when this check
+        told it only that the value had to be a list.
+      * a Poetry/PEP 621 hybrid — [tool.poetry.dependencies] in a file whose
+        [project] table and setuptools backend mean nothing reads it.
+
+    All three shipped live on 2026-08-10 and all three passed the parse floor.
+    The LAST TWO were on the file AT THE SAME TIME, which is why this returns a
+    list: reporting one defect at a time costs a repair round each, invites a
+    fix for one defect, and the gate then re-reports the next as though it were
+    new — against a reopen ceiling of 3.
+    """
+    if os.path.basename(path).lower() != "pyproject.toml":
+        return []
+    try:
+        doc = tomllib.loads(content)
+    except Exception:
+        return []  # the parse floor owns this case
+    return [d for check in _PYPROJECT_CHECKS if (d := check(doc))]
+
+
+def _pyproject_coherence_error(path: str, content: str) -> str | None:
+    """The first defect, for the write floor — where one reason is enough to
+    refuse. The gate wants them all; it calls _pyproject_defects."""
+    defects = _pyproject_defects(path, content)
+    return defects[0] if defects else None
 
 
 def scaffold_parse_error(

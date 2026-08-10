@@ -4424,7 +4424,11 @@ async def action_harvest_quality_findings(step_input: StepInput) -> StepOutput:
             reopened = False
             mission.goals.append(
                 GoalRecord(
-                    description=f"Quality gate failed: {reason[:200]}",
+                    # 200 chars truncated a two-defect manifest report to the
+                    # first defect and half a sentence. This description IS the
+                    # diagnosis brief — the only channel to the model — so it
+                    # gets room for a deterministic check's full finding.
+                    description=f"Quality gate failed: {reason[:900]}",
                     type="quality",
                     status="incomplete",
                     origin="quality_gate",

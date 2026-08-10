@@ -1348,14 +1348,18 @@ async def action_check_dependency_coverage(step_input: StepInput) -> StepOutput:
     #
     # Costs no inference. Bounded like any gate failure: it files ONE goal by
     # signature, and the reopen/attempt ceilings end it.
-    from agent.actions.file_ops_actions import _pyproject_coherence_error
+    from agent.actions.file_ops_actions import _pyproject_defects
 
-    # No path prefix: the message already names the file, and adding one shipped
-    # "pyproject.toml: pyproject.toml optional-dependencies…" to a model.
+    # ALL of them, not the first. Reporting one defect at a time costs a repair
+    # round each and invites a fix for one defect — live, the artifact carried a
+    # non-PEP-508 extras entry AND a [tool.poetry] table simultaneously, against
+    # a reopen ceiling of 3. No path prefix either: the message already names the
+    # file, and adding one shipped "pyproject.toml: pyproject.toml
+    # optional-dependencies…" to a model as its brief.
     manifest_defects = [
         err
         for mf, content in manifest_contents.items()
-        if (err := _pyproject_coherence_error(mf, content))
+        for err in _pyproject_defects(mf, content)
     ]
 
     return StepOutput(
@@ -1579,7 +1583,15 @@ async def action_parse_dep_check_result(step_input: StepInput) -> StepOutput:
     # manifest would otherwise slip through.
     defects = list(step_input.context.get("dep_manifest_defects") or [])
     if defects:
-        head = defects[0]
+        # EVERY defect in the reason, numbered. The reason becomes the goal
+        # description, which becomes the diagnosis brief — it is the only
+        # channel to the model, so naming one defect while withholding another
+        # spends a repair round per defect and re-reports the leftover as new.
+        detail = (
+            defects[0]
+            if len(defects) == 1
+            else " ".join(f"({i}) {d}" for i, d in enumerate(defects, 1))
+        )
         return StepOutput(
             result={"deps_ok": False, "missing_count": len(defects)},
             observations="\n".join(
@@ -1588,7 +1600,10 @@ async def action_parse_dep_check_result(step_input: StepInput) -> StepOutput:
             context_updates={
                 "dep_coverage_result": {"missing_dependencies": [], "defects": defects},
                 "dep_coverage_issues": defects,
-                "gate_failure_reason": f"manifest is not a valid declaration set — {head}",
+                "gate_failure_reason": (
+                    f"manifest is not a valid declaration set "
+                    f"({len(defects)} defect(s)) — {detail}"
+                ),
             },
         )
 

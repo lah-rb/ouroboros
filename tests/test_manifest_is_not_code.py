@@ -497,3 +497,62 @@ async def test_the_repair_that_only_adds_is_still_caught():
     assert whole.ok
     assert _pyproject_coherence_error("pyproject.toml", whole.text) is None
     assert (await _dep_parse([])).result["deps_ok"] is True
+
+
+# ── every defect, not merely the first ────────────────────────────────
+#
+# The artifact carried two at once — a non-PEP-508 extras entry AND a
+# [tool.poetry] table — against a reopen ceiling of 3. Naming one defect
+# invites a fix for one defect, and the gate re-reports the leftover as new.
+
+_TWO_DEFECTS = (
+    _PEP621 + '\npytest = ["^7.4"]\n\n[tool.poetry.dependencies]\npytest = "^7.4"\n'
+)
+
+
+def test_all_defects_are_reported_together():
+    from agent.actions.file_ops_actions import _pyproject_defects
+
+    ds = _pyproject_defects("pyproject.toml", _TWO_DEFECTS)
+    assert len(ds) == 2, ds
+    joined = " ".join(ds)
+    assert "PEP 508" in joined and "tool.poetry" in joined
+
+
+def test_the_write_floor_still_takes_the_first_defect():
+    """One reason is enough to refuse a write; the gate is the one that needs
+    the full list."""
+    from agent.actions.file_ops_actions import _pyproject_coherence_error
+
+    err = _pyproject_coherence_error("pyproject.toml", _TWO_DEFECTS)
+    assert err and err == _pyproject_defects_first(_TWO_DEFECTS)
+
+
+def _pyproject_defects_first(content: str) -> str:
+    from agent.actions.file_ops_actions import _pyproject_defects
+
+    return _pyproject_defects("pyproject.toml", content)[0]
+
+
+def test_a_clean_manifest_reports_nothing():
+    from agent.actions.file_ops_actions import _pyproject_defects
+
+    good = _PEP621.replace(
+        'dependencies = ["PyYAML>=6.0"]',
+        'dependencies = ["PyYAML>=6.0", "pytest>=7.4"]',
+    )
+    assert _pyproject_defects("pyproject.toml", good) == []
+
+
+@pytest.mark.asyncio
+async def test_the_gate_reason_names_every_defect():
+    from agent.actions.file_ops_actions import _pyproject_defects
+
+    ds = _pyproject_defects("pyproject.toml", _TWO_DEFECTS)
+    out = await _dep_parse(ds)
+    reason = out.context_updates["gate_failure_reason"]
+    assert "(2 defect(s))" in reason
+    assert "(1)" in reason and "(2)" in reason
+    assert "tool.poetry" in reason, "the second defect must survive into the brief"
+    # and it must survive the goal-description truncation that carries it
+    assert len(f"Quality gate failed: {reason}"[:900]) > len(ds[0])
