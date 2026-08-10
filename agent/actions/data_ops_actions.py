@@ -17,6 +17,7 @@ model is shown the real file.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from agent.data_ops import DataOp, detect_fmt, patch_text
@@ -75,6 +76,67 @@ def _defer(reason: str) -> StepOutput:
     )
 
 
+async def _trace_turn(effects: Any, prompt: str, res: Any, start: float) -> None:
+    """Emit the InferenceCall this turn would otherwise never produce.
+
+    THE WALKER'S TURN WAS INVISIBLE. It calls ``effects.run_inference``
+    directly rather than being an ``action: "inference"`` step, and the runtime
+    emits its InferenceCall inside the step path it renders — so with BOTH
+    --trace-prompts and --trace-thinking on, the trace held nothing for this
+    call. Live on 2026-08-10 the flow reported success over a byte-identical
+    write and there was no way to ask what ops it had proposed; the answer had
+    to be reconstructed from an mtime and a byte comparison, and the fix that
+    made the eventual repair legible was a logger.info line.
+
+    Emitted HERE rather than in the effects layer, deliberately: the runtime
+    already emits for the calls it originates, so emitting inside
+    ``run_inference`` would double-log every inference step. This mirrors
+    ``LocalEffects.session_inference``, which emits at the call site for
+    exactly the same reason. flow/step/mission/cycle come from the bound
+    ``agent.trace.step_context``; unbound (tests, mocks) it degrades to a
+    no-op rather than a mis-attributed row.
+
+    Best-effort throughout — a telemetry failure must never fail a patch.
+    """
+    try:
+        from agent.trace import InferenceCall, get_step_context, trace_enabled
+
+        if not trace_enabled(effects):
+            return
+        ctx = get_step_context() or {}
+        prompt_content = response_content = ""
+        if getattr(effects, "trace_prompts", False):
+            prompt_content = prompt
+            response_content = getattr(res, "text", "") or ""
+        thinking = ""
+        if getattr(effects, "trace_thinking", False) and hasattr(
+            effects, "fetch_thinking"
+        ):
+            try:
+                thinking = await effects.fetch_thinking()
+            except Exception:  # noqa: BLE001
+                thinking = ""
+        await effects.emit_trace(
+            InferenceCall(
+                mission_id=ctx.get("mission_id", ""),
+                cycle=ctx.get("cycle", 0),
+                flow=ctx.get("flow", "data_patch"),
+                step=ctx.get("step", "translate_ops"),
+                tokens_in=len(prompt.split()),
+                tokens_out=len((getattr(res, "text", "") or "").split()),
+                wall_ms=(time.monotonic() - start) * 1000,
+                purpose="step_inference",
+                thinking_content=thinking,
+                prompt_content=prompt_content,
+                response_content=response_content,
+                truncated=bool(getattr(res, "truncated", False)),
+                generated_tokens=int(getattr(res, "generated_tokens", 0) or 0),
+            )
+        )
+    except Exception:  # noqa: BLE001 — telemetry never breaks the patch
+        logger.debug("data_patch: could not emit inference trace", exc_info=True)
+
+
 async def action_translate_data_ops_turn(step_input: StepInput) -> StepOutput:
     """Translate the prose change_spec → structured DataOps, validate, and
     dry-run them. Publishes ``data_patched_text`` + ``ops_ready`` on success;
@@ -112,21 +174,16 @@ async def action_translate_data_ops_turn(step_input: StepInput) -> StepOutput:
         current=current,
     )
 
+    start = time.monotonic()
     try:
         res = await effects.run_inference(prompt)
         text = getattr(res, "text", "") or ""
     except Exception as e:  # noqa: BLE001
         logger.debug("data-ops translation inference failed", exc_info=True)
         return _defer(f"translation inference failed ({type(e).__name__})")
+    await _trace_turn(effects, prompt, res, start)
 
     ops = _coerce_ops(parse_llm_json(text))
-    # THE ONLY RECORD OF WHAT THE WALKER PROPOSED. This turn calls
-    # effects.run_inference directly rather than going through the turn
-    # machinery, so it emits no `inference_call` trace event — `--trace-prompts`
-    # and `--trace-thinking` both come back empty for it. Live on 2026-08-10 the
-    # flow reported success over a byte-identical write and there was no way to
-    # ask what ops it had emitted. Until the turn is properly instrumented, this
-    # line is the answer to that question.
     logger.info(
         "data_patch %s: model proposed %d op(s): %s",
         path,

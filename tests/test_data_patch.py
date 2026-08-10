@@ -339,3 +339,59 @@ async def test_a_real_change_still_writes():
     )
     assert out.result.get("status") == "success"
     assert eff.call_count("write_file") == 1
+
+
+# ── the walker's turn is visible to the trace ─────────────────────────
+#
+# It calls effects.run_inference directly rather than being an
+# `action: "inference"` step, and the runtime emits its InferenceCall inside
+# the step path it renders — so with BOTH --trace-prompts and --trace-thinking
+# on, the trace held NOTHING for this call. Diagnosing a no-op patch on
+# 2026-08-10 meant reconstructing the ops from an mtime and a byte comparison.
+
+
+@pytest.mark.asyncio
+async def test_the_translation_turn_emits_an_inference_call():
+    from agent.trace import step_context
+
+    eff = MockEffects(inference_responses=[GOOD_OPS])
+    eff.trace_prompts = True
+    emitted = []
+    eff.emit_trace = lambda ev: emitted.append(ev) or _noop()  # type: ignore[assignment]
+
+    with step_context("m1", 7, "data_patch", "translate_ops"):
+        out = await action_translate_data_ops_turn(
+            _si(eff, target_file_path="world.yaml", file_content=WORLD, change_spec="x")
+        )
+    assert out.result.get("ops_ready") is True
+
+    calls = [e for e in emitted if getattr(e, "event_type", "") == "inference_call"]
+    assert len(calls) == 1, "the walker's turn must appear in the trace"
+    ev = calls[0]
+    assert ev.flow == "data_patch" and ev.step == "translate_ops"
+    assert ev.mission_id == "m1" and ev.cycle == 7
+    assert "rooms" in ev.prompt_content  # the real prompt, under --trace-prompts
+    assert "ops" in ev.response_content  # and the real ops it proposed
+
+
+async def _noop():
+    return None
+
+
+@pytest.mark.asyncio
+async def test_tracing_failure_never_breaks_the_patch():
+    """Telemetry is best-effort: a broken emit must not cost a repair."""
+
+    async def boom(_ev):
+        raise RuntimeError("trace sink down")
+
+    eff = MockEffects(inference_responses=[GOOD_OPS])
+    eff.trace_prompts = True
+    eff.emit_trace = boom  # type: ignore[assignment]
+    from agent.trace import step_context
+
+    with step_context("m1", 1, "data_patch", "translate_ops"):
+        out = await action_translate_data_ops_turn(
+            _si(eff, target_file_path="world.yaml", file_content=WORLD, change_spec="x")
+        )
+    assert out.result.get("ops_ready") is True
