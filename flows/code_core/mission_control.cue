@@ -575,7 +575,7 @@ mission_control: #FlowDefinition & {
 					{condition: "true", transition: "harvest_quality_findings"},
 				]
 			}
-			publishes: ["quality_results"]
+			publishes: ["quality_results", "gate_failure_reason"]
 		}
 
 		// Harvest gate findings into goals (one per finding, classified by the
@@ -587,7 +587,10 @@ mission_control: #FlowDefinition & {
 			description: "Create/re-open goals from quality-gate findings"
 			context: {
 				required: ["mission"]
-				optional: ["quality_results"]
+				// gate_failure_reason: set when the gate died before the rung
+				// that builds quality_results. Undeclared, the harvester can
+				// only file a generic goal — see its no-findings branch.
+				optional: ["quality_results", "gate_failure_reason"]
 			}
 			resolver: {
 				type: "rule"

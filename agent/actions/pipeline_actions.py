@@ -1588,6 +1588,17 @@ async def action_parse_dep_check_result(step_input: StepInput) -> StepOutput:
             "dep_coverage_result": result_data,
             # Merge into validation_results so summarize sees it
             "dep_coverage_issues": issue_lines,
+            # LOAD-BEARING (2026-08-10). This branch routes straight to
+            # gate_fail, skipping the rung that builds quality_results — so
+            # the harvester downstream sees NO findings and, before this,
+            # completed the mission on a failed gate. Naming the reason here
+            # is what lets it file a SPECIFIC goal ("declare pyyaml") instead
+            # of a generic "the gate failed".
+            "gate_failure_reason": (
+                f"undeclared dependencies — {', '.join(missing[:6])} "
+                f"{'are' if len(missing) != 1 else 'is'} imported but not in "
+                f"the manifest" + (f"; fix: {install_cmd}" if install_cmd else "")
+            ),
         },
     )
 

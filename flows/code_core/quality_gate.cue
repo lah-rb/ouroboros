@@ -37,6 +37,10 @@ quality_gate: #FlowDefinition & {
 		check_results:   {type: "dict",   from: "context.validation_results",      optional: true}
 		terminal_output: {type: "string", from: "context.terminal_output",         optional: true}
 		dep_coverage:    {type: "dict",   from: "context.dep_coverage_result",     optional: true}
+		// Why the gate failed, when it failed BEFORE producing findings. The
+		// mission-side harvester files this as a goal rather than completing
+		// on a failed gate (operator, 2026-08-10).
+		gate_failure_reason: {type: "string", from: "context.gate_failure_reason", optional: true}
 	}
 
 	projections: {
@@ -263,7 +267,12 @@ quality_gate: #FlowDefinition & {
 					{condition: "true", transition: "gate_fail"},
 				]
 			}
-			publishes: ["dep_coverage_result"]
+			// gate_failure_reason: LOAD-BEARING. This step's failure branch goes
+			// straight to gate_fail, skipping the rung that builds
+			// quality_results, so the mission-side harvester sees no findings.
+			// Undeclared, it is filtered out and the harvester can only file a
+			// generic "the gate failed" goal instead of naming the missing deps.
+			publishes: ["dep_coverage_result", "gate_failure_reason"]
 		}
 
 		// ── Phase 2: Behavioral validation (completion mode only) ───

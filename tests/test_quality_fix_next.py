@@ -101,12 +101,21 @@ async def test_harvest_skips_in_flight_goal():
 
 
 @pytest.mark.asyncio
-async def test_harvest_no_findings_finalizes():
+async def test_harvest_no_findings_files_the_failure_instead_of_finalizing():
+    """CONTRACT CHANGED 2026-08-10 (operator: "a failed gate generally means
+    there is more to do"). This asserted done=True — finalize the mission when
+    a failed gate produced no findings — and that expectation was itself the
+    bug: harvest_quality_findings is reachable ONLY on gate failure, so "no
+    findings" means the gate died before the rung that produces them, not that
+    the artifact is clean. Live on gpt-oss-medium, an undeclared dependency
+    failed the gate at parse_dep_result and the mission completed in the same
+    cycle. See tests/test_failed_gate_blocks_completion.py."""
     m = _mission()
     out = await action_harvest_quality_findings(
         _si(m, quality_results={"fix_tasks": []})
     )
-    assert out.result.get("done") is True
+    assert out.result.get("done") is False
+    assert [g for g in m.goals if g.description.startswith("Quality gate failed")]
 
 
 # ── Quality sweep ────────────────────────────────────────────────────────

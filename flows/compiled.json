@@ -8643,7 +8643,8 @@
         },
         "params": {},
         "publishes": [
-          "quality_results"
+          "quality_results",
+          "gate_failure_reason"
         ],
         "resolver": {
           "type": "rule",
@@ -8668,7 +8669,8 @@
             "mission"
           ],
           "optional": [
-            "quality_results"
+            "quality_results",
+            "gate_failure_reason"
           ]
         },
         "params": {},
@@ -10562,6 +10564,11 @@
         "type": "dict",
         "from": "context.dep_coverage_result",
         "optional": true
+      },
+      "gate_failure_reason": {
+        "type": "string",
+        "from": "context.gate_failure_reason",
+        "optional": true
       }
     },
     "projections": {
@@ -10972,7 +10979,8 @@
           ]
         },
         "publishes": [
-          "dep_coverage_result"
+          "dep_coverage_result",
+          "gate_failure_reason"
         ],
         "effects": [],
         "terminal": false
@@ -17132,7 +17140,8 @@
         },
         "params": {},
         "publishes": [
-          "quality_results"
+          "quality_results",
+          "gate_failure_reason"
         ],
         "resolver": {
           "type": "rule",
@@ -17157,7 +17166,8 @@
             "mission"
           ],
           "optional": [
-            "quality_results"
+            "quality_results",
+            "gate_failure_reason"
           ]
         },
         "params": {},
@@ -18330,7 +18340,8 @@
         },
         "params": {},
         "publishes": [
-          "quality_results"
+          "quality_results",
+          "gate_failure_reason"
         ],
         "resolver": {
           "type": "rule",
@@ -18355,7 +18366,8 @@
             "mission"
           ],
           "optional": [
-            "quality_results"
+            "quality_results",
+            "gate_failure_reason"
           ]
         },
         "params": {},
@@ -19608,7 +19620,8 @@
         },
         "params": {},
         "publishes": [
-          "quality_results"
+          "quality_results",
+          "gate_failure_reason"
         ],
         "resolver": {
           "type": "rule",
@@ -19633,7 +19646,8 @@
             "mission"
           ],
           "optional": [
-            "quality_results"
+            "quality_results",
+            "gate_failure_reason"
           ]
         },
         "params": {},

@@ -555,7 +555,7 @@ mission_control_swarm: #FlowDefinition & {
 					{condition: "true", transition: "harvest_quality_findings"},
 				]
 			}
-			publishes: ["quality_results"]
+			publishes: ["quality_results", "gate_failure_reason"]
 		}
 
 		// Harvest gate findings into goals (one per finding, classified by the
@@ -567,7 +567,7 @@ mission_control_swarm: #FlowDefinition & {
 			description: "Create/re-open goals from quality-gate findings"
 			context: {
 				required: ["mission"]
-				optional: ["quality_results"]
+				optional: ["quality_results", "gate_failure_reason"]
 			}
 			resolver: {
 				type: "rule"

@@ -4192,9 +4192,65 @@ async def action_harvest_quality_findings(step_input: StepInput) -> StepOutput:
         else []
     )
     if not fix_tasks:
+        # A FAILED GATE MEANS THERE IS MORE TO DO (operator, 2026-08-10).
+        # This step is reachable ONLY when dispatch_quality_gate returned a
+        # non-success status, so "no findings" never means "nothing wrong" —
+        # it means the gate died before the rung that produces findings.
+        #
+        # Live on gpt-oss-medium (2026-08-09): the gate failed at
+        # parse_dep_result (step 9 of 10, an undeclared dependency), which
+        # publishes an observation string and no fix_tasks. The behavioural
+        # rung never ran, the harvester found nothing, returned done=True,
+        # and the mission COMPLETED — a gate failure and mission success in
+        # the same cycle. The one defect that would stop a stranger running
+        # the artifact was detected and discarded.
+        #
+        # File the failure itself as the finding. Idempotent by signature, so
+        # a gate that keeps failing the same way reopens ONE goal rather than
+        # multiplying; the goal's own attempt/escalation bounds and the
+        # mission wall stop the loop.
+        reason = str(
+            step_input.context.get("gate_failure_reason")
+            or (
+                quality_results.get("verdict")
+                if isinstance(quality_results, dict)
+                else ""
+            )
+            or "the gate terminated before it could produce findings"
+        ).strip()
+        sig = "quality-gate-fail:" + _quality_finding_signature({"description": reason})
+        existing = next(
+            (g for g in mission.goals if getattr(g, "finding_signature", "") == sig),
+            None,
+        )
+        if existing is not None:
+            reopened = existing.status == "complete"
+            existing.status = "incomplete"
+        else:
+            reopened = False
+            mission.goals.append(
+                GoalRecord(
+                    description=f"Quality gate failed: {reason[:200]}",
+                    type="quality",
+                    status="incomplete",
+                    origin="quality_gate",
+                    finding_signature=sig,
+                )
+            )
+        if effects:
+            await effects.save_mission(mission)
+        logger.warning(
+            "Quality harvest: gate failed with NO findings — filed it as a goal "
+            "rather than completing (%s): %s",
+            "reopened" if reopened else "new",
+            reason[:120],
+        )
         return StepOutput(
-            result={"done": True},
-            observations="Quality gate failed but produced no findings — finalizing",
+            result={"done": False},
+            observations=(
+                f"Quality gate failed with no findings — filed as a goal: {reason[:160]}"
+            ),
+            context_updates={"mission": mission},
         )
 
     by_sig = {
