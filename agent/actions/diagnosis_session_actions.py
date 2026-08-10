@@ -36,6 +36,7 @@ import logging
 import re
 from typing import Any
 
+from agent import languages
 from agent.models import StepInput, StepOutput
 from agent.loader import load_prompt_text
 
@@ -1542,6 +1543,39 @@ async def action_goal_search_gate(step_input: StepInput) -> StepOutput:
 _AUTHORED_TEST_MAX_ATTEMPTS = 2
 
 
+async def _input_data_files(effects, transients: list[str]) -> list[str]:
+    """Data files the program READS, as opposed to the ones it writes.
+
+    The brief already names the transients so a test never asserts on a runtime
+    file it did not create. This is the complement, and it exists because of the
+    opposite failure: on 2026-08-10 three CORRECT tests died in setup because
+    each one ``os.chdir``-ed into a temp directory to isolate its writes, and
+    the program opens ``world.yaml`` by bare relative path. The assertion never
+    ran; the quarantine then read the red as "the test is wrong" and disarmed
+    all three.
+
+    Data extension, at the workspace root, minus anything already known to be a
+    runtime output. Best-effort — an empty list degrades the rule to its generic
+    form rather than failing the gate.
+    """
+    if effects is None:
+        return []
+    try:
+        listing = await effects.list_directory(".", recursive=False)
+    except Exception:  # noqa: BLE001 — brief detail is best-effort
+        return []
+    out: list[str] = []
+    transient_set = {str(t).lstrip("./") for t in transients}
+    for e in getattr(listing, "entries", None) or []:
+        if not getattr(e, "is_file", False):
+            continue
+        name = str(getattr(e, "name", "") or "")
+        ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+        if languages.is_data(ext) and name not in transient_set:
+            out.append(name)
+    return sorted(out)[:12]
+
+
 async def action_gate_author_test(step_input: StepInput) -> StepOutput:
     """Decide whether this diagnosis round can carry an authored regression test.
 
@@ -1657,6 +1691,7 @@ async def action_gate_author_test(step_input: StepInput) -> StepOutput:
     except Exception:  # noqa: BLE001 - brief detail is best-effort
         patterns, observed = [], []
     transients = sorted({*patterns, *observed})
+    data_files = await _input_data_files(effects, transients)
 
     slug = _authored_test_slug(goal.description)
     brief = {
@@ -1668,6 +1703,7 @@ async def action_gate_author_test(step_input: StepInput) -> StepOutput:
         "suggested_path": f"tests/test_{slug}.py" if slug else "tests/test_goal.py",
         "working_directory": str(ctx.get("working_directory", "") or "").strip(),
         "transient_files": transients,
+        "data_files": data_files,
         "attempt": attempts + 1,
     }
     logger.info(

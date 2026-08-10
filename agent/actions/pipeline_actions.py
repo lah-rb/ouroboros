@@ -2136,6 +2136,23 @@ _AUTHORED_QUARANTINE_K = 3
 _AUTHORED_ATTEMPT_CEILING = 4
 
 
+def _harness_red(output: str) -> bool:
+    """True when a red never reached an assertion — a broken test harness.
+
+    The quarantine's whole premise is that a FAILING ASSERTION disagreeing with
+    a green behavioural evaluator is evidence the assertion is wrong. A test
+    that died in setup asserts nothing, so it is evidence of nothing, and
+    letting it advance the conflict counter is how a harness bug retires a
+    correct test. Shares its exception set with the arming probe, which now
+    refuses to arm these in the first place — this is the backstop for tests
+    armed before that gate existed, and for a harness that only breaks later
+    (a data file moved, a dependency dropped).
+    """
+    from agent.actions.authored_test_actions import _environment_red
+
+    return bool(_environment_red(output or ""))
+
+
 async def action_apply_acceptance_verdict(step_input: StepInput) -> StepOutput:
     """Fold the acceptance-check run into a deterministic verdict for the
     evaluator. acceptance_ok means "no deterministic objection" — with zero
@@ -2224,8 +2241,24 @@ async def action_reconcile_acceptance(step_input: StepInput) -> StepOutput:
     disarmed: set[str] = set()
     quarantined: set[str] = set()
     advisory: set[str] = set()  # authored + already quarantined = no veto left
+    harness: set[str] = set()  # red on its own setup — not a contradiction at all
     for row in failed:
         k = _key(row)
+        # A CONTRADICTION IS AN ASSERTION THAT DISAGREES WITH THE EVALUATOR.
+        # A test that never reached its assertion contradicts nothing — it is
+        # red on its own harness, and counting that as evidence against the
+        # test is how three CORRECT tests got disarmed on 2026-08-10. All three
+        # `os.chdir`-ed into a temp dir to isolate their writes, so the
+        # product's relative `open("world.yaml")` raised FileNotFoundError in
+        # setup; the behaviour they asserted was present and passing the whole
+        # time (verified after the run — the save DID contain every key they
+        # checked). The conflict counter must not advance on those rounds, or
+        # a harness bug wears down a test that was right.
+        if _is_authored(k) and _harness_red(
+            f"{row.get('stdout', '')}\n{row.get('stderr', '')}"
+        ):
+            harness.add(k)
+            continue
         goal.acceptance_conflicts[k] = goal.acceptance_conflicts.get(k, 0) + 1
         if _is_authored(k):
             if by_command.get(k, {}).get("required", True) is False:
@@ -2237,6 +2270,40 @@ async def action_reconcile_acceptance(step_input: StepInput) -> StepOutput:
             continue
         if goal.acceptance_conflicts[k] >= _ACCEPTANCE_DISARM_K:
             disarmed.add(k)
+
+    if harness:
+        from agent.persistence.models import WarningRecord
+
+        for k in harness:
+            mission.pending_warnings.append(
+                WarningRecord(
+                    kind="authored_test_harness_broken",
+                    subject=str(
+                        (getattr(goal, "authored_test", None) or {}).get("path") or k
+                    )[:120],
+                    evidence=(
+                        f"The authored regression test for "
+                        f"'{goal.description[:70]}' is red on its own SETUP — "
+                        f"it never reaches the assertion, so it neither "
+                        f"confirms nor contradicts the behaviour. Most often "
+                        f"the test changes the working directory and the "
+                        f"program then cannot find its own data files. "
+                        f"Command: {k[:200]}."
+                    ),
+                    prescribed_fix=(
+                        "Repair the TEST, not the code: the behaviour it "
+                        "asserts has not been measured yet. It keeps its veto "
+                        "and its conflict count is unchanged — a harness bug "
+                        "is not evidence against the assertion."
+                    ),
+                    source_flow="reconcile_acceptance",
+                )
+            )
+            logger.warning(
+                "reconcile: authored test on '%s' is red on its HARNESS, not "
+                "its assertion — conflict NOT counted",
+                goal.description[:50],
+            )
 
     if quarantined:
         from agent.persistence.models import WarningRecord

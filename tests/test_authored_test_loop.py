@@ -1189,3 +1189,210 @@ def test_the_test_gate_ignores_authored_tests_when_harvesting():
         "restarts on the next run that quarantines a test"
     )
     assert "red by design" in src
+
+
+# ══════════════════════════════════════════════════════════════════════
+# A red on the HARNESS is not a red on the defect
+# ══════════════════════════════════════════════════════════════════════
+#
+# LIVE, gpt-oss-medium 2026-08-10. Three authored tests each did
+# `os.chdir(tmpdir)` to isolate their writes; the program opens `world.yaml` by
+# bare relative path, so GameEngine() raised FileNotFoundError in setup and the
+# assertion never ran. `_self_inflicted` passed them — correctly by its own
+# rule, since the exception came from PRODUCT code — so all three armed.
+#
+# They were RIGHT. Verified after the run: the save contained every key they
+# asserted. The quarantine counted three "contradictions" and disarmed them.
+
+_FNF_OUTPUT = """\
+tests/test_save_includes_world_data.py:21: in test_save_includes_world_data
+    engine = GameEngine()
+game.py:88: in __init__
+    self.world = load_world()
+world.py:14: in load_world
+    with open("world.yaml") as fh:
+E       FileNotFoundError: [Errno 2] No such file or directory: 'world.yaml'
+=========================== short test summary info ============================
+FAILED tests/test_save_includes_world_data.py::test_save_includes_world_data
+"""
+
+_ASSERT_OUTPUT = """\
+tests/test_x.py:30: in test_x
+    assert "rooms" in saved_state
+E       AssertionError: assert 'rooms' in {'player': {}}
+tests/test_x.py:30: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_x.py::test_x
+"""
+
+
+def test_an_environment_red_is_named():
+    from agent.actions.authored_test_actions import _environment_red
+
+    assert _environment_red(_FNF_OUTPUT) == "FileNotFoundError"
+    assert _environment_red(_ASSERT_OUTPUT) == ""
+
+
+def test_arming_refuses_a_test_that_dies_on_its_own_harness():
+    """Caught at the probe, while the author is still in session and can fix
+    it — rather than hours later and blind, via the quarantine."""
+    from agent.actions.authored_test_actions import _classify
+
+    verdict, _nodes, detail = _classify(
+        1, _FNF_OUTPUT, False, "tests/test_save_includes_world_data.py"
+    )
+    assert verdict == "broken"
+    assert "FileNotFoundError" in detail and "harness" in detail
+
+
+def test_a_real_assertion_red_still_arms():
+    """The control must not get stricter for the case it exists to permit."""
+    from agent.actions.authored_test_actions import _classify
+
+    verdict, nodes, _detail = _classify(1, _ASSERT_OUTPUT, False, "tests/test_x.py")
+    assert verdict == "red" and nodes
+
+
+def test_a_product_side_red_that_is_not_environmental_still_arms():
+    """`_self_inflicted` permits product-raised exceptions on purpose — a
+    broken product is the point of a negative control. Only the environment
+    set is newly refused."""
+    from agent.actions.authored_test_actions import _classify
+
+    out = _ASSERT_OUTPUT.replace(
+        "E       AssertionError: assert 'rooms' in {'player': {}}",
+        "game.py:200: KeyError",
+    ).replace("tests/test_x.py:30: AssertionError", "game.py:200: KeyError")
+    verdict, _nodes, _detail = _classify(1, out, False, "tests/test_x.py")
+    assert verdict == "red"
+
+
+def _reconcile_si_out(mission, effects, command, stdout):
+    from agent.actions.check_result import check_result
+
+    return StepInput(
+        context={
+            "mission": mission,
+            "validation_results": [
+                check_result(
+                    "authored regression test",
+                    ["/bin/sh", "-c", command],
+                    False,
+                    required=True,
+                    return_code=1,
+                    stdout=stdout,
+                )
+            ],
+        },
+        inputs={"goal_id": "g1"},
+        params={},
+        meta=FlowMeta(flow_name="interact", step_id="reconcile_acceptance"),
+        effects=effects,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_harness_red_never_counts_as_a_contradiction():
+    """THE DEFECT, exactly as it ran. Three correct tests were disarmed because
+    a FileNotFoundError in setup was counted as the test disagreeing with the
+    evaluator. It disagreed with nothing — it never reached its assertion."""
+    check = {
+        "command": TEST_CMD,
+        "name": "authored regression test",
+        "required": True,
+        "source": "authored",
+    }
+    goal = _goal(
+        acceptance_checks=[check],
+        authored_test={"path": TEST_PATH, "command": TEST_CMD},
+    )
+    m = _mission(goal)
+    fx = MockEffects(mission=m)
+
+    for _ in range(_AUTHORED_QUARANTINE_K + 2):
+        await action_reconcile_acceptance(
+            _reconcile_si_out(m, fx, TEST_CMD, _FNF_OUTPUT)
+        )
+
+    assert goal.acceptance_conflicts.get(TEST_CMD, 0) == 0, "harness red must not count"
+    assert goal.acceptance_checks[0]["required"] is True, "it keeps its veto"
+    kinds = [w.kind for w in m.pending_warnings]
+    assert "authored_test_harness_broken" in kinds
+    assert "authored_test_contradicted" not in kinds
+
+
+@pytest.mark.asyncio
+async def test_an_assertion_red_still_quarantines_as_before():
+    """The change must not weaken the case the quarantine exists for."""
+    check = {
+        "command": TEST_CMD,
+        "name": "authored regression test",
+        "required": True,
+        "source": "authored",
+    }
+    goal = _goal(
+        acceptance_checks=[check],
+        authored_test={"path": TEST_PATH, "command": TEST_CMD},
+    )
+    m = _mission(goal)
+    fx = MockEffects(mission=m)
+
+    for _ in range(_AUTHORED_QUARANTINE_K):
+        await action_reconcile_acceptance(
+            _reconcile_si_out(m, fx, TEST_CMD, _ASSERT_OUTPUT)
+        )
+
+    assert goal.acceptance_conflicts[TEST_CMD] == _AUTHORED_QUARANTINE_K
+    assert goal.acceptance_checks[0]["required"] is False
+    assert "authored_test_contradicted" in [w.kind for w in m.pending_warnings]
+
+
+# ── the brief's earned rules ──────────────────────────────────────────
+#
+# Every rule below was paid for by a test we had to throw away. A future edit
+# that drops one silently re-opens that failure, and the loop's own output is
+# the only place it would show up — months later, as a red suite.
+
+
+def test_the_brief_carries_every_earned_rule():
+    from agent.actions.authored_test_actions import AUTHOR_PROMPT
+
+    required = {
+        "round trip": "IF THE BEHAVIOUR IS ONE HALF OF A PAIR",
+        "printed names": "DRIVE IT WITH THE STRINGS THE PROGRAM PRINTS",
+        "no chdir": "DO NOT CHANGE THE WORKING DIRECTORY",
+        "post-fix world": "EVERY ASSERTION DESCRIBES THE WORLD AFTER THE FIX",
+        "own preconditions": "OWN EVERY PRECONDITION",
+        "invariant": "PIN THE INVARIANT",
+        "real signature": "CALL THE CODE AS IT IS ACTUALLY WRITTEN",
+    }
+    missing = [k for k, needle in required.items() if needle not in AUTHOR_PROMPT]
+    assert not missing, f"the brief lost earned rule(s): {missing}"
+
+
+def test_the_brief_interpolates_both_file_lists():
+    """{data_files} is what rule 8 names; an unsubstituted token would ship the
+    literal placeholder to the model — the dead-{close_state_line} class."""
+    from agent.actions.authored_test_actions import _render_prompt
+
+    text = _render_prompt(
+        {
+            "goal_description": "g",
+            "target_file": "game.py",
+            "transient_files": ["savegame.json"],
+            "data_files": ["world.yaml"],
+        }
+    )
+    assert "world.yaml" in text and "savegame.json" in text
+    assert "{data_files}" not in text and "{transient_files}" not in text
+    import re
+
+    assert not re.search(r"\{[a-z_]+\}", text), "unsubstituted token in the brief"
+
+
+def test_the_brief_degrades_without_a_data_file_list():
+    from agent.actions.authored_test_actions import _render_prompt
+
+    text = _render_prompt({"goal_description": "g", "target_file": "game.py"})
+    assert "{data_files}" not in text
+    assert "its data files" in text

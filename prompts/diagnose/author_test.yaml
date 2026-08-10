@@ -22,7 +22,11 @@ content: |
 
   2. PIN THE INVARIANT, NOT A SESSION FINGERPRINT. Assert the rule that must always hold ("saving then loading restores the player's inventory"), never the incidental state one run happened to reach ("current_room_id == 'room4' and inventory == ['sword']"). A fingerprint breaks every time the project legitimately changes.
 
+  2b. IF THE BEHAVIOUR IS ONE HALF OF A PAIR, TEST THE ROUND TRIP. Save/load, encode/decode, write/read, push/pop. Testing one direction proves nothing about the other, and the defect is usually in the direction you did not test. That a saved file CONTAINS a key is a fingerprint of today's format — rule 2's mistake wearing a schema costume; that saving and then loading restores what you had is the invariant. One run shipped THREE separate tests asserting the writer's keys while the reader ignored every one of them, and the broken reader shipped.
+
   3. CALL THE CODE AS IT IS ACTUALLY WRITTEN. You traced these symbols earlier in this session — their real constructor arguments, method names and attribute names are in the bodies you read above. Use those exactly. Do NOT invent a constructor keyword or an attribute that "should" exist; if you are unsure how the object is built, construct it the way the program's own entry point does. A test that dies on `unexpected keyword argument` is red now AND red after the fix — it proves nothing and blocks the goal forever.
+
+  3b. DRIVE IT WITH THE STRINGS THE PROGRAM PRINTS, not the identifiers in its data files. If the room prints `Healing Herb Pouch`, that is the string the parser has to accept — passing the internal id `healing_herb` exercises a path no user can take, so a red tells you about your test rather than the product. Where the two differ, the printed name is the requirement.
 
   4. EXERCISE THE REPAIRED PATH HONESTLY. Call the real symbol. No monkeypatching the thing under test, no `check=False`, no `|| true`, no swallowing exceptions, no network. A test that cannot fail is worse than no test, because it reads like proof.
 
@@ -31,6 +35,10 @@ content: |
   6. NEVER GREP THE SOURCE FOR THE FIX. Searching for a function name or a keyword in a file tests that an edit happened, not that the behaviour works.
 
   7. IT MUST RUN, CLEAN AND FAST. One file, valid Python, imports that resolve, collectable by pytest. Clean up anything it creates. Under {max_seconds} seconds. A test that ERRORS (import error, syntax error, collection failure) is red before the fix AND red after it — that would block this goal forever, so it is rejected outright.
+
+  8. DO NOT CHANGE THE WORKING DIRECTORY. The program finds its own input by relative path — {data_files} are opened from wherever the process starts. A test that `os.chdir`s into a temp directory to isolate what it writes takes the program's input away with it, and dies in setup before your assertion ever runs. THREE tests died exactly this way in one run and ALL THREE WERE CORRECT; the loop read the red as "the test is wrong" and threw them away. If you need to isolate what the program writes, delete those files afterwards — you already know which ones they are: {transient_files}.
+
+  9. EVERY ASSERTION DESCRIBES THE WORLD AFTER THE FIX. Never assert the value the defect currently produces — not even as a "precondition" establishing that the bug is present. That inverts the whole contract: the test passes NOW and fails once the fix lands, which is the exact opposite of what you are being asked for. A test once opened with `assert monster.behavior == "aggressive"` to show the bug, and the fix that finally made the monster flee is what turned it red.
 
   ✅ `engine = Engine(); engine.do("take sword"); engine.save(p); e2 = Engine(); e2.load(p); assert "sword" in e2.inventory`
      — creates its own state, asserts the invariant, exercises the real path.

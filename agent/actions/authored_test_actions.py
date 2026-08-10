@@ -196,6 +196,42 @@ def _self_inflicted(output: str, test_path: str) -> str:
     return ""
 
 
+# Exceptions that are NEVER the behavioural defect under test, wherever they are
+# raised from. `_self_inflicted` above deliberately permits anything raised in
+# PRODUCT code, because a broken product is the whole point of a negative
+# control — but that let a whole class through on 2026-08-10: three tests
+# `os.chdir`-ed into a temp dir to isolate their writes, so the product's
+# `open("world.yaml")` raised FileNotFoundError from product code, and all
+# three armed. The assertion never ran, in any round. They were CORRECT tests —
+# verified afterwards: the behaviour they asserted was present and passing —
+# and the quarantine read their red as "the test is wrong" and disarmed them.
+#
+# No goal in a code_core mission is "the program should raise
+# FileNotFoundError", so a red of this shape is a broken harness, and catching
+# it HERE returns it to the author while the session is still open.
+_ENVIRONMENT_ERRORS = frozenset(
+    {
+        "FileNotFoundError",
+        "NotADirectoryError",
+        "IsADirectoryError",
+        "PermissionError",
+        "ModuleNotFoundError",
+        "ImportError",
+    }
+)
+
+
+def _environment_red(output: str) -> str:
+    """Name the environment error a red was actually caused by, if any."""
+    for _path, exc in _FAIL_LOCATION_RE.findall(output or ""):
+        if exc in _ENVIRONMENT_ERRORS:
+            return exc
+    for exc in _ENVIRONMENT_ERRORS:
+        if f"E       {exc}:" in (output or ""):
+            return exc
+    return ""
+
+
 def _classify(
     return_code: int, output: str, timed_out: bool, test_path: str = ""
 ) -> tuple[str, list[str], str]:
@@ -221,6 +257,14 @@ def _classify(
                 "broken",
                 nodes,
                 f"{exc} raised inside the test — it mis-calls the code",
+            )
+        env = _environment_red(output)
+        if env:
+            return (
+                "broken",
+                nodes,
+                f"{env} — the test cannot reach the behaviour it asserts "
+                f"(it is red on its own harness, not on the defect)",
             )
         return "red", nodes, ""
     return "broken", nodes, "not a classifiable pytest failure"
@@ -544,6 +588,10 @@ def _render_prompt(brief: dict) -> str:
     """
     transients = brief.get("transient_files") or []
     transient_line = ", ".join(str(t) for t in transients[:20]) or "(none declared)"
+    data = brief.get("data_files") or []
+    data_line = ", ".join(str(d) for d in data[:12]) or (
+        "its data files, wherever they are"
+    )
     fields = {
         "{goal_description}": str(brief.get("goal_description", "")),
         "{target_file}": str(brief.get("target_file", "")),
@@ -552,6 +600,7 @@ def _render_prompt(brief: dict) -> str:
         "{root_cause}": str(brief.get("root_cause", "")),
         "{suggested_path}": str(brief.get("suggested_path", "tests/test_goal.py")),
         "{transient_files}": transient_line,
+        "{data_files}": data_line,
         "{max_seconds}": str(int(_AUTHORED_MAX_SECONDS)),
     }
     text = AUTHOR_PROMPT
