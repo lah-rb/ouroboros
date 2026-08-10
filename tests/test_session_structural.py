@@ -520,3 +520,64 @@ def test_session_ab_arms_differ_only_in_structural_mode():
     assert diff == {"structural_mode"}, f"arms differ in more than the mode: {diff}"
     assert b["structural_mode"] == "batch"
     assert s["structural_mode"] == "session"
+
+
+# ══════════════════════════════════════════════════════════════════════
+# The bookkeeping contract
+#
+# Reusing batch's goal accounting means supplying the contract batch
+# supplies, not merely calling the same action. apply_batch_results maps
+# a written file onto its goal through `batch_manifest["written"]`; with
+# no manifest it skips EVERY goal, returns wrote_any=False, and the flow
+# reports failure over a complete artifact. That is what shipped on this
+# mode's first live run — nine files on disk, nine goals still
+# incomplete, zero reports booked. The graph pins could not see it: the
+# walk was reachable and every terminal path closed its session. What
+# was missing was a data contract between two steps, so the pin is here.
+# ══════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.asyncio
+async def test_the_finished_walk_publishes_the_manifest_apply_reads():
+    m = _mission(["entities.py", "world.py", "game.py"])
+    out = await action_session_next_file(
+        _si(
+            MockEffects(),
+            mission=m,
+            pending_files=[],
+            session_files_written=["entities.py", "world.py", "game.py"],
+        )
+    )
+    assert out.result["has_next"] is False
+    manifest = out.context_updates["batch_manifest"]
+    # The one key apply_batch_results actually indexes on.
+    assert set(manifest["written"]) == {"entities.py", "world.py", "game.py"}
+    assert manifest["missing"] == []
+
+
+@pytest.mark.asyncio
+async def test_a_file_the_walk_never_wrote_is_reported_missing_not_written():
+    """A refused write or an empty turn drops a file. It must land in
+    `missing` so the sweep serials it — never in `written`, which would
+    complete a goal for a file that is not on disk."""
+    m = _mission(["entities.py", "world.py", "game.py"])
+    out = await action_session_next_file(
+        _si(
+            MockEffects(),
+            mission=m,
+            pending_files=[],
+            session_files_written=["entities.py", "game.py"],
+        )
+    )
+    manifest = out.context_updates["batch_manifest"]
+    assert manifest["written"] == ["entities.py", "game.py"]
+    assert manifest["missing"] == ["world.py"]
+
+
+def test_the_manifest_key_is_declared_publishable():
+    """_build_step_input filters context to declared keys, so a manifest
+    the action returns but the step does not publish never reaches
+    apply_results — the same silent degradation, one layer up."""
+    steps = _steps()
+    assert "batch_manifest" in steps["next_file"]["publishes"]
+    assert "batch_manifest" in steps["apply_results"]["context"]["optional"]

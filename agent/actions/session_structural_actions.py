@@ -579,6 +579,38 @@ async def action_session_next_file(step_input: StepInput) -> StepOutput:
     pending = list(pending)
 
     if not pending:
+        # THE MANIFEST IS THE BOOKKEEPING CONTRACT, not telemetry.
+        # apply_batch_results reads `batch_manifest["written"]` to decide which
+        # structural goal each file belongs to; with no manifest it skips every
+        # goal, returns wrote_any=False, and the flow reports FAILURE over a
+        # complete artifact. That is exactly what happened on this mode's first
+        # live run: nine files on disk, nine goals still incomplete, zero
+        # reports booked. Reusing batch's bookkeeping means supplying the
+        # contract batch supplies, not merely calling the same action.
+        from agent.actions.mission_actions import _get_sweep_files
+
+        arch = getattr(mission, "architecture", None)
+        declared = list(_get_sweep_files(arch)) if arch is not None else []
+        manifest = {
+            "written": list(written_paths),
+            "missing": [f for f in declared if f not in written_paths],
+            "extra": [],
+            "truncated": False,
+            "salvaged": False,
+            "deliberation_chars": 0,
+            "attempts": 1,
+            "fallback_rung": "session walk",
+        }
+        logger.info(
+            "session walk: complete — %d/%d file(s) written%s",
+            len(written_paths),
+            len(declared) or len(written_paths),
+            (
+                f", missing {', '.join(manifest['missing'][:6])}"
+                if manifest["missing"]
+                else ""
+            ),
+        )
         return StepOutput(
             result={"has_next": False},
             observations=(
@@ -587,6 +619,7 @@ async def action_session_next_file(step_input: StepInput) -> StepOutput:
             context_updates={
                 "pending_files": [],
                 "session_files_written": written_paths,
+                "batch_manifest": manifest,
             },
         )
 

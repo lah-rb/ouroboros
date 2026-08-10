@@ -133,8 +133,12 @@ build_structure_session: #FlowDefinition & {
 					{condition: "true", transition:                    "apply_results"},
 				]
 			}
+			// batch_manifest is the BOOKKEEPING CONTRACT apply_batch_results
+			// reads to map each written file onto its structural goal.
+			// Undeclared, the runtime filters it out and every goal is skipped
+			// — nine files on disk, nine goals incomplete, flow reports FAILURE.
 			publishes: [
-				"pending_files", "session_files_written",
+				"pending_files", "session_files_written", "batch_manifest",
 				"current_file", "binding_vocabulary", "session_repairs",
 			]
 		}

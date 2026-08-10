@@ -763,6 +763,7 @@
         "publishes": [
           "pending_files",
           "session_files_written",
+          "batch_manifest",
           "current_file",
           "binding_vocabulary",
           "session_repairs"
