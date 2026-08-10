@@ -1,0 +1,86 @@
+# ══════════════════════════════════════════════════════════════════════
+# THE SESSION ARM OF THE STRUCTURAL A/B — 2026-08-10
+#
+# Identical to game_challenge_tier.yaml in EVERY respect except one line:
+# structural_mode. The objective is byte-identical and must stay that way —
+# test_session_ab_arms_differ_only_in_structural_mode pins it. An edited
+# objective would score the two arms against different requirements and the
+# comparison would measure the brief instead of the generation strategy.
+#
+# Control arm: tier_20260810-140320 (batch, same model, same 3h backstop).
+# ══════════════════════════════════════════════════════════════════════
+
+# Tier-batch challenge — the model's half of the pair.
+#
+# Scored under dev/blind_panel/TIER_RUBRIC_v2.md. That rubric's binary
+# conformance verdict checks dev/blind_panel/CHALLENGE_v2_CHECKLIST.md, and
+# EVERY item in that checklist is traceable to a phrase in the objective below.
+# If you edit this objective you MUST re-derive the checklist AND open a new
+# epoch (rubric §1: the brief is half the epoch id) — an edited brief scores
+# models against requirements the archived field was never given.
+#
+# v2 (2026-08-03) removed the YAML-data-files sentence: prescribing data/code
+# separation measured compliance with OUR architectural opinion, not the
+# model's judgment. Where world data lives is now the model's call; the
+# checklist dropped its 6 YAML items and connectivity moved into the
+# demo-world sentence ("eight CONNECTED rooms").
+#
+# ── WHY IT IS A PARAGRAPH AND NOT A LIST ─────────────────────────────
+# The asymmetry is the measurement. The model receives prose to interpret; the
+# judge receives an enumerated list to check. Conformance therefore measures
+# instruction-following under interpretation, which is the thing that actually
+# varies between models — a bulleted spec would measure transcription.
+#
+# The model is NEVER shown the rubric. Publishing the weights would collapse
+# creativity and ambition into conformance and we would have measured compliance
+# three times.
+#
+# ── run_until: completed, AND THE BOUND IS THE LEAGUE'S ──────────────
+# `run_until: completed` makes the league bound the ONLY bound. The tier
+# runner supplies it per league (TIER_RUBRIC v2 §2): grinders get the 2h wall
+# parked at the next resumable point; contemplators get --max-cycles 30 (hard,
+# no grace) with a 4h safety wall that never binds a healthy arm. Omitting
+# run_until looks like the neutral choice and is not: it defaults to
+# `cycle_budget`, which applies DEFAULT_MAX_CYCLES = 50
+# (agent/mission_config.py:141) — a third, unmeasured bound sitting inside the
+# range both leagues actually reach, confounding every score. One bound per
+# arm, and the league decides which.
+#
+# structural_mode: batch — one-shot creation via build_structure, which keeps
+# the deterministic cross-module gates (transfer-shape + typecheck) in the path.
+# Those gates target seam bugs, which have been the decisive defect in the
+# majority of panel arms to date.
+# version: 2
+
+objective: >
+  Build a text adventure game in Python that is genuinely fun to play, and make
+  it feel like a finished product rather than a prototype. It should open on a
+  title screen before play begins. Write a command parser covering movement
+  (go north/south/east/west), inventory handling (take, drop, use, examine,
+  equip), conversation (talk to), combat (attack, flee), and the usual
+  utilities: look, status, help, and quit.
+  Help should tell a new player what they can actually type, and status should
+  show health, equipment, and location at a glance.
+
+  Combat is turn-based. The player has health and attack power; weapons and
+  armour found in the world change those stats once equipped, and healing items
+  can be used in the middle of a fight. Three regular monsters guard specific
+  rooms and fight back, each with its own behaviour rather than a shared script.
+  The final boss has two phases and a weakness to one special item hidden
+  somewhere in the world; beating it wins the game, and dying ends the run with
+  an honest defeat screen that offers a restart.
+
+  Track game state properly — location, stats, equipment, inventory, room
+  changes, NPC dialogue progression, and which monsters have already been
+  defeated — and support saving and loading all of it to JSON. Ship a playable
+  demo world of at least eight connected rooms and five items, among them a
+  weapon, a piece of armour, a healing item, and the boss-weakness item, plus
+  two NPCs whose branching dialogue hints at what the boss is vulnerable to.
+  The game runs from the command line, narrates combat clearly, and should be
+  winnable by a player who listens to the NPCs.
+
+working_dir: "/tmp/ouroboros-challenge"
+effects_profile: local
+llmvp_endpoint: "http://localhost:8008/graphql"
+structural_mode: session
+run_until: completed

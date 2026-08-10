@@ -485,3 +485,38 @@ def test_session_mode_is_code_core_only_and_degrades_safely():
     ):
         if controller in compiled:
             assert "dispatch_session_create" not in compiled[controller]["steps"]
+
+
+def test_session_ab_arms_differ_only_in_structural_mode():
+    """The A/B is only meaningful if the two missions differ in ONE line.
+
+    An edited objective would score the arms against different requirements —
+    the mission header's own rule ("if you edit this objective you MUST
+    re-derive the checklist AND open a new epoch") — and the comparison would
+    measure the brief instead of the generation strategy.
+    """
+    import re
+
+    base = (ROOT / "missions" / "game_challenge_tier.yaml").read_text()
+    sess = (ROOT / "missions" / "game_challenge_tier_session.yaml").read_text()
+
+    def objective(text: str) -> str:
+        m = re.search(r"^objective: >\n(.*?)\n\w", text, re.S | re.M)
+        assert m, "objective block not found"
+        return m.group(1)
+
+    assert objective(base) == objective(sess), "the two arms' briefs have drifted"
+
+    def settings(text: str) -> dict:
+        out = {}
+        for line in text.splitlines():
+            if re.match(r"^[a-z_]+:\s", line) and not line.startswith("objective:"):
+                k, _, v = line.partition(":")
+                out[k.strip()] = v.strip()
+        return out
+
+    b, s = settings(base), settings(sess)
+    diff = {k for k in set(b) | set(s) if b.get(k) != s.get(k)}
+    assert diff == {"structural_mode"}, f"arms differ in more than the mode: {diff}"
+    assert b["structural_mode"] == "batch"
+    assert s["structural_mode"] == "session"
