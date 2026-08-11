@@ -1033,3 +1033,53 @@ class Game:
         self.player["equipped_weapon"] = item.name
 """
     assert _field_vocabulary_violations({"g.py": src, "o.py": _OTHER}) == []
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Code-synthesised exits
+#
+# A blind panel checked one of this check's own findings and was half
+# right about it: a room genuinely had no inbound exit in the world file
+# and was still reachable in play, through a `hidden` exit hardcoded in
+# the engine against literal room ids and gated on carrying an item. The
+# finding was true of the DATA and incomplete about the ARTIFACT.
+#
+# Qualified, not dropped — dropping would hide the real disconnected-wing
+# case, which also names its rooms somewhere. Measured across the corpus:
+# 1 of 29 reachability findings qualifies, and it is precisely the one the
+# panel proved was a secret passage. The other 28 are dead content.
+# ══════════════════════════════════════════════════════════════════════
+
+_WORLD_WITH_ORPHAN = """
+rooms:
+  - id: entrance
+    exits: {north: library}
+  - id: library
+    exits: {south: entrance}
+  - id: grotto
+    exits: {east: entrance}
+"""
+
+
+def test_an_orphan_named_in_code_is_qualified_not_dropped():
+    code = {
+        "game.py": 'if room == "library" and "ancient_map" in inv:\n'
+        '    exits.append("grotto")\n'
+    }
+    out = _graph_placement_violations({"world.yaml": _WORLD_WITH_ORPHAN}, code)
+    assert len(out) == 1
+    assert "grotto" in out[0]
+    assert "NOTE:" in out[0] and "synthesise" in out[0]
+
+
+def test_an_orphan_absent_from_code_stays_a_plain_finding():
+    code = {"game.py": "def move(direction):\n    return direction\n"}
+    out = _graph_placement_violations({"world.yaml": _WORLD_WITH_ORPHAN}, code)
+    assert len(out) == 1
+    assert "grotto" in out[0]
+    assert "NOTE:" not in out[0]
+
+
+def test_omitting_code_sources_keeps_the_old_behaviour():
+    out = _graph_placement_violations({"world.yaml": _WORLD_WITH_ORPHAN})
+    assert len(out) == 1 and "NOTE:" not in out[0]

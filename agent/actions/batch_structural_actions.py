@@ -597,11 +597,27 @@ def _field_vocabulary_violations(sources: dict[str, str]) -> list[str]:
     return out
 
 
-def _graph_placement_violations(data_sources: dict[str, str]) -> list[str]:
+def _graph_placement_violations(
+    data_sources: dict[str, str], code_sources: dict[str, str] | None = None
+) -> list[str]:
     """Unreachable rooms, exits to nowhere, and entities placed in no room.
 
     Returns [] when the world cannot be understood — a shape this does not
     recognise is not evidence of a defect.
+
+    CODE CAN SYNTHESISE EXITS, and a data-only walk cannot see it. A blind
+    panel checked one of this check's own findings and was half right about
+    it: a room genuinely had no inbound exit in the world file, and was
+    nonetheless reachable in play through a `hidden` exit hardcoded in the
+    engine against literal room ids and gated on carrying an item. The
+    finding was true of the DATA and incomplete about the ARTIFACT.
+
+    So when `code_sources` are supplied and an unreachable room's id appears
+    as a string literal in them, the finding is QUALIFIED rather than
+    dropped. Dropping it would hide the real disconnected-wing case, which
+    also tends to name its rooms somewhere; qualifying it tells the reader
+    exactly which possibility to check, and keeps the check honest about
+    what it can and cannot see.
     """
     import json as stdlib_json
 
@@ -661,10 +677,28 @@ def _graph_placement_violations(data_sources: dict[str, str]) -> list[str]:
                         queue.append(nxt)
             unreachable = sorted(ids - seen)
             if unreachable:
+                in_code = sorted(
+                    r
+                    for r in unreachable
+                    if any(
+                        f'"{r}"' in src or f"'{r}'" in src
+                        for src in (code_sources or {}).values()
+                    )
+                )
+                qualifier = ""
+                if in_code:
+                    qualifier = (
+                        f" NOTE: {', '.join(in_code[:4])} "
+                        f"{'is' if len(in_code) == 1 else 'are'} named as a string "
+                        f"literal in the code, so the engine may synthesise this "
+                        f"exit (an item-gated secret passage looks exactly like "
+                        f"this); confirm in play before treating it as dead content."
+                    )
                 out.append(
                     f"world graph ({path}): {len(unreachable)} room(s) cannot be "
-                    f"reached from '{start}' — {', '.join(unreachable[:6])}. A room "
-                    f"no path leads to is content the player can never see."
+                    f"reached from '{start}' by the authored exits — "
+                    f"{', '.join(unreachable[:6])}. A room no path leads to is "
+                    f"content the player can never see.{qualifier}"
                 )
 
         # ── entities placed in no room ────────────────────────────────
