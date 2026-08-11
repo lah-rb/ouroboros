@@ -1,0 +1,77 @@
+# Materials spectroscopy harvest — scraper flow set.
+#
+# Stage one of a corpus intended for SPECTRAL DATA EXTRACTION: the
+# extractor stage mines figures and tables from the OA PDFs this
+# collects, and the result trains a LoRA. That end use sets the whole
+# shape of the objective below:
+#
+#   * The filter is NAMED MATERIAL SYSTEM + AN ACTUAL MEASURED SPECTRUM.
+#     A paper that discusses a technique without showing instrument
+#     output is worth little here; one that plots a labelled spectrum of
+#     a named mineral is worth a lot, whatever journal it sits in.
+#   * VARIETY BEATS DEPTH. Transfer to unknown systems is the goal, so
+#     breadth across material families and instruments matters more than
+#     exhaustive coverage of any one.
+#   * CAST WIDE. A manual curation pass follows, so recall is cheap and
+#     misses are expensive — near-neighbour techniques (SIBS, XRF, FTIR)
+#     are deliberately inside the net, not outside it.
+#
+# Run:
+#   export OUROBOROS_CONTACT_EMAIL=<a real address — the polite API pools
+#     throttle the default, which is detectable as a placeholder>
+#   uv run ouroboros.py mission create --mission_config spectra_scrape
+#   uv run ouroboros.py start --working-dir /Users/lah-rb/corpora/ouroboros-spectra
+# version: 1
+
+objective: >
+  Build a literature corpus of materials spectroscopy papers that report
+  MEASURED SPECTRA on NAMED MATERIAL SYSTEMS — the paper must both
+  identify what was measured (a named mineral, pigment, alloy, oxide,
+  polymer, or biological material) and present the instrument's actual
+  output, as a plotted spectrum or diffractogram, a peak/band assignment
+  table, or tabulated line intensities. Papers that only discuss a
+  technique, model it, or review it without showing measured data are
+  out of scope.
+
+  Cover these families of technique. Atomic emission from a
+  laser or electrical spark: laser-induced breakdown spectroscopy
+  (LIBS), spark-induced breakdown spectroscopy (SIBS), spark and arc
+  optical emission, micro-LIBS and depth profiling. Vibrational: Raman
+  including micro-Raman, resonance and surface-enhanced Raman, together
+  with its infrared counterparts FTIR, ATR-FTIR and diffuse-reflectance
+  infrared. Diffraction: powder, micro-, grazing-incidence and
+  synchrotron X-ray diffraction, with the phase identifications they
+  support. Electronic and reflectance: UV-visible-near-infrared
+  absorption and diffuse reflectance, band-gap determination, and
+  visible/short-wave-infrared reflectance including hyperspectral
+  imaging. And the close neighbours that travel with these instruments
+  in practice: X-ray fluorescence including portable XRF,
+  energy-dispersive spectroscopy, photoluminescence and
+  cathodoluminescence.
+
+  Prioritise minerals, rocks and regolith first, then pigments, paints
+  and other cultural-heritage materials, biological and biomineral
+  samples, metals and alloys, and oxides and ceramics from engineered
+  materials. Value most highly any paper applying SEVERAL of these
+  techniques to the SAME sample, since paired spectra of one identified
+  material are the strongest evidence available. Prefer open-access
+  papers, because only their full text can be mined, and prefer breadth
+  of material systems and instruments over repeated coverage of any
+  single well-studied system.
+
+flow_set: scraper
+
+# Durable home — /tmp is wiped on reboot and took a corpus with it once.
+working_dir: "/Users/lah-rb/corpora/ouroboros-spectra"
+effects_profile: local
+llmvp_endpoint: "http://localhost:8008/graphql"
+
+# Run to the research gate's verdict. The wall clock bounds API-pacing
+# worst cases; the politeness budget independently caps total requests,
+# so this is a backstop rather than the intended stopping condition.
+run_until: completed
+max_wall_clock: 8h
+
+pre_create:
+  - "mkdir -p /Users/lah-rb/corpora/ouroboros-spectra"
+  - "uv run ouroboros.py cue-compile"

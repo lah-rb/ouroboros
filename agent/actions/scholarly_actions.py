@@ -317,8 +317,20 @@ _S2_SEARCH_FIELDS = (
 _OPENALEX_BASE = "https://api.openalex.org"
 _OPENALEX_SELECT = (
     "id,doi,title,abstract_inverted_index,publication_year,primary_location,"
-    "authorships,open_access,best_oa_location,ids,language"
+    "authorships,open_access,best_oa_location,locations,ids,language"
 )
+
+
+def _dedup_urls(urls: Any) -> list[str]:
+    """Order-preserving dedup of a URL list, dropping blanks."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for url in urls or []:
+        text = str(url or "").strip()
+        if text and text not in seen:
+            seen.add(text)
+            out.append(text)
+    return out
 
 
 def _deinvert_abstract(idx: Any) -> str:
@@ -341,6 +353,22 @@ def _candidate_base(aspect_name: str) -> dict:
         "access_status": "",
         "source_aspects": [aspect_name] if aspect_name else [],
         "oa_pdf_url": "",
+        # EVERY known OA location, best first, not just the best one. The
+        # publisher copy is the version of record and is tried first, but
+        # major publishers front their PDFs with commercial bot management
+        # (Radware, Cloudflare) that a script cannot pass and should not
+        # try to. Measured on the first spectra run: 224 of 325 resolved
+        # OA papers failed to download, 128 on HTTP 403 and 79 on a
+        # returned landing page -- yet 57% of a sampled 30 had a
+        # repository copy (PMC, Zenodo, DOAJ, HAL, institutional) that
+        # serves scripts by design. Falling back through this list uses
+        # the OA infrastructure as intended; defeating the bot wall is
+        # not an option we take.
+        "oa_pdf_urls": [],
+        # Urls already tried and failed. Retry is then idempotent: a
+        # re-resolve only re-arms a paper when it turns up a location we
+        # have NOT burned, so a dead link is never re-fetched forever.
+        "oa_attempted": [],
         "pdf_path": "",
         "tags": [],
         "reference_dois": [],
@@ -371,6 +399,7 @@ def _normalize_s2(paper: dict, aspect_name: str) -> dict:
         "s2_id": str(paper.get("paperId") or ""),
         "openalex_id": "",
         "oa_pdf_url": str(oa.get("url") or ""),
+        "oa_pdf_urls": _dedup_urls([oa.get("url")]),
     }
     rec["paper_key"] = paper_key(rec)
     return rec
@@ -400,6 +429,16 @@ def _normalize_openalex(work: dict, aspect_name: str) -> dict:
         "s2_id": "",
         "openalex_id": str(work.get("id") or ids.get("openalex") or ""),
         "oa_pdf_url": str(best_oa.get("pdf_url") or ""),
+        # locations[] rides along in the same request as best_oa_location,
+        # so the alternates cost no extra call.
+        "oa_pdf_urls": _dedup_urls(
+            [best_oa.get("pdf_url")]
+            + [
+                loc.get("pdf_url")
+                for loc in (work.get("locations") or [])
+                if isinstance(loc, dict) and loc.get("is_oa")
+            ]
+        ),
         "language": str(work.get("language") or ""),
         "license": str(best_oa.get("license") or ""),
     }
@@ -514,11 +553,19 @@ async def action_merge_candidates(step_input: StepInput) -> StepOutput:
         if key in batch:
             existing = batch[key]
             # Prefer the record with an abstract / OA url.
+            # S2 and OpenAlex often know DIFFERENT locations for the same
+            # paper, so pool their urls rather than letting one win.
+            pooled = _dedup_urls(
+                (existing.get("oa_pdf_urls") or [existing.get("oa_pdf_url")])
+                + (cand.get("oa_pdf_urls") or [cand.get("oa_pdf_url")])
+            )
             if not existing.get("abstract") and cand.get("abstract"):
                 cand["source_aspects"] = existing.get("source_aspects", [])
                 batch[key] = {**existing, **{k: v for k, v in cand.items() if v}}
+                existing = batch[key]
             elif not existing.get("oa_pdf_url") and cand.get("oa_pdf_url"):
                 existing["oa_pdf_url"] = cand["oa_pdf_url"]
+            existing["oa_pdf_urls"] = pooled
         else:
             batch[key] = dict(cand)
 
@@ -596,11 +643,15 @@ async def action_catalog_batch_next(step_input: StepInput) -> StepOutput:
 
 
 async def action_resolve_oa_pdf(step_input: StepInput) -> StepOutput:
-    """Assign access_status per paper; resolve missing OA urls via Unpaywall.
+    """Assign access_status per paper; gather EVERY OA location via Unpaywall.
 
-    oa_pdf (an OA location is known) / closed (no OA location anywhere).
-    oa_unresolved is assigned at download time when a known location
-    fails to fetch. Closed is an ACCESS state, never a failure.
+    oa_pdf (at least one untried location) / oa_unresolved (locations
+    exist but all have been tried and failed) / closed (no OA location
+    anywhere). Closed is an ACCESS state, never a failure.
+
+    Re-running this re-arms a previously failed paper only when it finds
+    a location not already in oa_attempted, so the step is safe to sweep
+    repeatedly over the whole databank.
 
     Context: catalog_batch
     Result: resolved, closed; Publishes: catalog_batch
@@ -609,31 +660,50 @@ async def action_resolve_oa_pdf(step_input: StepInput) -> StepOutput:
     batch = list(step_input.context.get("catalog_batch") or [])
     resolved = closed = 0
     for rec in batch:
-        if rec.get("oa_pdf_url"):
+        urls = _dedup_urls(rec.get("oa_pdf_urls") or [rec.get("oa_pdf_url")])
+        attempted = set(rec.get("oa_attempted") or [])
+        # Ask Unpaywall when there is nothing to fall back to -- no location
+        # at all, a single location, or a set we have already burned. A
+        # paper that arrived with several live alternates needs no call.
+        if len(urls) < 2 or not (set(urls) - attempted):
+            doi = str(rec.get("doi") or "").strip()
+            if doi:
+                up = await polite_request(
+                    effects,
+                    "GET",
+                    f"https://api.unpaywall.org/v2/{doi}",
+                    params={"email": _contact_email()},
+                )
+                if up.status == 200 and isinstance(up.json_data, dict):
+                    best = up.json_data.get("best_oa_location") or {}
+                    # oa_locations arrives best-first, which puts the
+                    # publisher's version of record ahead of repository
+                    # copies -- the order we want for figure fidelity.
+                    urls = _dedup_urls(
+                        urls
+                        + [best.get("url_for_pdf")]
+                        + [
+                            loc.get("url_for_pdf")
+                            for loc in (up.json_data.get("oa_locations") or [])
+                            if isinstance(loc, dict)
+                        ]
+                    )
+                    if best.get("license") and not rec.get("license"):
+                        rec["license"] = str(best.get("license"))
+        if urls:
+            rec["oa_pdf_urls"] = urls
+            rec["oa_pdf_url"] = urls[0]
+        if set(urls) - attempted:
             rec["access_status"] = "oa_pdf"
             resolved += 1
-            continue
-        doi = str(rec.get("doi") or "").strip()
-        if doi:
-            up = await polite_request(
-                effects,
-                "GET",
-                f"https://api.unpaywall.org/v2/{doi}",
-                params={"email": _contact_email()},
-            )
-            url = ""
-            if up.status == 200 and isinstance(up.json_data, dict):
-                best = up.json_data.get("best_oa_location") or {}
-                url = str(best.get("url_for_pdf") or "")
-                if best.get("license") and not rec.get("license"):
-                    rec["license"] = str(best.get("license"))
-            if url:
-                rec["oa_pdf_url"] = url
-                rec["access_status"] = "oa_pdf"
-                resolved += 1
-                continue
-        rec["access_status"] = "closed"
-        closed += 1
+        elif urls:
+            # Every known location has been tried. Not closed -- open in
+            # principle, unreachable in practice, and distinguishing the
+            # two keeps the corpus honest about why a paper is missing.
+            rec["access_status"] = "oa_unresolved"
+        else:
+            rec["access_status"] = "closed"
+            closed += 1
     return StepOutput(
         result={"resolved": resolved, "closed": closed},
         observations=f"OA resolution: {resolved} open, {closed} closed",
@@ -644,9 +714,11 @@ async def action_resolve_oa_pdf(step_input: StepInput) -> StepOutput:
 async def action_download_papers(step_input: StepInput) -> StepOutput:
     """Download oa_pdf papers to pdfs/<paper_key>.pdf.
 
-    Fetch failure downgrades access_status to oa_unresolved (retryable
-    in v2); the paper still proceeds to tagging — metadata + abstract
-    are enough for the catalog.
+    Tries every known OA location in turn, recording each in oa_attempted
+    so a later sweep neither repeats a dead link nor gives up on a paper
+    that has gained a new one. Exhausting them all downgrades
+    access_status to oa_unresolved; the paper still proceeds to tagging —
+    metadata + abstract are enough for the catalog.
 
     Context: catalog_batch
     Result: downloaded, failed; Publishes: catalog_batch
@@ -659,14 +731,36 @@ async def action_download_papers(step_input: StepInput) -> StepOutput:
             continue
         key = rec.get("paper_key") or paper_key(rec)
         path = f"{PDF_DIR}/{key}.pdf"
-        dl = await effects.http_download(rec["oa_pdf_url"], path)
-        if dl.success:
-            rec["pdf_path"] = path
-            rec["status"] = "acquired"
+        attempted = list(rec.get("oa_attempted") or [])
+        candidates = [
+            url
+            for url in _dedup_urls(rec.get("oa_pdf_urls") or [rec.get("oa_pdf_url")])
+            if url not in set(attempted)
+        ]
+        # Walk the locations until one yields a PDF. The publisher copy
+        # leads and is usually blocked by bot management; the repository
+        # copies behind it are what actually land.
+        last_error = ""
+        for url in candidates:
+            dl = await effects.http_download(url, path)
+            attempted.append(url)
+            if dl.success:
+                rec["pdf_path"] = path
+                rec["oa_pdf_url"] = url
+                rec["status"] = "acquired"
+                rec["failure_reason"] = ""
+                break
+            last_error = str(dl.error or f"HTTP {dl.status}")
+        rec["oa_attempted"] = attempted
+        if rec.get("pdf_path"):
             downloaded += 1
         else:
             rec["access_status"] = "oa_unresolved"
-            rec["failure_reason"] = str(dl.error or f"HTTP {dl.status}")
+            rec["failure_reason"] = (
+                f"{last_error} (tried {len(attempted)} location(s))"
+                if last_error
+                else rec.get("failure_reason", "")
+            )
             failed += 1
     return StepOutput(
         result={"downloaded": downloaded, "failed": failed},

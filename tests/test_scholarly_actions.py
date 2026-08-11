@@ -219,6 +219,101 @@ async def test_download_failure_downgrades_to_unresolved():
     assert batch[2]["access_status"] == "closed"  # untouched, proceeds
 
 
+@pytest.mark.asyncio
+async def test_download_falls_through_to_a_later_location():
+    """The publisher copy is bot-walled; a repository copy behind it lands.
+
+    Measured on the first spectra run: 224 of 325 resolved OA papers
+    failed, overwhelmingly on publisher bot management (403) or a
+    returned landing page. A single-url downloader records those as
+    unresolved even when another location would serve.
+    """
+    fx = MockEffects(
+        http_downloads={
+            "https://publisher.example/p.pdf": DownloadResult(
+                success=False,
+                url="https://publisher.example/p.pdf",
+                path="p",
+                error="HTTP 403",
+            ),
+            "https://landing.example/p": DownloadResult(
+                success=False,
+                url="https://landing.example/p",
+                path="p",
+                error="response is text/html, not a document",
+            ),
+        }
+    )
+    batch = [
+        {
+            "paper_key": "walled",
+            "access_status": "oa_pdf",
+            "oa_pdf_url": "https://publisher.example/p.pdf",
+            "oa_pdf_urls": [
+                "https://publisher.example/p.pdf",
+                "https://landing.example/p",
+                "https://repo.example/p.pdf",  # unregistered => succeeds
+            ],
+            "oa_attempted": [],
+            "pdf_path": "",
+        }
+    ]
+    out = await action_download_papers(_si(fx, context={"catalog_batch": batch}))
+    assert out.result == {"downloaded": 1, "failed": 0}
+    rec = batch[0]
+    assert rec["status"] == "acquired"
+    # The url that WORKED becomes the record's url, not the one we started on.
+    assert rec["oa_pdf_url"] == "https://repo.example/p.pdf"
+    assert rec["failure_reason"] == ""
+    assert rec["oa_attempted"] == [
+        "https://publisher.example/p.pdf",
+        "https://landing.example/p",
+        "https://repo.example/p.pdf",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_exhausted_locations_are_not_retried_forever():
+    """Re-resolving a burned paper must not re-arm it without a NEW location."""
+    fx = MockEffects(
+        http_responses={
+            # Unpaywall knows only the location we have already burned.
+            "https://api.unpaywall.org/v2/10.9/dead": HttpResult(
+                status=200,
+                url="up",
+                json_data={
+                    "best_oa_location": {"url_for_pdf": "https://dead.example/p.pdf"},
+                    "oa_locations": [{"url_for_pdf": "https://dead.example/p.pdf"}],
+                },
+            )
+        }
+    )
+    batch = [
+        {
+            "paper_key": "burned",
+            "doi": "10.9/dead",
+            "access_status": "oa_unresolved",
+            "oa_pdf_url": "https://dead.example/p.pdf",
+            "oa_pdf_urls": ["https://dead.example/p.pdf"],
+            "oa_attempted": ["https://dead.example/p.pdf"],
+            "pdf_path": "",
+        }
+    ]
+    out = await action_resolve_oa_pdf(_si(fx, context={"catalog_batch": batch}))
+    # Open in principle, unreachable in practice — and NOT counted as closed.
+    assert batch[0]["access_status"] == "oa_unresolved"
+    assert out.result == {"resolved": 0, "closed": 0}
+
+    # A newly discovered location re-arms it.
+    batch[0]["oa_pdf_urls"] = [
+        "https://dead.example/p.pdf",
+        "https://fresh.example/p.pdf",
+    ]
+    out = await action_resolve_oa_pdf(_si(fx, context={"catalog_batch": batch}))
+    assert batch[0]["access_status"] == "oa_pdf"
+    assert out.result == {"resolved": 1, "closed": 0}
+
+
 def _mission_with_plan():
     return MissionState(
         objective="t",
