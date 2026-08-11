@@ -436,6 +436,40 @@ def _roundtrip_keys(
     return written, read
 
 
+def _implicated_file(message: str, written: list[str]) -> str:
+    """The written file a cross-file violation actually names, if any.
+
+    Violation text carries its own provenance — "(game.py, save_load.py)" —
+    so the owner is recoverable without restructuring the checks' return
+    type.
+
+    THE READER OWNS A ROUND-TRIP DEFECT. When keys are written and never
+    read, the writer is doing its job and the loader is dropping state —
+    "a save whose loader ignores what the writer stored", as the message
+    says. So the `never read back (...)` clause wins when present, and only
+    then does the leftmost-mentioned file apply. Picking by string length
+    got this right once by accident and would have got it wrong the moment
+    the writer had the longer path.
+    """
+    import re as stdlib_re
+
+    clause = stdlib_re.search(r"never read back \(([^)]*)\)", message)
+    if clause:
+        named = clause.group(1)
+        for path in sorted(written, key=len, reverse=True):
+            if path and path in named:
+                return path
+
+    best, best_pos = "", len(message) + 1
+    for path in written:
+        if not path:
+            continue
+        i = message.find(path)
+        if i >= 0 and i < best_pos:
+            best, best_pos = path, i
+    return best
+
+
 def _serialized_roundtrip_violations(sources: dict[str, str]) -> list[str]:
     """Keys written to a serialized payload that nothing ever reads back.
 
@@ -1050,21 +1084,49 @@ async def action_check_session_file(step_input: StepInput) -> StepOutput:
     code = {p: s for p, s in sources.items() if p.endswith(".py")}
     data = {p: s for p, s in sources.items() if languages.is_data(_ext(p))}
 
+    # ── FILESET CHECKS RUN ONCE, WHEN THE FILESET EXISTS ──────────────
+    # A whole-project check applied after every file asks a question the
+    # walk cannot yet answer. Save/load wiring lives in the entry point,
+    # which creation_order writes LAST, so "nothing reads this payload" is
+    # true of every intermediate state and means nothing until the final
+    # file lands. Measured live: the round trip failed at file 5 of 7 while
+    # the consumer was still unwritten, and the model burned repair turns on
+    # a condition it had no way to satisfy.
+    pending = list(ctx.get("pending_files") or [])
     cross: list[str] = []
-    cross.extend(_serialized_roundtrip_violations(code))
-    cross.extend(_data_registry_violations(data, ctx.get("data_registry") or []))
+    if not pending:
+        cross.extend(_serialized_roundtrip_violations(code))
+        cross.extend(_data_registry_violations(data, ctx.get("data_registry") or []))
 
     entry = results.setdefault(
         current, {"passed": True, "checks_failed": [], "output": ""}
     )
     own = list(entry.get("checks_failed") or [])
     violations = [f"{current}: {c}" for c in own] + cross
-    if cross:
-        entry["passed"] = False
-        entry["checks_failed"] = own + ["cross_file"]
-        entry["output"] = (entry.get("output") or "") + "\n" + "\n".join(cross)
 
-    file_ok = bool(entry.get("passed", True)) and not cross
+    # ── ATTRIBUTE TO THE FILE THAT OWNS THE DEFECT ────────────────────
+    # Booking a cross-file violation against whatever file happened to be
+    # current is how a defect in game.py's save payload became a diagnosis
+    # aimed at data/world.yaml, which was then patched to satisfy it. The
+    # message names its writer files; book it there.
+    current_implicated = False
+    for msg in cross:
+        target = _implicated_file(msg, written_paths) or current
+        if target == current:
+            current_implicated = True
+        tgt_entry = results.setdefault(
+            target, {"passed": True, "checks_failed": [], "output": ""}
+        )
+        tgt_entry["passed"] = False
+        tgt_entry["checks_failed"] = list(tgt_entry.get("checks_failed") or []) + [
+            "cross_file"
+        ]
+        tgt_entry["output"] = (tgt_entry.get("output") or "") + "\n" + msg
+
+    # Repair only what THIS turn can fix. A violation owned by another file
+    # is recorded against that file and left to the sweep, which will
+    # diagnose it with the right target instead of rewriting a bystander.
+    file_ok = bool(entry.get("passed", True)) and not current_implicated
     repairs_left = max(0, _SESSION_REPAIR_ATTEMPTS - repairs)
     if not file_ok:
         logger.info(

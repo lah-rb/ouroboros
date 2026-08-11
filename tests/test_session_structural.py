@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 
 from agent.actions.session_structural_actions import (
+    _implicated_file,
     _payload_methods,
     _roundtrip_keys,
     _serializer_functions,
@@ -882,3 +883,104 @@ def load_game(path):
     return data["rooms"]
 """
     assert _serialized_roundtrip_violations({"s.py": src, "o.py": _SIB}) == []
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Ordering and attribution
+#
+# Both measured live. A whole-project check applied after every file asks
+# a question the walk cannot answer yet: save/load wiring lives in the
+# entry point, which creation_order writes LAST, so "nothing reads this
+# payload" is true of every intermediate state. The round trip failed at
+# file 5 of 7 with the consumer still unwritten and the model burned
+# repair turns on a condition it could not satisfy.
+#
+# And a cross-file violation booked against whatever file was current is
+# how a defect in game.py's save payload became a diagnosis aimed at
+# data/world.yaml — which was then patched to satisfy it.
+# ══════════════════════════════════════════════════════════════════════
+
+
+def test_the_implicated_file_is_recovered_from_the_message():
+    written = ["game.py", "save_load.py", "data/world.yaml"]
+    msg = "serialized round trip: rooms are written into the saved payload (game.py) and never read back (save_load.py)."
+    # The READER owns a round-trip defect: the writer stored the state and
+    # the loader dropped it. Length-based matching got this right by luck.
+    assert _implicated_file(msg, written) == "save_load.py"
+    assert _implicated_file("no file named here", written) == ""
+
+
+def test_longest_path_wins_so_a_bare_name_cannot_shadow_it():
+    written = ["game.py", "src/game.py"]
+    msg = "written into the saved payload (src/game.py)"
+    assert _implicated_file(msg, written) == "src/game.py"
+
+
+@pytest.mark.asyncio
+async def test_fileset_checks_do_not_run_mid_walk():
+    """The same fileset the checkpoint correctly fails when complete must
+    pass while files are still pending — the consumer may be unwritten."""
+    fx = MockEffects(files={"save_load.py": _SAVE_LOAD, "game.py": _GAME_BROKEN})
+    out = await action_check_session_file(
+        _si(
+            fx,
+            current_file="game.py",
+            session_files_written=["save_load.py", "game.py"],
+            pending_files=["main.py"],
+        )
+    )
+    assert out.result["file_ok"] is True, "mid-walk must not fire fileset checks"
+    assert not any(
+        "serialized round trip" in v
+        for v in (out.context_updates.get("violations") or [])
+    )
+
+
+@pytest.mark.asyncio
+async def test_fileset_checks_run_on_the_last_file():
+    fx = MockEffects(files={"save_load.py": _SAVE_LOAD, "game.py": _GAME_BROKEN})
+    out = await action_check_session_file(
+        _si(
+            fx,
+            current_file="game.py",
+            session_files_written=["save_load.py", "game.py"],
+            pending_files=[],
+        )
+    )
+    assert out.result["file_ok"] is False
+    assert any("serialized round trip" in v for v in out.context_updates["violations"])
+
+
+@pytest.mark.asyncio
+async def test_a_violation_owned_by_another_file_does_not_repair_a_bystander():
+    """A defect in game.py's payload booked against whatever file happened
+    to be current is how a game.py seam became a diagnosis aimed at
+    data/world.yaml, which was then patched to satisfy it."""
+    fx = MockEffects(
+        files={
+            "save_load.py": _SAVE_LOAD,
+            "game.py": _GAME_BROKEN,
+            "notes.py": _SIB,
+        }
+    )
+    out = await action_check_session_file(
+        _si(
+            fx,
+            current_file="notes.py",
+            session_files_written=["save_load.py", "game.py", "notes.py"],
+            pending_files=[],
+        )
+    )
+    # notes.py is innocent: it must not be sent to a repair turn.
+    assert out.result["file_ok"] is True
+    results = out.context_updates["batch_check_results"]
+    owner = next(
+        p for p, e in results.items() if "cross_file" in (e.get("checks_failed") or [])
+    )
+    assert owner != "notes.py"
+
+
+def test_the_checkpoint_step_declares_pending_files():
+    """Undeclared, _build_step_input filters it out and the action reads []
+    on every file — the gate silently never fires."""
+    assert "pending_files" in _steps()["check_file"]["context"]["optional"]

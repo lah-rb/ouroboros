@@ -202,7 +202,15 @@ build_structure_session: #FlowDefinition & {
 			description: "Gate this file and the fileset it now belongs to"
 			context: {
 				required: ["current_file", "session_files_written"]
-				optional: ["mission", "batch_check_results", "session_repairs", "data_registry"]
+				// pending_files is LOAD-BEARING, not informational: the
+				// fileset-wide checks fire only when it is empty (last file).
+				// Undeclared, _build_step_input filters it out, the action
+				// reads [] on every file, and the checks run against an
+				// incomplete fileset again — the exact bug this declares away.
+				optional: [
+					"mission", "batch_check_results", "session_repairs",
+					"data_registry", "pending_files",
+				]
 			}
 			resolver: {
 				type: "rule"

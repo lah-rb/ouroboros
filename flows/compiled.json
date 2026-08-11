@@ -883,7 +883,8 @@
             "mission",
             "batch_check_results",
             "session_repairs",
-            "data_registry"
+            "data_registry",
+            "pending_files"
           ]
         },
         "params": {},
