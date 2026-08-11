@@ -359,6 +359,70 @@ def repair_write_reason(file_path: str) -> tuple[str | None, bool]:
     return (None, False)
 
 
+# ── Elision + symbol-surface guards (the byte ratio is not enough) ────
+#
+# A per-write byte ratio has no memory. Measured 2026-08-11: a 17,973-char /
+# 17-method engine.py was reduced to a 2-method stub by a write that kept
+# 24.2% of the bytes — four points above the 20% floor — and every write after
+# it compared itself to the wreck and looked healthy at 59%. A file can be
+# demolished in two legal steps.
+#
+# Two checks that do have memory of what the file WAS:
+#   * elision — a body standing in for the parts it omits is not a file
+#   * symbol surface — losing most of a module's defs/classes is a gut
+#     regardless of how many bytes of docstring remain
+
+_ELISION_MARKERS = (
+    "rest of file unchanged",
+    "rest of the file unchanged",
+    "rest of file omitted",
+    "rest of the file omitted",
+    "... rest of",
+    "# ... (truncated)",
+    "(rest unchanged)",
+    "unchanged from the original",
+    "implement this later",
+    "code omitted",
+)
+
+# Keep at least this share of the file's top-level defs/classes. Deliberately
+# generous: a legitimate refactor may drop a couple of helpers, but going 17
+# symbols to 2 (12%) is a demolition whatever the byte count says.
+_MIN_SYMBOL_RETENTION = 0.50
+
+
+def _elision_marker(content: str) -> str:
+    """The first abbreviation marker in a body, or "" if it reads complete."""
+    low = content.lower()
+    for m in _ELISION_MARKERS:
+        if m in low:
+            return m
+    return ""
+
+
+def _symbol_surface(source: str) -> set[str]:
+    """Top-level def/class names plus method names, for a python source.
+
+    Names rather than a count, so a rename-heavy refactor that keeps the same
+    number of symbols still reads as a replacement of the surface, and so the
+    rejection can say WHICH symbols would vanish.
+    """
+    import ast as stdlib_ast
+
+    try:
+        tree = stdlib_ast.parse(source)
+    except SyntaxError:
+        return set()
+    out: set[str] = set()
+    for node in stdlib_ast.walk(tree):
+        if isinstance(
+            node,
+            (stdlib_ast.FunctionDef, stdlib_ast.AsyncFunctionDef, stdlib_ast.ClassDef),
+        ):
+            out.add(node.name)
+    return out
+
+
 # ── The guarded write (the one safe write path) ───────────────────────
 
 
@@ -369,7 +433,15 @@ async def guarded_write_file(
     min_retention_ratio: float = 0.20,
     repair_mode: bool = False,
 ) -> tuple[bool, str | None]:
-    """Write a generated file through the anti-gut guard — the ONE write path.
+    """Write a generated file through the write guards — the ONE write path.
+
+    Three guards, in order of how directly they see a demolition:
+    ELISION (a body containing "(rest of file unchanged)" is a summary, not a
+    file — any size), SYMBOL SURFACE (a python write losing most of the file's
+    defs/classes is a gut regardless of bytes), then the byte ratio.
+    The byte ratio alone has no memory: a 17-method file was reduced to 2 by a
+    write that kept 24.2% of the bytes, and every write after it compared
+    itself to the wreck and looked healthy.
 
     Anti-gut guard: reject a rewrite that would shrink an existing non-empty file
     below ``min_retention_ratio`` of its current size — the stub-clobbers-a-real-
@@ -397,10 +469,60 @@ async def guarded_write_file(
                     "Repair write guard rejected NEW test file %s", file_path
                 )
                 return False, f"Repair write guard: {reason}"
+    # ELISION FIRST — before any ratio, because an abbreviated body can be
+    # ANY size. The one that destroyed engine.py kept 24.2% of the bytes and
+    # would pass every threshold; what made it fatal was standing in for the
+    # 15 methods it dropped. The code_author persona already forbids
+    # placeholders; this is where that becomes enforcement.
+    marker = _elision_marker(content)
+    if marker:
+        logger.warning(
+            "Elision guard rejected write to %s: body contains %r", file_path, marker
+        )
+        return False, (
+            f"Elision guard: the content for {file_path} contains {marker!r}, so it "
+            f"is a SUMMARY of a file rather than a file. Applying it would delete "
+            f"everything the marker stands in for. Emit the complete file, or edit a "
+            f"single named symbol instead."
+        )
+
     if min_retention_ratio > 0:
         existing = await effects.read_file(file_path)
         if existing.exists and len(existing.content) > 0:
             existing_content = existing.content
+
+            # SYMBOL SURFACE — the check with memory of what the file WAS.
+            # Bytes are noisy (docstrings, comments); defs and classes are the
+            # thing other modules import. Python only: _symbol_surface returns
+            # an empty set for anything it cannot parse, and an empty BEFORE
+            # set disables the check rather than failing open on a guess.
+            if file_path.endswith(".py"):
+                before = _symbol_surface(existing.content)
+                if before:
+                    after = _symbol_surface(content)
+                    kept = len(before & after) / len(before)
+                    if kept < _MIN_SYMBOL_RETENTION:
+                        lost = sorted(before - after)
+                        logger.warning(
+                            "Symbol-surface guard rejected write to %s: "
+                            "%d→%d symbols (%.0f%% kept), losing %s",
+                            file_path,
+                            len(before),
+                            len(after),
+                            kept * 100,
+                            ", ".join(lost[:8]),
+                        )
+                        return False, (
+                            f"Symbol-surface guard: {file_path} would go from "
+                            f"{len(before)} to {len(after)} definitions "
+                            f"({kept:.0%} kept, minimum is "
+                            f"{_MIN_SYMBOL_RETENTION:.0%}), losing "
+                            f"{', '.join(lost[:8])}"
+                            f"{' and others' if len(lost) > 8 else ''}. If you "
+                            f"only meant to change part of this file, edit that "
+                            f"symbol instead of replacing the file."
+                        )
+
             ratio = len(content) / len(existing.content)
             if ratio < min_retention_ratio:
                 logger.warning(
