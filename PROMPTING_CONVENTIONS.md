@@ -661,7 +661,64 @@ resolver: {
 
 ---
 
-## 15. Prompt Maintenance Checklist
+## 15. No Firm Numeric Constraints
+
+**Never give a bare count the task can contradict.** `(2-4 steps)`,
+`under 200 words`, `at most 6 symbols` — a number is sticky to attention in
+a way the prose beside it is not, so it wins even when the work needs
+otherwise, and the model optimises the count instead of the job.
+
+This is not hypothetical. A charter prompt said `TEST STEPS ... (2-4 steps)`
+and, one line below, already carried the escape hatch: *"if reaching the
+target genuinely requires movement, write the exact route as explicit
+steps."* Given a game whose win is seven steps from the start, a captured
+reasoning trace shows the model spending its ENTIRE turn on the number —
+
+> *"That's 7 steps, exceeds limit."* … *"rule says 2-4 steps ... Must
+> adhere."* … *"Maybe we can **cheat**: use 'use crystal_key' immediately
+> after entering boss chamber."* … *"Maybe we can start at boss chamber by
+> launching program with a saved state? Not allowed."* … *"I'll produce a
+> brief with maybe 6 steps, hoping it's acceptable."*
+
+— cycling through shortcuts, rejecting one as not allowed, and violating
+the budget anyway. The qualifier directly beneath the number never got a
+vote. Downstream, that same pressure applied to a goal that could not be
+satisfied honestly produced four artifacts written to satisfy a checker
+rather than a player, including a `suicide` command added purely to reach
+an unreachable defeat screen.
+
+**Write the intent instead.**
+
+| ❌ firm count | ✅ intent |
+|---|---|
+| `A numbered short list (2-4 steps)` | `A numbered list, as short as the job allows` |
+| `Target length: under 200 words` | `Keep it brief — a tester should take it in at a glance` |
+| `Emit 2-4 NEW queries` | `Emit a handful of NEW queries` |
+
+**When the number exists to mean "too big", make the model REPORT the
+overflow rather than trim to fit.** Trimming destroys the signal the bound
+existed to raise:
+
+```
+❌  List at most 6 symbols — if more would need to change, the refactor
+    is too large to land in one patch.
+✅  List every symbol that must change with it — do NOT truncate the list
+    to keep it short. If it runs long, that IS the finding: the refactor
+    is too large for one patch, and a silently shortened list hides that.
+```
+
+A hard bound is legitimate only where the number is a REAL external limit
+(a context window, an API page size, a protocol field), not a stylistic
+preference. If violating it would merely make the output longer than you
+would like, it is a preference — say so in prose.
+
+**This governs prompt TEXT the model reads, not control flow.** The
+`meta.attempt` retry bounds in §14 are resolver guards the engine enforces;
+the model never sees them and cannot try to satisfy them. Keep those. The
+failure mode here is specifically a number placed in front of the model as
+a requirement it must reconcile with the work.
+
+## 16. Prompt Maintenance Checklist
 
 When adding or modifying a prompt template, verify:
 
@@ -676,3 +733,4 @@ When adding or modifying a prompt template, verify:
 - [ ] **Persona prompts follow section 9** — PList traits, concrete first action, under 300 tokens, focus last
 - [ ] **Pre-computed keys documented** — comment header listing what formatters provide
 - [ ] **Consistent with the soul** — step prompt reinforces (not contradicts) SOUL.md principles
+- [ ] **No firm numeric constraints** — no bare count the task could contradict (§15); write the intent, and where a bound means "too big", have the model report the overflow instead of trimming to fit
