@@ -690,6 +690,7 @@ def build_action_registry() -> ActionRegistry:
         action_escalation_fold_search,
         action_escalation_read,
         action_escalation_run,
+        action_escalation_propose,
         action_escalation_write,
         action_open_escalation_session,
     )
@@ -697,6 +698,9 @@ def build_action_registry() -> ActionRegistry:
     registry.register("open_escalation_session", action_open_escalation_session)
     registry.register("escalation_read", action_escalation_read)
     registry.register("escalation_run", action_escalation_run)
+    registry.register("escalation_propose", action_escalation_propose)
+    # Retired: refuses rather than writing. Registered so a stale route
+    # fails loudly instead of resolving to no action.
     registry.register("escalation_write", action_escalation_write)
     registry.register("escalation_fold_search", action_escalation_fold_search)
     registry.register("escalation_fold_consult", action_escalation_fold_consult)

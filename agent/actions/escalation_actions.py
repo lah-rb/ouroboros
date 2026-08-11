@@ -247,8 +247,99 @@ async def action_escalation_run(step_input: StepInput) -> StepOutput:
     )
 
 
+# Abbreviation markers. A body carrying any of these is not a file, it is a
+# summary of one — and applying it silently deletes everything it stands in
+# for. Lifted from the write that actually did this: the body ended
+# "def _handle_move(...):\n    \"\"\"\n    ...\n\n    (rest of file unchanged)".
+_ELISION_MARKERS = (
+    "rest of file unchanged",
+    "rest of the file unchanged",
+    "(unchanged)",
+    "rest of file omitted",
+    "... rest of",
+    "# ... (truncated)",
+    "implement this later",
+    "unchanged from the original",
+)
+
+
+async def action_escalation_propose(step_input: StepInput) -> StepOutput:
+    """propose_fix tool: record the model's fenced body as ADVISORY ONLY.
+
+    ESCALATION IS READ-ONLY (operator ruling, 2026-08-11). This replaces
+    ``escalation_write``, which wrote through guarded_write_file. That path is
+    how a working 17-method engine.py became a 2-method stub: an escalation
+    write emitted a body ending in "(rest of file unchanged)" and the guard
+    accepted it at 24.2% retention — four points above its anti-gut floor,
+    because that floor is a PER-WRITE ratio with no memory of the file's
+    original shape. Later writes measured against the wreck and looked healthy.
+
+    The threshold was not the real problem. A recovery loop that can write is a
+    SECOND authoring path around the flows that own file edits, carrying none
+    of their review, and it opened exactly the hole it was meant to patch. So
+    the proposal is recorded and handed back; the owning flow decides.
+
+    Elision is refused here rather than recorded, because an abbreviated body
+    is worse than no proposal: it reads as a complete file to whoever applies
+    it. The ``code_author`` persona already forbids placeholders — this is the
+    first place that rule is enforced instead of merely stated.
+
+    Context: inference_response (raw turn text), escalation_choice_arg (path),
+             escalation_proposals, counters.
+    """
+    from agent.markdown_fence import parse_file_blocks
+
+    raw = str(step_input.context.get("inference_response", "") or "")
+    fallback = str(step_input.context.get("escalation_choice_arg", "") or "").strip()
+    blocks = [(p, c) for p, c in parse_file_blocks(raw, fallback_path=fallback) if p]
+    if not blocks:
+        return _correction(
+            step_input,
+            "propose_fix needs the proposed file content in a fenced code block "
+            "(first line `# === FILE: path ===`) in the SAME response as the "
+            "JSON action.",
+        )
+
+    elided = [(p, m) for p, c in blocks for m in _ELISION_MARKERS if m in c]
+    if elided:
+        path, marker = elided[0]
+        return _correction(
+            step_input,
+            f"proposal for {path} is ABBREVIATED — it contains {marker!r}. "
+            "A partial body is worse than none: whoever applies it cannot tell "
+            "what you left out. Either propose the COMPLETE file, or propose a "
+            "single named symbol and say which one.",
+        )
+
+    proposals = list(step_input.context.get("escalation_proposals", []) or [])
+    for path, content in blocks:
+        proposals.append({"path": path, "content": content})
+    turn = int(step_input.context.get("escalation_turn", 0) or 0) + 1
+    names = ", ".join(p for p, _ in blocks)
+    return StepOutput(
+        result={"exhausted": False, "proposed": [p for p, _ in blocks]},
+        observations=(
+            f"Recorded an ADVISORY proposal for {names} "
+            f"({sum(len(c) for _, c in blocks)} chars). Nothing was written — "
+            "escalation is read-only; the flow that owns the file decides."
+        ),
+        context_updates={
+            "escalation_turn": turn,
+            "escalation_proposals": proposals,
+            "escalation_corrections": list(
+                step_input.context.get("escalation_corrections", []) or []
+            ),
+        },
+    )
+
+
 async def action_escalation_write(step_input: StepInput) -> StepOutput:
-    """write_file tool: the model's SAME response carries the full new file
+    """RETIRED — escalation is read-only; this refuses instead of writing.
+
+    Kept as a live refusal rather than deleted so any flow still routing here
+    fails loudly instead of finding no action. Original contract follows.
+
+    write_file tool: the model's SAME response carries the full new file
     body in a fenced block (`# === FILE: path ===` marker, or a bare fence
     with the path given as the menu arg). Every block goes through
     guarded_write_file — the anti-gut guard and the scaffold parse floor apply
@@ -258,8 +349,20 @@ async def action_escalation_write(step_input: StepInput) -> StepOutput:
     Context: inference_response (raw turn text), escalation_choice_arg (path),
              escalation_files, counters.
     """
-    from agent.actions.file_ops_actions import guarded_write_file
-    from agent.markdown_fence import parse_file_blocks
+    return StepOutput(
+        result={"exhausted": False, "refused": True},
+        observations=(
+            "escalation_write is RETIRED — escalation is read-only. An "
+            "escalation write once reduced a 17-method file to 2 by emitting a "
+            "body ending '(rest of file unchanged)', which the per-write "
+            "anti-gut floor passed at 24.2%. Use propose_fix; the flow that "
+            "owns the file applies it."
+        ),
+        context_updates={},
+    )
+
+    from agent.actions.file_ops_actions import guarded_write_file  # noqa: F401
+    from agent.markdown_fence import parse_file_blocks  # noqa: F401
 
     effects = step_input.effects
     raw = str(step_input.context.get("inference_response", "") or "")

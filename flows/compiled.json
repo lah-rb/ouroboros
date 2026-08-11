@@ -4399,7 +4399,7 @@
   "escalate": {
     "flow": "escalate",
     "version": 1,
-    "description": "Bounded recovery loop for a failed deterministic step: read/run/write\nwith a small budget, then conclude resolved (invoker re-validates) or\ndeferred (invoker's failure path). The shared escalation primitive.",
+    "description": "Bounded READ-ONLY recovery loop for a failed deterministic step:\nread/run/propose with a small budget, then conclude resolved\n(invoker re-validates) or\ndeferred (invoker's failure path). The shared escalation primitive.",
     "context_tier": "session_task",
     "returns": {
       "escalation_summary": {
@@ -4530,12 +4530,12 @@
                 },
                 "terminal": false
               },
-              "write_file": {
-                "key": "write_file",
-                "description": "Write the full new content of one file (fenced block in this same response)",
+              "propose_fix": {
+                "key": "propose_fix",
+                "description": "Propose the fix as an ADVISORY example (fenced block in this same response). It is recorded for the flow that owns the file \u2014 it is NOT written to disk.",
                 "arg": {
                   "name": "path",
-                  "description": "workspace-relative file path to write"
+                  "description": "workspace-relative file path the proposal is about"
                 },
                 "terminal": false
               },
@@ -4571,7 +4571,7 @@
             "options": {
               "read_file": "do_read",
               "run_command": "do_run",
-              "write_file": "do_write",
+              "propose_fix": "do_propose",
               "web_search": "do_web_search",
               "consult_boss": "do_consult",
               "conclude": "conclude"
@@ -4657,9 +4657,9 @@
         "effects": [],
         "terminal": false
       },
-      "do_write": {
-        "action": "escalation_write",
-        "description": "Apply the fenced file body through the guarded write path",
+      "do_propose": {
+        "action": "escalation_propose",
+        "description": "Record the fenced body as an advisory proposal \u2014 never written to disk",
         "context": {
           "required": [
             "escalation_session_id",
@@ -4669,7 +4669,8 @@
             "escalation_choice_arg",
             "escalation_turn",
             "escalation_corrections",
-            "escalation_files"
+            "escalation_files",
+            "escalation_proposals"
           ]
         },
         "params": {},
@@ -4690,7 +4691,7 @@
         "publishes": [
           "escalation_turn",
           "escalation_corrections",
-          "escalation_files"
+          "escalation_proposals"
         ],
         "effects": [],
         "terminal": false

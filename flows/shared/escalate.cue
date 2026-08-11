@@ -4,7 +4,8 @@
 // of a hardcoded fallback (the devolution pattern this replaces: file_ops'
 // self_correct → whole-file rewrite). Shape is diagnose_issue's proven REACT
 // loop — memoryful session + compound menu + budget + typed conclusion — over
-// the MINIMAL tool set: read_file / run_command / write_file / conclude.
+// a MINIMAL, READ-ONLY tool set: read_file / run_command / propose_fix /
+// conclude.
 //
 // The defining contract: the outcome REJOINS the invoker's normal
 // progression. Terminals carry status "resolved" (invoker re-validates and
@@ -12,8 +13,21 @@
 // dead end; sub-flow status propagates as result.status (runtime merges
 // {"status", **result} for the caller's resolver).
 //
-// Writes go through guarded_write_file, so the anti-gut guard and the
-// scaffold parse floor apply to escalations exactly as everywhere else.
+// ESCALATION DOES NOT WRITE (operator ruling, 2026-08-11). It used to, via
+// guarded_write_file, and that is precisely how a working 17-method engine.py
+// became a 2-method stub: an escalation write emitted a body ending in "(rest
+// of file unchanged)" and the guard accepted it at 24.2% retention — four
+// points above its 20% anti-gut floor, because that floor is a PER-WRITE ratio
+// with no memory of what the file used to be. Later writes then measured
+// themselves against the wreck and looked healthy at 59%. Every subsequent
+// step read a file that literally said the rest was unchanged, and roughly a
+// dozen further rewrites chased damage none of them had caused.
+//
+// The deeper problem is structural, not a threshold: a recovery loop that can
+// write is a SECOND authoring path around the flows that own file edits, with
+// none of their review. So escalation now proposes and the owning flow
+// decides. `propose_fix` records an advisory example the caller can act on;
+// nothing here reaches disk.
 //
 // v1 non-goals (see dev/ESCALATION_PRIMITIVE.md): web search, consult,
 // amended(restart), additional adoption sites.
@@ -24,8 +38,9 @@ escalate: #FlowDefinition & {
 	flow:    "escalate"
 	version: 1
 	description: """
-		Bounded recovery loop for a failed deterministic step: read/run/write
-		with a small budget, then conclude resolved (invoker re-validates) or
+		Bounded READ-ONLY recovery loop for a failed deterministic step:
+		read/run/propose with a small budget, then conclude resolved
+		(invoker re-validates) or
 		deferred (invoker's failure path). The shared escalation primitive.
 		"""
 
@@ -121,12 +136,23 @@ escalate: #FlowDefinition & {
 								description: "the exact shell command"
 							}
 						}
-						write_file: #MenuOption & {
-							key:         "write_file"
-							description: "Write the full new content of one file (fenced block in this same response)"
+						// ESCALATION IS READ-ONLY (operator ruling, 2026-08-11).
+						// It used to write files directly, and that is how a
+						// working 17-def engine.py became a 2-def stub: an
+						// escalation write emitted a body ending in "(rest of
+						// file unchanged)" and the guarded write accepted it at
+						// 24.2% retention, four points above the anti-gut floor.
+						// Every later step then read a file that literally said
+						// the rest was unchanged. A recovery loop that can write
+						// is a second, unreviewed authoring path around the
+						// flows that own file edits; escalation now PROPOSES and
+						// the owning flow decides.
+						propose_fix: #MenuOption & {
+							key:         "propose_fix"
+							description: "Propose the fix as an ADVISORY example (fenced block in this same response). It is recorded for the flow that owns the file — it is NOT written to disk."
 							arg: {
 								name:        "path"
-								description: "workspace-relative file path to write"
+								description: "workspace-relative file path the proposal is about"
 							}
 						}
 						web_search: #MenuOption & {
@@ -156,7 +182,7 @@ escalate: #FlowDefinition & {
 					options: {
 						read_file:    "do_read"
 						run_command:  "do_run"
-						write_file:   "do_write"
+						propose_fix:  "do_propose"
 						web_search:   "do_web_search"
 						consult_boss: "do_consult"
 						conclude:     "conclude"
@@ -212,14 +238,17 @@ escalate: #FlowDefinition & {
 			publishes: ["escalation_turn", "escalation_corrections"]
 		}
 
-		do_write: #StepDefinition & {
-			action:      "escalation_write"
-			description: "Apply the fenced file body through the guarded write path"
+		do_propose: #StepDefinition & {
+			action:      "escalation_propose"
+			description: "Record the fenced body as an advisory proposal — never written to disk"
 			context: {
 				required: ["escalation_session_id", "inference_response"]
+				// escalation_proposals must be DECLARED or _build_step_input
+				// filters it out and each proposal overwrites the last.
 				optional: [
 					"escalation_choice_arg", "escalation_turn",
 					"escalation_corrections", "escalation_files",
+					"escalation_proposals",
 				]
 			}
 			resolver: {
@@ -229,7 +258,7 @@ escalate: #FlowDefinition & {
 					{condition: "true", transition: "check_budget"},
 				]
 			}
-			publishes: ["escalation_turn", "escalation_corrections", "escalation_files"]
+			publishes: ["escalation_turn", "escalation_corrections", "escalation_proposals"]
 		}
 
 		// web_search tool: dispatch the reflect-and-refine deep_search sub-flow

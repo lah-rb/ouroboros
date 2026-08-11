@@ -23,6 +23,7 @@ from agent.actions.escalation_actions import (
     action_escalation_fold_search,
     action_escalation_read,
     action_escalation_run,
+    action_escalation_propose,
     action_escalation_write,
     action_open_escalation_session,
 )
@@ -128,72 +129,90 @@ async def test_corrections_cap_signals_exhausted():
 # ── write: fenced body through the guarded path ───────────────────────
 
 
+# ══════════════════════════════════════════════════════════════════════
+# ESCALATION IS READ-ONLY (operator ruling, 2026-08-11)
+#
+# These replace the write_file tests. Escalation used to write via
+# guarded_write_file, and that is how a working 17-method engine.py became a
+# 2-method stub: an escalation write emitted a body ending "(rest of file
+# unchanged)" and the guard accepted it at 24.2% retention — four points above
+# its anti-gut floor, because that floor is a PER-WRITE ratio with no memory of
+# the file's original shape. Later writes measured against the wreck and looked
+# healthy at 59%. The threshold was not the defect: a recovery loop that can
+# write is a second authoring path around the flows that own file edits, with
+# none of their review. It now proposes; the owning flow decides.
+# ══════════════════════════════════════════════════════════════════════
+
+
 @pytest.mark.asyncio
-async def test_write_parses_json_plus_fence_and_writes():
+async def test_propose_records_an_advisory_and_writes_nothing():
     fx = MockEffects(files={})
     raw = (
-        '{"choice": "write_file", "path": "src/x.py"}\n'
-        "```python\n"
-        "# === FILE: src/x.py ===\n"
-        "def f():\n    return 2\n"
-        "```\n"
+        '{"choice": "propose_fix", "path": "src/x.py"}\n'
+        "```python\n# === FILE: src/x.py ===\ndef f():\n    return 2\n```\n"
     )
-    out = await action_escalation_write(
+    out = await action_escalation_propose(
         _si(
             fx,
             inference_response=raw,
             escalation_choice_arg="src/x.py",
             escalation_turn=0,
-            escalation_files=[],
         )
     )
-    assert out.result["action_ok"] is True
-    assert out.context_updates["escalation_files"] == ["src/x.py"]
-    assert "def f()" in fx._files["src/x.py"]
-    assert "wrote src/x.py" in _queued(out)
+    props = out.context_updates["escalation_proposals"]
+    assert [x["path"] for x in props] == ["src/x.py"]
+    assert "def f()" in props[0]["content"]
+    assert fx._files == {}, "escalation must not touch disk"
 
 
 @pytest.mark.asyncio
-async def test_write_guard_rejection_is_correction():
-    # Scaffold parse floor: an invalid replacement TOML is rejected by
-    # guarded_write_file — surfaces as a correction (no turn spent, file
-    # untouched), with the guard's reason queued for the model.
-    fx = MockEffects(files={"pyproject.toml": VALID_TOML})
+async def test_propose_refuses_an_abbreviated_body():
+    """The exact shape that destroyed a file — a body standing in for what it
+    omits. Worse than no proposal: whoever applies it cannot tell."""
+    fx = MockEffects(files={})
     raw = (
-        '{"choice": "write_file", "path": "pyproject.toml"}\n'
-        "```toml\n"
-        "# === FILE: pyproject.toml ===\n"
-        "[project\nname = = broken\n"
-        "```\n"
+        '{"choice": "propose_fix", "path": "engine.py"}\n'
+        "```python\n# === FILE: engine.py ===\nclass GameEngine:\n"
+        "    def _handle_move(self, d):\n        ...\n\n"
+        "        (rest of file unchanged)\n```\n"
     )
-    out = await action_escalation_write(
-        _si(
-            fx,
-            inference_response=raw,
-            escalation_choice_arg="pyproject.toml",
-            escalation_files=[],
-        )
+    out = await action_escalation_propose(
+        _si(fx, inference_response=raw, escalation_choice_arg="engine.py")
     )
-    assert out.result["action_ok"] is False
-    assert out.context_updates["escalation_corrections"] == 1
-    assert fx._files["pyproject.toml"] == VALID_TOML  # untouched
-    assert "parse floor" in _queued(out)
+    q = _queued(out)
+    assert "ABBREVIATED" in q and "rest of file unchanged" in q
+    assert fx._files == {}
 
 
 @pytest.mark.asyncio
-async def test_write_without_fence_is_correction():
-    out = await action_escalation_write(
+async def test_propose_without_fence_is_correction():
+    out = await action_escalation_propose(
         _si(
             MockEffects(),
-            inference_response='{"choice": "write_file", "path": "x.py"}',
+            inference_response='{"choice": "propose_fix", "path": "x.py"}',
             escalation_choice_arg="",
         )
     )
-    assert out.result["action_ok"] is False
     assert "fenced code block" in _queued(out)
 
 
-# ── conclude: typed outcome, fail-safe deferred ───────────────────────
+@pytest.mark.asyncio
+async def test_the_retired_write_action_refuses_instead_of_writing():
+    """Registered still, so a stale route fails loudly rather than resolving
+    to no action."""
+    fx = MockEffects(files={"x.py": "original"})
+    out = await action_escalation_write(
+        _si(
+            fx,
+            inference_response=(
+                '{"choice": "write_file", "path": "x.py"}\n'
+                "```python\n# === FILE: x.py ===\nstub\n```\n"
+            ),
+            escalation_choice_arg="x.py",
+        )
+    )
+    assert out.result.get("refused") is True
+    assert fx._files["x.py"] == "original", "retired action must not write"
 
 
 @pytest.mark.asyncio
@@ -237,7 +256,7 @@ def test_escalate_flow_wiring():
     assert opts == {
         "read_file": "do_read",
         "run_command": "do_run",
-        "write_file": "do_write",
+        "propose_fix": "do_propose",
         "web_search": "do_web_search",
         "consult_boss": "do_consult",
         "conclude": "conclude",
@@ -247,7 +266,7 @@ def test_escalate_flow_wiring():
     budget_cond = steps["check_budget"]["resolver"]["rules"][0]["condition"]
     assert f">= {MAX_ESCALATION_TURNS}" in budget_cond
     # executors loop through the budget gate; exhausted corrections conclude
-    for s in ("do_read", "do_run", "do_write"):
+    for s in ("do_read", "do_run", "do_propose"):
         rules = {r["condition"]: r["transition"] for r in steps[s]["resolver"]["rules"]}
         assert rules["result.exhausted == true"] == "conclude"
         assert rules["true"] == "check_budget"
