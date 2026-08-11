@@ -776,3 +776,109 @@ def test_the_repair_backstop_cannot_revoke_a_files_budget():
     assert (
         int(m.group(1)) >= 100
     ), f"backstop {m.group(1)} is low enough to revoke a real repair budget"
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Blind spots 4 and 5 — found by measuring 64 finished artifacts
+#
+# Shapes below are real. Running the check over every staged artifact on
+# disk (64 with a save/load pair) is what surfaced them; unit fixtures
+# never would have, because I keep inventing the shapes I already handle.
+# After these fixes: 55 clean, 6 orphan findings — all six independently
+# confirmed true (their keys appear in no reader function body) — and 3
+# unverified. Precision on findings: 6/6.
+# ══════════════════════════════════════════════════════════════════════
+
+_ANNOTATED_LOADER = """
+import json
+def save_state(state, path):
+    with open(path, "w") as f:
+        json.dump(state, f)
+
+def load_save(path):
+    with open(path, encoding="utf-8") as handle:
+        save_data: dict = json.load(handle)
+    if "player" not in save_data:
+        raise KeyError("missing player")
+    player_dict = save_data["player"]
+    return player_dict
+"""
+
+_NESTED_PAYLOAD = """
+import json
+class Game:
+    def save_game(self, path):
+        p = {
+            "location": self.player.location,
+            "health": self.player.health,
+            "attack": self.player.attack,
+        }
+        data = {"player": p, "world": self.world_state}
+        with open(path, "w") as f:
+            json.dump(data, f)
+
+    def load_game(self, path):
+        with open(path, "r") as f:
+            data = json.load(f)
+        p = data["player"]
+        self.player.location = p["location"]
+        self.player.health = p["health"]
+        self.player.attack = p["attack"]
+        self.world_state = data["world"]
+"""
+
+_SIB = "def helper():\n    return 1\n"
+
+
+def test_an_annotated_payload_assignment_is_still_a_payload():
+    """`save_data: dict = json.load(f)` is an AnnAssign. An Assign-only walk
+    sees no payload at all, and typed loaders are the idiomatic ones."""
+    srcs = {"loader.py": _ANNOTATED_LOADER, "s.py": _SIB}
+    w, r = _serializer_functions(srcs)
+    _, rd = _roundtrip_keys(_ANNOTATED_LOADER, w, r, *_payload_methods(srcs))
+    assert "player" in rd
+
+
+def test_a_membership_guard_counts_as_a_read():
+    """`if "player" not in save_data: raise` is often the only mention
+    before the value is handed onward."""
+    srcs = {"loader.py": _ANNOTATED_LOADER, "s.py": _SIB}
+    w, r = _serializer_functions(srcs)
+    _, rd = _roundtrip_keys(_ANNOTATED_LOADER, w, r, *_payload_methods(srcs))
+    assert "player" in rd
+
+
+def test_a_nested_payload_read_is_followed():
+    """The grouped save: the writer unions every dict it built, so the INNER
+    keys are all in `written`, and the reader reaches them one subscript
+    deeper via `p = data["player"]`. Without propagation the entire player
+    block reads as written-and-never-read."""
+    srcs = {"game.py": _NESTED_PAYLOAD, "s.py": _SIB}
+    assert _serialized_roundtrip_violations(srcs) == []
+    w, r = _serializer_functions(srcs)
+    wr, rd = _roundtrip_keys(_NESTED_PAYLOAD, w, r, *_payload_methods(srcs))
+    assert {"location", "health", "attack"} <= rd
+
+
+def test_nested_propagation_still_catches_a_dropped_inner_key():
+    broken = _NESTED_PAYLOAD.replace('        self.player.attack = p["attack"]\n', "")
+    out = _serialized_roundtrip_violations({"game.py": broken, "s.py": _SIB})
+    assert len(out) == 1 and "attack" in out[0]
+
+
+def test_audit_fields_are_not_orphans():
+    """version/timestamp are written for humans and migrations. Flagging
+    them is true and useless, and this check DRIVES REPAIRS."""
+    src = """
+import json
+def save_game(state, path):
+    data = {"rooms": state.rooms, "version": 2, "saved_at": "now"}
+    with open(path, "w") as f:
+        json.dump(data, f)
+
+def load_game(path):
+    with open(path) as f:
+        data = json.load(f)
+    return data["rooms"]
+"""
+    assert _serialized_roundtrip_violations({"s.py": src, "o.py": _SIB}) == []

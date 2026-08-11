@@ -280,8 +280,23 @@ def _roundtrip_keys(
         )
 
         for n in stdlib_ast.walk(fn):
-            if isinstance(n, stdlib_ast.Assign) and len(n.targets) == 1:
-                tgt = n.targets[0]
+            # AnnAssign as well as Assign. `save_data: dict = json.load(f)` is
+            # an AnnAssign, so an Assign-only walk cannot see the payload at
+            # all — and annotating it is the IDIOMATIC style, which made this
+            # blind spot fire on typed loaders specifically. Measured against
+            # 64 finished artifacts it produced a confident "player is written
+            # and never read back" about a loader whose next line was
+            # `player_dict = save_data["player"]`.
+            if isinstance(n, (stdlib_ast.Assign, stdlib_ast.AnnAssign)):
+                if isinstance(n, stdlib_ast.AnnAssign):
+                    tgt = n.target
+                    if n.value is None:
+                        continue
+                    n = stdlib_ast.Assign(targets=[tgt], value=n.value)
+                elif len(n.targets) == 1:
+                    tgt = n.targets[0]
+                else:
+                    continue
                 if not isinstance(tgt, stdlib_ast.Name):
                     continue
                 keys = _dict_keys(n.value)
@@ -309,6 +324,31 @@ def _roundtrip_keys(
                     and n.value.func.attr in ("load", "loads")
                 ):
                     payload_vars.add(tgt.id)
+
+        # Two passes to a fixed point. `p = data["player"]` makes p a payload
+        # too — the writer unions every dict it built (direct_write), so the
+        # INNER keys of a nested payload are all in `written`, and the reader
+        # reaches them one subscript deeper. Without this the commonest
+        # grouped-save shape reports its whole player block unread. Source
+        # order is not walk order, so `data` may be registered after `p` is
+        # examined; iterate until stable rather than assuming.
+        for _pass in range(3):
+            before = len(payload_vars)
+            for n in stdlib_ast.walk(fn):
+                tgt_v = None
+                if isinstance(n, stdlib_ast.Assign) and len(n.targets) == 1:
+                    tgt_v, val = n.targets[0], n.value
+                elif isinstance(n, stdlib_ast.AnnAssign) and n.value is not None:
+                    tgt_v, val = n.target, n.value
+                if (
+                    isinstance(tgt_v, stdlib_ast.Name)
+                    and isinstance(val, stdlib_ast.Subscript)
+                    and isinstance(val.value, stdlib_ast.Name)
+                    and val.value.id in payload_vars
+                ):
+                    payload_vars.add(tgt_v.id)
+            if len(payload_vars) == before:
+                break
 
         for n in stdlib_ast.walk(fn):
             # writer_fn(payload) — the cross-module hop
@@ -373,6 +413,21 @@ def _roundtrip_keys(
                 and isinstance(n.args[0].value, str)
             ):
                 read.add(n.args[0].value)
+            # `if "player" not in save_data: raise` — a guard IS a read, and
+            # it is often the only mention before the value is handed to a
+            # from_dict. Missing it made a validated loader look negligent.
+            if isinstance(n, stdlib_ast.Compare) and isinstance(
+                n.left, stdlib_ast.Constant
+            ):
+                if isinstance(n.left.value, str) and any(
+                    isinstance(op, (stdlib_ast.In, stdlib_ast.NotIn)) for op in n.ops
+                ):
+                    for comp in n.comparators:
+                        if (
+                            isinstance(comp, stdlib_ast.Name)
+                            and comp.id in payload_vars
+                        ):
+                            read.add(n.left.value)
 
         if direct_write:
             for keys in dict_vars.values():
@@ -446,7 +501,27 @@ def _serialized_roundtrip_violations(sources: dict[str, str]) -> list[str]:
             "pair, so the two halves can be compared."
         ]
 
-    orphaned = sorted(k for k in written - read if not k.startswith("_"))
+    # Audit fields are written for humans and future migrations, not read
+    # back by the loader. Flagging them is technically true and practically
+    # noise — and because this check DRIVES REPAIRS, noise costs rewrites of
+    # correct code. Two of ten findings across 64 artifacts were this class.
+    _AUDIT_FIELDS = {
+        "version",
+        "schema_version",
+        "save_version",
+        "game_version",
+        "format_version",
+        "timestamp",
+        "save_timestamp",
+        "saved_at",
+        "created_at",
+        "generated_at",
+    }
+    orphaned = sorted(
+        k
+        for k in written - read
+        if not k.startswith("_") and k.lower() not in _AUDIT_FIELDS
+    )
     if not orphaned or not writer_files:
         return []
     return [
