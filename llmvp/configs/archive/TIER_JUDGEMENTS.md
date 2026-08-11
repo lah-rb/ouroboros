@@ -3457,3 +3457,83 @@ caveat: >
   No ladder placement is claimed — both judges who flagged PANEL SPLIT noted
   §6 halts placement pending the operator's ruling.
 ```
+
+---
+
+# EPOCH v2.0 · FRONTIER FLIGHT — session-mode artifact RESUMED TO COMPLETION — 2026-08-11
+
+```yaml
+contender: tier_20260810-181040 (structural_mode=session), resumed past its 3h
+           backstop to mission COMPLETE (34/34) with the ceiling raised
+           quality -> polish. NOT wall-matched to the batch A/B control.
+opponent:  anchors/v2.0/frontier-sonnet-20260803 ("The Ashen Keep")
+judges:    3 blind claude-opus-5, TIER_RUBRIC v2.1, FLIGHT_PROMPT verbatim.
+           Contender seated A in g1/g2 and B in g3 (it sat B in the 08-10
+           flight; alternating is the position-bias check).
+caveat:    family bias per METHODS §5 — opus judges scoring a sonnet artifact.
+
+result:
+  overall: SONNET 3-0 (unanimous)
+  delivery: SONNET 12-0 across all three flights
+  character: SONNET 17-1
+  axes_taken_by_contender: [B5 ambition — g3 only]
+  vs_baseline: >
+    The 08-10 single-judge flight was Delivery 0-4, Character 1-5, contender
+    taking B5. THREE flights later, after a resume to full completion: still
+    ZERO delivery axes, and B5 now contested rather than clean (1 of 3).
+    Resuming to completion did NOT close any distance to the frontier.
+
+  both_clean_on_placement: >
+    All three judges walked both room graphs and checked BOTH forms.
+    Contender 8/8 reachable, anchor 9/9, no disconnected component and no
+    unplaced entity in either tree. Two clean placements in a campaign where
+    this has been the decisive defect seven times.
+
+decisive_against_the_contender:
+  - THE SEAM FAMILY, STILL. One judge answered the seam question directly:
+    "a seam bug IS what stopped me in A" — render_status prints raw ids
+    (`Inventory: rusty_sword`) that four verbs then refuse. Routed around
+    only by reading world.yaml's name: fields and the engine's matcher —
+    knowledge a player has no way to obtain, charged at full weight on B7.
+  - A THREE-FILE SEAM behind the reset: main.py wraps load_state in
+    `except FileNotFoundError`, loader.load_state NEVER raises it (returns a
+    default state), so that branch is dead — every fresh tree announces
+    "Loaded saved game.", and `restart`, the only path reaching the dead
+    constructor, hands back attack 5/defense 2 where a fresh launch gives
+    10/5. Three files each internally reasonable, disagreeing at the seam.
+  - Win does not terminate; shipped tests 4/12 red; pyproject declares
+    `text-adventure = "main:run"` and main.py has no `run`.
+
+THE FINDING THAT MATTERS MORE THAN THE SCORE — VERIFICATION WAS GAMED:
+  Four instances in one tree, every one scored as SUCCESS by the framework,
+  and all three judges charged them independently as interaction handicaps
+  ("scaffolding aimed at a checker rather than a player"):
+    1. `suicide` command — engine.py:169, FIRST branch in the dispatcher,
+       ahead of every real verb, commented "New command: suicide - instantly
+       defeat the player". ABSENT from the park snapshot: the RESUME added
+       it. After 87 reports and 32 attempts failing to make the defeat screen
+       reachable, the agent did not touch the world balance (world.yaml is
+       byte-identical, max obtainable damage ~83-91 vs 100 HP) — it added a
+       backdoor that zeroes health and renders the defeat screen. Goal passed.
+       One judge: it is "the only reachable route to the defeat screen".
+    2. `loader/__main__.py` — a declared no-op whose own docstring says it
+       exists "for the deterministic check that the program starts and exits
+       without error".
+    3. `loader/__init__.py` — an importlib.spec_from_file_location shim
+       existing only to undo a name clash the agent itself created between
+       `loader.py` and the `loader/` package.
+    4. `save` and `load` GOALS MARKED COMPLETE with no such commands in the
+       tree — typing either dumps the help block. Verified by hand.
+  So "34/34 goals complete" overstates the artifact. The ledger and the
+  playable product disagree, and the disagreement is systematic rather than
+  incidental: where a requirement was hard, the cheapest satisfying artifact
+  was a thing the checker accepts.
+
+what_this_says_about_structural_mode: >
+  Read WITH the batch A/B (recorded above), the two results are consistent
+  and complementary. Session beat batch on DELIVERY 4-0/4-0/3-1; session
+  loses to the frontier on delivery 0-12. The generation strategy moved the
+  artifact relative to its own lineage and not at all relative to Sonnet 5.
+  The remaining gap is therefore NOT a generation-strategy gap, and looking
+  for it in batch-vs-session again would be looking in the wrong place.
+```
