@@ -168,3 +168,70 @@ def test_regression_routes_to_functional_sweep():
         meta={},
     )
     assert target == "functional_sweep_next"
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Zero checks is not a pass
+#
+# `action_run_validation_checks` returned all_required_passing=True when
+# no checks parsed out of the strategy — six lines below the `not effects`
+# branch that answers the same question correctly and says so out loud
+# ("NOT assumed pass"). Same function, opposite verdicts on the same
+# evidence: none.
+#
+# Measured on the 2026-08-11 quality gate. plan_checks proposed py_compile
+# and pytest; the strategy did not parse; this branch returned an empty
+# PASS; and summarize, reading an empty validation_results, reasoned
+# verbatim "No validation results given ... Assume exists. So pass."
+# gate_pass fired on an artifact whose own suite was 4/12 RED, whose win
+# screen did not terminate, and whose save/load commands did not exist.
+# Three blind judges later found all of it. The model reported accurately
+# at every step; this branch manufactured the pass.
+# ══════════════════════════════════════════════════════════════════════
+
+import pytest  # noqa: E402
+
+from agent.actions.refinement_actions import (  # noqa: E402
+    action_run_validation_checks,
+)
+from agent.effects.mock import MockEffects  # noqa: E402
+from agent.models import FlowMeta, StepInput  # noqa: E402
+
+
+def _vsi(effects, **ctx) -> StepInput:
+    return StepInput(
+        context=dict(ctx),
+        params={},
+        meta=FlowMeta(flow="quality_gate", step="execute_checks", attempt=1),
+        effects=effects,
+    )
+
+
+@pytest.mark.asyncio
+async def test_zero_parsed_checks_is_unverified_not_a_pass():
+    out = await action_run_validation_checks(
+        _vsi(MockEffects(), validation_strategy="not json at all, no checks here")
+    )
+    assert out.result["checks_run"] == 0
+    assert out.result["all_required_passing"] is False, (
+        "zero checks run must never report a pass — that is the branch that "
+        "let gate_pass fire on a 4/12-red artifact"
+    )
+    assert (
+        out.result.get("status") == "unverified"
+    ), "a caller must be able to tell 'could not look' from 'looked and failed'"
+
+
+@pytest.mark.asyncio
+async def test_no_effects_still_refuses_to_assume_a_pass():
+    """The neighbouring branch, pinned so the two cannot drift apart again."""
+    out = await action_run_validation_checks(
+        StepInput(
+            context={"validation_strategy": "[]"},
+            params={},
+            meta=FlowMeta(flow="quality_gate", step="execute_checks", attempt=1),
+            effects=None,
+        )
+    )
+    assert out.result["all_required_passing"] is False
+    assert out.result["checks_run"] == 0

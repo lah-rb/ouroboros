@@ -914,9 +914,34 @@ async def action_run_validation_checks(step_input: StepInput) -> StepOutput:
     checks = _parse_validation_strategy(strategy_raw, max_checks)
 
     if not checks:
+        # ZERO CHECKS IS NOT A PASS. This returned all_required_passing=True,
+        # six lines below the `not effects` branch that gets the same question
+        # right and says so out loud ("NOT assumed pass"). Same function,
+        # opposite verdicts on the same evidence: none.
+        #
+        # Measured cost — the 2026-08-11 quality gate. plan_checks proposed
+        # py_compile and pytest; the strategy did not parse into checks; this
+        # branch returned an empty PASS; and summarize, reading an empty
+        # validation_results, reasoned verbatim "No validation results given
+        # ... Not exercised but implemented? Assume exists. So pass." gate_pass
+        # then fired on an artifact whose own suite was 4/12 RED, whose win
+        # screen did not terminate, and whose save/load commands did not exist.
+        # The model reported accurately at every step. This branch
+        # manufactured the pass.
+        #
+        # EVERY RATE GATE MUST FAIL ON ZERO CHECKABLE ITEMS. `status` is
+        # distinct from a real failure so a caller can tell "we could not look"
+        # from "we looked and it failed".
         return StepOutput(
-            result={"all_required_passing": True, "checks_run": 0},
-            observations="No validation checks parsed from strategy",
+            result={
+                "all_required_passing": False,
+                "checks_run": 0,
+                "status": "unverified",
+            },
+            observations=(
+                "No validation checks parsed from strategy — UNVERIFIED, "
+                "not assumed pass (0 checks run)"
+            ),
             context_updates={"validation_results": []},
         )
 
