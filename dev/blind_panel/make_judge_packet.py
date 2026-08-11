@@ -248,13 +248,26 @@ def main() -> int:
     args = ap.parse_args()
 
     src = Path(args.staged).expanduser().resolve()
-    art = src if (src / "main.py").exists() else src / "alpha"
-    if not art.is_dir():
+
+    def _is_artifact(p: Path) -> bool:
+        """Layout-agnostic. Detecting on a top-level main.py silently failed
+        on every src/-layout artifact: the packet was never written, and with
+        stderr redirected the caller saw nothing until a blind judge reported
+        a one-sided packet mid-flight. An artifact is a dir that carries a
+        manifest or python anywhere it conventionally lives."""
+        if not p.is_dir():
+            return False
+        if (p / "main.py").exists() or (p / "pyproject.toml").exists():
+            return True
+        return any(p.glob("*.py")) or any(p.glob("src/*.py")) or any(p.glob("*/main.py"))
+
+    art = src if _is_artifact(src) else src / "alpha"
+    if not _is_artifact(art):
         for cand in (src / "judge1" / "alpha", src / "alpha"):
-            if cand.is_dir():
+            if _is_artifact(cand):
                 art = cand
                 break
-    if not art.is_dir():
+    if not _is_artifact(art):
         raise SystemExit(f"no artifact found under {src}")
 
     out = Path(args.out).expanduser().resolve()

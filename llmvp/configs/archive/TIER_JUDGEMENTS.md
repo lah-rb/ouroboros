@@ -3361,3 +3361,99 @@ tier:
       the total 59 — which is ★★★ and the rejudge band. Recorded so a future
       reader can weigh it.
 ```
+
+---
+
+## structural_mode A/B — batch vs session — 2026-08-10
+
+```yaml
+epoch: game_challenge_tier v2 brief, gpt-oss-120b-a5-medium both arms
+question: >
+  NOT a model comparison. ONE model, ONE brief, ONE 3h backstop per arm; the
+  only variable is structural_mode. Control tier_20260810-140320 (batch, all
+  files in ONE completion). Candidate tier_20260810-181040 (session, one file
+  per TURN inside one inference session, siblings in real context).
+  Operator ruling: both arms stay at 3h; the control was NOT resumed to the
+  quality gate, because extra wall on one side is a second variable.
+
+protocol:
+  instrument: TIER_RUBRIC v2.1, canonical FLIGHT_PROMPT dispatched VERBATIM
+  judges: 3 freshly spawned, blind, independent (never the dispatcher)
+  blinding: stage.py randomised labels + stripped .agent/logs/venvs;
+            make_judge_packet.py pseudonymised the rubric's model citations
+            (the rubric argues from real failures BY MODEL NAME — a judge who
+            hits a missing win condition and then reads that citation has been
+            handed the answer). Identifier scan clean.
+  position_bias: session presented as A in f1, as B in f2 and f3.
+                 It won the overall in all three. Bias ruled out.
+
+result:
+  overall: SESSION 3-0 (unanimous)
+  delivery_panel: session in all three (4-0, 4-0, 3-1)
+  character_panel: batch 5-1, batch 4-2, 3-3 tie
+  unanimous_axes:
+    session: [A1 working surface, A2 state integrity, A4 delivered scope]
+    batch:   [B6 imagination, B8 craft/UI]
+  shape: >
+    "A is the better-written artifact, B is the better-built one" — reached
+    independently, in those words or near them, by all three judges.
+    SESSION DELIVERS; BATCH REACHES FURTHER.
+
+decisive_facts:
+  - batch is UNWINNABLE. All three judges drove the intended chain (find map,
+    find Flame Ember, shatter the Ice Wyrm's shield, kill it) and got a
+    generic monster-death line and a prompt. Each then grepped ONLY to explain
+    what play had already shown, and found no victory path exists anywhere in
+    the tree. Fires the CORE-LOOP trigger: SIGNIFICANTLY-DEVIATED.
+    Session: WON, by two routes, 46/47 NEAR-FULL.
+  - batch's load REWRITES THE WORLD — the save carries no room-contents field,
+    so carried items duplicate onto the floor ("You are carrying: Frostbite
+    Axe, Frostbite Axe"). Independent of the missing win, which matters: the
+    delivery sweep does not rest on a single catastrophic defect.
+  - THE SEAM IS THE POINT. All three judges found the same batch defect:
+    handle_equip writes the item's DISPLAY NAME into the equipment field while
+    handle_status reads that value as an ID — two internally reasonable
+    functions disagreeing about a key type, so equipment reports None forever.
+    That is exactly the value/key vocabulary family this mode was built to
+    prevent, present in the batch arm and absent from the session arm.
+
+deterministic_readout:
+  batch:   21/24 functional (87.5%), 1610 inferences, 4/8 authored tests pass
+  session: 23/27 functional (85.2%), 1546 inferences, 8/12 authored tests pass
+  seam_checks: session 0 findings; batch 1 (grotto unreachable in the DATA)
+  note: >
+    Session did MORE absolute work (23 goals vs 21) with ~4% FEWER inferences.
+    That was the standing risk of one-file-per-turn — our historical losses are
+    agent_timeout from inference volume — and it did not materialise.
+
+instrument_note: >
+  THE CHECKPOINT NEVER FIRED. Session mode's distinguishing mechanism — the
+  between-turn check — ran zero times on this artifact, so this flight measures
+  the GENERATION half only: one file per turn with real siblings in context vs
+  all files in one completion. The checking half remains unproven live.
+
+  MY OWN CHECKS MISSED THE DECISIVE SEAM. The shared seam gate passed the batch
+  arm clean, and the round-trip check only inspects SERIALIZED payload keys, so
+  an in-process display-name/id mismatch between two functions is invisible to
+  it. Same family, different instance. The graph check's grotto finding was
+  true of the DATA and incomplete about the artifact: the room is reachable via
+  a `hidden` exit hardcoded in game.py and gated on carrying the Ancient Map —
+  a data-only reachability walk can be defeated by code-level exits.
+
+  FIRST DISPATCH WAS VOID, and the judges caught it. make_judge_packet.py
+  detected an artifact by a TOP-LEVEL main.py; the control uses a src/ layout,
+  so its packet silently never built, and stderr was redirected. All three
+  packets held one artifact. Two judges halted rather than invent the missing
+  side — "a fabricated verdict moves a real ladder row on invented evidence" —
+  and banked complete facts passes instead. Builder made layout-agnostic; the
+  solo-judging INSTRUCTIONS.md (which contradicts the comparative flight body)
+  is now stripped; a pre-dispatch gate refuses to fly a one-sided packet.
+
+caveat: >
+  n=1 ON THE ARTIFACT PAIR. Three judges reduce JUDGE variance, not ARTIFACT
+  variance. A second batch run need not ship a missing win condition. The
+  character panel favours batch consistently, so the defensible claim is a
+  TRADE WITH A DIRECTION, not a win: session delivers, batch reaches further.
+  No ladder placement is claimed — both judges who flagged PANEL SPLIT noted
+  §6 halts placement pending the operator's ruling.
+```
