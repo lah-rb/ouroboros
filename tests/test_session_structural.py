@@ -1094,3 +1094,39 @@ class Engine:
 """
     out = _serialized_roundtrip_violations({"loader.py": loader, "engine.py": engine})
     assert len(out) == 1 and "game_won" in out[0]
+
+
+def test_an_asymmetric_ambiguity_drop_reports_unverified_not_orphans():
+    """to_dict defined once, from_dict defined twice: only the consumer side
+    is dropped, so `written` stays populated and `read` empties. Without a
+    guard the check names keys as unread about a loader that calls the very
+    consumer it discarded. Found on a finished artifact whose loader is
+    GameState.from_dict(json.load(f)) alongside an Item.from_dict."""
+    src = """
+import json
+class Item:
+    @classmethod
+    def from_dict(cls, data):
+        return Item(name=data["name"], kind=data["kind"])
+
+class GameState:
+    def to_dict(self):
+        return {"player": self.player, "rooms_state": self.rooms}
+
+    @classmethod
+    def from_dict(cls, data):
+        return GameState(player=data["player"], rooms=data["rooms_state"])
+
+def save_state(state, path):
+    with open(path, "w") as f:
+        json.dump(state.to_dict(), f)
+
+def load_state(path):
+    with open(path) as f:
+        data = json.load(f)
+    return GameState.from_dict(data)
+"""
+    out = _serialized_roundtrip_violations({"models.py": src, "o.py": _SIB})
+    assert len(out) == 1
+    assert "UNVERIFIED" in out[0]
+    assert "player" not in out[0], "must not name keys it cannot resolve"

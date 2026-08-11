@@ -205,6 +205,38 @@ def _payload_methods(
     return producers, consumers
 
 
+def _ambiguous_payload_names(sources: dict[str, str]) -> set[str]:
+    """Method names `_payload_methods` had to drop as ambiguous.
+
+    ASYMMETRIC DROPS PRODUCE FALSE SPECIFIC CLAIMS. When `to_dict` is defined
+    once but `from_dict` is defined by two classes, only the consumer side is
+    dropped: `written` stays populated, `read` goes empty, and the check
+    reports named keys as "written and never read back" about a loader that
+    calls the very consumer it discarded. Measured live on a finished
+    artifact whose loader is `GameState.from_dict(json.load(f))`, where
+    `Item.from_dict` also exists.
+
+    A dropped name means the round trip is UNVERIFIABLE, not broken.
+    """
+    import ast as stdlib_ast
+
+    per_name: dict[str, list[frozenset[str]]] = {}
+    for src in sources.values():
+        try:
+            tree = stdlib_ast.parse(src)
+        except SyntaxError:
+            continue
+        for cls in stdlib_ast.walk(tree):
+            if not isinstance(cls, stdlib_ast.ClassDef):
+                continue
+            for fn in cls.body:
+                if isinstance(
+                    fn, (stdlib_ast.FunctionDef, stdlib_ast.AsyncFunctionDef)
+                ):
+                    per_name.setdefault(fn.name, []).append(frozenset())
+    return {n for n, seen in per_name.items() if len(seen) > 1}
+
+
 def _serializer_functions(sources: dict[str, str]) -> tuple[set[str], set[str]]:
     """(writer_names, reader_names) — functions that json.dump / json.load.
 
@@ -561,6 +593,14 @@ def _serialized_roundtrip_violations(sources: dict[str, str]) -> list[str]:
             read |= r
             reader_files.append(path)
 
+    # An ambiguous name dropped on EITHER side makes the comparison unsound:
+    # written stays populated while read goes empty, and the check would name
+    # keys as unread about a loader that calls the consumer it discarded.
+    ambiguous = _ambiguous_payload_names(py)
+    pair_unsound = bool(
+        ambiguous & {"to_dict", "from_dict", "serialize", "deserialize"}
+    )
+
     # THE VACUOUS PASS IS A REPORTABLE STATE. A serializer pair exists — the
     # project saves and loads — yet no key was recoverable from either side,
     # so this check has no opinion and must not be counted as a clean one.
@@ -593,6 +633,15 @@ def _serialized_roundtrip_violations(sources: dict[str, str]) -> list[str]:
         "created_at",
         "generated_at",
     }
+    if pair_unsound and (written - read):
+        return [
+            "serialized round trip: UNVERIFIED — this project saves and loads, "
+            f"but a payload method name ({', '.join(sorted(ambiguous & {'to_dict', 'from_dict', 'serialize', 'deserialize'}))}) "
+            "is defined by more than one class, so which keys belong to which "
+            "half cannot be resolved from the call sites. Not confirmed "
+            "symmetric and NOT confirmed broken."
+        ]
+
     orphaned = sorted(
         k
         for k in written - read
