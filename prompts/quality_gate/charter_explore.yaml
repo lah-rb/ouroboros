@@ -62,7 +62,7 @@ sections:
     This is the product's final inspection — an item skipped here is
     an item shipped unverified.
 
-    Target length: under 240 words. Write naturally as a brief.
+    Keep it brief — a tester should take it in at a glance. Write naturally as a brief.
   cache: true
 - id: product
   when: input.mission_objective

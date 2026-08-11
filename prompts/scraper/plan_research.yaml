@@ -28,7 +28,7 @@ sections:
       For each aspect give:
       - "name": a short, stable name (used as a tag — keep it terse)
       - "description": one sentence on what papers about this aspect contain
-      - "seed_queries": 2-4 scholarly search queries (terse noun phrases,
+      - "seed_queries": a handful of scholarly search queries (terse noun phrases,
         no boolean operators — these go to relevance-ranked APIs)
       - "coverage_target": how many strongly-relevant papers the corpus
         needs for this aspect (default 10; lower for narrow niches)

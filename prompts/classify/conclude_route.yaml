@@ -7,6 +7,6 @@ content: |-
       code_core = a change spanning MULTIPLE files/modules, a diffuse fix, or one needing cross-file understanding and a verified surgical patch. Slower and heavier; choose it only when the work is genuinely multi-file or the localization is not obvious from what you found.
     profile — one of: service | data_transform | invertible | repair | answer | plain (the KIND of end state the task produces).
       When the end state is an ANSWER — a value or small file the task wants written (an answer.txt, a move, a count) — route ops even if computing it takes code: the code is a means there, and ops iterates in the terminal with completion gates that drive at the required artifact. Reserve code_core for tasks whose DELIVERABLE is the software itself.
-    findings — 2-4 sentences for the NEXT stage: what the task needs, the specific file(s)/symbol(s) you identified, and whether it is localized (single-file) or diffuse (multi-file). A head start, not a full plan.
+    findings — a few sentences for the NEXT stage: what the task needs, the specific file(s)/symbol(s) you identified, and whether it is localized (single-file) or diffuse (multi-file). A head start, not a full plan.
 
   Return ONLY the fenced JSON object.

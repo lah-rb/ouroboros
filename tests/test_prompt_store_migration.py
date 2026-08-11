@@ -30,6 +30,20 @@ from agent.loader import load_prompt_text, set_prompt_text_dir
 ROOT = Path(__file__).resolve().parent.parent
 
 # (template_id, module, constant, chars, md5[:10]) — frozen at migration.
+#
+# TWO ENTRIES RE-FROZEN 2026-08-11, deliberately. diagnose/conclude and
+# classify/conclude_route carried HARD NUMERIC CONSTRAINTS ("at most 6
+# symbols", "2-4 sentences") and those were replaced with intent. A trace
+# showed why: a charter step budget of "2-4 steps" met a game whose win is
+# seven steps away, and the model spent its whole reasoning trying to comply
+# — "rule says 2-4 steps ... Must adhere" — then looked for a shortcut, in
+# its own word, to "cheat". The number outranked the qualifying sentence
+# directly beneath it. A count the task can contradict is a defect.
+#
+# Re-freezing is safe BY CONSTRUCTION: the KV head is keyed on md5(text), so
+# changed text takes a new key and cannot hit a stale pin. This list guards
+# UNINTENDED drift, which is why these two are updated in the same commit
+# that changes the prompts rather than quietly relaxed.
 MIGRATED = [
     (
         "personas/diagnosis",
@@ -52,8 +66,8 @@ MIGRATED = [
         "diagnose/conclude",
         "diagnosis_session_actions",
         "CONCLUDE_PROMPT",
-        8277,
-        "59f691704e",
+        8390,
+        "7eebca7a1d",
     ),
     (
         "diagnose/systemic_scan",
@@ -67,8 +81,8 @@ MIGRATED = [
         "classify/conclude_route",
         "router_actions",
         "CONCLUDE_ROUTE_PROMPT",
-        1479,
-        "03fb4207f6",
+        1481,
+        "8e73508214",
     ),
     (
         "personas/escalation_seed",

@@ -18,7 +18,7 @@ content: |
     related_symbols — array of other symbols that must change alongside ``target_symbol`` to keep the contract consistent. Each entry is a qualified name. Use one of two forms:
       - File-qualified (preferred): `path/to/file.py:ClassName.method`. Always use this when the symbol lives in a different file from ``target_file`` — and prefer it generally so file_ops can locate it unambiguously.
       - Bare: `ClassName.method` or `function_name` — interpreted as a symbol in ``target_file``. Use this only when the symbol definitely lives in ``target_file``.
-    Common cases: consumers of a method whose signature you're changing, callers of a renamed function, other methods that read the same attribute you're about to remove or rename, the upstream producer of a value the receiver is reporting as wrong-shaped. Leave as an empty array `[]` when the change is genuinely local to ``target_symbol``. List at most 6 symbols — if more would need to change, the refactor is too large to land in one patch and should be broken down.
+    Common cases: consumers of a method whose signature you're changing, callers of a renamed function, other methods that read the same attribute you're about to remove or rename, the upstream producer of a value the receiver is reporting as wrong-shaped. Leave as an empty array `[]` when the change is genuinely local to ``target_symbol``. List every symbol that must change with it — do NOT truncate the list to keep it short. If it runs long, that is the finding: the refactor is too large to land in one patch and should be broken down, and a silently shortened list hides that.
 
     root_cause — why the test failed. Name the specific bug, missing feature, or contract mismatch in one or two sentences.
 

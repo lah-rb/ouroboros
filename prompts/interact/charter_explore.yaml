@@ -40,5 +40,5 @@ content: |
   it discovers placement and writes the spec. If the capability turns out to
   already exist, say so plainly instead of inventing work.
 
-  Target length: under 220 words total. The banner tells the model this is
+  Keep it brief — a tester should take it in at a glance. The banner tells the model this is
   prose output — write naturally, no JSON, no code fences around the brief.

@@ -13,7 +13,7 @@ content: |
   arguments, include them.
 
   ## TEST STEPS
-  A numbered short list (2-4 steps) of what the tester should try.
+  A numbered list, as short as the job allows, of what the tester should try.
   Keep each step one action the tester takes — "type `help`", "add a
   todo labeled 'buy milk'", "quit cleanly with Ctrl-D." Steps are a
   GUIDE, not a checklist — the tester may stop early if the objective

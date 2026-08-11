@@ -31,7 +31,7 @@ sections:
 
   - id: instruction
     content: |
-      Emit 2-4 NEW queries likely to surface papers the prior queries
+      Emit a handful of NEW queries likely to surface papers the prior queries
       missed: synonyms, alternative terminology, related material
       systems, or methodological phrasings. Terse noun phrases only —
       no boolean operators, no quotes (the APIs do relevance ranking).

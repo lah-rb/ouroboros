@@ -16,7 +16,7 @@ content: |
   arguments, include them.
 
   ## TEST STEPS
-  A numbered short list (2-4 steps) that exercises the capability by the
+  A numbered list, as short as the job allows, that exercises the capability by the
   shortest path. Critical rules:
   - Pick the SIMPLEST instance reachable from the start state. Use the
     world/data files above to choose a target that is already present in
@@ -63,6 +63,6 @@ content: |
   fixing is a separate step's job. Do not include any file-editing action in
   the test steps.
 
-  Target length: under 200 words total. The banner tells the model this
+  Keep it brief — a tester should take it in at a glance. The banner tells the model this
   is prose output — write naturally, no JSON, no code fences around the
   whole brief.

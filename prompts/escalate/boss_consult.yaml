@@ -43,7 +43,7 @@ sections:
 - id: contract
   content: |
     ---
-    Reply with concise, actionable direction (under 250 words): the most
+    Reply with concise, actionable direction: the most
     likely root cause, what to verify FIRST to confirm or kill it, and
     the smallest change that would resolve it. If the agent is solving
     the wrong problem, say so plainly and redirect it. If its premise
