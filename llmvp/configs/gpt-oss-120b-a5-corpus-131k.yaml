@@ -1,0 +1,163 @@
+# SCRAPER / CORPUS CONFIG — gpt-oss-120b-a5, shared cell pool 131072.
+#
+# Purpose-built for continuous corpus work (scraper + extractor), where the
+# job is many small turns rather than a few enormous ones, and where the
+# machine must ALSO hold PaddleOCR-VL for PDF conversion.
+#
+# SIZED FROM MEASUREMENT, not from the ceiling. Across 122 real scraper
+# inferences (spectroscopy corpus, 2026-08-11):
+#
+#     prompt_tokens   median 3,442   p90 3,833   p99 4,123   MAX 4,165
+#     generated       median   674                            max 1,142
+#     peak turn total ≈ 5,307 tokens
+#
+# The swarm config provisions a 589,824-cell pool for that — roughly 100x
+# what the workload touches — and at 72 KiB/token it costs 40.5 GB of DIRTY,
+# unevictable memory. Measured on the live server: phys_footprint 41 GB
+# against 61 GB of clean mmap'd weights (RSS reads 101.8 GB and badly
+# overstates the reservation; only the dirty half is a real constraint).
+#
+# 131,072 cells x 72 KiB = 9.0 GB, freeing ~31 GB for PaddleOCR-VL and
+# headroom. model_max_context 32768 caps any single stream at ~6x the
+# observed peak, so a long turn still cannot starve the pool: at 32k a
+# stream takes 2.25 GB, and four such streams still fit inside the pool.
+#
+# thinking_mode: MEDIUM. The swarm config runs low for throughput on
+# mechanical fan-out; corpus work is judgement work — relevance tagging,
+# grounding, gate verdicts — and medium is the level that earns its tokens
+# there. It raises generated tokens, which the 3x per-stream headroom above
+# already absorbs.
+#
+# NOT tier-judged. This is an operational config, not a league entrant; it
+# carries no tier block, so agent/tier/runner.py will not treat it as one.
+
+app:
+  host: "0.0.0.0"
+  port: 8008
+  log_level: "info"
+  cors_origins: ["*"]
+  backend_timeout: 180
+  openai_shim: true
+
+graphql:
+  max_query_depth: 10
+  max_tokens: 32768
+  max_aliases: 50
+  introspection_enabled: true
+
+model:
+  name: "gpt-oss-120b-a5"
+  family: "harmony"
+  path: /Users/lah-rb/.lmstudio/models/unsloth/gpt-oss-120b-GGUF/gpt-oss-120b-F16.gguf
+  # RAISED 524288 -> 744448 on 2026-07-29 from the measured ceiling
+  # (probe_verified_n_ctx below). KV 72 KiB/token x 744448 = 54.9GB
+  # + 65.4GB weights = 120.3GB resident at boot.
+  # 2026-07-30 BOOT-FAILURE POST-MORTEM (measured end-to-end): 744,448 was
+  # probe-verified at n_seq_max=131 and served this morning at 133 — but at
+  # the 141-seq layout (+8 flow band) it Metal-OOMs at the FIRST DECODE
+  # even on a `sudo purge`d box with 118 GB free (status 5, pos 0). The
+  # page-cache theory is falsified; the band seqs genuinely tipped the
+  # knife-edge, so the 744448 record is invalid under the current map.
+  # 524,288@141 boots (measured same day). 589,824@141 is the bisect rung —
+  # every earlier attempt at it died at the formula preflight, never
+  # reaching Metal, so it was UNTESTED until now.
+  n_ctx: 131072
+  probe_verified_weights_bytes: 65369017728
+  # 2026-07-26 ladder measured rung (105.2 GB steady wired, old seq
+  # layout); live-validating under the 141-seq map 2026-07-30.
+  probe_verified_n_ctx: 131072
+  # Refuse arithmetically-impossible loads before Metal allocates. Set from
+  # the REAL wired limit (113 GB) minus working headroom, not the 116 that
+  # was assumed before it was checked.
+  kv_preflight_gb: 80
+  # model max context (trained per-stream range) vs n_ctx (the swarm
+  # max context: the shared KV cell pool). No single stream may exceed
+  # this, however large the pool. (2026-07-24 context-ladder split.)
+  model_max_context: 32768
+  n_gpu_layers: -1
+  seed: -1
+  verbose: false
+  flash_attn_type: auto
+  n_batch: 2048
+  # per_request, matching the parent (2026-08-03 routing redesign) —
+  # the harmony head-swap serves the per-level heads.
+  thinking: "per_request"
+  # low (2026-08-03): the per_request resting level — None routes LOW, never
+  # medium (operator rule). Also the backend's default-head level: medium and
+  # high get pinned reasoning heads; the resting head is the cheap one.
+  thinking_mode: medium
+  swa_full: true
+  kv_unified: true
+  # FLIPPED 2026-07-30: the batched flow band shipped (BUILD = range-copy
+  # off a completed stream's seat on the decode thread; HIT = whole-seq
+  # install via the control inbox). The 2026-06 revert hit the M8 blob
+  # implementation; this shares none of it. Under kv_unified the band
+  # adds 8 seq ids and divides nothing. Measured payout at realistic head
+  # sizes: 3.51s/call = 49% of prefill (glm pilot; gpt-oss prefill is
+  # faster so the absolute saving is smaller, the fraction similar).
+  flow_kv_cache: true
+  session_full_replay: true
+  resident_seq_cache: true
+  context_refresh_drain_s: 300
+  reasoning_head_swap: true
+
+prompt:
+  persona_file: "./knowledge/SOUL.md"
+
+generation:
+  # Ample default — design_and_plan and the contract author run at high/
+  # medium reasoning and must not be starved (a low default silently cut
+  # the architecture generation to an EMPTY response: gpt-oss burns the
+  # budget on CoT before emitting content). Swarm WORKERS carry no
+  # override, so this default is also their ceiling — it only binds on a
+  # ramble (EOS ends honest work), and the worker layer names that
+  # failure honestly instead of retrying it.
+  max_tokens_default: 32768
+  temperature_default: 1.0
+  top_p: 1.0
+  top_k: 0
+  min_p: 0.00
+  presence_penalty: 0.0
+  repeat_penalty: 1.05
+  session_temp_floor: 0.35
+  streaming_default: true
+
+knowledge:
+  tokens_bin: "./data/gpt-oss-120b-a5.tokens.bin"
+  token_limit: 32768
+
+resources:
+  decode_mode: "batched"
+  cpu_threads: 15
+  # W: admission ceiling for the n=symbols fan-out (engine proven to 64
+  # streams). The client-side pool-fit gate is the real load governor.
+  # UNCAPPED (field omitted) as of 2026-07-26 — resolves to the measured-safe
+  # default of 128 working seats. The old explicit 32 was costing ~40% of
+  # achievable throughput (144.7 tok/s at N=32 vs 202.5 at N=64, ladder in
+  # dev/decode_ceiling/). Seats are nearly free; the REAL limiter is pool
+  # cells, enforced by the swarm pool-fit gate against estimated context.
+  # Set an explicit value to pin the width for a controlled A/B or a
+  # latency-bounded workload.
+  jit_concurrency_limit: null
+
+tools:
+  enabled: false
+  max_iterations: 3
+
+logging:
+  enabled: true
+  directory: "./logs"
+
+# ── TIER RECORD (doc-only; see DOC_ONLY_KEYS in core/config.py) ──────
+# Two halves, never merged: `judged` came from a blind judge who saw only a
+# stripped artifact and a redacted rubric; `observed` from the operator who
+# watched the run. A judge must never see `observed` (TIER_RUBRIC §7), so it
+# stays a sibling key rather than a note nested inside the judgement.
+# SCORED TWICE, two rounds apart. The CURRENT record is `judged_2026_07_31`
+# below; the 2026-07-29 block that follows it is kept as history, not replaced.
+# (This is the same config measured again, not a variant — the "one config, one
+# score" rule is about VARIANTS, which get their own file via `extends:`.)
+#
+# 54/100 under v1.0, then 53/100 under v1.2, on the same config in different
+# rounds against different rubric versions. One point apart. That is the
+# strongest reproducibility evidence the instrument has produced.
