@@ -1416,7 +1416,29 @@ class LocalEffects:
             thinking_content = ""
             if self.trace_thinking:
                 try:
-                    thinking_content = await self.fetch_thinking()
+                    # CORRELATE ON THE SESSION ID. Fetching with "" was
+                    # measured 0-for-2444 on the session path (93% of a run's
+                    # inference) while the stateless path captured fine, and
+                    # the reason is in the tracker's own branch order:
+                    #
+                    #   if s.active:
+                    #       if not request_id or request_id == s.request_id:
+                    #           return s.thinking_content   # reset to "" by start()
+                    #   if not request_id or request_id == self._last_request_id:
+                    #       return self._last_thinking      # the promoted text
+                    #
+                    # An empty id is falsy, so it ALWAYS matches the active
+                    # generation — and any generation that starts between this
+                    # turn's FSM extraction and this fetch shadows the promoted
+                    # content with an empty live buffer. promote_thinking() was
+                    # written to fix exactly this and could never be reached.
+                    #
+                    # Session generations are labelled with the SESSION ID (see
+                    # _request_identity in effects/inference.py: turns are
+                    # sequential and single-driver, so LLMVP uses the session id
+                    # rather than minting a second key), so it is the correct
+                    # correlation key here.
+                    thinking_content = await self.fetch_thinking(session_id)
                 except Exception:  # noqa: BLE001 - non-critical, never break inference
                     thinking_content = ""
             cfg = config_overrides or {}
