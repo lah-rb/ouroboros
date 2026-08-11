@@ -170,7 +170,13 @@ def test_extractor_end_to_end_mock():
     saved = fx._state["mission"]
     assert saved.status == "completed"
     bank = {}
-    for line in fx._files["databank/papers.jsonl"].splitlines():
+    # The extractor writes its own sidecar; read_databank overlays it so
+    # callers still see one record per paper. Assert the MERGED view — that
+    # is the contract every consumer depends on.
+    for line in (
+        fx._files["databank/papers.jsonl"]
+        + fx._files.get("databank/extraction.jsonl", "")
+    ).splitlines():
         r = json.loads(line)
         bank[r["paper_key"]] = r
     assert bank["clean"]["extraction_status"] == "extracted"

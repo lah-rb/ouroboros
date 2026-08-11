@@ -49,6 +49,8 @@ from agent.models import StepInput, StepOutput
 logger = logging.getLogger(__name__)
 
 DATABANK_PATH = "databank/papers.jsonl"
+# Extractor-owned sidecar — see read_databank for why it is separate.
+EXTRACTION_PATH = "databank/extraction.jsonl"
 PDF_DIR = "pdfs"
 RELEVANCE_TIERS = ("exact", "close", "adjacent")
 MAX_REFERENCE_DOIS = 200
@@ -230,9 +232,9 @@ def paper_key(record: dict) -> str:
     return "title_" + "".join(c if c.isalnum() else "_" for c in title)[:80]
 
 
-async def read_databank(effects: Any) -> dict[str, dict]:
-    """paper_key -> record, last-record-wins."""
-    fc = await effects.read_file(DATABANK_PATH)
+async def _read_jsonl_records(effects: Any, path: str) -> dict[str, dict]:
+    """paper_key -> record for one JSONL file, last-record-wins."""
+    fc = await effects.read_file(path)
     records: dict[str, dict] = {}
     if not getattr(fc, "exists", False):
         return records
@@ -249,13 +251,50 @@ async def read_databank(effects: Any) -> dict[str, dict]:
     return records
 
 
+async def read_databank(effects: Any) -> dict[str, dict]:
+    """paper_key -> record, last-record-wins, with the extraction sidecar
+    overlaid so callers see ONE merged view and need no changes.
+
+    TWO WRITERS, TWO FILES. append_records is a read-modify-write of the
+    WHOLE file, so a scraper appending candidates and an extractor
+    appending extraction_status to the same path lose each other's work —
+    whichever writes second wins. That is the one thing standing between
+    here and running acquisition and OCR concurrently, which is worth a
+    lot: the extractor flow set contains ZERO LLM turns, so gpt-oss idles
+    for the entire OCR stage (~12 min per 3-PDF dispatch).
+
+    The stages own disjoint fields, so they get disjoint files. The
+    scraper owns papers.jsonl; the extractor owns extraction.jsonl and
+    overlays it here. Sidecar keys with no base record are kept rather
+    than dropped, so an orphan is visible instead of silently missing.
+    """
+    records = await _read_jsonl_records(effects, DATABANK_PATH)
+    for key, ext in (await _read_jsonl_records(effects, EXTRACTION_PATH)).items():
+        base = records.get(key)
+        records[key] = {**base, **ext} if base else ext
+    return records
+
+
+async def append_extraction_records(effects: Any, records: list[dict]) -> None:
+    """Append extractor-owned fields to the sidecar, never to papers.jsonl.
+
+    Keeps the extractor off the scraper's file so the two can run at the
+    same time without losing each other's appends (see read_databank).
+    """
+    await _append_jsonl(effects, EXTRACTION_PATH, records)
+
+
 async def append_records(effects: Any, records: list[dict]) -> None:
     """Append records as JSONL lines (last-wins semantics on read)."""
+    await _append_jsonl(effects, DATABANK_PATH, records)
+
+
+async def _append_jsonl(effects: Any, path: str, records: list[dict]) -> None:
     if not records:
         return
     from agent.persistence.models import _now_iso
 
-    fc = await effects.read_file(DATABANK_PATH)
+    fc = await effects.read_file(path)
     existing = fc.content if getattr(fc, "exists", False) else ""
     if existing and not existing.endswith("\n"):
         existing += "\n"
@@ -265,7 +304,7 @@ async def append_records(effects: Any, records: list[dict]) -> None:
         rec.setdefault("paper_key", paper_key(rec))
         rec["updated_at"] = _now_iso()
         lines.append(json.dumps(rec, ensure_ascii=False))
-    await effects.write_file(DATABANK_PATH, existing + "\n".join(lines) + "\n")
+    await effects.write_file(path, existing + "\n".join(lines) + "\n")
 
 
 # ── API normalization ─────────────────────────────────────────────────

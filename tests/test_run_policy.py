@@ -196,7 +196,10 @@ def test_wall_clock_parks_mission_as_paused():
     # dispatch that would never run (the devstral void).
     saved = fx._state["mission"]
     assert saved.status == "paused"
-    bank = fx._files["databank/papers.jsonl"]
+    # Extraction records land in the extractor-owned SIDECAR, not the
+    # scraper's papers.jsonl — the two stages write disjoint files so they
+    # can run concurrently without losing each other's appends.
+    bank = fx._files["databank/extraction.jsonl"]
     assert "extracted" in bank  # the in-flight work flow finished and recorded
     assert saved.cycles_consumed == 1
     assert saved.pending_return  # replay inputs survived the park

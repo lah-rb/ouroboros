@@ -152,3 +152,89 @@ async def test_reference_expansion_runs_when_the_budget_is_unlimited(monkeypatch
     from agent.actions.scholarly_actions import _request_budget
 
     assert _request_budget() == 0
+
+
+# ══════════════════════════════════════════════════════════════════════
+# The extraction sidecar — what makes concurrent scrape+OCR safe
+#
+# append_records is a read-modify-write of the WHOLE file. With the
+# scraper appending candidates and the extractor appending
+# extraction_status to the same path, whichever writes second wins and
+# the other's work is gone. That is the only thing standing between here
+# and running acquisition and OCR at the same time — worth removing,
+# because the extractor flow set has ZERO LLM turns, so gpt-oss idles for
+# the entire OCR stage (~12 min per 3-PDF dispatch).
+#
+# The two stages own disjoint fields, so they get disjoint files.
+# ══════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.asyncio
+async def test_extraction_writes_the_sidecar_not_the_scrapers_file():
+    from agent.actions.scholarly_actions import (
+        DATABANK_PATH,
+        EXTRACTION_PATH,
+        append_extraction_records,
+    )
+
+    fx = MockEffects(files={DATABANK_PATH: '{"paper_key": "a", "title": "A"}\n'})
+    await append_extraction_records(
+        fx, [{"paper_key": "a", "extraction_status": "extracted"}]
+    )
+    assert "extraction_status" not in fx._files[DATABANK_PATH]
+    assert "extracted" in fx._files[EXTRACTION_PATH]
+
+
+@pytest.mark.asyncio
+async def test_the_merged_view_overlays_the_sidecar_onto_the_base_record():
+    from agent.actions.scholarly_actions import (
+        DATABANK_PATH,
+        EXTRACTION_PATH,
+        read_databank,
+    )
+
+    fx = MockEffects(
+        files={
+            DATABANK_PATH: '{"paper_key": "a", "title": "A", "pdf_path": "p.pdf"}\n',
+            EXTRACTION_PATH: '{"paper_key": "a", "extraction_status": "extracted"}\n',
+        }
+    )
+    bank = await read_databank(fx)
+    assert bank["a"]["title"] == "A", "base fields survive the overlay"
+    assert bank["a"]["pdf_path"] == "p.pdf"
+    assert bank["a"]["extraction_status"] == "extracted", "sidecar overlays"
+
+
+@pytest.mark.asyncio
+async def test_interleaved_writes_no_longer_lose_each_other():
+    """THE REGRESSION. Both stages appending to one file lost whichever
+    write landed first; disjoint files make the interleaving harmless."""
+    from agent.actions.scholarly_actions import (
+        DATABANK_PATH,
+        append_extraction_records,
+        append_records,
+        read_databank,
+    )
+
+    fx = MockEffects(files={DATABANK_PATH: '{"paper_key": "a", "title": "A"}\n'})
+    # extractor records, then the scraper appends a fresh candidate
+    await append_extraction_records(
+        fx, [{"paper_key": "a", "extraction_status": "extracted"}]
+    )
+    await append_records(fx, [{"paper_key": "b", "title": "B"}])
+    bank = await read_databank(fx)
+    assert bank["a"]["extraction_status"] == "extracted", "extractor work survived"
+    assert bank["b"]["title"] == "B", "scraper work survived"
+
+
+@pytest.mark.asyncio
+async def test_a_sidecar_orphan_stays_visible_rather_than_vanishing():
+    """A sidecar key with no base record means something is out of step —
+    surface it rather than dropping it silently."""
+    from agent.actions.scholarly_actions import EXTRACTION_PATH, read_databank
+
+    fx = MockEffects(
+        files={EXTRACTION_PATH: '{"paper_key": "ghost", "extraction_status": "x"}\n'}
+    )
+    bank = await read_databank(fx)
+    assert "ghost" in bank

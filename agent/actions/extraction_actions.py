@@ -8,7 +8,9 @@ toolchain (own venv, own mlx server child, one process per dispatch);
 these actions are the policy layer: worklists, quality thresholds,
 record bookkeeping, and the gate verdict.
 
-Record fields owned by this stage (databank/papers.jsonl, last-wins):
+Record fields owned by this stage. They are written to the sidecar
+databank/extraction.jsonl (last-wins) and overlaid onto the scraper's
+papers.jsonl by read_databank, so this stage never writes that file:
   extraction_status: "" | "needs_reextract" | "extracted" | "extract_failed"
   md_path, figure_count, extraction_method, extraction_quality{...}
 """
@@ -191,7 +193,10 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
         → needs_reextract on the first attempt, extract_failed after
           (flagged, never silently included in the corpus).
     """
-    from agent.actions.scholarly_actions import append_records, read_databank
+    from agent.actions.scholarly_actions import (
+        append_extraction_records,
+        read_databank,
+    )
 
     effects = step_input.effects
     keys = list(step_input.inputs.get("paper_keys") or [])
@@ -297,7 +302,10 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
                 retried += 1
         updates.append(rec)
 
-    await append_records(effects, updates)
+    # SIDECAR, not papers.jsonl — the scraper owns that file and both
+    # writers do a whole-file read-modify-write, so sharing it loses
+    # appends. Disjoint files let acquisition and OCR run at once.
+    await append_extraction_records(effects, updates)
 
     status = "success" if extracted == len(resolved_keys) else "partial"
     if extracted == 0:
