@@ -477,6 +477,126 @@ def _edge_targets(room: dict) -> list[str]:
     return targets
 
 
+# ══════════════════════════════════════════════════════════════════════
+# Value/key vocabulary — the IN-PROCESS half
+#
+# A blind panel found the decisive defect of a shipped artifact and BOTH
+# existing checks were blind to it. `_transfer_shape_violations` indexes
+# dict-literal producers; `_serialized_roundtrip_violations` reads keys off
+# a SERIALIZED payload. Neither can see two functions disagreeing about what
+# a single in-memory state field holds:
+#
+#     game.py:231   self.state.player["equipped_weapon"] = item.name   # NAME
+#     game.py:426   self.state.player["equipped_weapon"] = loot_id     # ID
+#     game.py:136   weapon_id = player.get("equipped_weapon")          # as ID
+#
+# Equipment therefore reported "None" forever after any manual equip, while
+# the loot path displayed correctly — the two writers were each internally
+# reasonable and disagreed only about the vocabulary of the field between
+# them. That is the value/key seam family, and one field written two ways is
+# a far stronger signal than any resemblance heuristic.
+# ══════════════════════════════════════════════════════════════════════
+
+_NAME_ATTRS = {"name", "title", "display_name", "label", "display"}
+_ID_ATTRS = {"id", "key", "slug", "ident", "identifier", "uid"}
+
+
+def _value_vocabulary(node: Any) -> str:
+    """'name' | 'id' | '' — what a written value evidently IS."""
+    import ast as stdlib_ast
+
+    if isinstance(node, stdlib_ast.Attribute):
+        if node.attr in _NAME_ATTRS:
+            return "name"
+        if node.attr in _ID_ATTRS:
+            return "id"
+    if isinstance(node, stdlib_ast.Name):
+        n = node.id.lower()
+        if n == "id" or n.endswith("_id") or n.endswith("_key"):
+            return "id"
+        if n.endswith("_name") or n.endswith("_title"):
+            return "name"
+    if isinstance(node, stdlib_ast.Subscript) and isinstance(
+        node.slice, stdlib_ast.Constant
+    ):
+        s = node.slice.value
+        if isinstance(s, str):
+            if s in _NAME_ATTRS:
+                return "name"
+            if s in _ID_ATTRS:
+                return "id"
+    return ""
+
+
+def _field_vocabulary_violations(sources: dict[str, str]) -> list[str]:
+    """State fields written as a display name in one place and an id in another.
+
+    Reported only on DISAGREEMENT — a field consistently holding names is
+    fine, and so is one consistently holding ids. What breaks a program is
+    the two meeting in one field.
+    """
+    import ast as stdlib_ast
+
+    # field -> kind -> [(file, line)]
+    writes: dict[str, dict[str, list[tuple[str, int]]]] = {}
+    id_reads: dict[str, list[str]] = {}
+
+    for path, src in sorted(sources.items()):
+        if not path.endswith(".py"):
+            continue
+        try:
+            tree = stdlib_ast.parse(src)
+        except SyntaxError:
+            continue
+        for n in stdlib_ast.walk(tree):
+            # X[...]["field"] = <value>
+            if isinstance(n, stdlib_ast.Assign) and len(n.targets) == 1:
+                tgt = n.targets[0]
+                if (
+                    isinstance(tgt, stdlib_ast.Subscript)
+                    and isinstance(tgt.slice, stdlib_ast.Constant)
+                    and isinstance(tgt.slice.value, str)
+                ):
+                    kind = _value_vocabulary(n.value)
+                    if kind:
+                        writes.setdefault(tgt.slice.value, {}).setdefault(
+                            kind, []
+                        ).append((path, getattr(n, "lineno", 0)))
+                # <name>_id = ....get("field")  — the field is CONSUMED as an id
+                if (
+                    isinstance(tgt, stdlib_ast.Name)
+                    and (tgt.id.lower().endswith("_id") or tgt.id.lower() == "id")
+                    and isinstance(n.value, stdlib_ast.Call)
+                    and isinstance(n.value.func, stdlib_ast.Attribute)
+                    and n.value.func.attr == "get"
+                    and n.value.args
+                    and isinstance(n.value.args[0], stdlib_ast.Constant)
+                    and isinstance(n.value.args[0].value, str)
+                ):
+                    id_reads.setdefault(n.value.args[0].value, []).append(path)
+
+    out: list[str] = []
+    for field, kinds in sorted(writes.items()):
+        name_sites = kinds.get("name") or []
+        id_sites = kinds.get("id") or []
+        if name_sites and id_sites:
+            where = ", ".join(f"{f}:{ln}" for f, ln in (name_sites + id_sites)[:4])
+            out.append(
+                f"field vocabulary: '{field}' is written as a DISPLAY NAME in one "
+                f"place and an ID in another ({where}). Whichever consumer is "
+                f"right, the other half of the writes will silently miss."
+            )
+        elif name_sites and field in id_reads:
+            where = ", ".join(f"{f}:{ln}" for f, ln in name_sites[:3])
+            out.append(
+                f"field vocabulary: '{field}' is written as a DISPLAY NAME "
+                f"({where}) but read back as an id in "
+                f"{', '.join(sorted(set(id_reads[field]))[:3])}. The lookup "
+                f"cannot match what the writer stored."
+            )
+    return out
+
+
 def _graph_placement_violations(data_sources: dict[str, str]) -> list[str]:
     """Unreachable rooms, exits to nowhere, and entities placed in no room.
 

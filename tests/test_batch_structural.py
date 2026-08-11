@@ -929,3 +929,107 @@ def test_json_worlds_are_read_too():
     world = '{"rooms": [{"id": "a", "exits": {"n": "b"}}, {"id": "b", "exits": {}}, {"id": "c", "exits": {}}]}'
     out = _graph_placement_violations({"world.json": world})
     assert len(out) == 1 and "c" in out[0]
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Value/key vocabulary — the in-process half
+#
+# A blind panel found this defect decisive in a shipped artifact and BOTH
+# existing checks were blind to it: _transfer_shape_violations indexes
+# dict-literal producers, and the round-trip check reads keys off a
+# SERIALIZED payload. Neither sees two functions disagreeing about what a
+# single in-memory field holds.
+#
+# Measured across 72 staged artifacts: 4 findings on 2 artifacts (2.8%),
+# all four verified true. Both fixtures below are real.
+# ══════════════════════════════════════════════════════════════════════
+
+from agent.actions.batch_structural_actions import (  # noqa: E402
+    _field_vocabulary_violations,
+)
+
+# tier_20260810-140320 — the artifact three judges independently faulted.
+# The .get() reader shows "None" forever after any manual equip.
+_SEAM_GET = """
+class Game:
+    def handle_status(self):
+        weapon_id = self.state.player.get("equipped_weapon")
+        return self.world_data["items"].get(weapon_id)
+
+    def handle_equip(self, item):
+        self.state.player["equipped_weapon"] = item.name
+
+    def handle_loot(self, loot_id):
+        self.state.player["equipped_weapon"] = loot_id
+"""
+
+# tier_20260801-185254 — same shape, raw subscript reader, so the
+# name-writing path raises rather than silently missing.
+_SEAM_SUBSCRIPT = """
+class Engine:
+    def show(self):
+        return self.world["items"][self.player.equipment["weapon"]].name
+
+    def equip_by_id(self, item_id):
+        self.player.equipment["weapon"] = item_id
+
+    def equip_by_name(self, item):
+        self.player.equipment["weapon"] = item.name
+"""
+
+_OTHER = "def helper():\n    return 1\n"
+
+
+def test_one_field_written_as_both_name_and_id_is_flagged():
+    out = _field_vocabulary_violations({"game.py": _SEAM_GET, "o.py": _OTHER})
+    assert len(out) == 1
+    assert "equipped_weapon" in out[0]
+    assert "DISPLAY NAME" in out[0] and "ID" in out[0]
+
+
+def test_the_raw_subscript_variant_is_flagged_too():
+    out = _field_vocabulary_violations({"engine.py": _SEAM_SUBSCRIPT, "o.py": _OTHER})
+    assert len(out) == 1 and "'weapon'" in out[0]
+
+
+def test_a_field_written_as_a_name_but_read_as_an_id_is_flagged():
+    """Single writer, so the disagreement is between the writer and the
+    consumer rather than between two writers."""
+    src = """
+class Game:
+    def equip(self, item):
+        self.player["equipped_weapon"] = item.name
+
+    def status(self):
+        weapon_id = self.player.get("equipped_weapon")
+        return weapon_id
+"""
+    out = _field_vocabulary_violations({"g.py": src, "o.py": _OTHER})
+    assert len(out) == 1 and "read back as an id" in out[0]
+
+
+def test_a_field_written_consistently_is_silent():
+    """Consistently holding names is fine; consistently holding ids is fine.
+    Only the two meeting in one field breaks a program."""
+    src = """
+class Game:
+    def equip(self, item):
+        self.player["equipped_weapon"] = item.id
+
+    def loot(self, loot_id):
+        self.player["equipped_weapon"] = loot_id
+"""
+    assert _field_vocabulary_violations({"g.py": src, "o.py": _OTHER}) == []
+
+
+def test_initialisation_to_a_literal_is_not_a_write_of_either_kind():
+    src = """
+class Game:
+    def reset(self):
+        self.player["equipped_weapon"] = None
+        self.player["equipped_armor"] = ""
+
+    def equip(self, item):
+        self.player["equipped_weapon"] = item.name
+"""
+    assert _field_vocabulary_violations({"g.py": src, "o.py": _OTHER}) == []
