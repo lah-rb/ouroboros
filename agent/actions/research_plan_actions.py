@@ -260,6 +260,32 @@ async def action_catalog_sweep_next(step_input: StepInput) -> StepOutput:
             observations="Catalog sweep: corpus goal complete",
         )
 
+    # A SPENT BUDGET MUST END THE PHASE, NOT SPIN IT. The sweep completes
+    # the corpus goal only when the worklist empties — but with the request
+    # budget exhausted no record can ever be processed, so records stay
+    # "candidate" and the same batch redispatches forever. Measured: 296
+    # budget-exhausted warnings across 121 cycles, zero progress possible,
+    # and it would have burned the full 8h wall. Same shape as a gate that
+    # cannot fail: an exhausted resource has to be a terminal state.
+    from agent.actions.scholarly_actions import _HTTP_STATE_KEY, _request_budget
+
+    budget = _request_budget()
+    if budget and effects:
+        http_state = await effects.read_state(_HTTP_STATE_KEY) or {}
+        used = int(http_state.get("total_requests") or 0)
+        if used >= budget:
+            goal.status = "complete"
+            await effects.save_mission(mission)
+            return StepOutput(
+                result={"sweep_complete": True, "budget_exhausted": True},
+                observations=(
+                    f"Catalog sweep: request budget exhausted ({used}/{budget}) — "
+                    f"corpus goal closed as PARTIAL. Raise or unset "
+                    f"OUROBOROS_SCRAPER_HTTP_BUDGET and re-run to continue "
+                    f"acquiring; the databank is preserved."
+                ),
+            )
+
     databank = await read_databank(effects)
     retag = [k for k, r in databank.items() if r.get("status") == "needs_retag"]
     fresh = [k for k, r in databank.items() if r.get("status") == "candidate"]

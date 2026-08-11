@@ -50,16 +50,37 @@ async def test_state_persists_request_count():
 
 
 @pytest.mark.asyncio
-async def test_budget_exhaustion_fails_soft_without_calling():
+async def test_no_budget_by_default_because_the_scraper_runs_continuously():
+    """The total-request cap is a DEVELOPMENT guardrail, not a politeness
+    control — pacing and Retry-After are what protect the APIs, and they are
+    always on. A hard cap stopped a real corpus at 86 of 624 available OA
+    PDFs, so unlimited is the default and the cap is opt-in."""
+    assert scholarly_actions._request_budget() == 0
     fx = _fx()
-    await fx.write_state(
-        _HTTP_STATE_KEY,
-        {"hosts": {}, "total_requests": scholarly_actions._MISSION_REQUEST_BUDGET},
-    )
+    await fx.write_state(_HTTP_STATE_KEY, {"hosts": {}, "total_requests": 10_000})
+    r = await polite_request(fx, "GET", _URL)
+    assert r.status != 0, "an unset budget must never block a request"
+
+
+@pytest.mark.asyncio
+async def test_budget_exhaustion_fails_soft_without_calling_when_one_is_set(
+    monkeypatch,
+):
+    monkeypatch.setenv("OUROBOROS_SCRAPER_HTTP_BUDGET", "600")
+    fx = _fx()
+    await fx.write_state(_HTTP_STATE_KEY, {"hosts": {}, "total_requests": 600})
     r = await polite_request(fx, "GET", _URL)
     assert r.status == 0
     assert "budget" in (r.error or "")
     assert fx.call_count("http_request") == 0
+
+
+@pytest.mark.asyncio
+async def test_a_malformed_budget_is_ignored_rather_than_blocking_everything(
+    monkeypatch,
+):
+    monkeypatch.setenv("OUROBOROS_SCRAPER_HTTP_BUDGET", "not-a-number")
+    assert scholarly_actions._request_budget() == 0
 
 
 @pytest.mark.asyncio
@@ -83,3 +104,51 @@ async def test_429_gets_one_retry_honoring_retry_after():
     assert r.status == 200
     assert 12.0 in sleeps  # honored Retry-After
     assert fx.call_count("http_request") == 2
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Acquisition outranks expansion, and an exhausted budget is terminal
+#
+# Both measured on the spectroscopy corpus run. Discovery over-delivered
+# (1,197 records, every aspect 11-17x its target) and then catalog stalled:
+# reference expansion spent 541 of the 600-request budget — most of it
+# 429'd by Semantic Scholar's keyed quota — leaving acquisition at 86 of
+# 624 available OA PDFs. Only full text can be mined for spectra, so those
+# 86 were the whole dataset.
+#
+# Then it span: the sweep completes the corpus goal only when the worklist
+# empties, but with the budget spent no record can be processed, so the
+# same batch redispatched. 296 exhaustion warnings across 121 cycles.
+# ══════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.asyncio
+async def test_reference_expansion_yields_once_the_reserve_is_reached(monkeypatch):
+    from agent.actions.scholarly_actions import action_fetch_references
+    from agent.models import FlowMeta, StepInput
+
+    monkeypatch.setenv("OUROBOROS_SCRAPER_HTTP_BUDGET", "600")
+    fx = _fx()
+    # 40% spent — inside the 60% acquisition reserve.
+    await fx.write_state(_HTTP_STATE_KEY, {"hosts": {}, "total_requests": 240})
+    out = await action_fetch_references(
+        StepInput(
+            context={"catalog_batch": [{"doi": "10.1000/x"}]},
+            params={},
+            meta=FlowMeta(flow="acquire_catalog", step="fetch_references", attempt=1),
+            effects=fx,
+        )
+    )
+    assert out.result.get("yielded_to_acquisition") is True
+    assert out.result["reference_dois"] == []
+    assert fx.call_count("http_request") == 0, "must not spend the reserve"
+
+
+@pytest.mark.asyncio
+async def test_reference_expansion_runs_when_the_budget_is_unlimited(monkeypatch):
+    """The reserve exists to ration a scarce budget. With no budget — the
+    default for continuous capture — expansion must not be suppressed."""
+    monkeypatch.delenv("OUROBOROS_SCRAPER_HTTP_BUDGET", raising=False)
+    from agent.actions.scholarly_actions import _request_budget
+
+    assert _request_budget() == 0

@@ -57,7 +57,42 @@ CATALOG_BATCH_SIZE = 5
 # ── Politeness ────────────────────────────────────────────────────────
 
 _HTTP_STATE_KEY = "scraper_http_state"
-_MISSION_REQUEST_BUDGET = 600
+
+# TOTAL-REQUEST BUDGET — a DEVELOPMENT guardrail, not a corpus control.
+#
+# Politeness is enforced by _HOST_MIN_INTERVAL pacing and Retry-After
+# backoff below; those are what protect the APIs and they are always on.
+# This is a separate thing: a hard cap on how many requests a mission may
+# ever make. For a scraper intended to run continuously that cap is not a
+# safety property, it is an arbitrary stopping point — and it stopped a
+# real corpus at 86 of 624 available OA PDFs (14%), because reference
+# expansion had already spent 541 of the 600 on calls that largely 429'd.
+#
+# Default is now UNLIMITED. Set OUROBOROS_SCRAPER_HTTP_BUDGET to a positive
+# integer for development runs where a hard stop is wanted.
+_DEFAULT_REQUEST_BUDGET = 0  # 0 = unlimited
+
+# When a budget IS set, keep this share of it for acquisition. Reference
+# expansion is a nice-to-have that produces no dataset on its own; PDFs
+# are the artifact. Without a reserve, expansion drains the allowance
+# batch by batch and later batches never reach a download.
+_ACQUISITION_RESERVE = 0.60
+
+
+def _request_budget() -> int:
+    """Total-request cap for this mission; 0 means unlimited."""
+    raw = os.environ.get("OUROBOROS_SCRAPER_HTTP_BUDGET", "").strip()
+    if not raw:
+        return _DEFAULT_REQUEST_BUDGET
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        logger.warning(
+            "OUROBOROS_SCRAPER_HTTP_BUDGET=%r is not an integer — ignoring", raw
+        )
+        return _DEFAULT_REQUEST_BUDGET
+
+
 _DEFAULT_MIN_INTERVAL = 2.0
 _HOST_MIN_INTERVAL = {
     # Unauthenticated shared pool is ~100 req / 5 min.
@@ -133,12 +168,13 @@ async def polite_request(
     hosts = state.get("hosts") or {}
     total = int(state.get("total_requests") or 0)
 
-    if total >= _MISSION_REQUEST_BUDGET:
+    budget = _request_budget()
+    if budget and total >= budget:
         logger.warning("Scraper HTTP budget exhausted (%d requests)", total)
         return HttpResult(
             status=0,
             url=url,
-            error=f"mission request budget exhausted ({_MISSION_REQUEST_BUDGET})",
+            error=f"mission request budget exhausted ({budget})",
         )
 
     host = urlsplit(url).netloc
@@ -609,6 +645,36 @@ async def action_fetch_references(step_input: StepInput) -> StepOutput:
     Context: catalog_batch
     Result: fetched, skipped; Publishes: catalog_batch
     """
+
+    # ACQUISITION OUTRANKS EXPANSION. Reference expansion produces no
+    # dataset by itself; downloaded PDFs are the artifact. When a budget is
+    # in force, decline once the remaining allowance is inside the
+    # acquisition reserve, so later batches can still fetch their papers.
+    # Measured on the run that motivated this: expansion took 541 of a
+    # 600-request budget — most of it 429'd — and acquisition finished at
+    # 86 of 624 available OA PDFs.
+    budget = _request_budget()
+    if budget:
+        state = await step_input.effects.read_state(_HTTP_STATE_KEY) or {}
+        used = int(state.get("total_requests") or 0)
+        if used >= budget * (1.0 - _ACQUISITION_RESERVE):
+            logger.info(
+                "Reference expansion yielding to acquisition "
+                "(%d/%d requests used, %.0f%% reserved for PDFs)",
+                used,
+                budget,
+                _ACQUISITION_RESERVE * 100,
+            )
+            return StepOutput(
+                result={"reference_dois": [], "yielded_to_acquisition": True},
+                observations=(
+                    f"Reference expansion skipped — {used}/{budget} requests used "
+                    f"and the remaining allowance is reserved for PDF acquisition, "
+                    f"which is what produces the corpus."
+                ),
+                context_updates={"reference_dois": []},
+            )
+
     effects = step_input.effects
     batch = list(step_input.context.get("catalog_batch") or [])
     fetched = skipped = 0
