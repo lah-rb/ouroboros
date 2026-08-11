@@ -112,6 +112,8 @@ def _payload_methods(
 
     producers: dict[str, set[str]] = {}
     consumers: dict[str, set[str]] = {}
+    _prod_sets: dict[str, list[set[str]]] = {}
+    _cons_sets: dict[str, list[set[str]]] = {}
 
     for src in sources.values():
         try:
@@ -140,6 +142,7 @@ def _payload_methods(
                     lit = _dict_keys(n.value)
                     if lit:
                         producers.setdefault(fn.name, set()).update(lit)
+                        _prod_sets.setdefault(fn.name, []).append(set(lit))
                         continue
                     # asdict(self) / dataclasses.asdict(self)
                     v = n.value
@@ -152,6 +155,7 @@ def _payload_methods(
                         )
                         if name == "asdict" and fields:
                             producers.setdefault(fn.name, set()).update(fields)
+                            _prod_sets.setdefault(fn.name, []).append(set(fields))
 
                 # ── consumer ──────────────────────────────────────────
                 args = [a.arg for a in fn.args.args if a.arg not in ("self", "cls")]
@@ -181,6 +185,22 @@ def _payload_methods(
                         keys.add(n.args[0].value)
                 if keys:
                     consumers.setdefault(fn.name, set()).update(keys)
+                    _cons_sets.setdefault(fn.name, []).append(set(keys))
+
+    # AMBIGUOUS NAMES ARE DROPPED, NOT UNIONED. Both maps are keyed by bare
+    # method name because a call site like `self.to_dict()` names no class.
+    # When two classes each define one — Game.to_dict returning
+    # {"player", "rooms"} and Player.to_dict returning the player's own
+    # fields — unioning them makes the INNER keys look written at the TOP
+    # level, where nothing reads them. Measured on a frontier artifact that
+    # does exactly this: 12 keys reported written-and-never-read against a
+    # loader that reads every one of them through Player.from_dict.
+    # A name that means two things cannot be resolved from the call site, so
+    # the honest answer is silence.
+    for table, seen in ((producers, _prod_sets), (consumers, _cons_sets)):
+        for name, sets in seen.items():
+            if len({frozenset(s) for s in sets}) > 1:
+                table.pop(name, None)
 
     return producers, consumers
 
@@ -278,6 +298,28 @@ def _roundtrip_keys(
             and n.func.attr in ("dump", "dumps")
             for n in stdlib_ast.walk(fn)
         )
+
+        # TUPLE UNPACKING. `player, save_data = load_save(path, world)` is
+        # the shape a loader that returns BOTH a reconstructed object and the
+        # raw payload takes, and it is common precisely because the caller
+        # needs the top-level keys the object does not carry. A Name-target
+        # walk never registers save_data, so every `save_data.get("k")` in
+        # the caller went uncounted and the keys read as never-read.
+        for n in stdlib_ast.walk(fn):
+            if not (isinstance(n, stdlib_ast.Assign) and len(n.targets) == 1):
+                continue
+            tgt = n.targets[0]
+            if not isinstance(tgt, (stdlib_ast.Tuple, stdlib_ast.List)):
+                continue
+            v = n.value
+            is_payload_src = isinstance(v, stdlib_ast.Call) and (
+                (isinstance(v.func, stdlib_ast.Name) and v.func.id in readers)
+                or (isinstance(v.func, stdlib_ast.Attribute) and v.func.attr in readers)
+            )
+            if is_payload_src:
+                for el in tgt.elts:
+                    if isinstance(el, stdlib_ast.Name):
+                        payload_vars.add(el.id)
 
         for n in stdlib_ast.walk(fn):
             # AnnAssign as well as Assign. `save_data: dict = json.load(f)` is

@@ -984,3 +984,113 @@ def test_the_checkpoint_step_declares_pending_files():
     """Undeclared, _build_step_input filters it out and the action reads []
     on every file — the gate silently never fires."""
     assert "pending_files" in _steps()["check_file"]["context"]["optional"]
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Blind spots 6 and 7 — found by pointing the check at a FRONTIER anchor
+#
+# Two artifacts outside the usual corpus shape exposed these. Both were
+# false positives, and the second was hidden BY the first: the ambiguous
+# name union fabricated a read that masked a genuine gap.
+# ══════════════════════════════════════════════════════════════════════
+
+
+def test_two_classes_with_the_same_method_name_do_not_pool_their_keys():
+    """Game.to_dict returns the OUTER keys; Player.to_dict returns the
+    player's own. Keyed by bare method name they union, so the inner keys
+    look written at the top level where nothing reads them — 12 keys
+    reported unread against a loader that reads every one."""
+    src = """
+import json
+class Player:
+    def to_dict(self):
+        return {"hp": self.hp, "inventory": self.inventory}
+
+    @staticmethod
+    def from_dict(data):
+        return Player(hp=data["hp"], inventory=data["inventory"])
+
+class Game:
+    def to_dict(self):
+        return {"player": self.player.to_dict(), "rooms": self.rooms}
+
+    def load_from_data(self, data):
+        self.player = Player.from_dict(data.get("player", {}))
+        self.rooms = data.get("rooms", {})
+
+    def save_game(self, path):
+        with open(path, "w") as f:
+            json.dump(self.to_dict(), f)
+
+    def load_game(self, path):
+        with open(path) as f:
+            data = json.load(f)
+        self.load_from_data(data)
+"""
+    prod, cons = _payload_methods({"game.py": src})
+    assert "to_dict" not in prod, "an ambiguous producer name must be dropped"
+    assert "from_dict" not in cons or cons["from_dict"] == {"hp", "inventory"}
+    assert _serialized_roundtrip_violations({"game.py": src, "o.py": _SIB}) == []
+
+
+def test_a_tuple_unpacked_payload_is_still_a_payload():
+    """`player, save_data = load_save(path)` is what a loader returning BOTH
+    a rebuilt object and the raw payload looks like — common precisely
+    because the caller needs top-level keys the object does not carry."""
+    loader = """
+import json
+def load_save(path, world):
+    with open(path) as f:
+        data = json.load(f)
+    return None, data
+
+def save_state(state, path):
+    with open(path, "w") as f:
+        json.dump(state, f)
+"""
+    engine = """
+from loader import load_save, save_state
+class Engine:
+    def save(self, path):
+        save_data = {
+            "defeated_monsters": self.player.defeated,
+            "game_won": self.player.won,
+        }
+        save_state(save_data, path)
+
+    def load(self, path):
+        player, save_data = load_save(path, self.world)
+        self.player.defeated = save_data.get("defeated_monsters", [])
+        self.player.won = save_data.get("game_won", False)
+"""
+    assert (
+        _serialized_roundtrip_violations({"loader.py": loader, "engine.py": engine})
+        == []
+    )
+
+
+def test_the_tuple_fix_still_catches_a_genuinely_dropped_key():
+    loader = """
+import json
+def load_save(path, world):
+    with open(path) as f:
+        data = json.load(f)
+    return None, data
+
+def save_state(state, path):
+    with open(path, "w") as f:
+        json.dump(state, f)
+"""
+    engine = """
+from loader import load_save, save_state
+class Engine:
+    def save(self, path):
+        save_data = {"defeated_monsters": self.d, "game_won": self.w}
+        save_state(save_data, path)
+
+    def load(self, path):
+        player, save_data = load_save(path, self.world)
+        self.d = save_data.get("defeated_monsters", [])
+"""
+    out = _serialized_roundtrip_violations({"loader.py": loader, "engine.py": engine})
+    assert len(out) == 1 and "game_won" in out[0]
