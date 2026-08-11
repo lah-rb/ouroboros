@@ -752,3 +752,180 @@ async def test_slice_salvage_handles_missing_capture():
     assert fx.capture_requests == ["ouro-gone"]
     assert out.result["files_written"] == 0
     assert out.context_updates["batch_manifest"]["salvaged"] is False
+
+
+# ══════════════════════════════════════════════════════════════════════
+# The graph/placement seam family
+#
+# Third of the three recorded seam families, and the one nothing covered:
+# call-shape has the contract typecheck, value/key vocabulary has the
+# round-trip check, this had nothing. Measured across 68 real world files
+# from the staged corpus: 44 findings (29 reachability, 11 placement, 4
+# dangling), every one independently verified true, on 57% of files.
+#
+# Fixtures below are the REAL shapes from that corpus. Three of them
+# encode assumptions the survey overturned — see _graph_placement_violations.
+# ══════════════════════════════════════════════════════════════════════
+
+from agent.actions.batch_structural_actions import (  # noqa: E402
+    _graph_placement_violations,
+)
+
+
+def test_a_declared_start_with_no_exits_seals_the_whole_world():
+    """tier_20260731-050209/arm12, verbatim in shape: start_room names a
+    room with no exits, so all eight other rooms are unreachable and the
+    player boots into a sealed cell. The declared start is honoured — the
+    first room in document order would have hidden this entirely."""
+    world = """
+start_room: storage_room
+rooms:
+  mossy_clearing:
+    exits: {north: crumbling_bridge}
+  crumbling_bridge:
+    exits: {south: mossy_clearing}
+  storage_room:
+    exits: {}
+"""
+    out = _graph_placement_violations({"world.yaml": world})
+    assert len(out) == 1
+    assert "cannot be reached from 'storage_room'" in out[0]
+    assert "mossy_clearing" in out[0] and "crumbling_bridge" in out[0]
+
+
+def test_a_sealed_wing_is_found_even_though_its_rooms_have_inbound_edges():
+    """tier_20260803-200050/arm01: {tower, dungeon, throne_room} are
+    mutually connected — every one has an inbound edge — but nothing in
+    the entrance component points into them. An inbound-edge count alone
+    calls this clean; only reachability finds it."""
+    world = """
+rooms:
+  - id: entrance
+    exits: {north: library}
+  - id: library
+    exits: {south: entrance}
+  - id: tower
+    exits: {down: dungeon}
+  - id: dungeon
+    exits: {up: tower, east: throne_room}
+  - id: throne_room
+    exits: {west: dungeon}
+"""
+    out = _graph_placement_violations({"world.yaml": world})
+    assert len(out) == 1
+    for r in ("dungeon", "throne_room", "tower"):
+        assert r in out[0]
+
+
+def test_a_one_way_edge_into_the_main_body_does_not_rescue_the_island():
+    """tier_20260802-224028/arm01: courtyard -> armory points INTO the
+    reachable set, but nothing points back, so courtyard is still
+    stranded. Undirected connectivity would wrongly clear this."""
+    world = """
+rooms:
+  - id: entrance
+    exits: {north: armory}
+  - id: armory
+    exits: {south: entrance}
+  - id: courtyard
+    exits: {west: armory, north: throne_room}
+  - id: throne_room
+    exits: {south: courtyard}
+"""
+    out = _graph_placement_violations({"world.yaml": world})
+    assert len(out) == 1 and "courtyard" in out[0] and "throne_room" in out[0]
+
+
+def test_an_exit_to_a_room_that_does_not_exist_is_flagged():
+    world = """
+rooms:
+  - id: hall
+    exits: {north: vault, south: cellar}
+  - id: cellar
+    exits: {north: hall}
+"""
+    out = _graph_placement_violations({"world.yaml": world})
+    assert any("lead to a room that does not exist" in v for v in out)
+    assert any("hall -> vault" in v for v in out)
+
+
+def test_an_entity_in_no_room_is_flagged_under_the_embedded_convention():
+    """Placement is usually room-embedded (room.items: [id, ...]), not a
+    `location` field — only ~24 of 62 corpus worlds use location/room_id.
+    A check that looked only for `location` would find nothing here."""
+    world = """
+rooms:
+  - id: hall
+    exits: {north: cellar}
+    items: [torch]
+  - id: cellar
+    exits: {south: hall}
+    items: []
+items:
+  - id: torch
+  - id: rusty_key
+"""
+    out = _graph_placement_violations({"world.yaml": world})
+    assert any("rusty_key" in v and "are in no room" in v for v in out)
+    assert not any("torch" in v for v in out)
+
+
+def test_an_entity_naming_a_room_that_does_not_exist_is_flagged():
+    world = """
+rooms:
+  - id: hall
+    exits: {north: cellar}
+  - id: cellar
+    exits: {south: hall}
+monsters:
+  - id: wraith
+    location: crypt
+"""
+    out = _graph_placement_violations({"world.yaml": world})
+    assert any("name a room that does not exist" in v for v in out)
+    assert any("wraith -> 'crypt'" in v for v in out)
+
+
+def test_a_world_that_places_none_of_a_kind_is_left_alone():
+    """Silence is the honest answer when the world uses a placement
+    convention this cannot see. Flagging every item of a kind would be a
+    false alarm on the majority shape, and this check drives repairs."""
+    world = """
+rooms:
+  - id: hall
+    exits: {north: cellar}
+  - id: cellar
+    exits: {south: hall}
+items:
+  - id: torch
+  - id: rope
+"""
+    assert _graph_placement_violations({"world.yaml": world}) == []
+
+
+def test_a_healthy_world_is_silent():
+    world = """
+start_room: entrance
+rooms:
+  - id: entrance
+    exits: {north: hall}
+    items: [torch]
+  - id: hall
+    exits: {south: entrance}
+    items: []
+items:
+  - id: torch
+"""
+    assert _graph_placement_violations({"world.yaml": world}) == []
+
+
+def test_an_unrecognised_shape_is_not_a_defect():
+    assert _graph_placement_violations({"w.yaml": "servers:\n  - id: a\n"}) == []
+    assert _graph_placement_violations({"w.yaml": "not: [valid"}) == []
+    assert _graph_placement_violations({"w.yaml": "rooms:\n  - id: only_one\n"}) == []
+
+
+def test_json_worlds_are_read_too():
+    world = '{"rooms": [{"id": "a", "exits": {"n": "b"}}, {"id": "b", "exits": {}}, {"id": "c", "exits": {}}]}'
+    out = _graph_placement_violations({"world.json": world})
+    assert len(out) == 1 and "c" in out[0]

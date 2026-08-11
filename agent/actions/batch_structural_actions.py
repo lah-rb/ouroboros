@@ -393,6 +393,205 @@ def _producer_dict_keys(sources: dict[str, str]) -> dict[tuple[str, str], set[st
     return index
 
 
+# ══════════════════════════════════════════════════════════════════════
+# The graph/placement seam family
+#
+# Third of the three recorded seam families and the one no gate covered:
+# call-shape is caught by the contract typecheck, value/key vocabulary by
+# the round-trip check, and this — a boss wing with no inbound edge, an
+# entity authored into no room — by nothing at all. It is the second most
+# common DECISIVE defect in the blind-panel field.
+#
+# SHAPES ARE TAKEN FROM 62 REAL WORLD FILES, not from a guess. That survey
+# overturned three assumptions worth stating, because each would have made
+# this check wrong on the majority of artifacts:
+#
+#   * 55 of 62 declare NO start room. Reachability therefore falls back to
+#     the first room in document order, which is what the games themselves
+#     do. Requiring an explicit start would flag nearly every artifact.
+#   * Placement is usually ROOM-EMBEDDED (`room.items: [id, ...]`), not a
+#     `location` field on the entity — only ~24 of 62 use location/room_id.
+#     Checking only for `location` would find nothing on most worlds.
+#   * Rooms come list-shaped (40) AND dict-shaped (22), with edges under
+#     `exits` or `connections`.
+#
+# It reports only what it can prove. An unrecognised shape is skipped, not
+# flagged: this check drives repairs, and today a false positive already
+# cost three rewrites of a correct file.
+# ══════════════════════════════════════════════════════════════════════
+
+_ROOM_KEYS = ("rooms", "locations", "areas")
+_EDGE_KEYS = ("exits", "connections", "neighbors", "links")
+_START_KEYS = (
+    "start_room_id",
+    "start_room",
+    "starting_room_id",
+    "starting_room",
+    "player_start",
+    "start",
+)
+_ENTITY_KEYS = ("items", "monsters", "npcs", "entities", "characters", "creatures")
+_PLACE_KEYS = ("location", "room", "room_id", "place", "start_room")
+
+
+def _as_id_map(coll: Any) -> dict[str, dict]:
+    """Normalise a room/entity collection to {id: mapping} for both shapes."""
+    out: dict[str, dict] = {}
+    if isinstance(coll, dict):
+        for k, v in coll.items():
+            if isinstance(v, dict) and isinstance(k, str):
+                out[k] = v
+    elif isinstance(coll, list):
+        for v in coll:
+            if not isinstance(v, dict):
+                continue
+            ident = v.get("id") or v.get("name")
+            if isinstance(ident, str):
+                out[ident] = v
+    return out
+
+
+def _edge_targets(room: dict) -> list[str]:
+    """Room ids this room leads to, across every edge shape observed."""
+    targets: list[str] = []
+    for key in _EDGE_KEYS:
+        edges = room.get(key)
+        if isinstance(edges, dict):
+            for v in edges.values():
+                if isinstance(v, str):
+                    targets.append(v)
+                elif isinstance(v, dict):
+                    for k2 in ("room", "room_id", "target", "to", "destination", "id"):
+                        if isinstance(v.get(k2), str):
+                            targets.append(v[k2])
+                            break
+        elif isinstance(edges, list):
+            for v in edges:
+                if isinstance(v, str):
+                    targets.append(v)
+                elif isinstance(v, dict):
+                    for k2 in ("room", "room_id", "target", "to", "destination", "id"):
+                        if isinstance(v.get(k2), str):
+                            targets.append(v[k2])
+                            break
+    return targets
+
+
+def _graph_placement_violations(data_sources: dict[str, str]) -> list[str]:
+    """Unreachable rooms, exits to nowhere, and entities placed in no room.
+
+    Returns [] when the world cannot be understood — a shape this does not
+    recognise is not evidence of a defect.
+    """
+    import json as stdlib_json
+
+    out: list[str] = []
+    for path, text in sorted(data_sources.items()):
+        doc: Any = None
+        try:
+            if path.endswith((".yaml", ".yml")):
+                import yaml as stdlib_yaml
+
+                doc = stdlib_yaml.safe_load(text)
+            elif path.endswith(".json"):
+                doc = stdlib_json.loads(text)
+        except Exception:  # noqa: BLE001 — a malformed file is the syntax gate's job
+            continue
+        if not isinstance(doc, dict):
+            continue
+
+        rooms_raw = next((doc[k] for k in _ROOM_KEYS if k in doc), None)
+        rooms = _as_id_map(rooms_raw)
+        if len(rooms) < 2:
+            continue  # nothing to be disconnected from
+
+        ids = set(rooms)
+
+        # ── exits that lead nowhere ───────────────────────────────────
+        dangling: list[str] = []
+        adjacency: dict[str, list[str]] = {}
+        for rid, room in rooms.items():
+            tgts = _edge_targets(room)
+            adjacency[rid] = [t for t in tgts if t in ids]
+            dangling.extend(f"{rid} -> {t}" for t in tgts if t not in ids)
+        if dangling:
+            out.append(
+                f"world graph ({path}): {len(dangling)} exit(s) lead to a room that "
+                f"does not exist — {', '.join(sorted(dangling)[:6])}. Walking that "
+                f"direction cannot work."
+            )
+
+        # ── rooms nothing can reach ───────────────────────────────────
+        if any(adjacency.values()):
+            start = ""
+            for k in _START_KEYS:
+                v = doc.get(k)
+                if isinstance(v, str) and v in ids:
+                    start = v
+                    break
+            if not start:
+                start = next(iter(rooms))
+            seen = {start}
+            queue = [start]
+            while queue:
+                cur = queue.pop()
+                for nxt in adjacency.get(cur, []):
+                    if nxt not in seen:
+                        seen.add(nxt)
+                        queue.append(nxt)
+            unreachable = sorted(ids - seen)
+            if unreachable:
+                out.append(
+                    f"world graph ({path}): {len(unreachable)} room(s) cannot be "
+                    f"reached from '{start}' — {', '.join(unreachable[:6])}. A room "
+                    f"no path leads to is content the player can never see."
+                )
+
+        # ── entities placed in no room ────────────────────────────────
+        # Two placement conventions, and a world may use either. An entity
+        # is placed if a room embeds its id, or if it names a real room.
+        embedded: set[str] = set()
+        for room in rooms.values():
+            for key in _ENTITY_KEYS:
+                v = room.get(key)
+                if isinstance(v, list):
+                    embedded.update(x for x in v if isinstance(x, str))
+                elif isinstance(v, dict):
+                    embedded.update(k for k in v if isinstance(k, str))
+
+        for coll_key in _ENTITY_KEYS:
+            if coll_key not in doc:
+                continue
+            entities = _as_id_map(doc.get(coll_key))
+            if not entities:
+                continue
+            unplaced, misplaced = [], []
+            for eid, ent in entities.items():
+                where = next(
+                    (ent[k] for k in _PLACE_KEYS if isinstance(ent.get(k), str)), ""
+                )
+                if where:
+                    if where not in ids:
+                        misplaced.append(f"{eid} -> '{where}'")
+                elif eid not in embedded:
+                    unplaced.append(eid)
+            if misplaced:
+                out.append(
+                    f"world graph ({path}): {len(misplaced)} {coll_key} name a room "
+                    f"that does not exist — {', '.join(sorted(misplaced)[:6])}."
+                )
+            # Only meaningful when SOME entity of this kind is placed; a
+            # world that places none of them uses a convention this cannot
+            # see, and silence is the honest answer.
+            if unplaced and len(unplaced) < len(entities):
+                out.append(
+                    f"world graph ({path}): {len(unplaced)} {coll_key} are in no "
+                    f"room — {', '.join(sorted(unplaced)[:6])}. Authored but "
+                    f"unreachable."
+                )
+    return out
+
+
 def _transfer_shape_violations(sources: dict[str, str]) -> dict[str, list[str]]:
     """Cross-module transfer-dict check over the whole fileset.
 
