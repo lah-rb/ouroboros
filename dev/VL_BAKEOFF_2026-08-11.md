@@ -257,6 +257,28 @@ loop on it would have fed invented crop regions into a pipeline whose whole
 purpose is fidelity, and the crops would have been of the wrong regions with no
 error raised anywhere.
 
+## WHAT THIS PROBE DOES *NOT* ESTABLISH (operator's caution, and he is right)
+
+Two different claims, and only the first is settled:
+
+* **SETTLED: muse has no native detection mode to invoke.** Model card,
+  developer docs and the model's own answer all agree.
+* **NOT SETTLED: that no prompting strategy can elicit usable coordinates.**
+  The probe is three prompt shapes on ONE image and is a weak test of the
+  general claim. Its most obvious flaw: **it never told the model the image
+  dimensions.** A model asked for pixel coordinates in a space whose size it
+  was never given cannot do better than guess a plausible range — which is
+  precisely the failure observed, and it may be the probe's fault rather than
+  the model's.
+
+Untested and worth trying before concluding anything: supplying the image size
+in the prompt; normalised 0-1 or 0-1000 output instead of pixels; a drawn grid
+or ruler overlay; Set-of-Mark style numbered annotation of candidate regions
+(which turns "where is it" into "which numbered region is it", a much easier
+question); and asking on a CROP rather than a full page strip. Coordinates from
+this model are unproven, not disproven — `dev/muse_detect_probe.py` is the
+harness to extend.
+
 **What survives.** Crop-and-requery is still the right idea; the coordinates
 must come from something that MEASURES. Two sources already in the tree:
 
