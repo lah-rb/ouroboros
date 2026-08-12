@@ -1,0 +1,105 @@
+# Muse-Glimmer format schema — Meta Muse-Glimmer family
+#
+# Reference (model card, read 2026-08-11):
+#   https://huggingface.co/meta-models/Muse-Glimmer-30B
+#
+# Harmony-SHAPED but not Harmony. Both families frame messages as
+# <|start|>ROLE …<|message|>… and both reopen the assistant role between
+# reasoning and content inside ONE logical turn. The differences are what
+# this file exists to state:
+#
+#   * The reasoning channel is a RECIPIENT, not a channel token. Harmony
+#     writes `<|start|>assistant<|channel|>analysis<|message|>`; Muse-Glimmer
+#     writes `<|start|>assistant to=self<|message|>`, and its content message
+#     is `<|start|>assistant to=user<|message|>`. Setting channel_token to
+#     " to=" with channel_name "self" / content_channel "user" reproduces
+#     both byte-for-byte through the existing channel machinery.
+#   * TWO different closers. The reasoning message ends with <|eom|> ("more
+#     from the same speaker"), the content message with <|eot|> ("turn
+#     over"). Harmony closes both with <|end|>, so this is the family that
+#     needed tokens.thinking_close.
+#   * The GGUF's eos_token_id is <|end_of_text|> (200001) but NO turn ever
+#     ends with it — turns end on <|eot|> (200008). A stop set derived from
+#     EOS alone would run straight past every turn boundary. Equally,
+#     <|eom|> (200007) must NEVER be a stop: it closes the reasoning
+#     message, and stopping there truncates the answer before the content
+#     block starts. dev/stop_token_audit.py checks this against the headers.
+#
+# Sampling is the card's single published profile (temperature 1.0,
+# top_p 0.95, top_k 64) — deliberately NOT harmony's 1.0/1.0/0, which is
+# what copying the neighbouring family would have given.
+
+family: muse-glimmer
+display_name: "Muse-Glimmer (Meta)"
+
+tokens:
+  msg_open: "<|start|>"
+  msg_content: "<|message|>"
+  msg_close: "<|eot|>"
+  gen_stop: "<|eot|>"
+  history_close: "<|eot|>"
+  thinking_close: "<|eom|>"
+
+roles:
+  system: "system"
+  user: "user"
+  assistant: "assistant"
+  developer: "developer"
+
+thinking:
+  style: channel
+  channel_token: " to="
+  channel_name: "self"
+  content_channel: "user"
+
+# The card sets reasoning effort with a `Reasoning strength: <level>` line
+# inside the system block, and recommends high/xhigh for agentic work —
+# which is what Ouroboros runs. Levels are the model's own vocabulary, so
+# the canonical router names map straight through except `low`.
+reasoning:
+  levels:
+    low: "low"
+    medium: "medium"
+    high: "high"
+
+system_block:
+  identity: "You are a helpful AI assistant."
+  cutoff: "2026-01-04"
+  reasoning_default: "high"
+  channel_directive: "# Valid recipients: \"self\", \"user\"."
+  # Mirrors the template's WITH-system-message branch: the supplied system
+  # content replaces the identity/cutoff/date preamble entirely, then the
+  # reasoning line and the recipients line are appended as furniture. When
+  # no persona is set, {persona} collapses and the renderer's newline
+  # squeeze leaves the reasoning line at the top.
+  #
+  # (The default no-system branch does emit `Knowledge cutoff: <date>.` and
+  # `Current date: <date>.` WITH trailing periods — the golden test caught
+  # their absence when this template still rendered them.)
+  template: |
+    {persona}
+
+    Reasoning strength: {reasoning}.
+
+    {channel_directive}
+
+traits:
+  fold_system_into_first_user: false
+  # NO developer role. The template knows system / user / assistant / tool
+  # and nothing else, so persona belongs in the system message. Setting this
+  # true (the harmony reflex) framed SOUL.md in `<|start|>developer<|message|>`
+  # — a role this model has never seen — and the first live turn degraded to
+  # a short reasoning block that ended the turn without ever opening the
+  # `to=user` content channel, so every completion came back empty.
+  supports_developer_role: false
+
+generation:
+  temperature: 1.0
+  top_p: 0.95
+  top_k: 64
+  min_p: 0.0
+  repeat_penalty: 1.0
+
+turn_transition:
+  needs_close: true
+  after_generation: "\n"

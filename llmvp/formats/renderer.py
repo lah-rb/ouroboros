@@ -470,9 +470,23 @@ class FormatRenderer:
         """Segments for a previous assistant turn. Content/thinking are
         is_framing=False; channel headers and <think> tags are framing."""
         if thinking and self.s.thinking.style == "channel":
-            return self.render_message_segments(
+            think_segs = self.render_message_segments(
                 "assistant", thinking, channel=self.s.thinking.channel_name
-            ) + self.render_message_segments(
+            )
+            # Families whose reasoning block closes with its own token (see
+            # TokenSpec.thinking_close) swap only the trailing framing part.
+            close = self.s.tokens.thinking_close
+            if (
+                close
+                and think_segs
+                and think_segs[-1]
+                == (
+                    self.s.tokens.msg_close,
+                    True,
+                )
+            ):
+                think_segs = think_segs[:-1] + [(close, True)]
+            return think_segs + self.render_message_segments(
                 "assistant", content, channel=self.s.thinking.content_channel
             )
 

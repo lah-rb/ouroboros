@@ -1,0 +1,99 @@
+# Muse-Glimmer-30B (Meta) — first intake, 2026-08-11
+#
+# Model card (READ, per reference.yaml step 2):
+#   https://huggingface.co/meta-models/Muse-Glimmer-30B
+#
+# ── What the headers said (step 1) ──────────────────────────────────
+#   arch=muse-glimmer  layers=52  n_head=32  n_kv_head=2  embd=6656
+#   DENSE (experts=0)  trained ctx=131072  rope_freq_base=500000
+#   weights 18.3 GiB   KV/token 52 KiB
+#   attention.sliding_window = 2048, sliding_window_pattern = true
+#
+# The sliding window is the load-bearing one: this is an SWA family, so
+# `swa_full: true` is REQUIRED or any pinned/forked prefix corrupts at the
+# window boundary. Nothing but the GGUF headers tells you that.
+#
+# KV IS EXPENSIVE HERE. 52 KiB/token is 26x gpt-oss's 2 KiB, and swa_full
+# then allocates a full-size SWA cache ALONGSIDE the non-SWA one, so budget
+# roughly double the naive arithmetic. n_ctx starts conservative on purpose;
+# raise it only behind a real --probe-context measurement (step 6), never by
+# hand-editing probe_verified_* to make a load succeed.
+#
+# ── Sampling (step 2) ───────────────────────────────────────────────
+# CHOSEN: the card's single published profile — temperature 1.0, top_p 0.95,
+# top_k 64.
+# REJECTED: harmony's 1.0 / 1.0 / 0. Muse-Glimmer is harmony-SHAPED, and
+# copying the neighbouring family's block would have silently changed the
+# sampler on a model whose card specifies otherwise.
+#
+# ── Format (step 3) ─────────────────────────────────────────────────
+# New family `muse-glimmer` (formats/muse-glimmer.yaml). fsm_labeller needs
+# no edit — it derives shape from the format file. Two traps, both closed
+# there and verified by a golden test against the GGUF's own chat template:
+#   * turns end on <|eot|> (200008), NOT the GGUF eos <|end_of_text|> (200001)
+#   * <|eom|> (200007) closes the REASONING message and must never be a stop
+#
+# ── Reasoning ───────────────────────────────────────────────────────
+# The card exposes low/medium/high/xhigh via a `Reasoning strength:` system
+# line and recommends high/xhigh for agentic work, which is what we run.
+# thinking_mode pins the resident head; per_request lets the router move it.
+
+app:
+  host: "0.0.0.0"
+  port: 8008
+  log_level: "info"
+  cors_origins: ["*"]
+  backend_timeout: 180
+  openai_shim: true
+
+graphql:
+  max_query_depth: 10
+  max_tokens: 32768
+  max_aliases: 50
+  introspection_enabled: true
+
+model:
+  name: "muse-glimmer-30b"
+  family: "muse-glimmer"
+  path: /Users/lah-rb/.lmstudio/models/meta-models/Muse-Glimmer-30B-GGUF/muse-glimmer-30B-kquant-dynamic.gguf
+  n_ctx: 65536
+  model_max_context: 32768
+  n_gpu_layers: -1
+  seed: -1
+  verbose: false
+  flash_attn_type: auto
+  n_batch: 2048
+  thinking: "per_request"
+  thinking_mode: high
+  # ARCHITECTURE-determined, not strategy-determined: sliding_window=2048.
+  swa_full: true
+  kv_unified: true
+  resident_seq_cache: true
+  context_refresh_drain_s: 300
+
+prompt:
+  persona_file: "./knowledge/SOUL.md"
+
+generation:
+  max_tokens_default: 16384
+  temperature_default: 1.0
+  top_p: 0.95
+  top_k: 64
+  min_p: 0.00
+  presence_penalty: 0.0
+  repeat_penalty: 1.0
+  streaming_default: true
+
+knowledge:
+  tokens_bin: "./data/muse-glimmer-30b.tokens.bin"
+  token_limit: 16384
+
+resources:
+  cpu_threads: 15
+  jit_concurrency_limit: null
+
+logging:
+  enabled: true
+  directory: "./logs"
+
+tools: {}

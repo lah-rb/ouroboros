@@ -47,6 +47,16 @@ class TokenSpec(BaseModel):
     # 2026-07-29 incident burned 70k tokens on via <|user|>. Audited by
     # dev/stop_token_audit.py against GGUF eot/eom headers.
     extra_gen_stops: list = []
+    # Closer for the REASONING block when it differs from msg_close.
+    # Harmony closes both its analysis and final blocks with <|end|>, so it
+    # leaves this empty. Muse-Glimmer does not: its template ends the
+    # `to=self` reasoning message with <|eom|> ("more coming from the same
+    # speaker") and only the content message with <|eot|> ("turn over").
+    # Rendering history with <|eot|> after the reasoning would tell the model
+    # the turn had ended and then open another assistant block — off
+    # distribution. Empty = use msg_close, which leaves every existing family
+    # byte-identical.
+    thinking_close: str = ""
 
 
 class RoleTokens(BaseModel):
