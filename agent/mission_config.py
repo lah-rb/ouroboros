@@ -104,6 +104,11 @@ class MissionYAMLConfig(BaseModel):
     deep_research: bool = False
     principles: list[str] = Field(default_factory=list)
     tasks: list[str] = Field(default_factory=list)
+    # Scraper flow set: how many candidate papers the corpus should reach.
+    # The planner decides the SHAPE (relative weight per aspect), this the
+    # SCALE — aspect targets are rescaled to sum here. 0 = leave the
+    # planner's own numbers alone. See MissionConfig.corpus_target.
+    corpus_target: int = Field(default=0, ge=0)
 
     # Run-termination policy. "completed" runs until the mission reaches
     # a terminal status (cycle budget becomes an opt-in backstop);

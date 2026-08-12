@@ -22,6 +22,7 @@ from agent.actions.scholarly_actions import (
     action_merge_candidates,
     action_resolve_oa_pdf,
     action_scholarly_search,
+    action_snowball_expand,
     paper_key,
     read_databank,
 )
@@ -69,13 +70,28 @@ def _si(effects, context=None, params=None) -> StepInput:
     )
 
 
-def _http(s2_hits=None, oa_hits=None):
+_CORE_HIT = {
+    "title": "GB segregation in CoCrFeNi",
+    "abstract": "Repository copy of the same work.",
+    "yearPublished": 2024,
+    "publisher": "Acta Mat",
+    "authors": [{"name": "A. Smith"}],
+    "doi": "10.1000/hea.1",
+    "downloadUrl": "https://core.ac.uk/download/999.pdf",
+    "language": {"code": "en"},
+}
+
+
+def _http(s2_hits=None, oa_hits=None, core_hits=None):
     return {
         "https://api.semanticscholar.org/graph/v1/paper/search": HttpResult(
             status=200, url="s2", json_data={"data": s2_hits or []}
         ),
         "https://api.openalex.org/works": HttpResult(
             status=200, url="oa", json_data={"results": oa_hits or []}
+        ),
+        "https://api.core.ac.uk/v3/search/works": HttpResult(
+            status=200, url="core", json_data={"results": core_hits or []}
         ),
     }
 
@@ -93,21 +109,56 @@ def test_paper_key_fallback_chain():
 
 
 @pytest.mark.asyncio
-async def test_search_normalizes_both_apis():
-    fx = MockEffects(http_responses=_http([_S2_HIT], [_OPENALEX_HIT]))
+async def test_search_normalizes_all_three_apis():
+    fx = MockEffects(http_responses=_http([_S2_HIT], [_OPENALEX_HIT], [_CORE_HIT]))
     out = await action_scholarly_search(
         _si(fx, context={"search_queries": ["hea gb"]}, params={"aspect_name": "gb"})
     )
-    assert out.result == {"results_found": 2, "s2_count": 1, "openalex_count": 1}
+    assert out.result == {
+        "results_found": 3,
+        "s2_count": 1,
+        "openalex_count": 1,
+        "core_count": 1,
+    }
     recs = out.context_updates["raw_candidates"]
     assert recs[0]["doi"] == "10.1000/hea.1"
     assert recs[0]["source_aspects"] == ["gb"]
     assert recs[1]["abstract"] == "Grain boundary study"  # de-inverted
     assert recs[0]["paper_key"] == recs[1]["paper_key"]  # same DOI
     assert recs[1]["language"] == "en"
+    # CORE is the acquisition source: it carries a fetchable location.
+    assert recs[2]["paper_key"] == recs[0]["paper_key"]  # same DOI again
+    assert recs[2]["oa_pdf_urls"] == ["https://core.ac.uk/download/999.pdf"]
+    assert recs[2]["language"] == "en"
     assert recs[1]["license"] == "cc-by"
     # S2 records carry the fields too (empty — S2 doesn't provide them).
     assert recs[0]["language"] == "" and recs[0]["license"] == ""
+
+
+@pytest.mark.asyncio
+async def test_merge_pools_locations_across_sources():
+    """A CORE download url must survive the merge onto the S2/OpenAlex record.
+
+    All three sources key to the same DOI, so whichever record wins the
+    merge has to carry the union of their locations — otherwise the one
+    source that brings a fetchable PDF is exactly what gets dropped.
+    """
+    fx = MockEffects(http_responses=_http([_S2_HIT], [_OPENALEX_HIT], [_CORE_HIT]))
+    search = await action_scholarly_search(
+        _si(fx, context={"search_queries": ["hea gb"]}, params={"aspect_name": "gb"})
+    )
+    out = await action_merge_candidates(
+        _si(
+            fx,
+            context={"raw_candidates": search.context_updates["raw_candidates"]},
+            params={"aspect_name": "gb"},
+        )
+    )
+    assert out.result["new_candidates"] == 1  # one paper, three sources
+    bank = await read_databank(fx)
+    (rec,) = bank.values()
+    assert "https://core.ac.uk/download/999.pdf" in rec["oa_pdf_urls"]
+    assert "https://oa.org/hea1.pdf" in rec["oa_pdf_urls"]
 
 
 @pytest.mark.asyncio
@@ -217,6 +268,94 @@ async def test_download_failure_downgrades_to_unresolved():
     assert batch[0]["status"] == "acquired" and batch[0]["pdf_path"] == "pdfs/good.pdf"
     assert batch[1]["access_status"] == "oa_unresolved"
     assert batch[2]["access_status"] == "closed"  # untouched, proceeds
+
+
+@pytest.mark.asyncio
+async def test_snowball_expands_only_repeatedly_cited_absentees():
+    """Cited twice and absent = a candidate; cited once, or already held, is not.
+
+    Measured motivation: 8,812 referenced works against 39 collected.
+    """
+    from tests.conftest import papers_bank
+
+    bank = papers_bank(
+        [
+            {
+                "paper_key": "a",
+                "doi": "10.1/a",
+                "openalex_id": "https://openalex.org/W_A",
+                "source_aspects": ["gb"],
+                "referenced_works": ["W_HOT", "W_COLD", "https://openalex.org/W_A"],
+            },
+            {
+                "paper_key": "b",
+                "doi": "10.1/b",
+                "openalex_id": "https://openalex.org/W_B",
+                "source_aspects": ["gb"],
+                "referenced_works": ["W_HOT"],
+            },
+            {  # a different aspect must not contribute
+                "paper_key": "c",
+                "doi": "10.1/c",
+                "source_aspects": ["other"],
+                "referenced_works": ["W_ELSEWHERE", "W_ELSEWHERE2"],
+            },
+        ]
+    )
+    fx = MockEffects(
+        files=bank,
+        http_responses={
+            "https://api.openalex.org/works": HttpResult(
+                status=200,
+                url="oa",
+                json_data={
+                    "results": [
+                        {
+                            "id": "https://openalex.org/W_HOT",
+                            "doi": "https://doi.org/10.1/hot",
+                            "title": "Cited twice, not held",
+                            "publication_year": 2023,
+                        }
+                    ]
+                },
+            )
+        },
+    )
+    out = await action_snowball_expand(
+        _si(fx, context={}, params={"aspect_name": "gb", "min_citations": 2})
+    )
+    assert out.result["expanded"] == 1
+    (rec,) = out.context_updates["raw_candidates"]
+    assert rec["doi"] == "10.1/hot"
+    assert rec["source_aspects"] == ["gb"]
+
+
+@pytest.mark.asyncio
+async def test_snowball_is_silent_when_nothing_is_cited_twice():
+    from tests.conftest import papers_bank
+
+    fx = MockEffects(
+        files=papers_bank(
+            [
+                {
+                    "paper_key": "a",
+                    "doi": "10.1/a",
+                    "source_aspects": ["gb"],
+                    "referenced_works": ["W_ONCE"],
+                }
+            ]
+        )
+    )
+    out = await action_snowball_expand(
+        _si(
+            fx,
+            context={"raw_candidates": [{"paper_key": "keep"}]},
+            params={"aspect_name": "gb"},
+        )
+    )
+    assert out.result == {"expanded": 0, "backlog": 0}
+    # An empty expansion must not eat the candidates search already found.
+    assert out.context_updates["raw_candidates"] == [{"paper_key": "keep"}]
 
 
 @pytest.mark.asyncio

@@ -175,6 +175,7 @@ def cmd_mission_create(args: argparse.Namespace) -> None:
         run_until=(yaml_config.run_until if yaml_config else "cycle_budget"),
         max_cycles=(yaml_config.max_cycles if yaml_config else None),
         max_wall_clock_s=(yaml_config.max_wall_clock if yaml_config else None),
+        corpus_target=(yaml_config.corpus_target if yaml_config else 0),
     )
 
     mission = MissionState(objective=objective, principles=principles, config=config)

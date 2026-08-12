@@ -23876,6 +23876,38 @@
           "rules": [
             {
               "condition": "true",
+              "transition": "snowball"
+            }
+          ]
+        },
+        "publishes": [
+          "raw_candidates"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "snowball": {
+        "action": "snowball_expand",
+        "description": "Expand repeatedly-cited but uncollected references",
+        "context": {
+          "required": [],
+          "optional": [
+            "raw_candidates"
+          ]
+        },
+        "params": {
+          "aspect_name": {
+            "$ref": "input.aspect_name"
+          },
+          "min_citations": 2,
+          "max_expand": 50
+        },
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
               "transition": "merge"
             }
           ]

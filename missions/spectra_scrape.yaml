@@ -61,6 +61,15 @@ objective: >
 
 flow_set: scraper
 
+# Corpus SCALE (the planner still sets the shape — which aspects get more
+# weight). The first run stopped at 620 papers because the planner's
+# default per-aspect target of 10 was met in a single round, while
+# discovery was returning ~136 candidates a round: recall was never the
+# constraint. At the measured ~16% download conversion — higher now that
+# CORE serves repository full text past the publisher bot-walls — this
+# should land on the order of a thousand mineable PDFs.
+corpus_target: 5000
+
 # Durable home — /tmp is wiped on reboot and took a corpus with it once.
 working_dir: "/Users/lah-rb/corpora/ouroboros-spectra"
 effects_profile: local

@@ -15,7 +15,14 @@ from agent.models import StepInput, StepOutput
 
 logger = logging.getLogger(__name__)
 
-MAX_DISCOVERY_ROUNDS = 3
+# Absolute backstop only. The REAL stop is yield-based (DRY_ROUNDS_TO_STOP
+# below): an aspect keeps going while rounds still add papers. A fixed cap
+# of 3 was the binding constraint on the first corpus run — discovery
+# returned ~136 candidates against a target of 10, so every aspect stopped
+# after one round with the literature nowhere near exhausted.
+MAX_DISCOVERY_ROUNDS = 40
+# Consecutive no-new-papers rounds that mean the queries are spent.
+DRY_ROUNDS_TO_STOP = 2
 CORPUS_GOAL_SIGNATURE = "corpus-catalog"
 
 
@@ -65,6 +72,18 @@ async def action_parse_and_store_research_plan(step_input: StepInput) -> StepOut
             result={"plan_parsed": False},
             observations="Research plan parsed but contained no named aspects",
         )
+
+    # The planner sets the SHAPE, mission.config sets the SCALE. Rescaling
+    # preserves whatever relative weighting the model chose across aspects
+    # while keeping the corpus-size decision with the operator -- a model
+    # reading an example number in a prompt should not be deciding how big
+    # the dataset is.
+    corpus_target = int(getattr(getattr(mission, "config", None), "corpus_target", 0))
+    if corpus_target > 0 and aspects:
+        weight_total = sum(max(1, a.coverage_target) for a in aspects)
+        for aspect in aspects:
+            share = max(1, aspect.coverage_target) / weight_total
+            aspect.coverage_target = max(1, round(corpus_target * share))
 
     mission.research_plan = ResearchPlanState(
         abstract=str(getattr(mission, "objective", "") or ""),
@@ -183,17 +202,33 @@ async def action_discovery_sweep_next(step_input: StepInput) -> StepOutput:
             changed = True
             continue
         have = _aspect_count(aspect.name)
-        if have >= aspect.coverage_target or len(goal.reports) >= MAX_DISCOVERY_ROUNDS:
+        # A round that added nothing is the signal the queries are spent.
+        # Count it BEFORE deciding, so a dispatched-but-barren round is
+        # visible on the next pass.
+        if goal.reports:
+            if have <= aspect.last_have:
+                aspect.dry_rounds += 1
+            else:
+                aspect.dry_rounds = 0
+            changed = True
+        exhausted = aspect.dry_rounds >= DRY_ROUNDS_TO_STOP
+        if (
+            have >= aspect.coverage_target
+            or exhausted
+            or len(goal.reports) >= MAX_DISCOVERY_ROUNDS
+        ):
             goal.status = "complete"
             changed = True
             logger.info(
-                "Discovery complete for '%s': %d/%d candidates (%d round(s))",
+                "Discovery complete for '%s': %d/%d candidates (%d round(s)%s)",
                 aspect.name,
                 have,
                 aspect.coverage_target,
                 len(goal.reports),
+                ", queries exhausted" if exhausted else "",
             )
             continue
+        aspect.last_have = have
         if changed and effects:
             await effects.save_mission(mission)
         return StepOutput(

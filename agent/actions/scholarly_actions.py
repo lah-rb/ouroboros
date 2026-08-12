@@ -19,10 +19,13 @@ for a ``paper_key`` wins (append-only updates). Record contract:
       "openalex_id": str,
       "source_aspects": [str],      # which aspect queries found it
       "oa_pdf_url": str, "pdf_path": str,   # "" when not downloaded
+      "oa_pdf_urls": [str],         # every known location, best first
+      "oa_attempted": [str],        # locations already tried and failed
       "tags": [{"aspect": str,
                 "relevance": "exact"|"close"|"adjacent",
                 "justification": str}],
       "reference_dois": [str],      # capped, from S2 references
+      "referenced_works": [str],    # OpenAlex ids — snowball fuel
       "language": str,              # OpenAlex code ("en", "zh", ...)
       "license": str,               # best-OA license ("cc-by", ...)
       "failure_reason": str, "updated_at": iso8601
@@ -102,6 +105,9 @@ _HOST_MIN_INTERVAL = {
     # Polite pool (mailto param) tolerates ~10 rps; stay well under.
     "api.openalex.org": 0.6,
     "api.unpaywall.org": 1.0,
+    # Keyless CORE 429s within a handful of calls; a registered key lifts
+    # that but the aggregator is doing us a favour, so stay unhurried.
+    "api.core.ac.uk": 1.5,
 }
 
 
@@ -146,6 +152,32 @@ def _s2_headers() -> dict | None:
     """Optional Semantic Scholar API key headers (see _s2_key)."""
     key = _s2_key()
     return {"x-api-key": key} if key else None
+
+
+_CORE_KEY_FILE = "~/.coreacuk_key"
+_core_key_cache: str | None = None  # resolved once per process
+
+
+def _core_key() -> str:
+    """CORE API key: env var, else ~/.coreacuk_key, else '' (see _s2_key)."""
+    global _core_key_cache
+    if _core_key_cache is not None:
+        return _core_key_cache
+    key = os.environ.get("OUROBOROS_CORE_API_KEY", "").strip()
+    if not key:
+        try:
+            # Sanctioned raw read, same seam exemption as _s2_key.
+            key = open(os.path.expanduser(_CORE_KEY_FILE)).read().strip()
+        except OSError:
+            key = ""
+    _core_key_cache = key
+    return key
+
+
+def _core_headers() -> dict | None:
+    """Optional CORE bearer headers (see _core_key)."""
+    key = _core_key()
+    return {"Authorization": f"Bearer {key}"} if key else None
 
 
 async def polite_request(
@@ -315,9 +347,15 @@ _S2_SEARCH_FIELDS = (
     "authors,citationCount"
 )
 _OPENALEX_BASE = "https://api.openalex.org"
+_CORE_BASE = "https://api.core.ac.uk/v3"
 _OPENALEX_SELECT = (
     "id,doi,title,abstract_inverted_index,publication_year,primary_location,"
-    "authorships,open_access,best_oa_location,locations,ids,language"
+    "authorships,open_access,best_oa_location,locations,ids,language,"
+    # Snowball fuel, free in a request we already make. S2's references
+    # endpoint 429s hard -- it reached only 96 of 620 papers on the first
+    # corpus run -- and these are OpenAlex ids, which the expansion can
+    # re-fetch in batches of 50 without any DOI-resolution step.
+    "referenced_works"
 )
 
 
@@ -372,6 +410,8 @@ def _candidate_base(aspect_name: str) -> dict:
         "pdf_path": "",
         "tags": [],
         "reference_dois": [],
+        # OpenAlex work ids this paper cites (see _OPENALEX_SELECT).
+        "referenced_works": [],
         # Dataset hooks: language routes the future translation/OCR
         # stage (zh -> Paddle-native per the bake-off); license makes
         # the corpus filterable before any training use. OpenAlex and
@@ -400,6 +440,44 @@ def _normalize_s2(paper: dict, aspect_name: str) -> dict:
         "openalex_id": "",
         "oa_pdf_url": str(oa.get("url") or ""),
         "oa_pdf_urls": _dedup_urls([oa.get("url")]),
+    }
+    rec["paper_key"] = paper_key(rec)
+    return rec
+
+
+def _normalize_core(work: dict, aspect_name: str) -> dict:
+    """CORE work -> candidate record.
+
+    CORE is the acquisition source that matters: it aggregates full text
+    from ~10k repositories and serves the PDF from core.ac.uk itself, so
+    a paper whose publisher copy sits behind bot management is still
+    reachable. Verified against a Spectrochimica Acta B paper that 403'd
+    at Elsevier and downloaded as a 444 KB PDF from CORE.
+    """
+    doi = str(work.get("doi") or "").strip()
+    if "doi.org/" in doi:
+        doi = doi.split("doi.org/")[-1]
+    lang = work.get("language")
+    rec = {
+        **_candidate_base(aspect_name),
+        "title": str(work.get("title") or ""),
+        "abstract": str(work.get("abstract") or ""),
+        "year": work.get("yearPublished") or 0,
+        "venue": str(work.get("publisher") or ""),
+        "authors": [
+            str(a.get("name") or "")
+            for a in (work.get("authors") or [])
+            if isinstance(a, dict)
+        ][:25],
+        "doi": doi,
+        "arxiv_id": str(work.get("arxivId") or ""),
+        "s2_id": "",
+        "openalex_id": "",
+        "oa_pdf_url": str(work.get("downloadUrl") or ""),
+        "oa_pdf_urls": _dedup_urls(
+            [work.get("downloadUrl")] + list(work.get("sourceFulltextUrls") or [])
+        ),
+        "language": str(lang.get("code") or "") if isinstance(lang, dict) else "",
     }
     rec["paper_key"] = paper_key(rec)
     return rec
@@ -441,6 +519,9 @@ def _normalize_openalex(work: dict, aspect_name: str) -> dict:
         ),
         "language": str(work.get("language") or ""),
         "license": str(best_oa.get("license") or ""),
+        "referenced_works": [
+            str(w) for w in (work.get("referenced_works") or [])[:MAX_REFERENCE_DOIS]
+        ],
     }
     rec["paper_key"] = paper_key(rec)
     return rec
@@ -475,7 +556,7 @@ async def action_scholarly_search(step_input: StepInput) -> StepOutput:
     max_per_query = int(step_input.params.get("max_per_query") or 20)
 
     candidates: list[dict] = []
-    s2_count = openalex_count = 0
+    s2_count = openalex_count = core_count = 0
     for query in queries:
         s2 = await polite_request(
             effects,
@@ -515,18 +596,135 @@ async def action_scholarly_search(step_input: StepInput) -> StepOutput:
                 "OpenAlex search failed for %r: %s", query, oa.error or oa.status
             )
 
+        # CORE last: S2 and OpenAlex are the metadata authorities, but
+        # CORE is the one that brings a fetchable PDF with it, and the
+        # merge pools every source's locations onto one record.
+        core = await polite_request(
+            effects,
+            "GET",
+            f"{_CORE_BASE}/search/works",
+            params={"q": query, "limit": max_per_query},
+            headers=_core_headers(),
+        )
+        if core.status == 200 and isinstance(core.json_data, dict):
+            for work in core.json_data.get("results") or []:
+                candidates.append(_normalize_core(work, aspect_name))
+                core_count += 1
+        else:
+            logger.warning(
+                "CORE search failed for %r: %s%s",
+                query,
+                core.error or core.status,
+                "" if _core_key() else " (no API key — keyless CORE 429s early)",
+            )
+
     return StepOutput(
         result={
             "results_found": len(candidates),
             "s2_count": s2_count,
             "openalex_count": openalex_count,
+            "core_count": core_count,
         },
         observations=(
             f"Scholarly search ({aspect_name or 'no aspect'}): "
             f"{len(candidates)} hits across {len(queries)} query(ies) "
-            f"(S2 {s2_count}, OpenAlex {openalex_count})"
+            f"(S2 {s2_count}, OpenAlex {openalex_count}, CORE {core_count})"
         ),
         context_updates={"raw_candidates": candidates},
+    )
+
+
+_SNOWBALL_BATCH = 50  # OpenAlex OR-filter ceiling per request
+
+
+async def action_snowball_expand(step_input: StepInput) -> StepOutput:
+    """Turn repeatedly-cited but uncollected references into candidates.
+
+    The corpus cites far more than it contains -- measured on the first
+    spectra run, 8,812 distinct referenced works against 39 collected
+    (0.4%), with 204 cited two or more times and absent. A reference the
+    corpus reaches for twice is a stronger relevance signal than any
+    query we could write, and it costs one batched lookup.
+
+    Scoped to the dispatching aspect: only papers already carrying that
+    aspect contribute references, so expansion counts toward the coverage
+    it actually serves. Appends to raw_candidates, so the normal merge
+    dedups it into the databank.
+
+    Context: raw_candidates (optional)
+    Params: aspect_name, min_citations (default 2), max_expand (default 50)
+    Publishes: raw_candidates
+    """
+    effects = step_input.effects
+    aspect_name = str(step_input.params.get("aspect_name") or "")
+    min_citations = int(step_input.params.get("min_citations") or 2)
+    max_expand = int(step_input.params.get("max_expand") or 50)
+    existing = list(step_input.context.get("raw_candidates") or [])
+
+    databank = await read_databank(effects)
+    have_dois = {
+        str(rec.get("doi") or "").lower() for rec in databank.values() if rec.get("doi")
+    }
+    have_works = {
+        str(rec.get("openalex_id") or "")
+        for rec in databank.values()
+        if rec.get("openalex_id")
+    }
+    counts: dict[str, int] = {}
+    for rec in databank.values():
+        if aspect_name and aspect_name not in (rec.get("source_aspects") or []):
+            continue
+        for work_id in rec.get("referenced_works") or []:
+            wid = str(work_id)
+            if wid and wid not in have_works:
+                counts[wid] = counts.get(wid, 0) + 1
+
+    backlog = sorted(
+        (w for w, n in counts.items() if n >= min_citations),
+        key=lambda w: -counts[w],
+    )[:max_expand]
+    if not backlog:
+        return StepOutput(
+            result={"expanded": 0, "backlog": 0},
+            observations=(
+                f"Snowball: nothing cited {min_citations}+ times that the "
+                f"corpus does not already hold"
+            ),
+            context_updates={"raw_candidates": existing},
+        )
+
+    found: list[dict] = []
+    for start in range(0, len(backlog), _SNOWBALL_BATCH):
+        chunk = backlog[start : start + _SNOWBALL_BATCH]
+        resp = await polite_request(
+            effects,
+            "GET",
+            f"{_OPENALEX_BASE}/works",
+            params={
+                "filter": "openalex_id:" + "|".join(chunk),
+                "per-page": _SNOWBALL_BATCH,
+                "select": _OPENALEX_SELECT,
+                "mailto": _contact_email(),
+            },
+        )
+        if resp.status == 200 and isinstance(resp.json_data, dict):
+            for work in resp.json_data.get("results") or []:
+                rec = _normalize_openalex(work, aspect_name)
+                # A reference already held under a different id is not new.
+                if rec.get("doi") and rec["doi"].lower() in have_dois:
+                    continue
+                found.append(rec)
+        else:
+            logger.warning("Snowball lookup failed: %s", resp.error or resp.status)
+
+    return StepOutput(
+        result={"expanded": len(found), "backlog": len(counts)},
+        observations=(
+            f"Snowball ({aspect_name or 'no aspect'}): {len(found)} candidate(s) "
+            f"from {len(backlog)} work(s) cited {min_citations}+ times "
+            f"({len(counts)} uncollected reference(s) known)"
+        ),
+        context_updates={"raw_candidates": existing + found},
     )
 
 
@@ -690,6 +888,26 @@ async def action_resolve_oa_pdf(step_input: StepInput) -> StepOutput:
                     )
                     if best.get("license") and not rec.get("license"):
                         rec["license"] = str(best.get("license"))
+            # Still nothing fetchable. CORE aggregates repository full
+            # text and serves it from its OWN domain, so it is the one
+            # route that reaches a paper walled at the publisher.
+            if doi and not (set(urls) - attempted):
+                core = await polite_request(
+                    effects,
+                    "GET",
+                    f"{_CORE_BASE}/search/works",
+                    params={"q": f'doi:"{doi}"', "limit": 3},
+                    headers=_core_headers(),
+                )
+                if core.status == 200 and isinstance(core.json_data, dict):
+                    urls = _dedup_urls(
+                        urls
+                        + [
+                            work.get("downloadUrl")
+                            for work in (core.json_data.get("results") or [])
+                            if isinstance(work, dict)
+                        ]
+                    )
         if urls:
             rec["oa_pdf_urls"] = urls
             rec["oa_pdf_url"] = urls[0]

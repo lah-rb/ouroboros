@@ -143,6 +143,13 @@ class MissionConfig(BaseModel):
     #           run — but never skipped by choice).
     #   "off":  skip entirely (tests_verified set immediately).
     test_gate: Literal["auto", "on", "off"] = "auto"
+    # Scraper flow set: how many candidate papers the corpus should reach.
+    # The PLANNER sets the SHAPE (which aspects deserve more weight), this
+    # sets the SCALE -- aspect coverage targets are rescaled to sum here.
+    # Separating them keeps a corpus-size decision with the operator
+    # instead of with a model reading an example number in a prompt.
+    # 0 leaves the planner's absolute targets untouched.
+    corpus_target: int = 0
 
 
 # ── Directive Reports ─────────────────────────────────────────────────
@@ -976,6 +983,13 @@ class AspectSpec(BaseModel):
     description: str = ""
     seed_queries: list[str] = Field(default_factory=list)
     coverage_target: int = 10
+    # Yield tracking for the discovery stop. A fixed round cap either cuts
+    # a productive aspect short or spins a barren one; what actually
+    # matters is whether the LAST round found anything. last_have is the
+    # candidate count when this aspect was last dispatched, dry_rounds the
+    # run of consecutive rounds that added nothing.
+    last_have: int = 0
+    dry_rounds: int = 0
 
     @classmethod
     def from_llm_dict(cls, d: dict) -> "AspectSpec":

@@ -78,6 +78,28 @@ discover: #FlowDefinition & {
 			resolver: {
 				type: "rule"
 				rules: [
+					{condition: "true", transition: "snowball"},
+				]
+			}
+			publishes: ["raw_candidates"]
+		}
+
+		// The corpus cites far more than it holds — 8,812 referenced works
+		// against 39 collected on the first run. A work this aspect's own
+		// papers reach for twice is a better relevance signal than a query,
+		// and it appends to raw_candidates so merge dedups it as usual.
+		snowball: #StepDefinition & {
+			action:      "snowball_expand"
+			description: "Expand repeatedly-cited but uncollected references"
+			context: optional: ["raw_candidates"]
+			params: {
+				aspect_name:   {$ref: "input.aspect_name"}
+				min_citations: 2
+				max_expand:    50
+			}
+			resolver: {
+				type: "rule"
+				rules: [
 					{condition: "true", transition: "merge"},
 				]
 			}
