@@ -210,3 +210,103 @@ three requests and a token count. Where a preprocessing question decides an
 engineering direction, measure the preprocessor — do not infer it from
 metadata, and especially do not build arithmetic on top of the inference and
 then use that arithmetic to rule out an experiment.
+
+---
+
+# CONCLUSION — what actually fixes the sliver problem
+
+Two levers were tested against the same figure, the same 18-fact blind
+reference, the same rubric, and one judge per bundle so scores compose.
+
+    condition      facts/18   phantom/bar   large-seg err   thin-seg hits (of 33)
+    1x whole          14.0         0.88         4.8 pp            12
+    2x whole          15.0         0.24         1.5 pp            10
+    3x whole          15.0         0.11         3.8 pp             6.5
+    2x + halves       16.0         0.06         1.2 pp            17
+
+Phantom categories are normalised PER BAR COVERED. Coverage ranged 4-13 bars
+across runs and a candidate cannot invent a category for a bar it never
+described, so raw counts flatter the partial answers.
+
+**Three of the four metrics show disjoint distributions between 1x and
+2x+halves** — facts 14/14 vs 16/16, large-segment error 4.2/5.4 pp vs 1.1/1.3
+pp, phantom rate 1.00/0.77 vs 0.00/0.11. Unlike the capped-vs-uncapped
+comparison earlier today, this is not n=1 noise being read as signal.
+
+## The mechanism, measured rather than assumed
+
+The vision path tokenises by PIXEL AREA (measured: 662 image tokens at 1x,
+3130 at 2x). At native size one token covers ~26x26 px of the original, so a
+1-5% bar segment (3-15px) is sub-token: it falls inside one patch and is
+averaged with its neighbours. The model then does the only thing it can — it
+completes the pattern from the 9 of 13 bars that genuinely end
+`carbonates, iron oxides`.
+
+At 2x the same segment spans ~1.08 tokens and gets a patch of its own. The
+phantom categories largely stop. That is the whole story, and it is why the
+operator's reframing was right: **a resolution limit, not confabulation.**
+
+## Both levers are real, and they are independent
+
+* **Upscaling** changes pixels per token and nothing else. It is why thin
+  segments become resolvable.
+* **Splitting** changes nothing about resolution — two halves carry the same
+  pixel area, measured at 1,094 vs 1,152 prompt tokens — yet it independently
+  cut the phantom rate. The effect is structural: attention or framing, not
+  acuity. The turn boundary is irrelevant (one message and two turns scored
+  identically), so two images in one message is the cheaper form.
+
+They compose. 2x+halves beats 2x alone on every axis.
+
+## There is a ceiling, so do not just turn it up
+
+Prompt tokens stop tracking area between 2x and 3x: area-linear from the 2x
+point predicts 7,042 tokens at 3x, observed 4,020. The arithmetic implies a
+max long side near 3,190px, so a 4,218px-wide image is resized back to ~2.3x
+effective. 3x costs more, delivers less, and had the worst thin-segment recall
+in the set. **2x is at the practical ceiling for a figure this size** — a
+smaller figure has more headroom, which is the number to compute before
+choosing an upscale factor rather than fixing one globally.
+
+## What to adopt
+
+For `fig_review`, the configuration is **split by panel, upscale ~2x, one
+message, two images**. Cost is ~3.5x vision tokens (662 -> 3,130 for this
+figure) against a 131,072-token vision context — negligible — and roughly the
+same wall time, since these runs took 119-184s against the 1x baseline's
+106-184s.
+
+The panel split needs real boundaries, which is the one piece not yet built.
+The split here was hand-placed at the midpoint and happened to fall cleanly
+between panels. Column-wise pixel statistics find panel gutters exactly and
+deterministically; PP-DocLayoutV3, already running inside the extractor, is the
+other source. Neither asks the model where anything is — the approach that
+produced a perfect arithmetic grid of impossible coordinates.
+
+## What did not survive contact
+
+* **Muse has no native detection mode.** Confirmed against the model card and
+  the model itself. Prompted coordinates remain unproven rather than
+  disproven — the probe never supplied image dimensions, and Qwen3-VL's
+  0-1000 convention shows how a convention mismatch produces exactly the
+  observed symptom.
+* **No external toolkit is adoptable here.** The best structural match is
+  CUDA-only; the strongest verified number is GPT-4V-only and its authors say
+  open models cannot interpret the marks; several chart tools hard-depend on
+  AWS or Azure.
+* **Splitting is not free.** All four 1x split runs invented a large `glass`
+  segment in Botswana (45-60%) that no whole-image run produced. At 2x this
+  did not recur, but it is the failure to watch: splitting trades many small
+  inventions for the risk of one large one.
+
+## Errors made reaching this, recorded on purpose
+
+1. Relayed a blog's claim of native object detection that the model card
+   denied. Cost: a proposed port, killed by a probe before implementation.
+2. Read `clip.vision.image_size: 896` as a fixed canvas, computed 43.9 px per
+   token from it, and used that arithmetic to declare the upscale experiment
+   incapable of measuring anything. It was the experiment that worked.
+3. Called the capped-vs-uncapped difference "net negative" from n=1 per cell.
+
+All three share a shape: a plausible inference treated as a measurement. The
+corrections each took minutes; the claims would have cost days.
