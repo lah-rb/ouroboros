@@ -43,9 +43,7 @@ import asyncio
 import json
 import logging
 import os
-import time
 from typing import Any
-from urllib.parse import urlsplit
 
 from agent.models import StepInput, StepOutput
 
@@ -99,6 +97,9 @@ def _request_budget() -> int:
 
 
 _DEFAULT_MIN_INTERVAL = 2.0
+# Per-host floors. The PACER may widen any of these at runtime when a host
+# 429s (agent/actions/http_pacer.py) — these are the configured starting
+# points and the values it decays back toward, never a rate it will exceed.
 _HOST_MIN_INTERVAL = {
     # Unauthenticated shared pool is ~100 req / 5 min.
     "api.semanticscholar.org": 3.5,
@@ -109,6 +110,30 @@ _HOST_MIN_INTERVAL = {
     # that but the aggregator is doing us a favour, so stay unhurried.
     "api.core.ac.uk": 1.5,
 }
+
+
+_pacer_singleton = None
+
+
+def _pacer():
+    """The one pacer for this process.
+
+    A mission owns a thread with its own event loop, so module scope IS the
+    single owner. Built lazily so the S2 key (which buys a dedicated ~1 rps
+    quota, vs 3.5s for the shared unauthenticated pool) is resolved once the
+    environment is settled rather than at import.
+    """
+    global _pacer_singleton
+    if _pacer_singleton is None:
+        from agent.actions.http_pacer import HostPacer
+
+        intervals = dict(_HOST_MIN_INTERVAL)
+        if _s2_key():
+            intervals["api.semanticscholar.org"] = 1.1
+        _pacer_singleton = HostPacer(
+            default_interval=_DEFAULT_MIN_INTERVAL, intervals=intervals
+        )
+    return _pacer_singleton
 
 
 def _contact_email() -> str:
@@ -198,30 +223,18 @@ async def polite_request(
     """
     from agent.effects.protocol import HttpResult
 
-    state = await effects.read_state(_HTTP_STATE_KEY) or {}
-    hosts = state.get("hosts") or {}
-    total = int(state.get("total_requests") or 0)
-
     budget = _request_budget()
-    if budget and total >= budget:
-        logger.warning("Scraper HTTP budget exhausted (%d requests)", total)
+    if budget and _pacer().total_requests() >= budget:
+        logger.warning(
+            "Scraper HTTP budget exhausted (%d requests)", _pacer().total_requests()
+        )
         return HttpResult(
             status=0,
             url=url,
             error=f"mission request budget exhausted ({budget})",
         )
 
-    host = urlsplit(url).netloc
-    min_interval = _HOST_MIN_INTERVAL.get(host, _DEFAULT_MIN_INTERVAL)
-    # Authenticated S2 gets a dedicated ~1 rps quota — the 3.5s pacing
-    # exists for the shared unauthenticated pool only.
-    if host == "api.semanticscholar.org" and _s2_key():
-        min_interval = 1.1
-    last_ts = float((hosts.get(host) or {}).get("last_ts") or 0.0)
-    wait = min_interval - (time.time() - last_ts)
-    if wait > 0:
-        await asyncio.sleep(wait)
-
+    await _pacer().reserve(url)
     result = await effects.http_request(
         method, url, params=params, headers=headers, timeout=timeout
     )
@@ -233,15 +246,14 @@ async def polite_request(
             retry_after = float((result.headers or {}).get("retry-after") or 0)
         except (TypeError, ValueError):
             retry_after = 0.0
-        await asyncio.sleep(min(max(retry_after, 10.0), 60.0))
+        delay = await _pacer().note_throttled(url, retry_after)
+        await asyncio.sleep(delay)
+        await _pacer().reserve(url)
         result = await effects.http_request(
             method, url, params=params, headers=headers, timeout=timeout
         )
-
-    hosts[host] = {"last_ts": time.time()}
-    await effects.write_state(
-        _HTTP_STATE_KEY, {"hosts": hosts, "total_requests": total + 1}
-    )
+    if result.status and result.status != 429:
+        await _pacer().note_ok(url)
     return result
 
 
@@ -1006,8 +1018,8 @@ async def action_fetch_references(step_input: StepInput) -> StepOutput:
     # 86 of 624 available OA PDFs.
     budget = _request_budget()
     if budget:
-        state = await step_input.effects.read_state(_HTTP_STATE_KEY) or {}
-        used = int(state.get("total_requests") or 0)
+        # Counted by the pacer now, not mission state — same number, one owner.
+        used = _pacer().total_requests()
         if used >= budget * (1.0 - _ACQUISITION_RESERVE):
             logger.info(
                 "Reference expansion yielding to acquisition "
@@ -1031,6 +1043,16 @@ async def action_fetch_references(step_input: StepInput) -> StepOutput:
     fetched = skipped = 0
     for rec in batch:
         if rec.get("reference_dois"):
+            continue
+        # OPENALEX ALREADY ANSWERED THIS, FOR FREE. `referenced_works` rides
+        # along in the search response (_OPENALEX_SELECT) and _normalize_openalex
+        # stores it, so calling S2's references endpoint for the same paper buys
+        # nothing and spends the scarcest quota we have: S2 bounced 296 of 669
+        # requests (44%) on the 2026-08-11 run, and this endpoint is most of its
+        # volume — one call per paper. Snowball already consumes referenced_works
+        # directly, so the corpus loses nothing by preferring it here too.
+        if rec.get("referenced_works"):
+            skipped += 1
             continue
         if rec.get("doi"):
             ident = f"DOI:{rec['doi']}"

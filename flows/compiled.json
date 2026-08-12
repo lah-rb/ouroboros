@@ -23537,7 +23537,7 @@
           "rules": [
             {
               "condition": "result.batch_size > 0",
-              "transition": "resolve_oa"
+              "transition": "acquire"
             },
             {
               "condition": "true",
@@ -23551,61 +23551,9 @@
         "effects": [],
         "terminal": false
       },
-      "resolve_oa": {
-        "action": "resolve_oa_pdf",
-        "description": "Assign access_status (known OA url -> Unpaywall -> closed)",
-        "context": {
-          "required": [
-            "catalog_batch"
-          ],
-          "optional": []
-        },
-        "params": {},
-        "config": {},
-        "resolver": {
-          "type": "rule",
-          "rules": [
-            {
-              "condition": "true",
-              "transition": "download"
-            }
-          ]
-        },
-        "publishes": [
-          "catalog_batch"
-        ],
-        "effects": [],
-        "terminal": false
-      },
-      "download": {
-        "action": "download_papers",
-        "description": "Download oa_pdf papers; failures downgrade to oa_unresolved",
-        "context": {
-          "required": [
-            "catalog_batch"
-          ],
-          "optional": []
-        },
-        "params": {},
-        "config": {},
-        "resolver": {
-          "type": "rule",
-          "rules": [
-            {
-              "condition": "true",
-              "transition": "fetch_refs"
-            }
-          ]
-        },
-        "publishes": [
-          "catalog_batch"
-        ],
-        "effects": [],
-        "terminal": false
-      },
-      "fetch_refs": {
-        "action": "fetch_references",
-        "description": "Store reference DOIs (corpus edges computed at gate time)",
+      "acquire": {
+        "action": "acquire_batch",
+        "description": "Resolve+download+reference the batch concurrently; OCR earlier PDFs in parallel",
         "context": {
           "required": [
             "catalog_batch"

@@ -519,6 +519,12 @@ def build_action_registry() -> ActionRegistry:
     registry.register("resolve_oa_pdf", action_resolve_oa_pdf)
     registry.register("download_papers", action_download_papers)
     registry.register("fetch_references", action_fetch_references)
+    # Concurrent wrapper over the three above, gathered with an OCR lane.
+    # They stay registered and independently usable — this only changes how
+    # acquire_catalog drives them.
+    from agent.actions.acquire_overlap_actions import action_acquire_batch
+
+    registry.register("acquire_batch", action_acquire_batch)
     registry.register("apply_paper_tags", action_apply_paper_tags)
     registry.register(
         "parse_and_store_research_plan", action_parse_and_store_research_plan

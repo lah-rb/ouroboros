@@ -80,6 +80,20 @@ _MIN_FIG_BYTES = 4096
 _MIN_ENTROPY = 2.0  # near-uniform crops (separators, blank panels)
 _DHASH_SIZE = 8
 
+# NEAR-DUPLICATE RADIUS. This was 4 bits on a 64-bit hash of an 8x8 grayscale
+# downsample, which is far too loose for a spectroscopy corpus: two DIFFERENT
+# spectra sharing an overall envelope — the same pattern at successive delays,
+# the same diffractogram with different indexing — routinely land inside 4 bits
+# and one of them was silently deleted. Real data loss, recorded only as a
+# counter.
+#
+# Now a two-stage test: a candidate must collide at 8x8 within _DHASH_MAX_DIST
+# AND at 16x16 (256-bit) within _DHASH_CONFIRM_DIST. The second stage carries
+# the detail that distinguishes near-identical panels; the first keeps it cheap.
+_DHASH_MAX_DIST = int(os.environ.get("OUROBOROS_DHASH_MAX_DIST", "2"))
+_DHASH_CONFIRM_SIZE = 16
+_DHASH_CONFIRM_DIST = int(os.environ.get("OUROBOROS_DHASH_CONFIRM_DIST", "8"))
+
 
 def _free_port() -> int:
     s = socket.socket()
@@ -176,13 +190,13 @@ def _verify_page(md: str, truth: str) -> tuple[int, int, int, int]:
 # ── Figure dedup/filter ───────────────────────────────────────────────
 
 
-def _dhash(img: Image.Image) -> int:
-    g = img.convert("L").resize((_DHASH_SIZE + 1, _DHASH_SIZE))
+def _dhash(img: Image.Image, size: int = _DHASH_SIZE) -> int:
+    g = img.convert("L").resize((size + 1, size))
     px = list(g.getdata())
     bits = 0
-    for row in range(_DHASH_SIZE):
-        for col in range(_DHASH_SIZE):
-            i = row * (_DHASH_SIZE + 1) + col
+    for row in range(size):
+        for col in range(size):
+            i = row * (size + 1) + col
             bits = (bits << 1) | (1 if px[i] > px[i + 1] else 0)
     return bits
 
@@ -200,9 +214,20 @@ def _collect_figures(src_dir: str, dest_dir: str) -> tuple[int, int, dict]:
 
     Returns (kept, dropped, rename_map src_basename -> dest_relpath).
     """
-    seen_hashes: list[int] = []
+    seen: list[tuple[int, str, Image.Image]] = []  # (dhash8, kept_name, image)
     kept = dropped = 0
     renames: dict[str, str] = {}
+
+    def _note(src: str, reason: str, detail: str = "") -> None:
+        """Record a drop on STDERR — stdout is the JSON report channel that
+        action_extract_pdf_batch parses line-by-line. A dropped figure used to
+        leave only a counter, so a wrongly-deduped panel was unreviewable."""
+        print(
+            f"figdrop {os.path.basename(src)} reason={reason}"
+            + (f" {detail}" if detail else ""),
+            file=sys.stderr,
+        )
+
     candidates = []
     for root, _dirs, files in os.walk(src_dir):
         for f in sorted(files):
@@ -212,23 +237,48 @@ def _collect_figures(src_dir: str, dest_dir: str) -> tuple[int, int, dict]:
         try:
             if os.path.getsize(path) < _MIN_FIG_BYTES:
                 dropped += 1
+                _note(path, "size", f"bytes={os.path.getsize(path)}")
                 continue
             img = Image.open(path)
             if min(img.size) < _MIN_FIG_PX or _entropy(img) < _MIN_ENTROPY:
                 dropped += 1
+                _note(path, "px_or_entropy", f"size={img.size} H={_entropy(img):.2f}")
                 continue
             h = _dhash(img)
-            if any(bin(h ^ s).count("1") <= 4 for s in seen_hashes):
+            collision = None
+            for prev_h, prev_name, prev_img in seen:
+                d8 = bin(h ^ prev_h).count("1")
+                if d8 > _DHASH_MAX_DIST:
+                    continue
+                # CONFIRM AT HIGHER RESOLUTION. 8x8 cannot tell two spectra with
+                # the same envelope apart; 16x16 can. Only a collision at BOTH
+                # resolutions is a real duplicate.
+                d16 = bin(
+                    _dhash(img, _DHASH_CONFIRM_SIZE)
+                    ^ _dhash(prev_img, _DHASH_CONFIRM_SIZE)
+                ).count("1")
+                if d16 <= _DHASH_CONFIRM_DIST:
+                    collision = (prev_name, d8, d16)
+                    break
+            if collision:
                 dropped += 1
+                _note(
+                    path,
+                    "dhash",
+                    f"matches={collision[0]} d8={collision[1]} d16={collision[2]}",
+                )
                 continue
-            seen_hashes.append(h)
             os.makedirs(dest_dir, exist_ok=True)
             name = f"fig_{kept:02d}.png"
             img.save(os.path.join(dest_dir, name))
+            seen.append((h, name, img.copy()))
             renames[os.path.basename(path)] = name
             kept += 1
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 — one bad crop must not sink the paper
             dropped += 1
+            # Errors used to be folded into the same counter as dedup drops,
+            # so a decoder failure was indistinguishable from a duplicate.
+            _note(path, f"error:{type(exc).__name__}", str(exc)[:120])
     return kept, dropped, renames
 
 

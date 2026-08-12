@@ -1,8 +1,17 @@
 """polite_request: per-host throttling + mission request budget.
 
-Politeness lives in the action layer, not the HTTP effect. State
-persists via effects.read_state/write_state so it survives across
-dispatches within a mission.
+Politeness lives in the action layer, not the HTTP effect. Pacing state is now
+owned IN PROCESS by agent.actions.http_pacer.HostPacer rather than round-tripped
+through effects.read_state/write_state per call — that round trip was a
+read-modify-write race that turned into a burst generator the moment acquisition
+became concurrent (every in-flight caller read the same last_ts and fired
+together).
+
+CONSEQUENCE, deliberate: the request COUNTER is now per-process and does not
+survive a mission restart. It only gates the opt-in
+OUROBOROS_SCRAPER_HTTP_BUDGET development guardrail — the default is unlimited —
+so a restart resetting it is harmless. Politeness itself never depended on
+persistence: per-host intervals are re-derived on first use.
 """
 
 from __future__ import annotations
@@ -12,11 +21,27 @@ from unittest.mock import patch
 import pytest
 
 from agent.actions import scholarly_actions
-from agent.actions.scholarly_actions import _HTTP_STATE_KEY, polite_request
+from agent.actions.scholarly_actions import polite_request
 from agent.effects.mock import MockEffects
 from agent.effects.protocol import HttpResult
 
 _URL = "https://api.semanticscholar.org/graph/v1/paper/search"
+_HOST = "api.semanticscholar.org"
+
+
+@pytest.fixture(autouse=True)
+def _fresh_pacer():
+    """The pacer is a module singleton — without this, request counts leak
+    between tests and an unrelated test can trip a budget."""
+    scholarly_actions._pacer_singleton = None
+    yield
+    scholarly_actions._pacer_singleton = None
+
+
+def _spend(n: int, host: str = _HOST) -> None:
+    """Seed the pacer's counter without sleeping through n intervals."""
+    st = scholarly_actions._pacer()._state(host)
+    st.requests = n
 
 
 def _fx():
@@ -40,13 +65,16 @@ async def test_second_request_to_same_host_sleeps_min_interval():
 
 
 @pytest.mark.asyncio
-async def test_state_persists_request_count():
+async def test_request_count_is_tracked_in_process_not_on_disk():
     fx = _fx()
     await polite_request(fx, "GET", _URL)
     await polite_request(fx, "GET", _URL)
-    state = await fx.read_state(_HTTP_STATE_KEY)
-    assert state["total_requests"] == 2
-    assert "api.semanticscholar.org" in state["hosts"]
+    pacer = scholarly_actions._pacer()
+    assert pacer.total_requests() == 2
+    assert _HOST in pacer.stats()
+    # No per-call state round trip: that was two whole-file disk operations
+    # per API call, and the race that made concurrency unsafe.
+    assert fx.call_count("write_state") == 0
 
 
 @pytest.mark.asyncio
@@ -57,7 +85,7 @@ async def test_no_budget_by_default_because_the_scraper_runs_continuously():
     PDFs, so unlimited is the default and the cap is opt-in."""
     assert scholarly_actions._request_budget() == 0
     fx = _fx()
-    await fx.write_state(_HTTP_STATE_KEY, {"hosts": {}, "total_requests": 10_000})
+    _spend(10_000)
     r = await polite_request(fx, "GET", _URL)
     assert r.status != 0, "an unset budget must never block a request"
 
@@ -68,7 +96,7 @@ async def test_budget_exhaustion_fails_soft_without_calling_when_one_is_set(
 ):
     monkeypatch.setenv("OUROBOROS_SCRAPER_HTTP_BUDGET", "600")
     fx = _fx()
-    await fx.write_state(_HTTP_STATE_KEY, {"hosts": {}, "total_requests": 600})
+    _spend(600)
     r = await polite_request(fx, "GET", _URL)
     assert r.status == 0
     assert "budget" in (r.error or "")
@@ -130,7 +158,7 @@ async def test_reference_expansion_yields_once_the_reserve_is_reached(monkeypatc
     monkeypatch.setenv("OUROBOROS_SCRAPER_HTTP_BUDGET", "600")
     fx = _fx()
     # 40% spent — inside the 60% acquisition reserve.
-    await fx.write_state(_HTTP_STATE_KEY, {"hosts": {}, "total_requests": 240})
+    _spend(240)
     out = await action_fetch_references(
         StepInput(
             context={"catalog_batch": [{"doi": "10.1000/x"}]},

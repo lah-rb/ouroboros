@@ -54,42 +54,24 @@ acquire_catalog: #FlowDefinition & {
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "result.batch_size > 0", transition: "resolve_oa"},
+					{condition: "result.batch_size > 0", transition: "acquire"},
 					{condition: "true", transition: "return_success"},
 				]
 			}
 			publishes: ["catalog_batch"]
 		}
 
-		resolve_oa: #StepDefinition & {
-			action:      "resolve_oa_pdf"
-			description: "Assign access_status (known OA url -> Unpaywall -> closed)"
-			context: required: ["catalog_batch"]
-			resolver: {
-				type: "rule"
-				rules: [
-					{condition: "true", transition: "download"},
-				]
-			}
-			publishes: ["catalog_batch"]
-		}
-
-		download: #StepDefinition & {
-			action:      "download_papers"
-			description: "Download oa_pdf papers; failures downgrade to oa_unresolved"
-			context: required: ["catalog_batch"]
-			resolver: {
-				type: "rule"
-				rules: [
-					{condition: "true", transition: "fetch_refs"},
-				]
-			}
-			publishes: ["catalog_batch"]
-		}
-
-		fetch_refs: #StepDefinition & {
-			action:      "fetch_references"
-			description: "Store reference DOIs (corpus edges computed at gate time)"
+		// ONE STEP, TWO LANES. resolve -> download -> fetch_refs used to be
+		// three serial steps walking the batch one record at a time, each call
+		// paying its own politeness interval. They are now fanned out per
+		// record inside a single action, gathered with an OCR lane that drains
+		// PDFs which landed in EARLIER dispatches — so paddle works while this
+		// batch waits on the APIs. The three actions still exist and are still
+		// registered; only the driving changed. See
+		// agent/actions/acquire_overlap_actions.py.
+		acquire: #StepDefinition & {
+			action:      "acquire_batch"
+			description: "Resolve+download+reference the batch concurrently; OCR earlier PDFs in parallel"
 			context: required: ["catalog_batch"]
 			resolver: {
 				type: "rule"
