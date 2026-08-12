@@ -70,7 +70,9 @@
 # story for exactly this symptom.
 #
 # NEXT PROBE, in order:
-#   1. Neutral persona + tools OFF. Isolates prefix CONTENT from framing;
+#   1. DONE 2026-08-11 — neutral persona still returns EMPTY (107/205 tok
+#      generated, no content). Prefix CONTENT is RULED OUT; the tools block
+#      is still injected and is now the only remaining suspect.
 #      system-prompt content has vetoed a byte-perfect dial before.
 #   2. If that restores output, implement ATEM tool rendering + the
 #      dynamic recipients line, then re-probe with tools on.
