@@ -2,17 +2,22 @@
 """Figure → figtext sidecar: a VLM reads each extracted figure into text.
 
 Curator stage support tool. One agent dispatch = one invocation = one
-OS process owning its own mlx_vlm.server child (the extractor's
-crash-isolation model).
+OS process.
 
-This file used to say "LLMVP is text-only by design; vision runs here."
-That stopped being true on 2026-08-12: LLMVP now serves vision natively
-over POST /v1/vision (mtmd projector bound to the resident model, private
-single-sequence context — see llmvp/configs/reference.yaml, the VISION
-block). The MLX subprocess here is now a CHOICE, not a necessity, and its
-remaining justification is crash isolation plus the MLX-only models it can
-reach. Moving this behind the endpoint is a live option; it wants its own
-measurement, because FIG_MODEL here predates the 2026-08-11 bake-off.
+THE FIGURES ARE READ BY LLMVP NOW (--vl-backend, default llmvp). This file
+used to say "LLMVP is text-only by design; vision runs here"; that stopped
+being true on 2026-08-12, and the port followed the same day. The private
+mlx_vlm.server child is still available and still crash-isolated, but it is
+the opt-in, not the arrangement.
+
+Two things changed together, deliberately. The TRANSPORT: no VLM subprocess
+per dispatch, one HTTP call per figure to a server that is already resident,
+so the figure work costs no second model load. And the MODEL: the old
+FIG_MODEL (Qwen3-VL-8B-8bit) was a "mid-size default" picked before the
+2026-08-11 bake-off and never entered in it; the endpoint serves the winner
+of that bake-off instead. Model choice now belongs to LLMVP's config, which
+is the point — this tool asks for a figure to be read and does not decide
+what reads it.
 
 Per paper: for each databank/figures/<paper_key>/fig_NN.png, locate its
 reference in the extracted markdown, take the surrounding paragraphs as
@@ -30,7 +35,9 @@ line per paper on stdout:
 Usage:
   .venv/bin/python fig_review.py --keys k1 k2 \
       --figures-root <databank>/figures --markdown-dir <databank>/markdown \
-      --out-dir <databank>/figtext --model <mlx-vlm model dir>
+      --out-dir <databank>/figtext \
+      [--vl-backend llmvp|mlx] [--llmvp-url http://127.0.0.1:8008] \
+      [--model <mlx-vlm model dir>   # --vl-backend mlx only]
 
 Module-level imports are stdlib-only ON PURPOSE: the main repo's tests
 import caption_context/numeric_overlap from here without the mlx stack.
@@ -126,12 +133,60 @@ def _wait_health(port: int, timeout: float = 180.0) -> bool:
     return False
 
 
-def _chat_figure(port: int, model: str, image_path: str, caption: str) -> str:
-    """One OpenAI-compatible chat call with the figure attached."""
+# ── Which VLM reads the figure ────────────────────────────────────────
+# llmvp (default): the fleet server's own vision endpoint, serving whatever
+# model the active config holds. mlx: a private mlx_vlm.server child, the
+# original arrangement, kept because it needs nothing else running.
+#
+# THE DEFAULT IS ALSO A MODEL CHANGE, and that is the point. FIG_MODEL was
+# Qwen3-VL-8B-8bit, chosen as a "mid-size default" BEFORE the 2026-08-11
+# bake-off and never entered in it. The endpoint serves the bake-off winner
+# instead — muse-glimmer-30b, 145/192 on the 10-figure held-out set against
+# four rivals, and 155/192 re-measured through this very endpoint.
+#
+# KNOWN AND ACCEPTED: muse fabricates on 5 of 10 figures, more than
+# qwen3.6-27b's 3. That is tolerable HERE specifically because figtext is a
+# CLAIM and is never gated on — numeric_overlap_rate is advisory and the
+# curator's review pass judges the inlined figtext in context. Do not carry
+# this default into a path that trusts figtext directly.
+_VL_BACKENDS = ("llmvp", "mlx")
+_DEFAULT_VL_BACKEND = os.environ.get("OUROBOROS_FIG_BACKEND", "llmvp")
+_LLMVP_URL = os.environ.get("OUROBOROS_LLMVP_URL", "http://127.0.0.1:8008").rstrip("/")
+
+
+def _llmvp_ready(url: str, timeout: float = 5.0) -> bool:
+    """LLMVP's health lives on GraphQL — there is no REST /health.
+
+    Probed ONCE rather than waited on: we do not own this server, so an
+    absent one is an operator error to report, not a race to sleep through.
+    """
+    req = urllib.request.Request(
+        f"{url}/graphql",
+        data=json.dumps({"query": "{ health { status } }"}).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read())
+        return ((data.get("data") or {}).get("health") or {}).get("status") == "ok"
+    except Exception:
+        return False
+
+
+def _chat_figure(
+    endpoint: str, model: str, image_path: str, caption: str, send_model: bool
+) -> tuple[str, str]:
+    """One vision call with the figure attached. Returns (text, served model).
+
+    Both backends take the SAME OpenAI-shaped message with a base64 data URI
+    and answer with the same choices[0].message.content, so only the URL and
+    the model field differ. Base64 rather than a path on purpose: LLMVP reads
+    paths only under model.vision_image_roots, and the figure lives wherever
+    the mission's workspace happens to be.
+    """
     with open(image_path, "rb") as f:
         b64 = base64.b64encode(f.read()).decode()
     payload = {
-        "model": model,
         "max_tokens": _MAX_FIGTEXT_TOKENS,
         "temperature": 0.2,
         "messages": [
@@ -152,18 +207,29 @@ def _chat_figure(port: int, model: str, image_path: str, caption: str) -> str:
             }
         ],
     }
+    if send_model:
+        # mlx_vlm.server loads per request, so the name IS the model. LLMVP
+        # fixed its model at boot and ignores the field.
+        payload["model"] = model
     req = urllib.request.Request(
-        f"http://127.0.0.1:{port}/v1/chat/completions",
+        endpoint,
         data=json.dumps(payload).encode(),
         headers={"Content-Type": "application/json"},
     )
     with urllib.request.urlopen(req, timeout=300) as resp:
         data = json.loads(resp.read())
-    return str(data["choices"][0]["message"]["content"] or "").strip()
+    text = str(data["choices"][0]["message"]["content"] or "").strip()
+    return text, str(data.get("model") or model)
 
 
 def review_paper(
-    port: int, model: str, key: str, figures_root: str, markdown_dir: str, out_dir: str
+    endpoint: str,
+    model: str,
+    key: str,
+    figures_root: str,
+    markdown_dir: str,
+    out_dir: str,
+    send_model: bool = True,
 ) -> dict:
     t0 = time.time()
     report = {
@@ -183,9 +249,12 @@ def review_paper(
             if f.endswith(".png")
         )
         entries = []
+        served = os.path.basename(model.rstrip("/")) if model else "unknown"
         for fig in figs:
             caption = caption_context(md, key, fig)
-            figtext = _chat_figure(port, model, os.path.join(fig_dir, fig), caption)
+            figtext, served = _chat_figure(
+                endpoint, model, os.path.join(fig_dir, fig), caption, send_model
+            )
             entries.append(
                 {
                     "fig": fig,
@@ -198,11 +267,10 @@ def review_paper(
         out_path = os.path.join(out_dir, f"{key}.json")
         with open(out_path, "w") as f:
             json.dump(
-                {
-                    "paper_key": key,
-                    "model": os.path.basename(model.rstrip("/")),
-                    "figs": entries,
-                },
+                # The model the SERVER reports, not the one we asked for —
+                # with LLMVP the caller does not choose it, and "which model
+                # read this figure" is per-record provenance.
+                {"paper_key": key, "model": served, "figs": entries},
                 f,
                 ensure_ascii=False,
                 indent=1,
@@ -221,30 +289,63 @@ def main() -> int:
     ap.add_argument("--figures-root", required=True)
     ap.add_argument("--markdown-dir", required=True)
     ap.add_argument("--out-dir", required=True)
-    ap.add_argument("--model", required=True, help="MLX VLM model directory")
-    ap.add_argument("--port", type=int, default=0, help="reuse a running server")
+    ap.add_argument(
+        "--vl-backend",
+        choices=_VL_BACKENDS,
+        default=_DEFAULT_VL_BACKEND,
+        help=f"which VLM reads the figures (default: {_DEFAULT_VL_BACKEND})",
+    )
+    ap.add_argument(
+        "--model", default="", help="MLX VLM model directory (--vl-backend mlx only)"
+    )
+    ap.add_argument(
+        "--llmvp-url", default=_LLMVP_URL, help="LLMVP base URL (--vl-backend llmvp)"
+    )
+    ap.add_argument("--port", type=int, default=0, help="reuse a running mlx server")
     args = ap.parse_args()
 
-    port = args.port or _free_port()
     server = None
-    if not args.port:
-        server = subprocess.Popen(
-            [sys.executable, "-m", "mlx_vlm.server", "--port", str(port)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    try:
+    if args.vl_backend == "llmvp":
+        url = args.llmvp_url.rstrip("/")
+        if not _llmvp_ready(url):
+            # An unreachable LLMVP is an operator condition, not a transient:
+            # nothing here can start it, so say which server and stop.
+            print(
+                json.dumps(
+                    {
+                        "error": f"LLMVP not reachable at {url} — start it, or "
+                        "pass --vl-backend mlx to use a private mlx server"
+                    }
+                )
+            )
+            return 3
+        endpoint, send_model = f"{url}/v1/vision", False
+    else:
+        if not args.model:
+            print(json.dumps({"error": "--model is required for --vl-backend mlx"}))
+            return 2
+        port = args.port or _free_port()
+        if not args.port:
+            server = subprocess.Popen(
+                [sys.executable, "-m", "mlx_vlm.server", "--port", str(port)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
         if not _wait_health(port):
             print(json.dumps({"error": "mlx server failed to start"}))
             return 3
+        endpoint, send_model = f"http://127.0.0.1:{port}/v1/chat/completions", True
+
+    try:
         for key in args.keys:
             report = review_paper(
-                port,
+                endpoint,
                 args.model,
                 key,
                 args.figures_root,
                 args.markdown_dir,
                 args.out_dir,
+                send_model,
             )
             print(json.dumps(report, ensure_ascii=False), flush=True)
     finally:

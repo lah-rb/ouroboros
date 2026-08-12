@@ -301,6 +301,11 @@ def format_key_registry(registry: dict, top_n: int = REGISTRY_PROMPT_TOP_N) -> s
 # ── Stage constants ───────────────────────────────────────────────────
 
 FIG_BATCH_SIZE = 3
+# Figures, not papers, are what the dispatch actually spends. At the endpoint's
+# measured ~37s/figure this budget is ~37 min against FIG_TIMEOUT_S=3600, which
+# leaves headroom for a slow figure without letting three figure-heavy papers
+# (this corpus has 54, 53 and 40) walk the batch past its own timeout.
+FIG_BATCH_FIGURES = 60
 FIG_TIMEOUT_S = 3600
 CURATE_SESSION_TTL = 1800  # a paper's review+pack passes span many minutes
 
@@ -309,8 +314,30 @@ CURATE_GOAL_SIGNATURE = "corpus-curate"
 
 _FIG_TOOL_PY = "tools/fig_review/.venv/bin/python"
 _FIG_TOOL_SCRIPT = "tools/fig_review/fig_review.py"
-# M6's vision bake-off decides the production model; mid-size default.
+
+# WHO READS THE FIGURES. Default llmvp: the fleet server's /v1/vision, i.e.
+# whatever model the active config serves. That settles the open FIG_MODEL
+# question by removing it — model choice belongs to LLMVP's config, not to a
+# constant in a curation action.
+#
+# The retired constant was "mlx-community/Qwen3-VL-8B-Instruct-8bit", marked
+# "M6's vision bake-off decides the production model; mid-size default". The
+# bake-off ran on 2026-08-11 and Qwen3-VL-8B was never in it; muse-glimmer-30b
+# won at 145/192, and re-measured through this endpoint scored 155/192. So the
+# port is also the answer to the TODO.
+#
+# `mlx` keeps the private mlx_vlm.server child, which needs no server running
+# and reaches MLX-only models; it then needs --model again.
+FIG_BACKEND_DEFAULT = "llmvp"
 FIG_MODEL = "mlx-community/Qwen3-VL-8B-Instruct-8bit"
+
+
+def _fig_backend() -> str:
+    """Read at call time, not import time, so a station's env actually
+    reaches an already-imported module (and tests can flip it)."""
+    import os
+
+    return os.environ.get("OUROBOROS_FIG_BACKEND", FIG_BACKEND_DEFAULT)
 
 
 def _active_text_model() -> str:
@@ -397,6 +424,20 @@ async def _load_figtext(effects, paper_key: str) -> dict | None:
         return None
 
 
+async def _figtext_model(effects, paper_key: str) -> str:
+    """Which VLM actually read THIS paper's figures.
+
+    Read from the sidecar rather than assumed from config: under the llmvp
+    backend the caller does not choose the model — LLMVP's active config
+    does — so a constant here would record a guess. Papers processed before
+    the backend changed keep the model that really read them, which is the
+    whole point of provenance.
+    """
+    figtext = await _load_figtext(effects, paper_key)
+    served = str((figtext or {}).get("model") or "").strip()
+    return served or FIG_MODEL.rsplit("/", 1)[-1]
+
+
 # ── Actions: goals + sweeps ───────────────────────────────────────────
 
 
@@ -463,6 +504,33 @@ async def action_derive_curation_goals(step_input):
     )
 
 
+def _fig_batch(databank: dict) -> list[str]:
+    """The next batch, budgeted by FIGURES rather than papers.
+
+    A paper-count batch was safe against an 8B MLX model at a few seconds a
+    figure. It is not safe against the endpoint: muse reads a figure in ~37s
+    (measured 2026-08-12, 4 figures in 147.9s), and this corpus has papers
+    with 54, 53 and 40 figures. Three of those in one dispatch is ~90 minutes
+    against a 3600s timeout — the batch would die mid-flight and every paper
+    in it would book figtext_failed, having done the work.
+
+    So the unit of work is the figure, which is what actually costs time.
+    FIG_BATCH_SIZE still caps the paper count (a batch of many tiny papers
+    stays bounded), and a single paper over the figure budget is ALWAYS
+    dispatched alone rather than skipped — it must still get its turn.
+    """
+    pending = sorted(k for k, r in databank.items() if _fig_pending(r))
+    batch: list[str] = []
+    figures = 0
+    for key in pending:
+        n = int((databank.get(key) or {}).get("figure_count") or 0)
+        if batch and (figures + n > FIG_BATCH_FIGURES or len(batch) >= FIG_BATCH_SIZE):
+            break
+        batch.append(key)
+        figures += n
+    return batch
+
+
 async def action_fig_review_sweep_next(step_input):
     """Dispatch the next fig-review batch; empty worklist completes the goal."""
     from agent.actions.scholarly_actions import read_databank
@@ -489,7 +557,7 @@ async def action_fig_review_sweep_next(step_input):
         )
 
     databank = await read_databank(effects)
-    batch = sorted(k for k, r in databank.items() if _fig_pending(r))[:FIG_BATCH_SIZE]
+    batch = _fig_batch(databank)
     if not batch:
         goal.status = "complete"
         await effects.save_mission(mission)
@@ -559,9 +627,11 @@ async def action_fig_review_batch(step_input):
         os.path.join(working_dir, "databank", "markdown"),
         "--out-dir",
         os.path.join(working_dir, FIGTEXT_DIR),
-        "--model",
-        FIG_MODEL,
+        "--vl-backend",
+        _fig_backend(),
     ]
+    if _fig_backend() == "mlx":
+        cmd += ["--model", FIG_MODEL]
     result = await effects.run_command(cmd, timeout=FIG_TIMEOUT_S)
 
     reports: dict[str, dict] = {}
@@ -981,6 +1051,9 @@ async def action_curate_book_result(step_input):
     session_id = str(state.get("session_id") or "")
     review = dict(state.get("review") or {})
     pack = dict(state.get("pack") or {})
+    # Resolved once — both the envelope and curation_method record it, and
+    # re-reading the sidecar per field would be two chances to disagree.
+    figtext_model = await _figtext_model(effects, paper_key)
 
     # Structural cleanup FIRST — even a booking error must not leak the
     # pinned instance or the snapshot's context budget.
@@ -1032,7 +1105,7 @@ async def action_curate_book_result(step_input):
                 "data": data,
                 "provenance": {
                     "model": _active_text_model(),
-                    "figtext_model": FIG_MODEL,
+                    "figtext_model": figtext_model,
                     "packed_at": datetime.now(timezone.utc).isoformat(),
                     "md_path": rec.get("md_path", ""),
                 },
@@ -1065,7 +1138,7 @@ async def action_curate_book_result(step_input):
             rec["pack_status"] = "pack_failed"
             rec["failure_reason"] = f"pack: {pack.get('reason') or 'no pack state'}"
             outcome = "pack_failed"
-    rec["curation_method"] = f"{_active_text_model()}+{FIG_MODEL.rsplit('/', 1)[-1]}"
+    rec["curation_method"] = f"{_active_text_model()}+{figtext_model}"
     await append_records(effects, [rec])
 
     summary = f"Curated {paper_key}: {outcome}"
