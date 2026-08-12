@@ -171,3 +171,58 @@ logging:
   directory: "./logs"
 
 tools: {}
+
+# ── Ledger cell (reference.yaml step 8), 2026-08-11 ──────────────────
+# dev/cache_compat_matrix.py --depth 16 --turn-tokens 900. ONE cell, not the
+# multi-cell sweep gpt-oss carries, and run at 900-token turns — do NOT compare
+# prefill_total_s against a cell run with the 5-token filler, which understates
+# replay growth by ~56x. Compare the CURVE.
+#
+# The full resident stack engages and correctness holds:
+#   fresh curve  [1415, 1080 x14, 20, 18]  — flat, growth 0.02
+# Flat is the whole point: each turn re-prefills its OWN payload (1080 ≈ the
+# 900-token turn plus framing) and not the accumulated history. Full replay
+# would climb turn over turn — gpt-oss's B01 replay cell went 2567 -> 17394 and
+# cost 207.7s against 22.4s resident.
+#
+# Needle recall held at depth 16 AND the early fact survived, so this is not
+# plumbing that merely runs — it retains. Snapshot capture came back resident,
+# and the fork was HOT at 20 fresh tokens / 2.9s.
+probe_verified_cache:
+  run_id: cells_20260811-221252
+  A2:
+    strategy: resident
+    can_shift: True
+    n_ctx_seq: 131072
+    fresh_t2_last: [1080, 18]
+    prefill_total_s: 84.3
+    needle_at_depth: True
+    # Extras this cell measured, kept because they are the resident claims:
+    curve_growth: 0.02
+    session_mode: resident-live
+    strategy_matches_behaviour: True
+    early_fact_ok: True
+    snapshot_resident: True
+    fork_mode: hot
+    fork_fresh: 20
+    fork_s: 2.9
+    depth: 16
+    turn_tokens: 900
+
+# PRE-REGISTERED BEFORE THE FIRST ARM, per reference.yaml step 8 — the job of
+# this expectation is to make a surprise legible, not to be right.
+#
+# GRINDER, expected mid. The reasoning: it is a DENSE 30B at 19.3 tok/s single
+# stream, ~3x slower than gpt-oss, and it reasons heavily before answering
+# (27-224 tokens on trivial prompts), so long contemplative chains are the
+# expensive shape here. Its measured strength is fidelity — it read figures
+# more faithfully than anything else in the bake-off, including three checks
+# nothing else caught — which is a grinder virtue. If it lands contemplator
+# instead, the thing to look at is whether the high reasoning dial is paying
+# for itself; the swarm config note flags that as the first A/B.
+#
+# NEVER judged by me — blind subagent only, TIER_RUBRIC v2.1, verdicts to
+# llmvp/configs/archive/TIER_JUDGEMENTS.md.
+tier:
+  league: grinder  # LOAD-BEARING — agent/tier/runner.py:config_league
+  status: expected  # history: llmvp/configs/archive/TIER_JUDGEMENTS.md

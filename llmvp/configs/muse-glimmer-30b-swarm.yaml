@@ -176,3 +176,11 @@ logging:
   directory: "./logs"
 
 tools: {}
+
+# Same model, same league as the single-stream config — stated explicitly
+# rather than left to config_league's silent grinder fallback, so "grinder"
+# reads as a decision and not as an absent block. The expectation and its
+# reasoning live in muse-glimmer-30b.yaml; this is a serving variant.
+tier:
+  league: grinder  # LOAD-BEARING — agent/tier/runner.py:config_league
+  status: expected  # history: llmvp/configs/archive/TIER_JUDGEMENTS.md
