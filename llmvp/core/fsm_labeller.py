@@ -658,7 +658,7 @@ def fsm_decode(
     raw_text: str, family: str = "harmony", single_turn: bool = True
 ) -> list[tuple[str, str]]:
     """Featurize raw text and return per-atom (text, label) pairs."""
-    atoms = featurize(raw_text)
+    atoms = featurize(raw_text, family=family)
     return label_atoms(atoms, family=family, single_turn=single_turn)
 
 
@@ -666,7 +666,7 @@ def fsm_extract_content(
     raw_text: str, family: str = "harmony", single_turn: bool = True
 ) -> str:
     """Featurize raw text and return only the content-phase text."""
-    atoms = featurize(raw_text)
+    atoms = featurize(raw_text, family=family)
     return extract_content(atoms, family=family, single_turn=single_turn)
 
 
@@ -674,5 +674,5 @@ def fsm_extract_phases(
     raw_text: str, family: str = "harmony", single_turn: bool = True
 ) -> dict[str, str]:
     """Featurize raw text and return all phases as a {D,T,C,E} dict."""
-    atoms = featurize(raw_text)
+    atoms = featurize(raw_text, family=family)
     return extract_phases(atoms, family=family, single_turn=single_turn)

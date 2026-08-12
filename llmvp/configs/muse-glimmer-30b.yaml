@@ -33,51 +33,55 @@
 #   * turns end on <|eot|> (200008), NOT the GGUF eos <|end_of_text|> (200001)
 #   * <|eom|> (200007) closes the REASONING message and must never be a stop
 #
-# ══════════════════════════════════════════════════════════════════
-# NOT READY TO CODE. DO NOT PUT THIS MODEL IN A RUN YET.
-# ══════════════════════════════════════════════════════════════════
-# Status 2026-08-11: it LOADS clean (graph splits 2, resident granted,
-# swa_full honoured) and it DECODES — but every completion through this
-# config returns an EMPTY string, so it cannot execute a single flow step.
+# ── The empty-completion defect: FIXED 2026-08-11 ───────────────────
+# Every completion through this config used to return "". It was never the
+# model and never the prompt — it was EXTRACTION, and the earlier diagnosis
+# recorded here was wrong on the facts. Keeping the correction visible
+# because the wrong story cost most of a day.
 #
-# The symptom: given the generation prompt `<|start|>assistant`, the model
-# opens ` to=self<|message|>`, reasons, and then emits <|eot|> — ending the
-# turn from inside the REASONING channel without ever opening the `to=user`
-# content block. Extraction correctly strips reasoning, finds no content,
-# and returns "".
+# WHAT WAS ACTUALLY HAPPENING. Captured raw, with no stop strings and EOG
+# reported rather than obeyed (dev/muse_raw_probe.py):
 #
-# What has been RULED OUT, so nobody re-walks it:
-#   * Not the model. Driven through its OWN chat template with a bare user
-#     message it reaches `<|start|>assistant to=user<|message|>` correctly.
-#     It also works in LM Studio (operator).
-#   * Not a stop-token mixup. llama_vocab_is_eog: <|eot|> and
-#     <|end_of_text|> are EOG, <|eom|> is NOT. stop_token_audit clean.
-#   * Not the developer role. That WAS wrong — this family has no developer
-#     role and SOUL.md was being framed in `<|start|>developer<|message|>` —
-#     and fixing it did not restore output.
-#   * Not the message framing. A golden test against the GGUF's own chat
-#     template matches byte-for-byte for the system block and for the
-#     reasoning+content assistant history.
+#   to=self<|message|>…347+596 = 943…<|eom|>
+#   <|start|>assistant to=user<|message|>943<|eot|>
 #
-# PRIME SUSPECT — tool rendering. This family renders tool definitions
-# INSIDE the system message in its own ATEM form, and changes the
-# `# Valid recipients:` line to list each tool namespace when tools are
-# present. The renderer does neither: it injects the auto-generated
-# tools.txt (~1.6k chars) in a shape the model was never trained on, while
-# the recipients line still claims only "self" and "user" are valid. A
-# model told its only valid recipients are self and user, holding a tool
-# block it cannot address, ending the turn after reasoning is a coherent
-# story for exactly this symptom.
+# The model opened `to=user`, answered 943, and terminated on <|eot|>
+# correctly — a textbook turn. The server's 158-char raw was that exact
+# string. What returned "" was `_strip_delimiter`.
 #
-# NEXT PROBE, in order:
-#   1. DONE 2026-08-11 — neutral persona still returns EMPTY (107/205 tok
-#      generated, no content). Prefix CONTENT is RULED OUT; the tools block
-#      is still injected and is now the only remaining suspect.
-#      system-prompt content has vetoed a byte-perfect dial before.
-#   2. If that restores output, implement ATEM tool rendering + the
-#      dynamic recipients line, then re-probe with tools on.
-#   3. Only then --probe-context (n_ctx is a guess until measured) and a
-#      cache_compat_matrix cell for the ledger.
+# ROOT CAUSE — the FSM derived the channel SHAPE from this family's format
+# yaml but not the channel VOCABULARY. core/featurizer.py hardcoded
+# Harmony's words (analysis/final/tool/functions). This family's channels
+# are a RECIPIENT in plain text — `to=self` / `to=user` — so no CHAN_* atom
+# was ever emitted, `<|message|>` never completed a transition, the FSM sat
+# in DELIM for the whole stream, and reasoning AND answer were both labelled
+# D and dropped. Two more gaps fell out of the same root: <|eom|> and <|eot|>
+# were in no marker table either, so no phase ever closed, `eot` leaked into
+# content as a bare word, and the single_turn seal never fired against this
+# model's post-answer orbit (it re-answers ~20x if you let it).
+#
+# The fix derives all three from formats/muse-glimmer.yaml, so the next
+# family costs zero edits — which is what this file already claimed and did
+# not yet deliver. See _channel_vocab / _recipient_form in core/featurizer.py
+# and TestRecipientChannelFamily in tests/test_fsm_labeller.py.
+#
+# What was ruled out along the way, so nobody re-walks it: the model itself
+# (its own template works, and so does LM Studio); stop tokens (<|eot|> and
+# <|end_of_text|> are EOG, <|eom|> is not — audit clean); the developer role
+# (genuinely wrong, this family has none, but fixing it changed nothing);
+# message framing (golden test is byte-exact against the published
+# template); persona content; sampling temperature; and the tools block —
+# which was never injected at all, because prompt.tools_file defaults to
+# None and no config in the fleet sets it. The "PRIME SUSPECT — tool
+# rendering" theory recorded here was false on that last point alone.
+#
+# STILL OWED before this model carries a coding run:
+#   1. --probe-context (n_ctx is a guess until measured; KV is 52 KiB/tok
+#      and swa_full doubles the cache) and a cache_compat_matrix cell.
+#   2. A batched-decode swarm check (1->4 streams) — the open question is
+#      whether it can pull double duty as the vision model AND a text arm.
+#   3. ATEM tool rendering + the dynamic `# Valid recipients:` line IF we
+#      ever give this family tools. Not a blocker for plain text.
 #
 # Vision is a SEPARATE track and is NOT blocked by this: the mmproj works
 # today through llama-cpp-python's mtmd path outside LLMVP, where it was

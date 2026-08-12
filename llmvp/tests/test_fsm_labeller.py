@@ -1067,3 +1067,88 @@ class TestSuffixedThinkTags:
         prose containing the same characters elsewhere is still content."""
         got = self._content("</think:opensource>see the :opensource notes", "hunyuan3")
         assert got == "see the :opensource notes", repr(got)
+
+
+class TestRecipientChannelFamily:
+    """Muse-Glimmer names its channel as a RECIPIENT in plain text
+    (``<|start|>assistant to=self<|message|>``) rather than with a special
+    token (``<|channel|>analysis<|message|>``).
+
+    The FSM already derived the channel SHAPE from formats/<family>.yaml, but
+    the channel VOCABULARY stayed hardcoded to Harmony's words, so no
+    transition ever fired for this family: reasoning AND the correct answer
+    were both labelled D and extraction returned "". Every Muse completion came
+    back empty while the model was answering correctly the whole time.
+    """
+
+    RAW = (
+        " to=self<|message|>The user wants a sum.\n\n347+596 = 943\n\n<|eom|>"
+        "<|start|>assistant to=user<|message|>943<|eot|>"
+    )
+
+    @staticmethod
+    def _phases(raw, family="muse-glimmer"):
+        from core.fsm_labeller import fsm_extract_phases
+
+        return fsm_extract_phases(raw, family=family)
+
+    def test_content_is_extracted_from_the_recipient_channel(self):
+        assert self._phases(self.RAW)["C"].strip() == "943"
+
+    def test_reasoning_is_captured_as_thinking_not_discarded(self):
+        t = self._phases(self.RAW)["T"]
+        assert "347+596 = 943" in t
+        assert "943" not in self._phases(self.RAW)["C"].replace("943", "", 1)
+
+    def test_declared_terminators_close_the_phase(self):
+        """<|eom|> and <|eot|> are neither in _MARKER_WORDS nor Harmony's
+        vocabulary. Untreated, `eot` leaks into content as a bare word."""
+        assert "eot" not in self._phases(self.RAW)["C"]
+        assert "eom" not in self._phases(self.RAW)["T"]
+
+    def test_post_answer_orbit_is_sealed_off(self):
+        """This model re-opens self/user and re-answers ~20x after the real
+        answer. Without a working close marker the seal never fires and the
+        self-play concatenates onto the answer."""
+        orbit = self.RAW + (
+            "<|start|>assistant to=self<|message|>b<|eom|>"
+            "<|start|>assistant to=user<|message|>OOPS<|eot|>"
+        )
+        assert self._phases(orbit)["C"].strip() == "943"
+
+    def test_recipient_syntax_in_generated_code_is_not_structural(self):
+        """``to=`` is ordinary text, not a special token, so it appears in real
+        code. Treating it as structural anywhere would DELETE the identifier
+        from written files — the bare-``<`` corruption class."""
+        code = (
+            " to=self<|message|>x<|eom|><|start|>assistant to=user<|message|>"
+            "def f(to=user):\n    return to==x  # to=self\n<|eot|>"
+        )
+        got = self._phases(code)["C"]
+        assert "def f(to=user):" in got, repr(got)
+        assert "return to==x" in got, repr(got)
+        assert "# to=self" in got, repr(got)
+
+    def test_channel_token_families_are_unaffected(self):
+        """The regression guard: deriving the vocabulary must leave every
+        family that already worked byte-identical."""
+        harmony = (
+            "<|channel|>analysis<|message|>Need to add.<|end|>"
+            "<|start|>assistant<|channel|>final<|message|>943"
+        )
+        assert self._phases(harmony, "harmony")["C"].strip() == "943"
+        assert self._phases(harmony, "harmony")["T"].strip() == "Need to add."
+        for fam in ("qwen", "chatml", "glm4", "olmo"):
+            assert self._phases("<think>hmm</think>943", fam)["C"].strip() == "943"
+
+    def test_vocabulary_is_derived_from_the_spec_not_hardcoded(self):
+        from core.featurizer import _channel_vocab, _recipient_form
+
+        names, word, sep, closes = _channel_vocab("muse-glimmer")
+        assert (word, sep) == ("to", "=")
+        assert {"eom", "eot"} <= closes
+        assert names["self"].value == "C_AN" and names["user"].value == "C_FI"
+        # Harmony's channel token carries <|, so it has no recipient form.
+        assert _recipient_form("<|channel|>") == ("", "")
+        _, hword, hsep, _ = _channel_vocab("harmony")
+        assert (hword, hsep) == ("", "")

@@ -108,6 +108,100 @@ _CHANNEL_NAMES: dict[str, ObsCategory] = {
     "functions": ObsCategory.CHAN_TOOL,
 }
 
+
+def _recipient_form(channel_token: str) -> tuple[str, str]:
+    """Split a BARE-TEXT channel token into (word, separator).
+
+    Harmony names its channel with a special token — ``<|channel|>final`` —
+    and the atom pattern hands that to us pre-delimited. Muse-Glimmer names
+    the same concept as a RECIPIENT in plain text: ``<|start|>assistant
+    to=self<|message|>``. There is no ``<|`` to open a marker context, so the
+    delimiter-aware recognition below never fires and the channel name is
+    just another content word.
+
+    Returns ("", "") for any token carrying ``<|`` (i.e. every family that
+    already worked), which is what keeps this a no-op for them.
+    """
+    tok = (channel_token or "").strip()
+    if not tok or "<|" in tok:
+        return "", ""
+    # Trailing non-word char is the separator; the leading word is the anchor.
+    if not tok[-1].isalnum() and tok[:-1].isalnum():
+        return tok[:-1].lower(), tok[-1]
+    return "", ""
+
+
+def _at_recipient_head(atoms: list["Atom"]) -> bool:
+    """Is the recipient separator sitting at a genuine MESSAGE HEAD?
+
+    ``to=`` is not a special token, so unlike ``<|channel|>`` it can occur in
+    ordinary generated code (``call(to=user)``, ``return to==x``). Treating it
+    as structural everywhere would label the identifier D and DELETE it from
+    written files — the same class of corruption the bare-``<`` note above
+    records. So the recipient form only counts where the grammar can actually
+    put it: immediately after ``<|start|>ROLE`` , or at the head of the stream
+    (our generation prompt ends with ``<|start|>assistant``, so the model's
+    first emitted atoms are `` to=self``).
+    """
+    if len(atoms) <= 2:
+        return True
+    tail = atoms[-5:]
+    if len(tail) < 5:
+        return False
+    return [a.category for a in tail] == [
+        ObsCategory.MARKER_START,
+        ObsCategory.ANGLE_PIPE_CLOSE,
+        ObsCategory.WORD,  # role, e.g. "assistant"
+        ObsCategory.WHITESPACE,
+        ObsCategory.WORD,  # the recipient anchor, e.g. "to"
+    ]
+
+
+def _channel_vocab(
+    family: str | None,
+) -> tuple[dict[str, ObsCategory], str, str, set[str]]:
+    """(channel names, recipient word, recipient separator, close words).
+
+    DERIVED from ``formats/<family>.yaml``, never hardcoded. The channel
+    *shape* was already derived (see fsm_labeller._ThinkShape); the channel
+    *vocabulary* was not, and that gap is what shipped Muse-Glimmer with
+    every completion empty: the FSM starts in DELIM and leaves it only when a
+    channel name it recognises is followed by ``<|message|>``. Muse's names
+    are "self"/"user", so no transition ever fired and the whole stream —
+    reasoning AND the correct answer — was labelled D and discarded.
+
+    Falls back to the Harmony table for unknown/absent families, so callers
+    that pass no family behave exactly as before.
+    """
+    names = dict(_CHANNEL_NAMES)
+    if not family:
+        return names, "", "", set()
+    try:
+        from formats.registry import load_schema
+
+        s = load_schema(family)
+    except Exception:  # noqa: BLE001 — extraction must survive a bad family
+        return names, "", "", set()
+    think = s.thinking
+    if think.channel_name:
+        names[think.channel_name.lower()] = ObsCategory.CHAN_ANALYSIS
+    if think.content_channel:
+        names[think.content_channel.lower()] = ObsCategory.CHAN_FINAL
+    word, sep = _recipient_form(think.channel_token)
+    # Every terminator the family declares is a phase close, exactly like
+    # Harmony's <|end|>. Muse needs BOTH: <|eom|> closes the reasoning message
+    # and <|eot|> closes the turn — neither is in _MARKER_WORDS, so without
+    # this the turn never resets, `eot` leaks into content as a bare word, and
+    # the single_turn seal never fires (the model's post-answer orbit then
+    # concatenates onto the real answer).
+    closes = {
+        (getattr(s.tokens, name, "") or "").strip("<|>").lower()
+        for name in ("thinking_close", "msg_close", "gen_stop", "history_close")
+    }
+    closes.discard("")
+    return names, word, sep, closes - set(_MARKER_WORDS)
+
+
 # ── Tokenization regex ────────────────────────────────────────────────
 # Splits text into structural atoms. Order matters — more specific
 # patterns must come before general ones.
@@ -134,7 +228,7 @@ _ATOM_PATTERN = re.compile(
 )
 
 
-def featurize(text: str) -> list[Atom]:
+def featurize(text: str, family: str | None = None) -> list[Atom]:
     """Convert raw model output text into a sequence of structural atoms.
 
     Marker words are only classified as markers when they appear inside
@@ -155,12 +249,21 @@ def featurize(text: str) -> list[Atom]:
     The bare word ``return`` in Python code is classified as a regular
     WORD; only ``<|return|>`` is MARKER_RETURN.
 
+    Channel names are family-derived (see ``_channel_vocab``). Families whose
+    channel is a RECIPIENT in plain text (``to=self``) rather than a special
+    token (``<|channel|>analysis``) are recognised through the same
+    ``after_channel_marker`` path, set by the recipient separator instead of
+    by ``<|channel|>``.
+
     Args:
         text: Raw model output (before any delimiter stripping).
+        family: Format family driving the channel vocabulary. ``None`` keeps
+            the Harmony table — the historical behaviour for every caller.
 
     Returns:
         List of Atom objects, each with a text span and observation category.
     """
+    chan_names, recip_word, recip_sep, close_words = _channel_vocab(family)
     atoms: list[Atom] = []
     # Track which delimiter opened the current marker context.
     # The trigger matters because Mistral's bracket-delimited markers
@@ -236,6 +339,19 @@ def featurize(text: str) -> list[Atom]:
         elif kind == "code_char":
             cat = ObsCategory.CODE_CHAR
             marker_context = None
+            # Recipient form (`to=`): the separator plays the structural role
+            # <|channel|> plays for Harmony, so the NEXT word is a channel
+            # name. Anchored on the preceding word so a bare `=` in code is
+            # untouched, and never set for families with a `<|`-delimited
+            # channel token (recip_sep is "" for them).
+            if (
+                recip_sep
+                and raw == recip_sep
+                and atoms
+                and atoms[-1].text.lower() == recip_word
+                and _at_recipient_head(atoms)
+            ):
+                after_channel_marker = True
         elif kind == "word":
             lower = raw.lower()
             cat = ObsCategory.WORD  # default — most words are content
@@ -260,8 +376,12 @@ def featurize(text: str) -> list[Atom]:
                 # <|message|> <|channel|> ...): full marker + channel lookup.
                 if lower in _MARKER_WORDS:
                     cat = _MARKER_WORDS[lower]
-                elif lower in _CHANNEL_NAMES:
-                    cat = _CHANNEL_NAMES[lower]
+                elif lower in close_words:
+                    # Family-declared terminator (<|eom|> / <|eot|>) — a phase
+                    # close, same role as Harmony's <|end|>.
+                    cat = ObsCategory.MARKER_END
+                elif lower in chan_names:
+                    cat = chan_names[lower]
             elif marker_context == "angle":
                 # Bare '<' / '</': the ONLY marker that legitimately uses a bare
                 # angle bracket is the ChatML inline tag <think>/</think>. The
@@ -274,9 +394,11 @@ def featurize(text: str) -> list[Atom]:
                 # corruption note.
                 if lower == "think":
                     cat = ObsCategory.MARKER_THINK
-            elif after_channel_marker and lower in _CHANNEL_NAMES:
-                # Channel name right after <|channel|> — e.g. "final", "analysis"
-                cat = _CHANNEL_NAMES[lower]
+            elif after_channel_marker and lower in chan_names:
+                # Channel name right after <|channel|> (Harmony: "final",
+                # "analysis") or after the recipient separator (Muse: "self",
+                # "user").
+                cat = chan_names[lower]
 
             marker_context = None
             after_channel_marker = False
