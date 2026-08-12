@@ -173,6 +173,16 @@ model:
   kv_unified: true
   resident_seq_cache: true
   context_refresh_drain_s: 300
+  # VISION. muse was the most faithful figure transcriber in the 2026-08-11
+  # bake-off (145/192). The projector is 1.40GB and binds the MODEL, not a
+  # context, so it costs no second weight load — just a private single-seq
+  # context that the pool never sees. Budget sweep 2026-08-12: no ceiling,
+  # answers a dense figure in ~1500 tokens (3200 and 6400 both stop naturally).
+  mmproj_path: /Users/lah-rb/.lmstudio/models/meta-models/Muse-Glimmer-30B-GGUF/mmproj-kquant.gguf
+  vision_n_ctx: 8192
+  vision_image_roots:
+    - "~/ouroboros-runs"
+    - "~/corpora"
 
 prompt:
   persona_file: "./knowledge/SOUL.md"
