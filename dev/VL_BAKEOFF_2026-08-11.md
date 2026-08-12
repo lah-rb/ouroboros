@@ -110,3 +110,93 @@ Muse's 5 fabrication figures are properties of the figure, not the model.
   for LLMVP vision: bound `max_tokens` on the vision endpoint and treat a
   zero-token vision response as a budget symptom, not a broken model.
   Repro: `dev/deepstack_handler_probe.py`.
+
+---
+
+# Addendum, 2026-08-12 — paired blind re-judge of the endpoint answers
+
+Two questions, one run: does the 2,048 `max_tokens` cap suppress the endpoint's
+real quality, and does `mineralogy`'s large fabrication count survive at full
+budget?
+
+**Method.** The same 10-figure references and rubric. For each of the 5 figures
+whose first endpoint run hit the cap, ONE judge received ONE bundle holding the
+capped answer and an uncapped re-run (server default, 16,384) as anonymous
+candidates A/B under a per-figure shuffle. Pairing them inside one bundle is the
+point: a plain re-score compares today's judge against this morning's, and
+judge-strictness drift would be indistinguishable from a real change. Judges
+were not told a fabrication count was under investigation.
+
+| figure | capped | untruncated | fabs capped | fabs untrunc |
+|---|---|---|---|---|
+| card_ocr | 18/18 | 16/18 | 2 | 2 |
+| ir_spectra | 9/18 | 9/18 | 1 | 2 |
+| refidx_2panel | 15/18 | 15/18 | 1 | 2 |
+| mineralogy | 16/18 | 16/18 | **13** | **12** |
+| lunar_b | 13/18 | 12/18 | 0 | 0 |
+| **total** | **71/90 (78.9%)** | **68/90 (75.6%)** | **17** | **18** |
+
+**The two are the same within noise, and the cap explains none of it.** The
+first reading of this table said "removing the cap is NET NEGATIVE"; that is
+WRONG and the error is methodological, not arithmetic. The uncapped answers are
+FRESH GENERATIONS, not the capped ones extended — so every difference between
+the columns is sampling variation at temperature 0.2, of which the cap is at
+most one contributor and cannot be isolated. Three of five figures are
+identical (9/9, 15/15, 16/16); the whole delta is -2 on one figure and -1 on
+another. A 3-fact spread over 90 with n=1 per cell supports no causal claim in
+either direction.
+
+What the table DOES support: the endpoint's quality is stable across budgets,
+so the cap was never the confound the morning's reading feared. Leave the
+generation budget alone. Truncating a fully formed answer is not a quality
+lever, and nothing here argues for making one.
+
+**A real defect, independent of the scores.** The vision path bypasses LLMVP's
+FSM extraction AND its `single_turn` seal, so muse's known post-answer orbit
+runs unchecked. Judges independently reported duplicated restatements on three
+figures and, on `lunar_b`, the raw marker `<|start|>assistant to=user<|message|>`
+verbatim mid-answer. It appears in CAPPED and UNCAPPED answers alike, so it is
+a property of the path, not of the budget — which is also why it explains the
+`lunar_b` token anomaly (2,048 once, 1,219 next) without implicating the cap:
+one sample orbited, the other did not.
+
+The fix is the SEAL, not a smaller budget. Honouring the family's own
+end-of-turn token stops a finished turn from restarting; that is the opposite
+of truncating a fully formed answer, and it is what the text path already does.
+
+**The mineralogy fabrication is REAL and STABLE — 13 vs 12, not a truncation
+artifact.** The useful part is the judge's decomposition: **10 of them are
+invented bar-segment compositions**, not invented text. The model sees a
+stacked bar, then supplies plausible mineral names and percentages for
+categories the reference states are absent — e.g. quartz/clays/carbonates in
+the Iceland bars, which have none. Only 2-3 are text-level (the unreadable
+caption, the clipped page number, an unprinted axis unit).
+
+So the risk to a corpus is not mainly "it quotes captions it cannot read". It
+is **invented quantitative composition on segmented figures**, which is exactly
+the shape that reads as data. `numeric_overlap_rate` is the existing advisory
+signal and should catch it: invented percentages will not appear in the paper's
+prose.
+
+**Judge consistency.** The same five capped answers scored 72/90 this morning
+and 71/90 here, by different judges — a 1-fact spread, which is the strongest
+evidence yet that the earlier 155/192 figure is stable.
+
+**Consequences.**
+
+1. **Leave the generation budget alone.** Neither raising nor lowering it is
+   supported. The morning's "the cap is hiding quality" reading and the first
+   draft of this addendum's "the cap is helping" reading are both artefacts of
+   reading n=1 differences as signal.
+2. **Fix the seal and the leak** — the format family's terminators on the
+   vision path, and strip control tokens before returning. Justified by the
+   markers appearing in returned text at all, not by any score.
+3. **Fabrication is a PROMPTING problem, and that is where to work.** The model
+   invents composition numbers on segmented figures under a prompt that already
+   says "a stated uncertainty is worth more than a confident invention" — so
+   the existing nudge is not reaching this failure mode. Candidate levers, none
+   yet tested: naming the segmented-figure case explicitly, asking for
+   per-segment confidence, or asking it to state which categories it can and
+   cannot resolve BEFORE giving percentages. Test them against these same 5
+   figures and this same paired protocol; the references and rubric are the
+   held-out set that makes that measurable.
