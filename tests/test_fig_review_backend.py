@@ -6,10 +6,11 @@ pinned here:
 
   TRANSPORT — no VLM subprocess per dispatch; one HTTP call per figure to a
   server that is already resident.
-  MODEL — the old FIG_MODEL (Qwen3-VL-8B-8bit) was a "mid-size default"
-  chosen before the 2026-08-11 bake-off and never entered in it. The
-  endpoint serves that bake-off's winner instead, and which model that is
-  belongs to LLMVP's config rather than a constant here.
+  MODEL — the old FIG_MODEL (Qwen3-VL-8B-8bit) was a "mid-size default" that
+  the 2026-08-11 bake-off had already beaten: its whole family lost the
+  initial pass on speed and quality. The endpoint serves that bake-off's
+  winner instead, and which model that is belongs to LLMVP's config rather
+  than a constant here.
 
 The provenance tests are the load-bearing ones. figtext_model must come
 from the sidecar the run actually wrote, because under the llmvp backend
@@ -100,12 +101,22 @@ async def test_the_default_dispatch_targets_llmvp_and_names_no_model(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_mlx_opt_in_still_carries_its_model(monkeypatch):
-    """mlx_vlm.server loads per request, so the name IS the model — the
-    opt-in is useless without it."""
+async def test_mlx_opt_in_names_no_model_unless_one_is_configured(monkeypatch):
+    """The old default (Qwen3-VL-8B) was retired and its weights deleted.
+    Keeping the name would make this path silently re-download 9.2GB of a
+    beaten model; fig_review fails fast on a missing --model instead."""
+    monkeypatch.delenv("OUROBOROS_FIG_MLX_MODEL", raising=False)
     cmd = await _dispatch(monkeypatch, "mlx")
     assert cmd[cmd.index("--vl-backend") + 1] == "mlx"
-    assert cmd[cmd.index("--model") + 1] == ca.FIG_MODEL
+    assert "--model" not in cmd
+
+
+@pytest.mark.asyncio
+async def test_mlx_opt_in_carries_an_explicitly_configured_model(monkeypatch):
+    """mlx_vlm.server loads per request, so the name IS the model."""
+    monkeypatch.setenv("OUROBOROS_FIG_MLX_MODEL", "mlx-community/Some-VL-8bit")
+    cmd = await _dispatch(monkeypatch, "mlx")
+    assert cmd[cmd.index("--model") + 1] == "mlx-community/Some-VL-8bit"
 
 
 @pytest.mark.asyncio

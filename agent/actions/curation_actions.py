@@ -321,15 +321,23 @@ _FIG_TOOL_SCRIPT = "tools/fig_review/fig_review.py"
 # constant in a curation action.
 #
 # The retired constant was "mlx-community/Qwen3-VL-8B-Instruct-8bit", marked
-# "M6's vision bake-off decides the production model; mid-size default". The
-# bake-off ran on 2026-08-11 and Qwen3-VL-8B was never in it; muse-glimmer-30b
-# won at 145/192, and re-measured through this endpoint scored 155/192. So the
-# port is also the answer to the TODO.
+# "M6's vision bake-off decides the production model; mid-size default". That
+# bake-off ran on 2026-08-11 and ANSWERED it: the whole Qwen3-VL MLX family
+# (4B/8B/30B-A3B) went in with every other mmproj-bearing model in the initial
+# pass and was dominated on BOTH speed and transcription quality, so it never
+# reached the 10-figure final. muse-glimmer-30b won that final at 145/192, and
+# scored 155/192 re-measured through this endpoint. The incumbent was not
+# untested — it was beaten, and had simply never been replaced.
 #
 # `mlx` keeps the private mlx_vlm.server child, which needs no server running
 # and reaches MLX-only models; it then needs --model again.
 FIG_BACKEND_DEFAULT = "llmvp"
-FIG_MODEL = "mlx-community/Qwen3-VL-8B-Instruct-8bit"
+# NO DEFAULT MLX MODEL, deliberately. It used to be Qwen3-VL-8B-8bit; that
+# family was retired after losing the bake-off and its 45GB of weights were
+# deleted on 2026-08-12. Keeping the name here would make the mlx opt-in
+# silently re-download 9.2GB of a beaten model. Name one explicitly instead —
+# fig_review fails fast and says so when the mlx backend has no --model.
+FIG_MODEL = ""
 
 
 def _fig_backend() -> str:
@@ -338,6 +346,13 @@ def _fig_backend() -> str:
     import os
 
     return os.environ.get("OUROBOROS_FIG_BACKEND", FIG_BACKEND_DEFAULT)
+
+
+def _fig_mlx_model() -> str:
+    """The MLX model for the opt-in path — env only, no baked-in default."""
+    import os
+
+    return os.environ.get("OUROBOROS_FIG_MLX_MODEL", FIG_MODEL)
 
 
 def _active_text_model() -> str:
@@ -435,7 +450,9 @@ async def _figtext_model(effects, paper_key: str) -> str:
     """
     figtext = await _load_figtext(effects, paper_key)
     served = str((figtext or {}).get("model") or "").strip()
-    return served or FIG_MODEL.rsplit("/", 1)[-1]
+    # "unknown" beats an empty string in a dataset envelope, which would read
+    # as "no VLM involved" rather than "the sidecar did not say".
+    return served or "unknown"
 
 
 # ── Actions: goals + sweeps ───────────────────────────────────────────
@@ -630,8 +647,8 @@ async def action_fig_review_batch(step_input):
         "--vl-backend",
         _fig_backend(),
     ]
-    if _fig_backend() == "mlx":
-        cmd += ["--model", FIG_MODEL]
+    if _fig_backend() == "mlx" and _fig_mlx_model():
+        cmd += ["--model", _fig_mlx_model()]
     result = await effects.run_command(cmd, timeout=FIG_TIMEOUT_S)
 
     reports: dict[str, dict] = {}

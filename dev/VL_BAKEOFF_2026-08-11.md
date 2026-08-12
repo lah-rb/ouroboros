@@ -7,6 +7,18 @@ tell a capability gap from a fluke — and it turned out they could not.
 
 ## Method
 
+**The field, and what was already eliminated.** An initial pass ran EVERY
+mmproj-bearing model available, which included the whole Qwen3-VL MLX family
+(4B / 8B / 30B-A3B). That family was dominated on BOTH axes — speed and
+transcription quality — by the larger suite, and did not advance. The five
+entrants below are the survivors, not the whole field.
+
+Recording this because the absence was later misread as "never benched": the
+incumbent `FIG_MODEL` was Qwen3-VL-8B, and a reader who saw it missing from
+the results table could conclude it was untested rather than beaten. It was
+beaten. (Operator correction, 2026-08-12 — the claim "never in it" in commit
+2e72752's message and in the code comments it introduced is WRONG.)
+
 **Figures.** 10 held out from the same 37-figure extraction pool the screen
 drew from, spanning 5 papers and 4 aspect classes, chosen for mixed figure
 TYPE rather than mixed topic: stick pattern, histogram, dense-text card,

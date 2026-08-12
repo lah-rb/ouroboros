@@ -13,11 +13,12 @@ the opt-in, not the arrangement.
 Two things changed together, deliberately. The TRANSPORT: no VLM subprocess
 per dispatch, one HTTP call per figure to a server that is already resident,
 so the figure work costs no second model load. And the MODEL: the old
-FIG_MODEL (Qwen3-VL-8B-8bit) was a "mid-size default" picked before the
-2026-08-11 bake-off and never entered in it; the endpoint serves the winner
-of that bake-off instead. Model choice now belongs to LLMVP's config, which
-is the point — this tool asks for a figure to be read and does not decide
-what reads it.
+FIG_MODEL (Qwen3-VL-8B-8bit) was a "mid-size default" that the 2026-08-11
+bake-off had already beaten — its whole family was dominated on speed and
+quality in the initial pass — and simply never got replaced. The endpoint
+serves that bake-off's winner. Model choice now belongs to LLMVP's config,
+which is the point: this tool asks for a figure to be read and does not
+decide what reads it.
 
 Per paper: for each databank/figures/<paper_key>/fig_NN.png, locate its
 reference in the extracted markdown, take the surrounding paragraphs as
@@ -139,10 +140,11 @@ def _wait_health(port: int, timeout: float = 180.0) -> bool:
 # original arrangement, kept because it needs nothing else running.
 #
 # THE DEFAULT IS ALSO A MODEL CHANGE, and that is the point. FIG_MODEL was
-# Qwen3-VL-8B-8bit, chosen as a "mid-size default" BEFORE the 2026-08-11
-# bake-off and never entered in it. The endpoint serves the bake-off winner
-# instead — muse-glimmer-30b, 145/192 on the 10-figure held-out set against
-# four rivals, and 155/192 re-measured through this very endpoint.
+# Qwen3-VL-8B-8bit, a "mid-size default" that the 2026-08-11 bake-off beat:
+# the whole Qwen3-VL MLX family entered the initial pass with every other
+# mmproj-bearing model and lost on speed AND quality to the larger suite. The
+# endpoint serves the winner of the final instead — muse-glimmer-30b, 145/192
+# on the 10-figure held-out set, 155/192 re-measured through this endpoint.
 #
 # KNOWN AND ACCEPTED: muse fabricates on 5 of 10 figures, more than
 # qwen3.6-27b's 3. That is tolerable HERE specifically because figtext is a
