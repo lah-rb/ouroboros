@@ -215,3 +215,83 @@ def test_only_generic_handler_receives_chat_format():
     src = inspect.getsource(mod.LlamaCppBackend._create_vision_instance)
     assert "GenericMTMDChatHandler" in src, "the chat_format guard is gone"
     assert 'handler_kwargs["chat_format"]' in src
+
+
+# ── vision must be INERT until called ─────────────────────────────────
+
+
+def test_text_prompt_tokens_are_identical_with_and_without_a_projector():
+    """THE golden. Declaring a projector must not move one token of the text
+    path.
+
+    The text path renders through formats/*.yaml into list[int]; the vision
+    path never touches that machinery. If adding mmproj_path ever changed a
+    rendered prompt, every cached static prefix and every probe-verified
+    ceiling in the fleet would silently be measuring something else.
+    """
+    from inference.tokenizer import tokenize_segments
+    from formats.registry import get_renderer
+
+    class _Tok:
+        """Deterministic stand-in — we are comparing two renderings, not
+        exercising a real vocabulary."""
+
+        def tokenize(self, text, add_bos=False, special=False):
+            return [len(text), sum(text) % 251]
+
+    from core.config import get_config, set_config
+    from tests.conftest import make_config
+
+    def _render_under(cfg) -> list:
+        """Render a fixed conversation through the ACTIVE config's renderer."""
+        prev = getattr(get_config, "_config", None)
+        set_config(cfg)
+        try:
+            renderer = get_renderer(get_config().model.family)
+            segments = renderer.render_system_segments(
+                persona="You are a careful engineer.", reasoning="high", tools=""
+            ) + renderer.render_user_segments("Describe the KV cache.")
+            return tokenize_segments(_Tok(), segments, add_bos=True)
+        finally:
+            if prev is not None:
+                set_config(prev)
+            else:
+                get_config._config = None
+
+    plain = _render_under(make_config())
+    with_vision = _render_under(
+        make_config(
+            model_extra={
+                "mmproj_path": "/nonexistent/mmproj.gguf",
+                "vision_handler": "qwen3vl",
+                "vision_n_ctx": 4096,
+                "vision_image_roots": ["/tmp"],
+            }
+        )
+    )
+
+    assert plain == with_vision, (
+        "declaring a projector changed the TEXT path's tokens — every cached "
+        "static prefix and probe-verified ceiling in the fleet would silently "
+        "be measuring something else"
+    )
+    assert plain, "the fixture rendered nothing; the comparison proved nothing"
+
+
+def test_preflight_counts_the_projector_only_when_configured():
+    """weights_bytes_total deliberately EXCLUDES a sibling mmproj (its
+    docstring warns a directory glob would add ~8GB to single-digit headroom).
+    That stays true; the projector is added at the preflight site instead, and
+    only when we are actually going to load it."""
+    import inspect
+
+    from inference.backends import llama_cpp_backend as mod
+
+    pre = inspect.getsource(mod.LlamaCppBackend._kv_preflight)
+    assert "mmproj_path" in pre, "preflight does not account for the projector"
+    assert "vision_bytes" in pre
+
+    wt = inspect.getsource(mod.LlamaCppBackend.weights_bytes_total)
+    assert "mmproj" in wt, "the exclusion note must survive"
+    # The exclusion itself must not have been turned into an inclusion.
+    assert "EXCLUDED" in wt or "excluded" in wt

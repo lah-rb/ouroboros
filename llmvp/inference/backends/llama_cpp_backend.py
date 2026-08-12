@@ -3607,7 +3607,33 @@ class LlamaCppBackend(BaseBackend):
         budget_gb = min(asked_gb, hard_ceiling_gb)
         clamped = budget_gb < asked_gb
 
-        total_gb = (kv_bytes + weights_bytes) / 1e9
+        # VISION ADDS TO THE BUDGET, AND ONLY WHEN CONFIGURED.
+        # weights_bytes_total() deliberately EXCLUDES a sibling mmproj-*.gguf
+        # (see its docstring — a directory glob there would silently add ~8GB
+        # to a budget measured in single-digit GB of headroom). That exclusion
+        # is correct for a text-only load and must stay, so the projector is
+        # added HERE instead, where we know we are actually going to load it.
+        # Step-3.7's projector is 7.92GB, so under-counting is not academic.
+        # The vision context's own KV rides along at n_seq_max=1.
+        vision_bytes = 0
+        mmproj = getattr(self.config.model, "mmproj_path", None)
+        if mmproj:
+            try:
+                vision_bytes += os.path.getsize(str(mmproj))
+            except OSError as exc:
+                log.warning("mmproj not readable for preflight (%s): %s", mmproj, exc)
+            v_ctx = int(getattr(self.config.model, "vision_n_ctx", 8192) or 8192)
+            text_ctx = int(getattr(self.config.model, "n_ctx", 0) or 0)
+            if kv_bytes and text_ctx:
+                vision_bytes += int(kv_bytes * (v_ctx / float(text_ctx)))
+
+        total_gb = (kv_bytes + weights_bytes + vision_bytes) / 1e9
+        if vision_bytes:
+            log.info(
+                "👁  Vision adds %.2fGB to the preflight (projector + %d-token ctx)",
+                vision_bytes / 1e9,
+                int(getattr(self.config.model, "vision_n_ctx", 8192) or 8192),
+            )
 
         # ── A PROBE-VERIFIED CEILING OUTRANKS THE ARITHMETIC ─────────
         # This n_ctx has been observed to load AND decode on this machine, so a
