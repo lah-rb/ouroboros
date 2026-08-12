@@ -365,9 +365,17 @@ model:
   # paddleocr|minicpm|llava15|llava16|moondream) or the class name.
   # Default: unset (auto by family)
   vision_handler: qwen3vl
-  # [O] Type: int — window for the vision context. Small on purpose: it is
-  # per-request and carries NO static prefix, so it needs one image plus a
-  # turn, not a session. Default: 8192
+  # [O] Type: int — window for the vision context. The 8192 default is a
+  # CONSERVATIVE INTAKE VALUE, not a recommendation: it is enough for one
+  # image plus a turn, because the vision context is per-request and carries
+  # no static prefix. Once the model is proven through the endpoint, raise it
+  # to the trained/probe-verified ceiling the same way n_ctx is raised — the
+  # context is lazy (nothing allocated until the first vision request), so the
+  # only cost is KV held for the process lifetime after the first call, and
+  # the room buys multi-image requests and long transcription turns.
+  # Preflight scales the text path's measured KV/token by this window, so a
+  # ceiling-sized value is accounted for at boot rather than discovered later.
+  # Default: 8192
   vision_n_ctx: 8192
   # [O] Type: int — reject an image larger than this rather than letting mtmd
   # OOM. Default: 33554432 (32MB)

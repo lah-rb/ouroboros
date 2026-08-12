@@ -135,10 +135,14 @@ terminal for computation; multi-source synthesis prompting patterns.
   discipline is its own feature (string-match scoring).
 - **Attached-file readers.** xlsx/pdf/csv as effects or MCP tools —
   mechanical.
-- **The hard blocker: multimodality.** A meaningful slice of GAIA needs
-  vision (some audio). LLMVP is text-only; this is a backend feature
-  (multimodal model support through the static-prefix/session
-  machinery), not a flow change. Until then: text-only subset.
+- ~~**The hard blocker: multimodality.**~~ **RESOLVED — twice.** This
+  said "LLMVP is text-only; this is a backend feature". Both halves are
+  now out of date. First the modality sidecars landed (objective-
+  conditioned VL/ASR digests at the workspace scan), which is what let
+  the GAIA run reach 50/165. Then on 2026-08-12 LLMVP itself gained a
+  native vision endpoint (POST /v1/vision — mtmd projector bound to the
+  resident model, private single-sequence context). Vision is a served
+  capability now, not a subprocess and not a gap.
 
 **Status note:** planned direction — the assistant/research mission type
 is on the intended roadmap, so GAIA becomes a natural fit when it lands.

@@ -100,11 +100,14 @@ class MissionConfig(BaseModel):
     # inherited. Default False = the one-shot search.
     deep_research: bool = False
     # Whether the mission may consult the local vision tool (vl_inspect —
-    # an isolated one-shot mlx_vlm process; LLMVP itself stays text-only by
-    # design). Set CONFIG-TIME by the overseer/adapter — deterministically
-    # for benchmarks (the GAIA adapter flips it on image attachments), by
-    # classify/design_and_plan later for auto missions. Consumed by charter/
-    # persona gates; default off keeps text-only missions unchanged.
+    # an isolated one-shot mlx_vlm process). NOTE: since 2026-08-12 LLMVP
+    # also serves vision itself over POST /v1/vision, so this flag gates the
+    # SUBPROCESS path specifically; a mission routed at the endpoint instead
+    # would not be governed by it. Set CONFIG-TIME by the overseer/adapter —
+    # deterministically for benchmarks (the GAIA adapter flips it on image
+    # attachments), by classify/design_and_plan later for auto missions.
+    # Consumed by charter/persona gates; default off leaves a mission that
+    # never looks at an image unchanged.
     vision: bool = False
     # Whether the mission may consult the local ASR tool (audio_transcribe —
     # parakeet/whisper one-shot; transcription only, no diarization). Same

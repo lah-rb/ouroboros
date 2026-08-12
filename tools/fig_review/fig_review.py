@@ -3,7 +3,16 @@
 
 Curator stage support tool. One agent dispatch = one invocation = one
 OS process owning its own mlx_vlm.server child (the extractor's
-crash-isolation model). LLMVP is text-only by design; vision runs here.
+crash-isolation model).
+
+This file used to say "LLMVP is text-only by design; vision runs here."
+That stopped being true on 2026-08-12: LLMVP now serves vision natively
+over POST /v1/vision (mtmd projector bound to the resident model, private
+single-sequence context — see llmvp/configs/reference.yaml, the VISION
+block). The MLX subprocess here is now a CHOICE, not a necessity, and its
+remaining justification is crash isolation plus the MLX-only models it can
+reach. Moving this behind the endpoint is a live option; it wants its own
+measurement, because FIG_MODEL here predates the 2026-08-11 bake-off.
 
 Per paper: for each databank/figures/<paper_key>/fig_NN.png, locate its
 reference in the extracted markdown, take the surrounding paragraphs as

@@ -9,6 +9,10 @@ A high-performance Graphql (Strawberry) server for local LLMs with static knowle
 - **Static Knowledge Base**: Memory-mapped token storage for large context windows
 - **Llama Instance Pooling**: Concurrent request handling with warm-up on startup
 - **Streaming Support**: Real-time token-by-token response streaming
+- **Vision (mtmd)**: Images as a first-class request type — `visionCompletion` /
+  `POST /v1/vision`. The projector binds the resident model (no second weight
+  load) and serves from a private single-sequence context the pool never sees,
+  so the text path is untouched. Off unless `model.mmproj_path` is set.
 - **Configuration-Driven**: YAML-based configuration system
 - **Jinja Template Integration**: Flexible chat formatting with template support
 
@@ -169,8 +173,12 @@ app:
   openai_shim: true  # Enable OpenAI-compatible REST endpoints
 ```
 
-When enabled, the following endpoint is available:
+When enabled, the following endpoints are available:
 - `POST /v1/completions` - OpenAI-compatible completion endpoint
+- `POST /v1/chat/completions` - chat-shaped messages (non-streaming)
+- `POST /v1/vision` - messages carrying image parts; requires
+  `model.mmproj_path`, and image *paths* additionally require
+  `model.vision_image_roots` (empty = paths refused, base64 only)
 
 ### REST Streaming Example
 

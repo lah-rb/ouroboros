@@ -25,7 +25,11 @@ model:
   # DENSE 128B, 88 blocks, no expert_count — the contrast arm against
   # Small-4's 119B/128-expert MoE. IQ4_XS, ~67.1GB across 3 shards (shard 1 is
   # a ~7.9MB metadata-only split). A 10GB mmproj sits alongside (this model is
-  # multimodal); we do NOT wire vision — text only for now.
+  # multimodal) and vision IS wireable now (set mmproj_path — see
+  # reference.yaml's VISION block); it is left unset here DELIBERATELY. At 67GB
+  # of weights plus an 88-block KV this config is the tightest in the fleet on
+  # memory, and a 10GB projector plus its own context is exactly the addend
+  # that would push it over. Wire it only after re-running the preflight.
   path: /Users/lah-rb/.lmstudio/models/unsloth/Mistral-Medium-3.5-128B-GGUF/Mistral-Medium-3.5-128B-IQ4_XS-00001-of-00003.gguf
   # Native context is 262144. Held at 131072 to match small-4 for
   # comparability AND because this is DENSE with 88 blocks, so its KV is far

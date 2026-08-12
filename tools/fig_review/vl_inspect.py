@@ -2,11 +2,16 @@
 """One-shot image → text: ask the local VLM a question about one image.
 
 Generic sibling of fig_review.py (same venv, same crash-isolation model:
-one invocation = one OS process owning its own mlx_vlm.server child;
-LLMVP stays text-only by design — vision runs here). Built for agent
-missions that hit an image they cannot read as text (GAIA attachments,
-UI screenshots): the mission's objective carries the invocation line and
-the answer comes back on stdout.
+one invocation = one OS process owning its own mlx_vlm.server child).
+Built for agent missions that hit an image they cannot read as text (GAIA
+attachments, UI screenshots): the mission's objective carries the
+invocation line and the answer comes back on stdout.
+
+The header used to say "LLMVP stays text-only by design — vision runs
+here". Not true since 2026-08-12: LLMVP serves vision natively over POST
+/v1/vision. This path stays because it is a self-contained one-shot that
+reaches MLX models and survives its own crashes, not because the server
+cannot see. See fig_review.py's header for the same note.
 
 Usage:
   .venv/bin/python vl_inspect.py --image photo.jpg \

@@ -178,8 +178,22 @@ model:
   # context, so it costs no second weight load — just a private single-seq
   # context that the pool never sees. Budget sweep 2026-08-12: no ceiling,
   # answers a dense figure in ~1500 tokens (3200 and 6400 both stop naturally).
+  #
+  # PROVEN THROUGH THE ENDPOINT 2026-08-12: the same 10 held-out figures and
+  # the same question, served by POST /v1/vision, scored 155/192 against the
+  # bake-off's recorded 145/192. Not a clean like-for-like (bigger budget, not
+  # blind), but well inside the band — the endpoint assembles the prompt the
+  # way the direct harness does.
+  #
+  # vision_n_ctx raised 8192 -> 131072, the model's trained ceiling, which is
+  # the standing practice once a model has been proven on the framework. It is
+  # LAZY: nothing is allocated until the first vision request, and the text
+  # path never touches it. Once built it holds its own KV for the process
+  # lifetime — ~7GB at this ceiling, on top of the text path's ~30GB against a
+  # 123.7GB budget. Headroom for many images in one request, or a long
+  # transcription turn, instead of one figure and a short answer.
   mmproj_path: /Users/lah-rb/.lmstudio/models/meta-models/Muse-Glimmer-30B-GGUF/mmproj-kquant.gguf
-  vision_n_ctx: 8192
+  vision_n_ctx: 131072
   vision_image_roots:
     - "~/ouroboros-runs"
     - "~/corpora"
