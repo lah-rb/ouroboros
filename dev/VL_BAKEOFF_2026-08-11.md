@@ -164,19 +164,34 @@ The fix is the SEAL, not a smaller budget. Honouring the family's own
 end-of-turn token stops a finished turn from restarting; that is the opposite
 of truncating a fully formed answer, and it is what the text path already does.
 
-**The mineralogy fabrication is REAL and STABLE — 13 vs 12, not a truncation
-artifact.** The useful part is the judge's decomposition: **10 of them are
-invented bar-segment compositions**, not invented text. The model sees a
-stacked bar, then supplies plausible mineral names and percentages for
-categories the reference states are absent — e.g. quartz/clays/carbonates in
-the Iceland bars, which have none. Only 2-3 are text-level (the unreadable
-caption, the clipped page number, an unprinted axis unit).
+**The mineralogy result is REAL and STABLE — 13 vs 12 — but it is a MISS ON A
+HARD TASK, not fabrication.** The rubric's term is "fabrication" because it
+scores any stated-but-absent content that way, and this addendum first carried
+that word into the analysis. The operator reviewed the figure against the
+reference and rejected the framing, correctly: the disputed segments are 1-5 %
+slivers a few pixels tall in a 13-bar stacked chart. Getting them wrong is a
+resolution limit, not confabulation, and the distinction changes the remedy —
+you do not prompt a model out of an eyesight problem the way you prompt it out
+of a habit.
 
-So the risk to a corpus is not mainly "it quotes captions it cannot read". It
-is **invented quantitative composition on segmented figures**, which is exactly
-the shape that reads as data. `numeric_overlap_rate` is the existing advisory
-signal and should catch it: invented percentages will not appear in the paper's
-prose.
+The mechanism is **pattern completion across the bar series**. Nine of the 13
+bars genuinely end `… carbonates, iron oxides` at the top of the stack; the
+model applies that template to the exceptions. It reads Niger and Bodele with
+carbonates (~5 %, ~10 %) where the reference says there are none, and gives the
+two Iceland bars quartz/clays/carbonates which they do not have. Same phantom,
+same stack position, same thin-segment magnitude.
+
+Two properties support the "resolution, not invention" reading:
+
+* **Large segments are read well.** Morocco illite 38 % vs 38.5 % measured;
+  Namib-1 total clays 75 % vs 75.5 %; Kuwait 55 % vs 57 %. Accuracy collapses
+  only at the slivers.
+* **The percentages sum to ~100**, so an invented sliver has to be funded out
+  of a real segment — which is why Iceland-H feldspars reads 40 %/30 % against
+  a true 53 %. The error propagates into numbers that ARE real.
+
+Downstream, `numeric_overlap_rate` remains the right advisory: these
+percentages will not appear in the paper's prose either way.
 
 **Judge consistency.** The same five capped answers scored 72/90 this morning
 and 71/90 here, by different judges — a 1-fact spread, which is the strongest

@@ -1293,6 +1293,8 @@ async def run_vision_completion(
         resolve_image_part,
         to_data_uri,
     )
+    from inference.vision_text import clean as vision_clean
+    from inference.vision_text import stop_strings as vision_stop_strings
 
     mcfg = config.model
     if not getattr(mcfg, "mmproj_path", None):
@@ -1338,6 +1340,16 @@ async def run_vision_completion(
     resolved_max = resolve_max_tokens(max_tokens)
     resolved_temp = resolve_temperature(temperature)
 
+    # SEAL THE TURN WITH THE FAMILY'S OWN TERMINATOR. The mtmd handler builds
+    # its prompt from the model's chat template and never consults the FSM, so
+    # without this a family that reopens the assistant role between messages
+    # simply re-answers — measured on muse, which emitted
+    # `<|start|>assistant to=user<|message|>` mid-answer and started again.
+    # Honouring the terminator the model itself emits is what the text path
+    # has always done; it is not a cap and costs nothing when the model stops
+    # correctly on its own.
+    stops = vision_stop_strings(mcfg.family)
+
     # Serialize with text generation: one Metal command queue, and the handler
     # drives its own decode loop outside the engine's scheduling.
     t0 = _time.time()
@@ -1347,13 +1359,16 @@ async def run_vision_completion(
                 messages=prepared,
                 max_tokens=resolved_max,
                 temperature=resolved_temp,
+                **({"stop": stops} if stops else {}),
             )
         )
     decode_ms = (_time.time() - t0) * 1000.0
 
     choice = (result.get("choices") or [{}])[0]
     msg_out = choice.get("message") or {}
-    text = (msg_out.get("content") or "").strip()
+    # Then repair what still arrives: a stop string fires on an exact match,
+    # and a family with two closers has more than one way to leak.
+    text = vision_clean(msg_out.get("content") or "", mcfg.family)
     usage = result.get("usage") or {}
     generated = int(usage.get("completion_tokens") or 0)
 
