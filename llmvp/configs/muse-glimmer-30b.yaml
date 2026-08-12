@@ -105,10 +105,39 @@
 # today through llama-cpp-python's mtmd path outside LLMVP, where it was
 # the most faithful figure transcriber in the 2026-08-11 bake-off.
 #
-# ── Reasoning ───────────────────────────────────────────────────────
+# ── Reasoning: the PREFILL dial works, the PER-REQUEST dial does not ─
 # The card exposes low/medium/high/xhigh via a `Reasoning strength:` system
-# line and recommends high/xhigh for agentic work, which is what we run.
-# thinking_mode pins the resident head; per_request lets the router move it.
+# line and recommends high/xhigh for agentic work.
+#
+# MEASURED 2026-08-11, two structured shapes (strict-JSON extraction and a
+# one-word screening decision), 2 samples each:
+#
+#   per-request `reasoning:` override, prefix pinned high
+#     json      low 302 tok · medium 227 · high 290
+#     decision  low 155 tok · medium 182 · high 173
+#   NON-MONOTONIC in both, reasoning fraction stuck at 88-94% regardless.
+#   It is a SILENT NO-OP. The level lives in the `Reasoning strength:` line
+#   inside the STATIC PREFIX, so a per-request override cannot move it
+#   without reasoning_head_swap, which this config does not enable. The
+#   prefill half of a dial is the half a model follows.
+#
+#   thinking_mode in the PREFIX (rebuild the tokens.bin to apply)
+#     json      high 240-290 tok / 12-15s  ->  low 151-178 tok / 7.6-9.0s
+#     decision  high 173-177 tok / 8.8s    ->  low 102-149 tok / 5.1-7.5s
+#   ~35-40% fewer tokens per turn, IDENTICAL answers in every sample.
+#
+# SET TO low, deliberately against the card's high/xhigh recommendation,
+# because the first workload is a literature SCRAPE: hundreds of short
+# screening decisions where the model was spending ~90% of every turn
+# thinking about a one-word answer. At 19.3 tok/s that overhead is the
+# difference between a mission that finishes and one that agent_timeouts —
+# our historical losses are inference VOLUME, not capability. Raise it back
+# to high for coding or long-horizon agentic work, and REBUILD the prefix
+# when you do; changing it per request will do nothing.
+#
+# Caveat on the evidence: two prompt shapes, not a full eval. Reasoning is
+# still ~85-92% of output at low, so this trims the dial, it does not
+# disable thinking.
 
 app:
   host: "0.0.0.0"
@@ -138,7 +167,7 @@ model:
   flash_attn_type: auto
   n_batch: 2048
   thinking: "per_request"
-  thinking_mode: high
+  thinking_mode: low
   # ARCHITECTURE-determined, not strategy-determined: sliding_window=2048.
   swa_full: true
   kv_unified: true
