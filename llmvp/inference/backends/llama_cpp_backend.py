@@ -211,6 +211,11 @@ class LlamaCppBackend(BaseBackend):
         self._engine_seats: List[Any] = []  # SeqSlot seats (batched mode)
         self._batched_map: Any = None  # memoized SeqMap (batched mode)
         self._all_instances: List[Any] = []  # For shutdown cleanup
+        # The mtmd vision instance, built on first vision request. NOT in
+        # _all_instances and NOT in any queue — it must never be handed out as
+        # a pool slot (see _create_vision_instance for why that would silently
+        # corrupt the text path's KV bands). Shutdown closes it explicitly.
+        self._vision_instance: Optional[Any] = None
         self._llama_module = None
         self._tokenizer = None
         # Hybrid/recurrent model support
@@ -718,6 +723,112 @@ class LlamaCppBackend(BaseBackend):
         inst.draft_model = self._make_draft()
 
         return inst
+
+    # ------------------------------------------------------------------
+    # Vision (mtmd) — a private single-seq instance, never in the pool
+    # ------------------------------------------------------------------
+
+    def _create_vision_instance(self, primary: Any) -> Any:
+        """A private instance carrying the mtmd chat handler.
+
+        WHY THIS IS NOT A POOL SLOT, AND MUST NEVER BECOME ONE.
+        ``MTMDChatHandler.__call__`` is hard-coded to ``seq_id=0`` and, on a
+        prefix mismatch, calls ``llama._ctx.memory_clear(True)`` — which clears
+        EVERY sequence, not just its own. On a pooled instance that single call
+        destroys SEQ_STATIC, the flow band, the snapshot band and every pinned
+        reasoning head, and the text path keeps running afterwards producing
+        wrong output with no error at all. Nothing downstream would catch it.
+
+        Giving vision its own context with ``n_seq_max=1`` makes the handler's
+        assumption TRUE instead of dangerous: seq 0 is the only sequence it
+        can reach, and clearing it destroys nothing else.
+
+        Weights are shared with the primary (``model=primary._model``) — the
+        projector binds the MODEL, not a context (mtmd_init_from_file), so this
+        costs one small context plus the mmproj, never a second weight load.
+
+        The handler is attached HERE and never to the primary: pool slots are
+        built with ``copy.copy(primary)``, which does not reset ``chat_handler``
+        — it would be aliased into every slot with a single-owner ``close()``.
+        """
+        import copy
+
+        from llama_cpp import internals
+
+        from inference.vision_handlers import load_handler_class
+
+        mcfg = self.config.model
+        n_ctx = int(getattr(mcfg, "vision_n_ctx", 8192) or 8192)
+
+        inst = copy.copy(primary)
+        inst._stack = contextlib.ExitStack()
+
+        # Own params: our own window AND a single sequence.
+        params = type(primary.context_params).from_buffer_copy(primary.context_params)
+        params.n_ctx = n_ctx
+        params.n_seq_max = 1
+        inst.context_params = params
+
+        inst._ctx = internals.LlamaContext(
+            model=primary._model, params=params, verbose=False
+        )
+        inst._n_ctx = n_ctx
+        inst._n_ctx_seq = n_ctx
+        inst._persona_n_ctx = None
+        inst._batch = internals.LlamaBatch(
+            n_tokens=primary.n_batch, embd=0, n_seq_max=1, verbose=False
+        )
+        inst.input_ids = np.ndarray((n_ctx,), dtype=np.intc)
+        logits_rows = n_ctx if primary._logits_all else 1
+        inst.scores = np.ndarray((logits_rows, primary._n_vocab), dtype=np.single)
+        inst._candidates = internals.LlamaTokenDataArray(n_vocab=primary._n_vocab)
+        inst.n_tokens = 0
+        inst._mirostat_mu = ctypes.c_float(2.0 * 5.0)
+        inst._sampler = None
+        inst._sampling_ctx = None
+        inst.cache = None
+        inst._hybrid_cache_mgr = None
+        # Speculative decoding is off for vision: the draft model has no
+        # projector and the handler drives its own decode loop.
+        inst.draft_model = None
+
+        handler_cls = load_handler_class(
+            mcfg.family, getattr(mcfg, "vision_handler", None)
+        )
+        inst.chat_handler = handler_cls(
+            chat_format=None, mmproj_path=str(mcfg.mmproj_path), verbose=False
+        )
+        log.info(
+            "👁  Vision instance ready — handler=%s n_ctx=%d mmproj=%s",
+            handler_cls.__name__,
+            n_ctx,
+            os.path.basename(str(mcfg.mmproj_path)),
+        )
+        return inst
+
+    async def get_vision_instance(self) -> Any:
+        """The vision instance, built on first use.
+
+        Lazy so a config that declares a projector pays nothing until a vision
+        request actually arrives. Built under BOTH the spawn lock (one builder)
+        and the generation guard — creating a context while a generation is
+        live on the same Metal device crashes ggml, which is the same reason
+        _jit_batch_scale_up drains first.
+        """
+        if self._vision_instance is not None:
+            return self._vision_instance
+        if not getattr(self.config.model, "mmproj_path", None):
+            raise RuntimeError(
+                "vision is not configured: set model.mmproj_path for "
+                f"{self.config.model.name!r}"
+            )
+        async with self._spawn_lock:
+            if self._vision_instance is None:  # re-check under the lock
+                async with self.generation_guard():
+                    self._vision_instance = self._create_vision_instance(
+                        self._primary_instance
+                    )
+        return self._vision_instance
 
     # ------------------------------------------------------------------
     # Model architecture detection (informational)
@@ -3113,6 +3224,20 @@ class LlamaCppBackend(BaseBackend):
             self._engine_seats = []
 
         pool_size = len(self._all_instances)
+
+        # Free the vision instance FIRST — it holds a context over the shared
+        # model plus an mtmd context of its own, and the primary's close() will
+        # not free the handler because the handler lives here, not there.
+        if self._vision_instance is not None:
+            handler = getattr(self._vision_instance, "chat_handler", None)
+            if handler is not None:
+                try:
+                    handler.close()  # frees mtmd_ctx
+                except Exception as exc:  # noqa: BLE001 — teardown must finish
+                    log.warning(f"⚠️ Error closing vision handler: {exc}")
+                self._vision_instance.chat_handler = None
+            self._close_shared_context(self._vision_instance)
+            self._vision_instance = None
 
         # Free shared instances' contexts (not the model).
         for inst in reversed(self._all_instances):

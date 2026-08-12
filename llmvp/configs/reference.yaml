@@ -335,6 +335,51 @@ model:
   # Default: false
   reasoning_head_swap: true
 
+  # ── VISION (mtmd) ───────────────────────────────────────────────────────
+  # Setting mmproj_path is what turns the vision endpoint on. Absent = the
+  # server is text-only, which is why every config without these stays valid.
+  #
+  # COSTS NO SECOND WEIGHT LOAD. mtmd binds the llama_model, not a context, so
+  # the projector attaches to weights already resident (muse: 1.40GB beside
+  # 19.65GB). It DOES cost a private single-sequence context.
+  #
+  # THAT PRIVATE CONTEXT IS NOT OPTIONAL. MTMDChatHandler is hard-coded to
+  # seq_id=0 and calls memory_clear(True) on a prefix mismatch — on a POOLED
+  # instance that clears every sequence, destroying SEQ_STATIC, the flow band,
+  # the snapshot band and each pinned reasoning head, after which the text path
+  # keeps running and silently produces wrong output. The vision instance is
+  # therefore never a pool slot; n_seq_max=1 makes the handler's assumption
+  # true rather than dangerous.
+  #
+  # [O] Type: path — the multimodal projector beside the model.
+  # Default: unset (no vision)
+  mmproj_path: /path/to/mmproj-F16.gguf
+  # [O] Type: str — which llama-cpp-python MTMD handler renders the prompt.
+  # Unset resolves from `family` (as formats/registry.py resolves a renderer),
+  # falling back to GenericMTMDChatHandler. Name one when the family default is
+  # wrong: family handlers pin the model's own BOS/EOS/image tokens where
+  # Generic only infers a template — the leading explanation for
+  # qwen3.6-35b-a3 returning ZERO tokens under Generic in the 2026-08-11
+  # bake-off while the upstream CLI drove it fine.
+  # Accepts a short name (generic|qwen3vl|step3vl|gemma4|glm41v|glm46v|
+  # paddleocr|minicpm|llava15|llava16|moondream) or the class name.
+  # Default: unset (auto by family)
+  vision_handler: qwen3vl
+  # [O] Type: int — window for the vision context. Small on purpose: it is
+  # per-request and carries NO static prefix, so it needs one image plus a
+  # turn, not a session. Default: 8192
+  vision_n_ctx: 8192
+  # [O] Type: int — reject an image larger than this rather than letting mtmd
+  # OOM. Default: 33554432 (32MB)
+  vision_max_image_bytes: 33554432
+  # [O] Type: list[str] — directories a request may read image PATHS from.
+  # EMPTY MEANS PATHS ARE REFUSED and only inline base64 is accepted. This is a
+  # security boundary: without it the endpoint is an arbitrary file read for
+  # anything that can reach the port. Checked against the FULLY RESOLVED path,
+  # so `..` traversal and symlinks escaping the root are both rejected.
+  # Default: [] (paths disabled)
+  vision_image_roots: ["~/corpora"]
+
   # ── Session-state strategy ──────────────────────────────────────────────
   # [O] Type: bool — sessions keep token history and FULLY RE-PREFILL each
   # turn from the pristine static snapshot (safe default: save_state is

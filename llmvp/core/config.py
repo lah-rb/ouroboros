@@ -323,6 +323,40 @@ class ModelConfig(BaseModel):
     # decision layer) is a follow-up; this ships the turn-0/session install.
     reasoning_head_swap: bool = False
 
+    # ── VISION ────────────────────────────────────────────────────────
+    # The multimodal projector that sits beside a VL-capable model. Setting
+    # this is what turns the vision endpoint on; absent means text-only, which
+    # is why every existing config stays valid untouched.
+    #
+    # COSTS NO EXTRA WEIGHTS. mtmd_init_from_file binds the llama_model, not a
+    # context, so the projector attaches to the model already resident (muse:
+    # 1.40GB beside 19.65GB). What it DOES cost is a private single-seq context
+    # — see _create_vision_instance. The projector must never be attached to a
+    # pooled instance: MTMDChatHandler is hard-coded to seq_id=0 and calls
+    # memory_clear(True) on a prefix mismatch, which would obliterate
+    # SEQ_STATIC, the flow band, the snapshot band and every pinned reasoning
+    # head while the text path kept running and silently produced wrong output.
+    mmproj_path: Optional[Path] = None
+    # Which llama-cpp-python MTMD handler renders the vision prompt. None =
+    # resolve from `family` (the way formats/registry.py resolves a renderer),
+    # falling back to GenericMTMDChatHandler. Name one explicitly when the
+    # family default is wrong: the family handlers pin the model's own
+    # BOS/EOS/image tokens where Generic only infers a template, which is the
+    # leading explanation for qwen3.6-35b-a3 returning zero tokens under
+    # Generic in the 2026-08-11 bake-off.
+    vision_handler: Optional[str] = None
+    # Window for the vision context. Small on purpose — it is per-request and
+    # carries no static prefix, so it needs room for one image plus a turn,
+    # not a session.
+    vision_n_ctx: int = 8192
+    # Reject an image larger than this rather than letting mtmd OOM. 32MB.
+    vision_max_image_bytes: int = 33_554_432
+    # Directories a vision request may read image PATHS from. Empty = paths are
+    # refused entirely and only inline base64 is accepted. This is a security
+    # boundary, not a convenience: without it the endpoint is an arbitrary file
+    # read for anything that can reach the port.
+    vision_image_roots: list[str] = Field(default_factory=list)
+
     @field_validator("thinking_mode")
     @classmethod
     def _validate_thinking_mode(cls, v: Optional[str]) -> Optional[str]:
