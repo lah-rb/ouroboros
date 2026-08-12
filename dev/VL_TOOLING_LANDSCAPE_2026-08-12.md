@@ -310,3 +310,71 @@ produced a perfect arithmetic grid of impossible coordinates.
 
 All three share a shape: a plausible inference treated as a measurement. The
 corrections each took minutes; the claims would have cost days.
+
+---
+
+# REVISION — the prompt is the strongest lever, and Upscayl is harmful
+
+The operator supplied a clean crop of the left panel run through Upscayl-lite
+at 4x. Testing it properly required repairing two flaws in my first attempt
+(controls derived from the Upscayl output, so they inherited its glyphs; and a
+rewritten question containing a clause that targets the very metric). Repaired,
+the result reorders the conclusion above.
+
+## 1. The anti-listing clause dominates every pixel lever
+
+Pooling every image condition tested today by which QUESTION was used:
+
+    WITHOUT "if a category is not present in a bar, do not list it"
+      1x whole 5,5 | 2x whole 0,1 | 3x whole 0,1 | 2x halves 0,0
+      Upscayl 4x 0,5 | crop 1x 2,1          ->  7 of 12 runs produced phantoms
+
+    WITH the clause
+      Upscayl 4x 0,0 | Lanczos 4x 0,0 | crop 1x 0,0 | (and the two
+      Upscayl-derived controls, 0,0 each)   ->  0 of 10 runs produced phantoms
+
+Zero phantoms in ten runs, including at 696 and 434 prompt tokens — FEWER than
+the whole figure at 1x. The cheapest, most effective intervention found today
+is one sentence, and it costs nothing.
+
+Honest scope: the crop-adapted question differs from the original in more than
+that clause (it drops the panel-letter demand and asks explicitly for every
+bar), so "the clause" is not cleanly isolated — it is the crop-adapted wording
+as a whole. Isolating the single sentence is a one-variable follow-up.
+
+## 2. Generative upscaling REWRITES TEXT. Do not use it here.
+
+    Upscayl-lite 4x            `Bolswana` in 4/4 runs, `Alacama` in 1/4
+    Lanczos 4x from ORIGINAL   clean, 0/2
+    crop 1x   from ORIGINAL    clean, 0/2
+
+The model faithfully transcribed glyphs the upscaler invented. Against a rubric
+that rewards exact transcription including printed misspellings, an ESRGAN-class
+upscaler manufactures scored misses. Lanczos at the same output dimensions and
+the same token cost (3,093 both) is clean. **Use plain interpolation.**
+
+This is the same class of failure as everything else today — a plausible
+artefact generated where measurement was required — except here the generator
+is the preprocessing step rather than the model.
+
+## 3. Revised ranking of levers
+
+1. **Prompt** — free, largest measured effect, no token cost.
+2. **Crop to the panel** — free, deterministic, and it also removes the
+   whole-figure framing that seems to invite template completion.
+3. **Upscale with plain interpolation**, bounded by the ~3,190px long-side
+   ceiling. Real but smaller than the two above, and it costs ~3.5x tokens.
+4. **Generative upscaling** — NEGATIVE. Corrupts text.
+
+The earlier conclusion ("2x upscale + panel split") is not wrong, but it
+credited pixels for work the prompt was doing. Cheapest configuration that
+captures most of the benefit: crop to the panel, ask the question that forbids
+listing absent categories, and upscale only if the crop is small.
+
+## Incidental
+
+One Upscayl run under the original question ran away to the full 16,384-token
+budget (27,169 chars). The turn seal did not fire because the model never
+emitted its terminator — a different failure from the marker-leak orbit fixed
+in 0820ed9, and the reason a max_tokens ceiling still earns its keep as a
+backstop.
