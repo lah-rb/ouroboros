@@ -795,9 +795,17 @@ class LlamaCppBackend(BaseBackend):
         handler_cls = load_handler_class(
             mcfg.family, getattr(mcfg, "vision_handler", None)
         )
-        inst.chat_handler = handler_cls(
-            chat_format=None, mmproj_path=str(mcfg.mmproj_path), verbose=False
-        )
+        # ONLY Generic takes chat_format. The family handlers carry a fixed
+        # CHAT_FORMAT class attribute and REJECT the kwarg with a TypeError —
+        # their __init__ is (force_reasoning, add_vision_id, **kwargs) over a
+        # base of (mmproj_path, verbose, use_gpu, image_min/max_tokens).
+        handler_kwargs: dict = {
+            "mmproj_path": str(mcfg.mmproj_path),
+            "verbose": False,
+        }
+        if handler_cls.__name__ == "GenericMTMDChatHandler":
+            handler_kwargs["chat_format"] = None
+        inst.chat_handler = handler_cls(**handler_kwargs)
         log.info(
             "👁  Vision instance ready — handler=%s n_ctx=%d mmproj=%s",
             handler_cls.__name__,

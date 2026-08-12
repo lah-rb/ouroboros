@@ -76,10 +76,25 @@ Muse's 5 fabrication figures are properties of the figure, not the model.
   this" facts all turned out to be genuinely hard (a recoloured bar, an absent
   wavenumber axis, the printed space in `200 µ m`, minor-phase attributions)
   rather than out-of-place content.
-* **qwen3.6-35b-a3 needs the CLI harness.** llama-cpp-python's
-  GenericMTMDChatHandler returns zero tokens for it and logs `find_slot:
-  non-consecutive token position` — it mis-positions KV after splicing the
-  image embedding, which the deepstack projector (`qwen3vl_merger`,
-  `clip.vision.is_deepstack_layers`) requires. Upstream `llama-mtmd-cli` drives
-  it correctly on an OLDER build. A binding gap, not a model limit — and one
-  LLMVP-native vision would inherit.
+* **qwen3.6-35b-a3's zero-token failure is a `max_tokens` effect — CORRECTED
+  2026-08-12.** This section previously called it a binding gap
+  ("GenericMTMDChatHandler mis-positions KV after splicing the image
+  embedding... a binding gap, not a model limit"). That was wrong, and so was
+  the follow-up guess that a dedicated `Qwen3VLChatHandler` would fix it.
+  Measured, same model, same mmproj, same image, only `max_tokens` varying:
+
+      short prompt, max_tokens 300    -> 138 tokens   OK
+      long  prompt, max_tokens 300    -> 300 tokens   OK
+      long  prompt, max_tokens 1400   ->   0 tokens   FAILS
+
+  Both handlers produce tokens at 300; both produce nothing at 1400. The
+  `find_slot: non-consecutive token position` lines appear in the WORKING runs
+  too, so they are noise, not the cause — which is exactly why they misled the
+  original diagnosis. The bake-off harness used `max_tokens=1400`, so this
+  model's 126/192 was scored through the CLI (`-n 1400`, which handles it)
+  while the python path returned nothing at the same budget.
+
+  Threshold between 300 and 1400 is not yet bisected. Practical consequence
+  for LLMVP vision: bound `max_tokens` on the vision endpoint and treat a
+  zero-token vision response as a budget symptom, not a broken model.
+  Repro: `dev/deepstack_handler_probe.py`.
