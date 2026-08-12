@@ -215,3 +215,58 @@ evidence yet that the earlier 155/192 figure is stable.
    cannot resolve BEFORE giving percentages. Test them against these same 5
    figures and this same paired protocol; the references and rubric are the
    held-out set that makes that measurable.
+
+---
+
+# Muse detection tool: NO-GO, 2026-08-12
+
+Proposed port: use muse's "native object detection" to get bounding boxes for
+chart elements, then crop-and-requery to fix the thin-segment misses. Killed
+before implementation. **Muse has no detection capability, and asking for one
+produces confabulated coordinates that look exactly like real ones.**
+
+**Provenance of the error, because it was mine.** The HF *blog* says the model
+does "open ended object detection ... returning structured JSON output with
+bounding box coordinates", and I relayed that as fact. The MODEL CARD and the
+Meta developer docs both state the opposite — text+image in, text out, no
+coordinate grounding documented anywhere. A blog sentence is not a capability
+statement, and I should have checked the card before proposing a port on it.
+
+**The probe (`dev/muse_detect_probe.py`), on mineralogy.png, a 1406x439 image:**
+
+* "Return the result in your native object-detection format" — the model
+  correctly says there are no detectable objects and answers in prose. There is
+  no native mode to invoke.
+* An EXPLICIT JSON request produces beautifully well-formed output:
+
+      [{"label": "Morocco",  "box_2d": [115, 150, 165, 750]},
+       {"label": "Niger",    "box_2d": [175, 150, 225, 750]},
+       {"label": "Bodele",   "box_2d": [235, 150, 285, 750]}, ...]
+
+  Which is fabricated. `x1` is an exact arithmetic progression (+60, nine times
+  running), every width is exactly 50, every box spans y 150-750 — and the
+  image is **439 pixels tall**, so 10 of 10 boxes fall outside it. This is a
+  generated grid wearing the shape of a measurement.
+* "Point to the Iceland-M bar" returns normalised coords for the 12th of 13
+  bars at x~0.70 of image width. The left panel ends at x~690 of 1406, so the
+  bar is near x~0.45. Confidently wrong, no hedge.
+
+**This is the SAME failure as the mineralogy segments, in coordinate form** —
+plausible structure generated where measurement was required. Building a crop
+loop on it would have fed invented crop regions into a pipeline whose whole
+purpose is fidelity, and the crops would have been of the wrong regions with no
+error raised anywhere.
+
+**What survives.** Crop-and-requery is still the right idea; the coordinates
+must come from something that MEASURES. Two sources already in the tree:
+
+1. **PP-DocLayoutV3**, the layout detector inside the PaddleOCR-VL pipeline we
+   already run — real detection, already producing the figure crops in
+   `databank/figures/`.
+2. **Deterministic image analysis** for charts specifically: bar columns are
+   findable by column-wise pixel statistics, exactly, in numpy. The reference
+   agents did this by hand ("read off pixel positions against the 0-100% axis")
+   and it is what made the reference trustworthy.
+
+Neither needs the VLM to know where anything is. Test either against these same
+10 figures before adopting.
