@@ -7,7 +7,7 @@
 // are never re-touched, so this stage is independently re-runnable.
 //
 // The set contains ZERO LLM turns: the OCR work is the isolated
-// tools/pdf_extract toolchain (own venv, own mlx server, one process
+// tools/pdf_extract toolchain (own venv, own VLM server, one process
 // per dispatch — crash isolation per the bake-off), and every agent
 // action is policy/bookkeeping. Deterministic findings stay
 // deterministic end-to-end.
@@ -24,7 +24,7 @@ extract_control: #FlowDefinition & {
 	description: """
 		Extractor pipeline controller. Bootstraps the corpus extraction
 		goal from the databank, sweeps pending OA PDFs through the
-		Paddle-MLX toolchain in batches, and completes when the
+		PaddleOCR-VL toolchain in batches, and completes when the
 		deterministic extraction gate passes.
 		"""
 

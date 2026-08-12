@@ -21276,7 +21276,7 @@
   "extract_control": {
     "flow": "extract_control",
     "version": 1,
-    "description": "Extractor pipeline controller. Bootstraps the corpus extraction\ngoal from the databank, sweeps pending OA PDFs through the\nPaddle-MLX toolchain in batches, and completes when the\ndeterministic extraction gate passes.",
+    "description": "Extractor pipeline controller. Bootstraps the corpus extraction\ngoal from the databank, sweeps pending OA PDFs through the\nPaddleOCR-VL toolchain in batches, and completes when the\ndeterministic extraction gate passes.",
     "context_tier": "project_goal",
     "returns": {
       "final_status": {
@@ -21752,7 +21752,7 @@
   "extract_pdfs": {
     "flow": "extract_pdfs",
     "version": 1,
-    "description": "Extract markdown + figures from a batch of OA PDFs via the\nPaddle-MLX toolchain; verify against the publisher text layer;\nupdate databank records by quality policy.",
+    "description": "Extract markdown + figures from a batch of OA PDFs via the\nPaddleOCR-VL toolchain; verify against the publisher text layer;\nupdate databank records by quality policy.",
     "context_tier": "flow_directive",
     "returns": {
       "directive_report": {

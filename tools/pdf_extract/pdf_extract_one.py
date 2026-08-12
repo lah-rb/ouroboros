@@ -12,14 +12,15 @@ Two engines behind one entrypoint, so mission objective notes never change:
           fallback. Pages with no text layer are flagged, never silent.
 
 The paddle engine serves its per-region VLM calls from EITHER backend —
---vl-backend mlx (the bundled 8-bit, default) or llamacpp (a GGUF pair).
-Same layout pipeline, same crops, same prompts; only the engine differs.
+--vl-backend llamacpp (default, a GGUF pair) or mlx (the bundled 8-bit, a
+station-dependent speed opt-in). Same layout pipeline, same crops, same
+prompts, measurably identical fidelity; only the engine differs.
 
 Usage:
   .venv/bin/python pdf_extract_one.py --pdf doc.pdf [--out doc.pdf.md]
       [--engine paddle|pymupdf] [--dpi 160] [--port 0]
-      [--model <mlx dir | model.gguf>]
-      [--vl-backend mlx|llamacpp] [--mmproj mmproj.gguf] [--vl-parallel 1]
+      [--vl-backend llamacpp|mlx] [--model <gguf | mlx dir>]
+      [--mmproj mmproj.gguf] [--vl-parallel 4]
 
 stdout = the markdown/text (or a one-line JSON report with --out); errors to
 stderr, non-zero exit.
@@ -38,16 +39,16 @@ import time
 # Server plumbing shared with extract_batch.py (same directory → importable
 # when invoked by path).
 from extract_batch import (
+    _DEFAULT_MMPROJ,
+    _DEFAULT_VL_BACKEND,
     _VL_BACKENDS,
+    _default_vl_model,
     _free_port,
     _spawn_vl_server,
     _vl_pipe_kwargs,
     _wait_health,
 )
 
-_DEFAULT_MODEL = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "models", "PaddleOCR-VL-1.6-MLX-8bit"
-)
 _NO_TEXT_MARKER = "[no text layer on this page — try vl_inspect on a rendered page]"
 
 
@@ -65,7 +66,7 @@ def extract_pymupdf(pdf_path: str) -> str:
 
 
 def extract_paddle(
-    pdf_path: str, model: str, dpi: int, port: int, backend: str = "mlx"
+    pdf_path: str, model: str, dpi: int, port: int, backend: str = _DEFAULT_VL_BACKEND
 ) -> str:
     """PaddleOCR-VL page loop from extract_batch.extract_paper, layout-only:
     no figure sidecars, no databank paths, no verification tallies."""
@@ -103,8 +104,8 @@ def main() -> int:
     ap.add_argument(
         "--model",
         default="",
-        help="VLM to serve — an MLX model dir, or the GGUF for --vl-backend "
-        "llamacpp (default: the bundled MLX 8-bit)",
+        help="VLM to serve — a GGUF (llamacpp) or an MLX model dir. "
+        "Default: the backend's entry under models/",
     )
     ap.add_argument("--dpi", type=int, default=160)
     ap.add_argument(
@@ -116,27 +117,27 @@ def main() -> int:
     ap.add_argument(
         "--vl-backend",
         choices=_VL_BACKENDS,
-        default=os.environ.get("OUROBOROS_VL_BACKEND", "mlx"),
-        help="engine serving the per-region VLM calls (default: mlx)",
+        default=_DEFAULT_VL_BACKEND,
+        help=f"engine serving the per-region VLM calls "
+        f"(default: {_DEFAULT_VL_BACKEND})",
     )
     ap.add_argument(
         "--mmproj",
         default="",
-        help="projector GGUF — required for --vl-backend llamacpp",
+        help="projector GGUF for --vl-backend llamacpp "
+        "(default: the entry under models/)",
     )
-    ap.add_argument("--vl-parallel", type=int, default=1, help="llamacpp server slots")
+    ap.add_argument("--vl-parallel", type=int, default=4, help="llamacpp server slots")
     args = ap.parse_args()
 
-    # Only the MLX default is bundled; llamacpp must be told which GGUF.
+    # Resolve the pair together — an explicit model with a defaulted projector
+    # from a different quant is a mix that would load and quietly misbehave.
     if not args.model:
-        if args.vl_backend != "mlx":
-            print(
-                "pdf_extract_one: --model (the GGUF) is required for "
-                f"--vl-backend {args.vl_backend}",
-                file=sys.stderr,
-            )
-            return 2
-        args.model = _DEFAULT_MODEL
+        args.model, default_mmproj = _default_vl_model(args.vl_backend)
+        if not args.mmproj:
+            args.mmproj = default_mmproj
+    elif args.vl_backend == "llamacpp" and not args.mmproj:
+        args.mmproj = _DEFAULT_MMPROJ
 
     if not os.path.isfile(args.pdf):
         print(f"pdf_extract_one: no such pdf: {args.pdf}", file=sys.stderr)

@@ -4,7 +4,7 @@ Scraper v2, stage two of the corpus pipeline (scrape → extract →
 dataset). Operates on an EXISTING databank produced by a scraper
 mission; every action here is deterministic — the set contains zero
 LLM turns. The OCR work happens in the isolated tools/pdf_extract
-toolchain (own venv, own mlx server child, one process per dispatch);
+toolchain (own venv, own VLM server child, one process per dispatch);
 these actions are the policy layer: worklists, quality thresholds,
 record bookkeeping, and the gate verdict.
 
@@ -37,12 +37,26 @@ EXTRACT_TIMEOUT_S = 1800
 MIN_NUMERIC_RATE = 0.85
 MIN_SPAN_RATE = 0.75
 
-EXTRACTION_METHOD = "paddleocr-vl-1.6-mlx-8bit"
 CORPUS_GOAL_SIGNATURE = "corpus-pdf-extract"
 
 _TOOL_PY = "tools/pdf_extract/.venv/bin/python"
 _TOOL_SCRIPT = "tools/pdf_extract/extract_batch.py"
-_TOOL_MODEL = "tools/pdf_extract/models/PaddleOCR-VL-1.6-MLX-8bit"
+
+# WHICH ENGINE READ THE PAGE IS PROVENANCE, so extraction_method carries the
+# backend rather than a constant. llama.cpp is the default (2026-08-12): it is
+# fidelity-identical to MLX on the pipeline's own truth-recall check (numeric
+# 0.935 / span 0.900 on every run, both backends) and ~1.15x slower, but it
+# runs on every station while MLX runs on one. Records written before the
+# switch keep "paddleocr-vl-1.6-mlx-8bit" — they WERE extracted that way, and
+# the field is only ever written, never filtered on.
+_VL_BACKEND = os.environ.get("OUROBOROS_VL_BACKEND", "llamacpp")
+_EXTRACTION_METHODS = {
+    "llamacpp": "paddleocr-vl-1.6-q8_0-llamacpp",
+    "mlx": "paddleocr-vl-1.6-mlx-8bit",
+}
+EXTRACTION_METHOD = _EXTRACTION_METHODS.get(
+    _VL_BACKEND, f"paddleocr-vl-1.6-{_VL_BACKEND}"
+)
 
 
 def _extraction_pending(record: dict) -> bool:
@@ -233,8 +247,8 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
         *resolved_keys,
         "--databank-dir",
         os.path.join(working_dir, "databank"),
-        "--model",
-        os.path.join(root, _TOOL_MODEL),
+        "--vl-backend",
+        _VL_BACKEND,
     ]
     result = await effects.run_command(cmd, timeout=EXTRACT_TIMEOUT_S)
 

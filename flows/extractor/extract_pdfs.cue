@@ -12,7 +12,7 @@ extract_pdfs: #FlowDefinition & {
 	version: 1
 	description: """
 		Extract markdown + figures from a batch of OA PDFs via the
-		Paddle-MLX toolchain; verify against the publisher text layer;
+		PaddleOCR-VL toolchain; verify against the publisher text layer;
 		update databank records by quality policy.
 		"""
 

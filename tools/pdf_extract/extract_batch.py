@@ -5,7 +5,9 @@ One agent dispatch = one invocation of this script = one OS process
 (crash isolation: the bake-off showed long-lived vision servers
 accumulate state and die mid-batch; per-batch processes bound the blast
 radius). The script owns its own VLM server child for the batch —
-mlx_vlm.server or llama-server, see --vl-backend.
+llama-server by default, mlx_vlm.server as a station-dependent opt-in
+(--vl-backend; MLX is ~1.15x faster and exists on one machine, llama.cpp
+is fidelity-identical and runs everywhere).
 
 Pipeline per paper:
   1. pymupdf renders pages (160 dpi) and extracts the per-page text
@@ -38,9 +40,14 @@ quality policy; this script computes metrics, it does not judge.
 
 Usage:
   .venv/bin/python extract_batch.py --pdfs a.pdf b.pdf \
-      --databank-dir /path/to/databank --model /path/to/mlx-model \
+      --databank-dir /path/to/databank \
       [--keys key_a key_b] [--dpi 160] \
-      [--vl-backend mlx|llamacpp] [--mmproj mmproj.gguf] [--vl-parallel N]
+      [--vl-backend llamacpp|mlx] [--model <gguf|mlx dir>] \
+      [--mmproj mmproj.gguf] [--vl-parallel 4]
+
+Weights default to the backend's entry under models/ (gitignored,
+operator-placed), overridable per station with OUROBOROS_PADDLE_GGUF /
+OUROBOROS_PADDLE_MMPROJ / OUROBOROS_PADDLE_MLX.
 """
 
 from __future__ import annotations
@@ -105,7 +112,7 @@ def _free_port() -> int:
     return port
 
 
-# ── VL backend: MLX or llama.cpp, chosen per invocation ──────────────
+# ── VL backend: llama.cpp (default) or MLX ───────────────────────────
 # The layout pipeline is PaddleOCR-VL's own either way. What changes is
 # only which engine answers the per-region VLM calls, and paddleocr 3.7
 # supports both natively (_SUPPORTED_VL_BACKENDS) over one OpenAI-shaped
@@ -113,12 +120,49 @@ def _free_port() -> int:
 # encoding and the max_tokens field name; crops, prompts and ordering are
 # identical. So this is a true either/or, not two pipelines.
 #
-# MLX was chosen originally because llama.cpp was considerably slower on
-# Metal. That measurement is only as good as the binary it was taken on —
-# see the DeepSeek-V4 case where a stale build cost 4.2x decode — so the
-# comparison is re-runnable here rather than settled by the old verdict.
-_VL_BACKENDS = ("mlx", "llamacpp")
+# LLAMA.CPP IS THE DEFAULT, and that is a PORTABILITY choice made with the
+# speed cost known. MLX is measurably faster here — 75-80s against 88s on a
+# 10-page paper (2026-08-12, llama.cpp b10360, 4 slots) — but it exists on
+# exactly one machine in the fleet, and pinning the OCR stage to Apple
+# Silicon pins the whole scrape pipeline with it. llama.cpp is the runtime
+# everything else already runs on, so the default is the one that travels
+# and MLX is the station-dependent opt-in.
+#
+# THE 1.15x IS THE WHOLE COST. Fidelity is IDENTICAL between the two:
+# numeric recall 0.935, span recall 0.900 against the publisher's own text
+# layer, on every run, both backends, BF16 and Q8_0 alike. Precision is not
+# the gap either — Q8_0 vs BF16 sits inside run-to-run noise.
+#
+# The original "MLX, because llama.cpp is considerably slower" verdict was
+# taken on llama-server b9910 against b10360 stable, on a model whose
+# architecture (paddleocr) is newer than that build. A performance verdict
+# is only as good as the binary under it — cf. DeepSeek-V4, where a stale
+# build cost 4.2x decode.
+_VL_BACKENDS = ("llamacpp", "mlx")
+_DEFAULT_VL_BACKEND = os.environ.get("OUROBOROS_VL_BACKEND", "llamacpp")
 _LLAMA_SERVER = os.environ.get("OUROBOROS_LLAMA_SERVER", "llama-server")
+
+# Weights live in models/ (gitignored — operator-placed, as the MLX model
+# always has been). Env overrides let a station point elsewhere without a
+# code change; the GGUF entries here are symlinks into the LM Studio tree.
+_MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
+_DEFAULT_MLX_MODEL = os.environ.get(
+    "OUROBOROS_PADDLE_MLX", os.path.join(_MODELS_DIR, "PaddleOCR-VL-1.6-MLX-8bit")
+)
+_DEFAULT_GGUF = os.environ.get(
+    "OUROBOROS_PADDLE_GGUF", os.path.join(_MODELS_DIR, "PaddleOCR-VL-1.6-Q8_0.gguf")
+)
+_DEFAULT_MMPROJ = os.environ.get(
+    "OUROBOROS_PADDLE_MMPROJ", os.path.join(_MODELS_DIR, "PaddleOCR-VL-1.6-mmproj.gguf")
+)
+
+
+def _default_vl_model(backend: str) -> tuple[str, str]:
+    """(model, mmproj) for `backend` — one place, so the batch tool, the
+    one-shot tool and the agent action cannot drift apart."""
+    if backend == "mlx":
+        return _DEFAULT_MLX_MODEL, ""
+    return _DEFAULT_GGUF, _DEFAULT_MMPROJ
 
 
 def _spawn_vl_server(
@@ -457,26 +501,43 @@ def main() -> int:
     ap.add_argument("--pdfs", nargs="+", required=True)
     ap.add_argument("--keys", nargs="*", default=None)
     ap.add_argument("--databank-dir", required=True)
-    ap.add_argument("--model", required=True)
+    ap.add_argument(
+        "--model",
+        default="",
+        help="VLM to serve — a GGUF (llamacpp) or an MLX model dir. "
+        "Default: the backend's entry under models/",
+    )
     ap.add_argument("--dpi", type=int, default=160)
     ap.add_argument(
         "--vl-backend",
         choices=_VL_BACKENDS,
-        default=os.environ.get("OUROBOROS_VL_BACKEND", "mlx"),
-        help="engine serving the per-region VLM calls (default: mlx)",
+        default=_DEFAULT_VL_BACKEND,
+        help=f"engine serving the per-region VLM calls "
+        f"(default: {_DEFAULT_VL_BACKEND})",
     )
     ap.add_argument(
         "--mmproj",
         default="",
-        help="projector GGUF — required for --vl-backend llamacpp",
+        help="projector GGUF for --vl-backend llamacpp "
+        "(default: the entry under models/)",
     )
     ap.add_argument(
         "--vl-parallel",
         type=int,
-        default=1,
-        help="llamacpp server slots; paddle fires region crops concurrently",
+        default=4,
+        help="llamacpp server slots; paddle fires region crops concurrently. "
+        "Measured to saturate at 4 (2026-08-12)",
     )
     args = ap.parse_args()
+
+    # Resolve weights together, so a half-specified pair cannot silently mix
+    # an explicit model with a default projector from the other quant.
+    if not args.model:
+        args.model, default_mmproj = _default_vl_model(args.vl_backend)
+        if not args.mmproj:
+            args.mmproj = default_mmproj
+    elif args.vl_backend == "llamacpp" and not args.mmproj:
+        args.mmproj = _DEFAULT_MMPROJ
 
     keys = args.keys or [os.path.splitext(os.path.basename(p))[0] for p in args.pdfs]
     if len(keys) != len(args.pdfs):

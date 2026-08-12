@@ -131,6 +131,40 @@ def test_unknown_backend_is_refused(spawn):
         spawn(backend="vllm", model="m", port=1)
 
 
+# ── the default is llama.cpp, deliberately ────────────────────────────
+
+
+def test_llamacpp_is_the_default_backend():
+    """MLX is ~1.15x faster and runs on one machine; llama.cpp is
+    fidelity-identical and runs on all of them. The default is the portable
+    one — flipping it back is a decision, not a typo."""
+    assert _MOD._DEFAULT_VL_BACKEND == "llamacpp"
+    assert _MOD._VL_BACKENDS[0] == "llamacpp"
+
+
+def test_the_llamacpp_default_resolves_to_a_gguf_AND_a_projector():
+    """A GGUF without its projector loads as a text model and OCRs nothing,
+    so the default must never supply half a pair."""
+    model, mmproj = _MOD._default_vl_model("llamacpp")
+    assert model.endswith(".gguf")
+    assert mmproj.endswith(".gguf")
+    assert "mmproj" in os.path.basename(mmproj)
+
+
+def test_the_mlx_default_is_a_model_dir_and_carries_no_projector():
+    model, mmproj = _MOD._default_vl_model("mlx")
+    assert not model.endswith(".gguf")
+    assert mmproj == "", "mlx_vlm has no separate projector to pass"
+
+
+def test_default_weights_live_under_the_tools_models_dir():
+    """models/ is gitignored and operator-placed — the same convention the
+    MLX model has always used, so a station swaps weights without a diff."""
+    for path in _MOD._default_vl_model("llamacpp") + _MOD._default_vl_model("mlx"):
+        if path:
+            assert os.path.basename(os.path.dirname(path)) == "models"
+
+
 # ── paddleocr wiring ──────────────────────────────────────────────────
 
 
