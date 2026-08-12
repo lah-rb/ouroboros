@@ -1238,3 +1238,145 @@ async def refresh_context(reason: str = "manual") -> dict:
     if not hasattr(backend, "refresh_context"):
         return {"refreshed": 0, "reason": reason, "status": "unsupported"}
     return await backend.refresh_context(reason)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Vision (mtmd) — a deliberately separate path
+#
+# This does NOT reuse _build_messages_tokens. That function flattens each
+# message to `str(msg.get("content"))`, which turns a list-of-parts into
+# "[{'type': 'text'...}]" with no error, and the whole text stack downstream
+# is typed `prompt_tokens: List[int]` — image embeddings are not token ids and
+# cannot cross that boundary. So vision hands `messages` to the mtmd handler,
+# which builds its own prompt from the model's chat template.
+#
+# What that means, stated plainly so nobody looks for it later: the vision path
+# has NO static prefix (SOUL.md), NO resident-seq cache, NO flow cache, and NO
+# FSM extraction. Its response therefore reports no cache telemetry rather than
+# reporting zeros that would read as cache misses.
+# ══════════════════════════════════════════════════════════════════════
+
+
+@dataclass
+class VisionOutcome:
+    """Result of one vision completion. Deliberately narrower than
+    CompletionOutcome — the fields it omits are ones the vision path cannot
+    honestly populate."""
+
+    text: str
+    generated_tokens: int = 0
+    prompt_tokens: int = 0
+    image_count: int = 0
+    vision_model: str = ""
+    handler: str = ""
+    decode_ms: float = 0.0
+
+
+async def run_vision_completion(
+    messages: list,
+    max_tokens: Optional[int] = None,
+    temperature: Optional[float] = None,
+) -> VisionOutcome:
+    """Run one image+text completion through the mtmd handler.
+
+    ``messages`` is the OpenAI shape with content PARTS; image parts may be a
+    base64 data URI (``image_url``) or a local path (``image_path``) under a
+    configured root — see inference/vision_images.resolve_image_part, which is
+    also where the path allowlist is enforced.
+    """
+    import time as _time
+
+    from fastapi.concurrency import run_in_threadpool
+
+    from inference.vision_images import (
+        ImageIntakeError,
+        resolve_image_part,
+        to_data_uri,
+    )
+
+    mcfg = config.model
+    if not getattr(mcfg, "mmproj_path", None):
+        raise RuntimeError(
+            f"vision is not configured for {mcfg.name!r}: set model.mmproj_path"
+        )
+
+    roots = list(getattr(mcfg, "vision_image_roots", []) or [])
+    limit = int(getattr(mcfg, "vision_max_image_bytes", 33_554_432))
+
+    # Normalise every image part to a data URI up front, so intake errors
+    # surface as a clean 4xx-shaped failure BEFORE the model is touched.
+    prepared: list = []
+    image_count = 0
+    for msg in messages:
+        content = msg.get("content")
+        if not isinstance(content, list):
+            prepared.append(msg)
+            continue
+        parts = []
+        for part in content:
+            ptype = (part or {}).get("type")
+            if ptype in ("image_url", "image_path"):
+                data = resolve_image_part(part, roots, limit)  # may raise
+                parts.append(
+                    {"type": "image_url", "image_url": {"url": to_data_uri(data)}}
+                )
+                image_count += 1
+            else:
+                parts.append(part)
+        prepared.append({**msg, "content": parts})
+
+    if image_count == 0:
+        raise ImageIntakeError(
+            "no image parts in the request — use the text endpoint for text-only"
+        )
+
+    backend = await _get_backend()
+    if not hasattr(backend, "get_vision_instance"):
+        raise RuntimeError("the active backend does not support vision")
+    inst = await backend.get_vision_instance()
+
+    resolved_max = resolve_max_tokens(max_tokens)
+    resolved_temp = resolve_temperature(temperature)
+
+    # Serialize with text generation: one Metal command queue, and the handler
+    # drives its own decode loop outside the engine's scheduling.
+    t0 = _time.time()
+    async with backend.generation_guard():
+        result = await run_in_threadpool(
+            lambda: inst.create_chat_completion(
+                messages=prepared,
+                max_tokens=resolved_max,
+                temperature=resolved_temp,
+            )
+        )
+    decode_ms = (_time.time() - t0) * 1000.0
+
+    choice = (result.get("choices") or [{}])[0]
+    msg_out = choice.get("message") or {}
+    text = (msg_out.get("content") or "").strip()
+    usage = result.get("usage") or {}
+    generated = int(usage.get("completion_tokens") or 0)
+
+    # A zero-token vision response is a BUDGET symptom on some models, not a
+    # broken model: qwen3.6-35b-a3 returns nothing at max_tokens 1400 and
+    # answers fine at 300 (measured 2026-08-12, dev/VL_BAKEOFF_2026-08-11.md).
+    # Say so, because "" with no explanation sent the last diagnosis of this
+    # exact symptom down a two-day wrong path.
+    if generated == 0 and not text:
+        log.warning(
+            "vision returned ZERO tokens at max_tokens=%d — some models fail at "
+            "large budgets and answer fine at smaller ones; try lowering it "
+            "before suspecting the model or the projector",
+            resolved_max,
+        )
+
+    handler = type(getattr(inst, "chat_handler", None)).__name__
+    return VisionOutcome(
+        text=text,
+        generated_tokens=generated,
+        prompt_tokens=int(usage.get("prompt_tokens") or 0),
+        image_count=image_count,
+        vision_model=mcfg.name,
+        handler=handler,
+        decode_ms=round(decode_ms, 1),
+    )

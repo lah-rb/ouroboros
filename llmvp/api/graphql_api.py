@@ -283,6 +283,49 @@ class CompletionChunk:
     is_complete: bool
 
 
+@strawberry.type
+class VisionCompletionResponse:
+    """Result of a vision completion.
+
+    DELIBERATELY NARROWER than CompletionResponse. The vision path has no
+    static prefix, no resident-seq cache and no flow cache, so cacheHit /
+    cachedPrefixTokens / flowKey are omitted rather than reported as zeros —
+    a zero there would read as a cache MISS, which is a different and false
+    claim from "this path has no cache".
+    """
+
+    text: str
+    generated_tokens: int = 0
+    prompt_tokens: int = 0
+    image_count: int = 0
+    vision_model: str = ""
+    handler: str = ""
+    decode_ms: float = 0.0
+
+
+@strawberry.input
+class VisionImage:
+    """One image: EITHER a base64 data URI or a local path.
+
+    A path is only read when it resolves under model.vision_image_roots;
+    remote URLs are refused rather than fetched (fetching caller-supplied URLs
+    would be an SSRF primitive).
+    """
+
+    url: Optional[str] = strawberry.field(default=None)
+    path: Optional[str] = strawberry.field(default=None)
+
+
+@strawberry.input
+class VisionCompletionRequest:
+    """Input for a vision completion — images plus the text that asks about them."""
+
+    prompt: str
+    images: List[VisionImage]
+    max_tokens: Optional[int] = strawberry.field(default=None)
+    temperature: Optional[float] = strawberry.field(default=None)
+
+
 @strawberry.input
 class CompletionRequest:
     """Input type for completion requests."""
@@ -988,6 +1031,46 @@ class Mutation:
             cache_hit=outcome.cache_hit,
             flow_key=outcome.flow_key,
             prefill_ms=outcome.prefill_ms,
+            decode_ms=outcome.decode_ms,
+        )
+
+    @strawberry.mutation
+    async def vision_completion(
+        self, request: VisionCompletionRequest
+    ) -> VisionCompletionResponse:
+        """Image(s) + text in, completion out.
+
+        A SEPARATE endpoint on purpose: this path does not share prompt
+        assembly with text completions (the mtmd handler builds its own prompt
+        from the model's chat template), so overloading `createCompletion`
+        would hide a genuinely different pipeline behind one name.
+        """
+        from core.inference import run_vision_completion
+        from inference.vision_images import ImageIntakeError
+
+        parts: list = [{"type": "text", "text": request.prompt}]
+        for img in request.images:
+            if img.path:
+                parts.append({"type": "image_path", "path": img.path})
+            elif img.url:
+                parts.append({"type": "image_url", "image_url": {"url": img.url}})
+        try:
+            outcome = await run_vision_completion(
+                messages=[{"role": "user", "content": parts}],
+                max_tokens=request.max_tokens,
+                temperature=request.temperature,
+            )
+        except ImageIntakeError as exc:
+            # Caller error (bad path, outside the allowlist, oversize) — the
+            # message is written to be safe to return.
+            raise ValueError(f"image rejected: {exc}") from exc
+        return VisionCompletionResponse(
+            text=outcome.text,
+            generated_tokens=outcome.generated_tokens,
+            prompt_tokens=outcome.prompt_tokens,
+            image_count=outcome.image_count,
+            vision_model=outcome.vision_model,
+            handler=outcome.handler,
             decode_ms=outcome.decode_ms,
         )
 

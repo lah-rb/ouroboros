@@ -189,3 +189,64 @@ async def _stream_response(
         yield json.dumps({"error": str(exc)}).encode() + b"\n"
     except RuntimeError as exc:
         yield json.dumps({"error": str(exc)}).encode() + b"\n"
+
+
+@router.post("/vision")
+async def vision_completions(request: Request):
+    """OpenAI-shaped vision completion: messages with image content parts.
+
+    Separate from /chat/completions on purpose — the mtmd handler builds its
+    own prompt from the model's chat template, so this is a different pipeline,
+    not a flag on the text one. Non-streaming, matching /chat/completions.
+
+    Image parts accept either the standard base64 data URI::
+
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}
+
+    or a local path, which is only read when it resolves under
+    ``model.vision_image_roots``::
+
+        {"type": "image_path", "path": "/abs/path.png"}
+    """
+    from fastapi.responses import JSONResponse
+
+    from core.inference import run_vision_completion
+    from inference.vision_images import ImageIntakeError
+
+    body = await request.json()
+    messages = body.get("messages") or []
+    if not messages:
+        raise HTTPException(status_code=400, detail="messages is required")
+    try:
+        outcome = await run_vision_completion(
+            messages=messages,
+            max_tokens=body.get("max_tokens"),
+            temperature=body.get("temperature"),
+        )
+    except ImageIntakeError as exc:
+        # 400, not 500: the caller sent an image we will not read (outside the
+        # allowlist, traversal, oversize, or a remote URL we refuse to fetch).
+        return JSONResponse(status_code=400, content={"error": str(exc)})
+    except RuntimeError as exc:
+        return JSONResponse(status_code=503, content={"error": str(exc)})
+    return {
+        "id": "visioncmpl-llmvp",
+        "object": "vision.completion",
+        "model": outcome.vision_model,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": outcome.text},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": outcome.prompt_tokens,
+            "completion_tokens": outcome.generated_tokens,
+        },
+        "vision": {
+            "image_count": outcome.image_count,
+            "handler": outcome.handler,
+            "decode_ms": outcome.decode_ms,
+        },
+    }
