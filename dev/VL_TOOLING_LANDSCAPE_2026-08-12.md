@@ -164,3 +164,49 @@ without asking the model where anything is.
 Incidental: a whole figure costs ~288 vision tokens, so `vision_n_ctx: 131072`
 is vastly more than one image needs. Harmless (lazy allocation, and it buys
 multi-image headroom) but it is not doing anything for single-figure reads.
+
+---
+
+# CORRECTION to the addendum above — the tower is NOT fixed-canvas
+
+The addendum read `clip.vision.image_size: 896` as a hard canvas and computed
+"one token covers 43.9 px of the original image", then used that to declare the
+upscale experiment invalid. **Both conclusions are wrong.** Measured directly
+by sending the same figure at three scales and reading `prompt_tokens`:
+
+    scale   pixels        prompt_tok   image_tok   ORIGINAL px per token
+    0.5x      153,957          302         288       46.3 x 46.3
+    1.0x      617,234          910         896       26.2 x 26.2
+    2.0x    2,468,936         3194        3180       13.9 x 13.9
+
+Token count tracks PIXEL AREA (288:896:3180 against an area ratio of 1:4:16).
+There is no clamp to 896 — `clip.vision.image_size` is a reference/training
+size, and this mtmd path handles resolution dynamically.
+
+Consequences, each reversing something the addendum said:
+
+* **Native resolution is better than I claimed.** One token covers ~26x26
+  original px, not 44x44. A 15px (5%) sliver spans 0.57 tokens, not 0.34.
+  Still sub-token, so the mechanism stands — but the numbers were pessimistic.
+* **UPSCALING IS A REAL LEVER.** At 2x, one token covers 13.9x13.9 original px
+  and a 15px sliver spans 1.08 tokens — over the threshold. The research
+  report's top-ranked experiment was sound and my dismissal of it was not.
+  Cost is ~3.5x the vision tokens (896 -> 3180), which is affordable: even 2x
+  is 3,180 tokens against a 131,072 vision context.
+* **SPLITTING IN HALF BUYS NO RESOLUTION AT ALL.** Two halves have the same
+  total pixel area as the whole, hence the same total tokens — confirmed
+  live: 1,094 prompt tokens for the whole vs 1,152 for both halves, the 58
+  difference being the extra instruction text. Each half's panel is tokenised
+  at exactly the rate it was inside the full image.
+
+That last point is what makes the split experiment informative rather than
+redundant: **any quality difference it shows cannot be a resolution effect.**
+It would have to be structural — attention, framing, or the turn boundary.
+
+## Method note
+
+The error was reading a header field as a behavioural guarantee. The fix took
+three requests and a token count. Where a preprocessing question decides an
+engineering direction, measure the preprocessor — do not infer it from
+metadata, and especially do not build arithmetic on top of the inference and
+then use that arithmetic to rule out an experiment.
