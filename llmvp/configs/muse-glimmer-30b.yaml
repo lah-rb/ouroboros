@@ -13,11 +13,18 @@
 # `swa_full: true` is REQUIRED or any pinned/forked prefix corrupts at the
 # window boundary. Nothing but the GGUF headers tells you that.
 #
-# KV IS EXPENSIVE HERE. 52 KiB/token is 26x gpt-oss's 2 KiB, and swa_full
-# then allocates a full-size SWA cache ALONGSIDE the non-SWA one, so budget
-# roughly double the naive arithmetic. n_ctx starts conservative on purpose;
-# raise it only behind a real --probe-context measurement (step 6), never by
-# hand-editing probe_verified_* to make a load succeed.
+# KV is 52 KiB/token — 26x gpt-oss's 2 KiB — but that header figure is the
+# WHOLE cost, not a number to double. This config previously warned that
+# swa_full allocates a full-size SWA cache alongside the non-SWA one and to
+# "budget roughly double the naive arithmetic"; the probe measured
+# kv_bytes_per_token_actual = 53248 with both caches live, i.e. exactly the
+# header figure. n_ctx started conservative on that wrong arithmetic.
+#
+# MEASURED 2026-08-11 (--probe-context): ceiling 131072 = the full trained
+# range, "nothing here limits it". One rung, 3/3 generations, KV 6656 MiB,
+# peak wired 30.2GB against a 123.7GB budget — so the whole model at full
+# context costs ~30GB and leaves room to co-reside. n_ctx and
+# model_max_context both raised to the measured ceiling.
 #
 # ── Sampling (step 2) ───────────────────────────────────────────────
 # CHOSEN: the card's single published profile — temperature 1.0, top_p 0.95,
@@ -27,11 +34,15 @@
 # sampler on a model whose card specifies otherwise.
 #
 # ── Format (step 3) ─────────────────────────────────────────────────
-# New family `muse-glimmer` (formats/muse-glimmer.yaml). fsm_labeller needs
-# no edit — it derives shape from the format file. Two traps, both closed
-# there and verified by a golden test against the GGUF's own chat template:
+# New family `muse-glimmer` (formats/muse-glimmer.yaml). Two traps, both
+# closed there and verified by a golden test against the GGUF's own chat
+# template:
 #   * turns end on <|eot|> (200008), NOT the GGUF eos <|end_of_text|> (200001)
 #   * <|eom|> (200007) closes the REASONING message and must never be a stop
+# This section used to claim "fsm_labeller needs no edit — it derives shape
+# from the format file". Half true, and the wrong half is what broke: it
+# derived the SHAPE and not the VOCABULARY. See the defect note below. It is
+# true NOW, for shape, vocabulary, recipient form and terminators alike.
 #
 # ── The empty-completion defect: FIXED 2026-08-11 ───────────────────
 # Every completion through this config used to return "". It was never the
@@ -75,9 +86,16 @@
 # None and no config in the fleet sets it. The "PRIME SUSPECT — tool
 # rendering" theory recorded here was false on that last point alone.
 #
+# The probe that found this deserves a note of its own: --probe-context
+# scored a rung on whether EXTRACTED text came back from a maxTokens:200
+# completion, and this model spends 27-224 tokens reasoning before it opens
+# the content channel. So the first probe scored a healthy 131072 rung as
+# NO_OUTPUT at 30GB/123.7GB and would have walked every rung to a wrong
+# ceiling. The health test now accepts "still generating at the cap" (155466c)
+# — a fix that was owed to every heavy reasoner, not just this one.
+#
 # STILL OWED before this model carries a coding run:
-#   1. --probe-context (n_ctx is a guess until measured; KV is 52 KiB/tok
-#      and swa_full doubles the cache) and a cache_compat_matrix cell.
+#   1. A cache_compat_matrix cell for the ledger (step 8).
 #   2. A batched-decode swarm check (1->4 streams) — the open question is
 #      whether it can pull double duty as the vision model AND a text arm.
 #   3. ATEM tool rendering + the dynamic `# Valid recipients:` line IF we
@@ -110,8 +128,10 @@ model:
   name: "muse-glimmer-30b"
   family: "muse-glimmer"
   path: /Users/lah-rb/.lmstudio/models/meta-models/Muse-Glimmer-30B-GGUF/muse-glimmer-30B-kquant-dynamic.gguf
-  n_ctx: 65536
-  model_max_context: 32768
+  n_ctx: 131072
+  probe_verified_weights_bytes: 19653957984
+  probe_verified_n_ctx: 131072
+  model_max_context: 131072
   n_gpu_layers: -1
   seed: -1
   verbose: false

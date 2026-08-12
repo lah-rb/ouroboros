@@ -1,0 +1,150 @@
+# Muse-Glimmer-30B — SWARM (batched decode) variant
+#
+# The single-stream config is muse-glimmer-30b.yaml and is the one to read
+# first: it carries the intake record, the format-family notes and the
+# empty-completion post-mortem. This file changes only what the pool changes.
+#
+# WHY THIS EXISTS. Muse-Glimmer was the most faithful figure transcriber in
+# the 2026-08-11 VL bake-off (12/12 against a blind Opus reference, including
+# three checks nothing else caught). If it can also serve text streams it
+# pulls double duty and we stop paying a model swap to look at a figure. That
+# is the question this config is built to answer; it is not yet answered.
+#
+# ── The budget, from MEASURED constants ──────────────────────────────
+# --probe-context 2026-08-11 measured, on the single-stream config:
+#   KV 53,248 B/token (= the 52 KiB header figure exactly — swa_full does
+#   NOT double it, both caches live inside that number)
+#   weights 19,653,957,984 B
+#   single-stream ceiling 131,072 at 30.2GB peak wired
+#
+# Under kv_unified, n_ctx is the SHARED cell pool across all working seats and
+# model_max_context bounds any ONE stream. So the pool is memory-bound, not
+# trained-range-bound, and the arithmetic is:
+#   (budget - weights - measured overhead ~3.4GB) / 53,248 B
+# which lands near 1.9M cells (~14 streams' worth) against the probe's
+# 123.7GB ceiling. That is an ESTIMATE and is not what this config claims.
+#
+# ── MEASURED 2026-08-11, and why n_ctx is NOT the measured number ────
+# --probe-context walked 11 rungs and landed at 1,838,080 cells, hardware-
+# bound (every failure was a decode error, not a refused allocation). That is
+# 14.02 x 131,072 — fourteen full-length streams — at KV 93,340 MiB and
+# 124.7GB peak wired.
+#
+# It is a KNIFE EDGE and must not be shipped:
+#     1,843,200  FAIL   peak 124.0GB
+#     1,841,152  FAIL   peak 123.8GB
+#     1,839,104  FAIL   peak 121.1GB
+#     1,838,080  pass   peak 124.7GB   <- the measured ceiling
+#     1,837,056  pass   peak 124.5GB
+# 1,024 cells (0.06%) separate pass from fail, and peak wired is NOT monotonic
+# in KV — 121.1GB failed while 124.7GB passed. This is exactly the trap in the
+# gpt-oss swarm header: 744,448 was probe-verified, served for a morning, then
+# Metal-OOMed at the FIRST decode once the seq layout widened by 8 band seqs.
+# A ceiling measured at one seq map is not a ceiling at the next one.
+#
+# It also cannot boot as configured: 1,838,080 needs 97.9GB KV + 19.7GB
+# weights = 117.6GB, and kv_preflight_gb below refuses anything over 106.
+#
+# So n_ctx is set to 1,441,792 — ELEVEN streams' worth, 96.4GB against the
+# 106GB preflight, ~9.6GB of margin for the seq bands to grow into. Twelve
+# (1,572,864 / 103.4GB) fits arithmetically with only 2.6GB of margin, which
+# is the margin gpt-oss did not have.
+#
+# READ THE POOL AS A CELL BUDGET, NOT A STREAM COUNT. Cells are consumed per
+# ACTUAL token, so "11 streams" is only the worst case where every worker
+# fills the full 131,072 window. At realistic worker contexts 1,441,792 cells
+# admit 176 workers at 8k, 88 at 16k, 44 at 32k. The admission governor is the
+# pool-fit gate against estimated context, not this number.
+#
+# ── What is deliberately NOT copied from the gpt-oss swarm ───────────
+#   * flow_kv_cache — stays FALSE. It has regressed gpt-oss twice, subtly,
+#     and a brand-new family is the worst place to debug it.
+#   * reasoning_head_swap — needs resident AND a family with reasoning
+#     levels. Muse has the levels, but the head-swap is unproven here and a
+#     swarm is not where you prove it.
+#   * thinking_mode: low. The gpt-oss swarm rests at low; Muse's card
+#     recommends high/xhigh for agentic work and the single-stream config
+#     runs high, so this holds high until a measurement says otherwise.
+#     Note this makes each stream EXPENSIVE in tokens — see the probe note
+#     in the single-stream config about how much it reasons before answering.
+
+app:
+  host: "0.0.0.0"
+  port: 8008
+  log_level: "info"
+  cors_origins: ["*"]
+  backend_timeout: 180
+  openai_shim: true
+
+graphql:
+  max_query_depth: 10
+  max_tokens: 131072
+  max_aliases: 50
+  introspection_enabled: true
+
+model:
+  name: "muse-glimmer-30b"
+  family: "muse-glimmer"
+  path: /Users/lah-rb/.lmstudio/models/meta-models/Muse-Glimmer-30B-GGUF/muse-glimmer-30B-kquant-dynamic.gguf
+  # The pool total, not one stream's window. ELEVEN streams' worth —
+  # deliberately below the measured 1,838,080 ceiling; see header.
+  n_ctx: 1441792
+  probe_verified_n_ctx: 1838080
+  probe_verified_weights_bytes: 19653957984
+  # MEASURED on the single-stream config, so the preflight stops using the
+  # header formula. This is the number the pool arithmetic runs on.
+  kv_bytes_per_token_measured: 53248
+  # Refuse arithmetically-impossible loads BEFORE Metal allocates — an
+  # allocation past physical memory hard-reboots the box with no error code.
+  # Set from the real wired limit minus working headroom, matching the
+  # gpt-oss swarm's hard-won value rather than the nominal 116.
+  kv_preflight_gb: 106
+  # Trained per-stream range. No single stream may exceed this however large
+  # the pool gets.
+  model_max_context: 131072
+  n_gpu_layers: -1
+  seed: -1
+  verbose: false
+  flash_attn_type: auto
+  n_batch: 2048
+  thinking: "per_request"
+  thinking_mode: high
+  # ARCHITECTURE-determined: sliding_window=2048. Required, or any pinned or
+  # forked prefix corrupts at the window boundary.
+  swa_full: true
+  kv_unified: true
+  resident_seq_cache: true
+  context_refresh_drain_s: 300
+
+prompt:
+  persona_file: "./knowledge/SOUL.md"
+
+generation:
+  max_tokens_default: 32768
+  # The card's single published profile, same as the single-stream config.
+  temperature_default: 1.0
+  top_p: 0.95
+  top_k: 64
+  min_p: 0.00
+  presence_penalty: 0.0
+  repeat_penalty: 1.0
+  streaming_default: true
+
+knowledge:
+  # Shared with the single-stream config — same persona, same family framing,
+  # so the static prefix is byte-identical and there is nothing to rebuild.
+  tokens_bin: "./data/muse-glimmer-30b.tokens.bin"
+  token_limit: 16384
+
+resources:
+  decode_mode: "batched"
+  cpu_threads: 15
+  # Unset resolves to the measured-safe default seat count; the real limiter
+  # is pool cells, enforced by the pool-fit gate against estimated context.
+  jit_concurrency_limit: null
+
+logging:
+  enabled: true
+  directory: "./logs"
+
+tools: {}

@@ -65,14 +65,24 @@ refines cannot drift apart.
   a crash-time restore is impossible by definition and v1 needed the backup.
 * Wired memory is sampled at 10Hz throughout.
 
-── NOT VALID FOR POOLED/BATCHED CONFIGS ─────────────────────────────
-This probe assumes `n_ctx` is ONE context's window. Under
-`decode_mode: batched` it is the SUM budgeted across pool streams —
-`gpt-oss-120b-a5-swarm-524k` declares n_ctx 524288 against a
-model_max_context of 131072 — so a rung there means something different and a
-recorded `probe_verified_n_ctx` would be actively misleading. Probe the
-single-stream config for a model's per-context ceiling; a pool's total is a
-different measurement and needs a different instrument.
+── POOLED/BATCHED CONFIGS MEASURE SOMETHING DIFFERENT ───────────────
+For a single-stream config `n_ctx` is ONE context's window. Under
+`decode_mode: batched` it is the SUM budgeted across pool streams, while
+`model_max_context` bounds any one of them — `gpt-oss-120b-a5-swarm-524k`
+declares n_ctx 589824 against a model_max_context of 131072.
+
+Both are measurable and the probe handles both: a config declaring n_ctx above
+its trained range is claiming to be a pool, so run() drops the per-stream cap
+and bounds it by memory instead (see the POOL branch). What changes is the
+READING, not the validity — a pool ceiling is a cell-budget total, NOT a
+window any single stream may use, and quoting it as a context length is the
+mistake to avoid. Probe the single-stream config for the per-context ceiling
+and the pool config for the budget; they are different questions.
+
+(This section previously said pooled configs were NOT VALID here and that a
+recorded probe_verified_n_ctx would be "actively misleading". The pool branch
+below post-dates that text and contradicts it, and the shipped gpt-oss swarm
+config carries a probe-verified value — so the docstring was the stale half.)
 
 READ IT AS: `ceiling` is the largest rung that both LOADED and DECODED. Loading
 is not enough — the Hy3 ladder found 49152 loaded fine and could not decode a
