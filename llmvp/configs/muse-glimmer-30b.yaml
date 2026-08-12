@@ -33,6 +33,54 @@
 #   * turns end on <|eot|> (200008), NOT the GGUF eos <|end_of_text|> (200001)
 #   * <|eom|> (200007) closes the REASONING message and must never be a stop
 #
+# ══════════════════════════════════════════════════════════════════
+# NOT READY TO CODE. DO NOT PUT THIS MODEL IN A RUN YET.
+# ══════════════════════════════════════════════════════════════════
+# Status 2026-08-11: it LOADS clean (graph splits 2, resident granted,
+# swa_full honoured) and it DECODES — but every completion through this
+# config returns an EMPTY string, so it cannot execute a single flow step.
+#
+# The symptom: given the generation prompt `<|start|>assistant`, the model
+# opens ` to=self<|message|>`, reasons, and then emits <|eot|> — ending the
+# turn from inside the REASONING channel without ever opening the `to=user`
+# content block. Extraction correctly strips reasoning, finds no content,
+# and returns "".
+#
+# What has been RULED OUT, so nobody re-walks it:
+#   * Not the model. Driven through its OWN chat template with a bare user
+#     message it reaches `<|start|>assistant to=user<|message|>` correctly.
+#     It also works in LM Studio (operator).
+#   * Not a stop-token mixup. llama_vocab_is_eog: <|eot|> and
+#     <|end_of_text|> are EOG, <|eom|> is NOT. stop_token_audit clean.
+#   * Not the developer role. That WAS wrong — this family has no developer
+#     role and SOUL.md was being framed in `<|start|>developer<|message|>` —
+#     and fixing it did not restore output.
+#   * Not the message framing. A golden test against the GGUF's own chat
+#     template matches byte-for-byte for the system block and for the
+#     reasoning+content assistant history.
+#
+# PRIME SUSPECT — tool rendering. This family renders tool definitions
+# INSIDE the system message in its own ATEM form, and changes the
+# `# Valid recipients:` line to list each tool namespace when tools are
+# present. The renderer does neither: it injects the auto-generated
+# tools.txt (~1.6k chars) in a shape the model was never trained on, while
+# the recipients line still claims only "self" and "user" are valid. A
+# model told its only valid recipients are self and user, holding a tool
+# block it cannot address, ending the turn after reasoning is a coherent
+# story for exactly this symptom.
+#
+# NEXT PROBE, in order:
+#   1. Neutral persona + tools OFF. Isolates prefix CONTENT from framing;
+#      system-prompt content has vetoed a byte-perfect dial before.
+#   2. If that restores output, implement ATEM tool rendering + the
+#      dynamic recipients line, then re-probe with tools on.
+#   3. Only then --probe-context (n_ctx is a guess until measured) and a
+#      cache_compat_matrix cell for the ledger.
+#
+# Vision is a SEPARATE track and is NOT blocked by this: the mmproj works
+# today through llama-cpp-python's mtmd path outside LLMVP, where it was
+# the most faithful figure transcriber in the 2026-08-11 bake-off.
+#
 # ── Reasoning ───────────────────────────────────────────────────────
 # The card exposes low/medium/high/xhigh via a `Reasoning strength:` system
 # line and recommends high/xhigh for agentic work, which is what we run.
