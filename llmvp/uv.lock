@@ -408,8 +408,8 @@ wheels = [
 
 [[package]]
 name = "llama-cpp-python"
-version = "0.3.44"
-source = { git = "https://github.com/JamePeng/llama-cpp-python.git?rev=998b7b5a5318ab6d53c66a7cf79f7760e5b9f83c#998b7b5a5318ab6d53c66a7cf79f7760e5b9f83c" }
+version = "0.3.46"
+source = { git = "https://github.com/JamePeng/llama-cpp-python.git?rev=8a3bcbfb#8a3bcbfb5e9ed628327ad94b2587cd278507ffa9" }
 dependencies = [
     { name = "diskcache" },
     { name = "jinja2" },
@@ -449,11 +449,11 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "black", specifier = ">=25.11.0" },
+    { name = "black", specifier = ">=26.3.1" },
     { name = "fastapi", specifier = ">=0.128.0" },
     { name = "gguf", specifier = ">=0.10.0" },
     { name = "httpx", specifier = ">=0.28.1" },
-    { name = "llama-cpp-python", git = "https://github.com/JamePeng/llama-cpp-python.git?rev=998b7b5a5318ab6d53c66a7cf79f7760e5b9f83c" },
+    { name = "llama-cpp-python", git = "https://github.com/JamePeng/llama-cpp-python.git?rev=8a3bcbfb" },
     { name = "numpy", specifier = ">=1.26.0" },
     { name = "psutil", specifier = ">=7.2.2" },
     { name = "pydantic", specifier = ">=2.12.5" },
