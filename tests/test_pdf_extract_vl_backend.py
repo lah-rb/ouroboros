@@ -1,0 +1,158 @@
+"""The VL backend is an either/or, and its slot knob must not degrade output.
+
+PaddleOCR-VL's layout pipeline is the same either way; only the engine
+answering the per-region VLM calls changes (paddleocr 3.7 supports both
+`mlx-vlm-server` and `llama-cpp-server` over one OpenAI-shaped client).
+
+THE REGRESSION THIS FILE EXISTS FOR: llama-server's -c is the TOTAL KV cache
+DIVIDED across --parallel slots. A fixed -c therefore shrinks every slot's
+window as slots are added, and a region crop that no longer fits comes back
+TRUNCATED with no error, exit code 0 and the same wall time. Measured
+2026-08-12 on a 10-page paper: -c 8192 held numeric recall 0.935 / span 0.900
+at 1, 4 and 8 slots, then at 16 slots (512 tokens each) fell to 0.910 / 0.850
+and lost 4,482 characters. Speed alone could not see it — only the pipeline's
+own truth-recall check did.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import os
+import sys
+
+import pytest
+
+_TOOL = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "tools",
+    "pdf_extract",
+    "extract_batch.py",
+)
+
+
+def _load_tool():
+    """Import the tool by path — it lives outside the package tree."""
+    spec = importlib.util.spec_from_file_location("_extract_batch_vl_under_test", _TOOL)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+pytest.importorskip("PIL")  # the tool imports PIL at module scope
+_MOD = _load_tool()
+
+
+class _FakePopen:
+    """Captures the argv instead of starting a server."""
+
+    last: list[str] = []
+
+    def __init__(self, cmd, **kwargs):
+        type(self).last = list(cmd)
+
+
+@pytest.fixture
+def spawn(monkeypatch):
+    monkeypatch.setattr(_MOD.subprocess, "Popen", _FakePopen)
+
+    def _run(**kw):
+        _MOD._spawn_vl_server(**kw)
+        return _FakePopen.last
+
+    return _run
+
+
+def _flag(cmd: list[str], name: str) -> str:
+    return cmd[cmd.index(name) + 1]
+
+
+# ── the slot/context invariant ────────────────────────────────────────
+
+
+@pytest.mark.parametrize("slots", [1, 2, 4, 8, 16])
+def test_every_slot_gets_the_full_per_slot_window(spawn, slots):
+    """-c must scale with --parallel, or extra slots silently truncate crops."""
+    cmd = spawn(
+        backend="llamacpp",
+        model="m.gguf",
+        mmproj="p.gguf",
+        port=1,
+        parallel=slots,
+        ctx=2048,
+    )
+    assert int(_flag(cmd, "--parallel")) == slots
+    assert int(_flag(cmd, "-c")) == 2048 * slots, (
+        "-c is the TOTAL cache split across slots; a fixed value shrinks each "
+        "slot's window and truncates region crops with no error at all"
+    )
+
+
+def test_zero_slots_does_not_zero_the_context(spawn):
+    """A 0/negative slot count must not collapse -c to nothing."""
+    cmd = spawn(
+        backend="llamacpp",
+        model="m.gguf",
+        mmproj="p.gguf",
+        port=1,
+        parallel=0,
+        ctx=2048,
+    )
+    assert int(_flag(cmd, "-c")) >= 2048
+
+
+# ── backend selection ─────────────────────────────────────────────────
+
+
+def test_mlx_spawns_the_mlx_server_and_nothing_llama(spawn):
+    cmd = spawn(backend="mlx", model="/models/paddle-mlx", port=7)
+    assert "mlx_vlm.server" in cmd
+    assert _flag(cmd, "--port") == "7"
+    assert "--mmproj" not in cmd and "-ngl" not in cmd
+
+
+def test_llamacpp_passes_model_projector_and_full_offload(spawn):
+    cmd = spawn(backend="llamacpp", model="m.gguf", mmproj="p.gguf", port=9)
+    assert _flag(cmd, "-m") == "m.gguf"
+    assert _flag(cmd, "--mmproj") == "p.gguf"
+    assert _flag(cmd, "-ngl") == "99"
+    assert _flag(cmd, "--port") == "9"
+
+
+def test_llamacpp_without_a_projector_is_refused(spawn):
+    """A VL model with no mmproj loads as text-only and OCRs nothing —
+    fail at spawn rather than produce empty markdown for a whole batch."""
+    with pytest.raises(ValueError, match="mmproj"):
+        spawn(backend="llamacpp", model="m.gguf", port=1)
+
+
+def test_unknown_backend_is_refused(spawn):
+    with pytest.raises(ValueError, match="unknown VL backend"):
+        spawn(backend="vllm", model="m", port=1)
+
+
+# ── paddleocr wiring ──────────────────────────────────────────────────
+
+
+def test_pipe_kwargs_map_to_paddleocrs_own_backend_names():
+    mlx = _MOD._vl_pipe_kwargs("mlx", "/models/paddle-mlx", 123)
+    llama = _MOD._vl_pipe_kwargs("llamacpp", "m.gguf", 123)
+    assert mlx["vl_rec_backend"] == "mlx-vlm-server"
+    assert llama["vl_rec_backend"] == "llama-cpp-server"
+    assert mlx["vl_rec_server_url"] == "http://127.0.0.1:123/"
+
+
+def test_api_model_name_is_sent_only_where_it_selects_the_model():
+    """mlx_vlm.server loads per request, so the name IS the model. llama-server
+    fixed its model at spawn; naming it there can only disagree with reality,
+    so the client discovers it from /v1/models instead."""
+    assert "vl_rec_api_model_name" in _MOD._vl_pipe_kwargs("mlx", "/m", 1)
+    assert "vl_rec_api_model_name" not in _MOD._vl_pipe_kwargs("llamacpp", "m.gguf", 1)
+
+
+def test_concurrency_is_only_sent_when_asked_for():
+    assert "vl_rec_max_concurrency" not in _MOD._vl_pipe_kwargs("mlx", "/m", 1)
+    assert (
+        _MOD._vl_pipe_kwargs("mlx", "/m", 1, concurrency=8)["vl_rec_max_concurrency"]
+        == 8
+    )

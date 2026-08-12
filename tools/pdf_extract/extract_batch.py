@@ -4,14 +4,15 @@
 One agent dispatch = one invocation of this script = one OS process
 (crash isolation: the bake-off showed long-lived vision servers
 accumulate state and die mid-batch; per-batch processes bound the blast
-radius). The script owns its own mlx_vlm.server child for the batch.
+radius). The script owns its own VLM server child for the batch —
+mlx_vlm.server or llama-server, see --vl-backend.
 
 Pipeline per paper:
   1. pymupdf renders pages (160 dpi) and extracts the per-page text
      layer — the publisher's own text, used ONLY as the verification
      oracle, never as output (one output dialect: the engine's).
-  2. PaddleOCR-VL (layout pipeline native, VLM via the MLX server)
-     produces per-page markdown; pages join into
+  2. PaddleOCR-VL (layout pipeline native, VLM over an OpenAI-shaped
+     endpoint) produces per-page markdown; pages join into
      databank/markdown/<paper_key>.md.
   3. Figure crops from the pipeline are deduped (dHash) and filtered
      (size/entropy) into databank/figures/<paper_key>/fig_NN.png; the
@@ -38,7 +39,8 @@ quality policy; this script computes metrics, it does not judge.
 Usage:
   .venv/bin/python extract_batch.py --pdfs a.pdf b.pdf \
       --databank-dir /path/to/databank --model /path/to/mlx-model \
-      [--keys key_a key_b] [--dpi 160]
+      [--keys key_a key_b] [--dpi 160] \
+      [--vl-backend mlx|llamacpp] [--mmproj mmproj.gguf] [--vl-parallel N]
 """
 
 from __future__ import annotations
@@ -101,6 +103,87 @@ def _free_port() -> int:
     port = s.getsockname()[1]
     s.close()
     return port
+
+
+# ── VL backend: MLX or llama.cpp, chosen per invocation ──────────────
+# The layout pipeline is PaddleOCR-VL's own either way. What changes is
+# only which engine answers the per-region VLM calls, and paddleocr 3.7
+# supports both natively (_SUPPORTED_VL_BACKENDS) over one OpenAI-shaped
+# client. The two wire differences it applies are PNG-vs-JPEG crop
+# encoding and the max_tokens field name; crops, prompts and ordering are
+# identical. So this is a true either/or, not two pipelines.
+#
+# MLX was chosen originally because llama.cpp was considerably slower on
+# Metal. That measurement is only as good as the binary it was taken on —
+# see the DeepSeek-V4 case where a stale build cost 4.2x decode — so the
+# comparison is re-runnable here rather than settled by the old verdict.
+_VL_BACKENDS = ("mlx", "llamacpp")
+_LLAMA_SERVER = os.environ.get("OUROBOROS_LLAMA_SERVER", "llama-server")
+
+
+def _spawn_vl_server(
+    backend: str,
+    model: str,
+    mmproj: str = "",
+    port: int = 0,
+    parallel: int = 1,
+    ctx: int = 2048,
+) -> subprocess.Popen:
+    """Start the VLM server for `backend`. Caller owns termination.
+
+    `ctx` is PER SLOT. llama-server's -c is the TOTAL cache divided across
+    --parallel slots, so a fixed -c silently shrinks every slot's window as
+    slots are added — and a region crop that no longer fits comes back
+    truncated with no error anywhere. Measured 2026-08-12 on a 10-page
+    paper: -c 8192 held numeric recall 0.935 / span 0.900 at 1, 4 and 8
+    slots, then at 16 slots (512 tokens each) dropped to 0.910 / 0.850 and
+    lost 4,482 characters. Same wall time, quietly worse extraction — the
+    exact shape of defect that poisons a corpus without failing a run.
+    Scaling here makes the knob mean what a caller thinks it means.
+    """
+    if backend == "mlx":
+        cmd = [sys.executable, "-m", "mlx_vlm.server", "--port", str(port)]
+    elif backend == "llamacpp":
+        if not mmproj:
+            raise ValueError("the llamacpp backend needs --mmproj (the projector)")
+        cmd = [
+            _LLAMA_SERVER,
+            "-m",
+            model,
+            "--mmproj",
+            mmproj,
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+            "-ngl",
+            "99",
+            "-c",
+            str(ctx * max(1, parallel)),
+            "--parallel",
+            str(parallel),
+        ]
+    else:
+        raise ValueError(f"unknown VL backend {backend!r}; expected {_VL_BACKENDS}")
+    return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _vl_pipe_kwargs(backend: str, model: str, port: int, concurrency: int = 0) -> dict:
+    """PaddleOCRVL kwargs for `backend`.
+
+    The api model name is passed for MLX (mlx_vlm.server loads per request,
+    so the name IS the model) and left unset for llama.cpp, whose model is
+    fixed at spawn and discovered from /v1/models.
+    """
+    kwargs: dict = {
+        "vl_rec_backend": "mlx-vlm-server" if backend == "mlx" else "llama-cpp-server",
+        "vl_rec_server_url": f"http://127.0.0.1:{port}/",
+    }
+    if backend == "mlx":
+        kwargs["vl_rec_api_model_name"] = model
+    if concurrency:
+        kwargs["vl_rec_max_concurrency"] = concurrency
+    return kwargs
 
 
 def _wait_health(port: int, timeout: float = 120.0) -> bool:
@@ -376,6 +459,23 @@ def main() -> int:
     ap.add_argument("--databank-dir", required=True)
     ap.add_argument("--model", required=True)
     ap.add_argument("--dpi", type=int, default=160)
+    ap.add_argument(
+        "--vl-backend",
+        choices=_VL_BACKENDS,
+        default=os.environ.get("OUROBOROS_VL_BACKEND", "mlx"),
+        help="engine serving the per-region VLM calls (default: mlx)",
+    )
+    ap.add_argument(
+        "--mmproj",
+        default="",
+        help="projector GGUF — required for --vl-backend llamacpp",
+    )
+    ap.add_argument(
+        "--vl-parallel",
+        type=int,
+        default=1,
+        help="llamacpp server slots; paddle fires region crops concurrently",
+    )
     args = ap.parse_args()
 
     keys = args.keys or [os.path.splitext(os.path.basename(p))[0] for p in args.pdfs]
@@ -384,21 +484,21 @@ def main() -> int:
         return 2
 
     port = _free_port()
-    server = subprocess.Popen(
-        [sys.executable, "-m", "mlx_vlm.server", "--port", str(port)],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    try:
+        server = _spawn_vl_server(
+            args.vl_backend, args.model, args.mmproj, port, args.vl_parallel
+        )
+    except (ValueError, OSError) as exc:
+        print(json.dumps({"error": f"{type(exc).__name__}: {exc}"}))
+        return 2
     try:
         if not _wait_health(port):
-            print(json.dumps({"error": "mlx server failed to start"}))
+            print(json.dumps({"error": f"{args.vl_backend} server failed to start"}))
             return 3
         from paddleocr import PaddleOCRVL
 
         pipe = PaddleOCRVL(
-            vl_rec_backend="mlx-vlm-server",
-            vl_rec_server_url=f"http://127.0.0.1:{port}/",
-            vl_rec_api_model_name=args.model,
+            **_vl_pipe_kwargs(args.vl_backend, args.model, port),
         )
         for pdf, key in zip(args.pdfs, keys):
             report = extract_paper(pipe, pdf, key, args.databank_dir, args.dpi)

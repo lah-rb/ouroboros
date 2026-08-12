@@ -7,13 +7,19 @@ Two engines behind one entrypoint, so mission objective notes never change:
           extract_batch.py (vector-figure text, no-text-layer pages, layout
           fidelity), minus the databank layout / figure sidecars / corpus
           verification bookkeeping. One invocation = one OS process owning
-          its own mlx_vlm.server child (crash isolation, fig_review model).
+          its own VLM server child (crash isolation, fig_review model).
   pymupdf — the raw text layer (fitz get_text), seconds-fast comparator and
           fallback. Pages with no text layer are flagged, never silent.
 
+The paddle engine serves its per-region VLM calls from EITHER backend —
+--vl-backend mlx (the bundled 8-bit, default) or llamacpp (a GGUF pair).
+Same layout pipeline, same crops, same prompts; only the engine differs.
+
 Usage:
   .venv/bin/python pdf_extract_one.py --pdf doc.pdf [--out doc.pdf.md]
-      [--engine paddle|pymupdf] [--model <mlx dir>] [--dpi 160] [--port 0]
+      [--engine paddle|pymupdf] [--dpi 160] [--port 0]
+      [--model <mlx dir | model.gguf>]
+      [--vl-backend mlx|llamacpp] [--mmproj mmproj.gguf] [--vl-parallel 1]
 
 stdout = the markdown/text (or a one-line JSON report with --out); errors to
 stderr, non-zero exit.
@@ -31,7 +37,13 @@ import time
 
 # Server plumbing shared with extract_batch.py (same directory → importable
 # when invoked by path).
-from extract_batch import _free_port, _wait_health
+from extract_batch import (
+    _VL_BACKENDS,
+    _free_port,
+    _spawn_vl_server,
+    _vl_pipe_kwargs,
+    _wait_health,
+)
 
 _DEFAULT_MODEL = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "models", "PaddleOCR-VL-1.6-MLX-8bit"
@@ -52,18 +64,16 @@ def extract_pymupdf(pdf_path: str) -> str:
     return "\n\n".join(pages)
 
 
-def extract_paddle(pdf_path: str, model: str, dpi: int, port: int) -> str:
+def extract_paddle(
+    pdf_path: str, model: str, dpi: int, port: int, backend: str = "mlx"
+) -> str:
     """PaddleOCR-VL page loop from extract_batch.extract_paper, layout-only:
     no figure sidecars, no databank paths, no verification tallies."""
     import fitz  # pymupdf
 
     from paddleocr import PaddleOCRVL
 
-    pipe = PaddleOCRVL(
-        vl_rec_backend="mlx-vlm-server",
-        vl_rec_server_url=f"http://127.0.0.1:{port}/",
-        vl_rec_api_model_name=model,
-    )
+    pipe = PaddleOCRVL(**_vl_pipe_kwargs(backend, model, port))
     doc = fitz.open(pdf_path)
     page_mds: list[str] = []
     with tempfile.TemporaryDirectory(prefix="pdfx1_") as tmp:
@@ -91,16 +101,42 @@ def main() -> int:
     ap.add_argument("--out", default="", help="write here (default: stdout)")
     ap.add_argument("--engine", choices=("paddle", "pymupdf"), default="paddle")
     ap.add_argument(
-        "--model", default=_DEFAULT_MODEL, help="MLX VLM model dir (paddle)"
+        "--model",
+        default="",
+        help="VLM to serve — an MLX model dir, or the GGUF for --vl-backend "
+        "llamacpp (default: the bundled MLX 8-bit)",
     )
     ap.add_argument("--dpi", type=int, default=160)
     ap.add_argument(
         "--port",
         type=int,
         default=0,
-        help="0 = spawn a private mlx_vlm.server; N = reuse one (paddle)",
+        help="0 = spawn a private VLM server; N = reuse one (paddle)",
     )
+    ap.add_argument(
+        "--vl-backend",
+        choices=_VL_BACKENDS,
+        default=os.environ.get("OUROBOROS_VL_BACKEND", "mlx"),
+        help="engine serving the per-region VLM calls (default: mlx)",
+    )
+    ap.add_argument(
+        "--mmproj",
+        default="",
+        help="projector GGUF — required for --vl-backend llamacpp",
+    )
+    ap.add_argument("--vl-parallel", type=int, default=1, help="llamacpp server slots")
     args = ap.parse_args()
+
+    # Only the MLX default is bundled; llamacpp must be told which GGUF.
+    if not args.model:
+        if args.vl_backend != "mlx":
+            print(
+                "pdf_extract_one: --model (the GGUF) is required for "
+                f"--vl-backend {args.vl_backend}",
+                file=sys.stderr,
+            )
+            return 2
+        args.model = _DEFAULT_MODEL
 
     if not os.path.isfile(args.pdf):
         print(f"pdf_extract_one: no such pdf: {args.pdf}", file=sys.stderr)
@@ -114,15 +150,20 @@ def main() -> int:
         else:
             port = args.port or _free_port()
             if not args.port:
-                server = subprocess.Popen(
-                    [sys.executable, "-m", "mlx_vlm.server", "--port", str(port)],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+                server = _spawn_vl_server(
+                    args.vl_backend,
+                    args.model,
+                    args.mmproj,
+                    port,
+                    args.vl_parallel,
                 )
             if not _wait_health(port):
-                print("pdf_extract_one: mlx server failed to start", file=sys.stderr)
+                print(
+                    f"pdf_extract_one: {args.vl_backend} server failed to start",
+                    file=sys.stderr,
+                )
                 return 3
-            text = extract_paddle(args.pdf, args.model, args.dpi, port)
+            text = extract_paddle(args.pdf, args.model, args.dpi, port, args.vl_backend)
     except Exception as e:  # noqa: BLE001 — CLI boundary: report, non-zero exit
         print(f"pdf_extract_one: {type(e).__name__}: {e}", file=sys.stderr)
         return 1
