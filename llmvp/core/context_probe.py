@@ -154,6 +154,20 @@ PROBE_PROMPT = (
     "Write a Python function that merges two sorted lists. Return only the code."
 )
 
+# What this probe is actually asking is "did this n_ctx DECODE cleanly?", not
+# "was the answer good". Those come apart on a heavy reasoner: muse-glimmer at
+# thinking_mode high spends 27-224 tokens in its reasoning channel before it
+# opens the content channel, so a small budget is exhausted mid-thought, there
+# is no content block to extract, and a perfectly healthy rung scored
+# NO_OUTPUT. Every rung failed that way on the first muse probe.
+#
+# A budget-starved reasoner and a latched context are distinguishable: the
+# starved one is still emitting tokens at the cap, the latched one returns
+# nothing (or throws decode -3, which `saw_code` catches separately). So the
+# health test is "content OR the generator was still running at the cap",
+# and the cap is generous enough that a normal model answers well inside it.
+PROBE_MAX_TOKENS = 600
+
 
 @dataclass
 class Rung:
@@ -570,12 +584,16 @@ class Probe:
                 break
             try:
                 d = q(
-                    '{completion(request:{prompt:"%s",maxTokens:200}){text}}'
-                    % PROBE_PROMPT,
+                    '{completion(request:{prompt:"%s",maxTokens:%d})'
+                    "{text generatedTokens}}" % (PROBE_PROMPT, PROBE_MAX_TOKENS),
                     timeout=600,
                 )
-                t = ((d.get("data") or {}).get("completion") or {}).get("text") or ""
-                if d.get("errors") or not t.strip():
+                c = (d.get("data") or {}).get("completion") or {}
+                t = c.get("text") or ""
+                gen = int(c.get("generatedTokens") or 0)
+                # Content, OR still generating at the cap (a reasoner that
+                # spent the budget thinking — see PROBE_MAX_TOKENS).
+                if d.get("errors") or not (t.strip() or gen >= PROBE_MAX_TOKENS):
                     bad += 1
                 else:
                     ok += 1

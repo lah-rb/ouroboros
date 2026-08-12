@@ -43,11 +43,58 @@
 # say why it samples the way it does cannot be defended after a bad arm.
 #
 # ── 3. FAMILY / FORMAT ───────────────────────────────────────────────
-# Does `family:` already exist in llmvp/formats/? If NOT, the new schema must
-# ALSO be registered in core/fsm_labeller.py — olmo shipped unmapped once and
-# `think>` residue corrupted the judged artifact. Verify the turn terminator
-# is in the family's stop set: `dev/stop_token_audit.py` (a missing one burned
-# 83 minutes of a glm arm).
+# Does `family:` already exist in llmvp/formats/? If not, write the schema.
+# fsm_labeller and featurizer now DERIVE shape, channel vocabulary, recipient
+# form and terminators from the yaml, so a new family costs no edits there —
+# but only if the yaml actually declares them. The fields that carry
+# extraction are `thinking.channel_name` / `content_channel` /
+# `channel_token`, and `tokens.thinking_close` / `msg_close` / `gen_stop`.
+# An undeclared terminator is not a cosmetic omission: it is a phase that
+# never closes.
+#
+# GET THE TEMPLATE FROM THE CARD, NOT FROM THE NEIGHBOURING FAMILY. Quant
+# publishers (bartowski, unsloth) print the prompt format verbatim; diff ours
+# against it byte-for-byte before writing a line of code, and search for known
+# issues while you are there — muse-glimmer's arch needed llama.cpp b10353,
+# which one search answered and no amount of local debugging would have.
+# Copying the nearest family is how muse got harmony's sampler and a
+# `developer` role it has never seen.
+#
+# Verify the turn terminator is in the family's stop set:
+# `dev/stop_token_audit.py` (a missing one burned 83 minutes of a glm arm).
+#
+# ── 3b. PROVE EXTRACTION, NOT JUST RENDERING ─────────────────────────
+# THE GOLDEN TEMPLATE TEST DOES NOT COVER THIS. Rendering and extraction are
+# separate registries and the second one fails silently — twice, differently:
+# olmo leaked a `think>` residue into CONTENT (a SyntaxError in a judged
+# artifact) while capturing zero thinking; muse-glimmer rendered byte-perfectly
+# and returned "" on EVERY completion for a day, because the FSM knew
+# harmony's channel WORDS (analysis/final) and muse names its channel as a
+# recipient in plain text (`to=self` / `to=user`).
+#
+# So the acceptance test for a new family is a REAL completion with non-empty
+# C *and* non-empty T, plus a check that the post-answer orbit is sealed —
+# models that reopen and re-answer are common, and an unclosed phase
+# concatenates the self-play onto the real answer.
+#
+# CAPTURE THE RAW STREAM BEFORE BELIEVING ANY DIAGNOSIS.
+#   .venv/bin/python ../dev/muse_raw_probe.py <arm>
+# drives the GGUF directly with NO stop strings and REPORTS EOG instead of
+# obeying it, so you see what the model intended. LLMVP logs only `first100`
+# of the raw answer, which cannot distinguish "the model never answered" from
+# "extraction dropped the answer" — and those two lead to opposite fixes. A
+# day went into a suspect list (tools block, developer role, persona content,
+# framing, temperature) that one raw capture cleared, because the recorded
+# symptom was an INFERENCE from an empty result, never a measurement.
+#
+# Two non-suspects, so nobody re-walks them:
+#   • The tools block is NEVER injected. `prompt.tools_file` defaults to None
+#     and no config in the fleet sets it, so preprocessing/builder.py skips it.
+#     The auto-generated knowledge/tools.txt is written to disk and read by
+#     nothing. Check the boot line `📝 Static prefix: N chars` against persona
+#     length + framing before blaming the prefix.
+#   • Empty output at temperature 0 that is also empty at the card's sampling
+#     profile is not a sampling problem. Check once, then move on.
 #
 # ── 4. CHOOSE THE STRATEGY, THEN STATE swa_full ──────────────────────
 #   cache_strategy: replay | resident | batched      (see the shortcut below)
@@ -68,8 +115,10 @@
 # qwen3-next (DeltaNet) grants it while the GDN qwens refuse.
 #
 # ── 6. PROBE THE CONTEXT CEILING ─────────────────────────────────────
-#   .venv/bin/python api/main.py --probe-context <config>     (detached:
-#   bash dev/probe_ctx.sh <config>)
+#   nohup .venv/bin/python api/main.py --probe-context <config> &
+# It backs the config up to ~/ouroboros-runs/ctx_probe_*/ and walks rungs down
+# from the trained ctx, so run it detached and read the log — it outlives the
+# launching shell but NOT the session that owns it.
 # Writes back probe_verified_n_ctx + probe_verified_weights_bytes so the KV
 # preflight stops guessing. Two rules: never hand-edit those to make a load
 # succeed, and RE-PROBE after any flag change that moves the seq map — a
