@@ -63,6 +63,35 @@ _NUM_RE = re.compile(r"-?\d+\.\d+(?:[eE][+-]?\d+)?|-?\d{2,}")
 _MAX_CAPTION_CHARS = 1400
 _MAX_FIGTEXT_TOKENS = 800
 
+# ── Resolution floor ─────────────────────────────────────────────────
+# MEASURED 2026-08-12. The vision tower tokenises by PIXEL AREA at ~715 px per
+# token, so one token spans ~26.7 px of whatever we send. A feature smaller
+# than that is averaged into a neighbouring patch and the model falls back to
+# completing the pattern from the rest of the figure — which is how a 13-bar
+# stacked chart acquired mineral categories that were not in it.
+#
+# Upscaling a small crop changes the sampling rate relative to the feature and
+# is the cheapest general fix: at 1 Mpx one token spans ~15 native px instead
+# of ~27, and phantom categories on the test figure fell from 5 per run to 1
+# with NO prompt change. It is not a complete fix and is not sold as one.
+#
+# A FLOOR, NOT A TARGET. Crops already above the floor are left alone —
+# downscaling them to hit a number would discard native detail we already have
+# in order to save a few seconds.
+#
+# PLAIN INTERPOLATION ONLY. A learned upscaler (Upscayl-lite 4x, ESRGAN class)
+# rewrote glyphs on the same figure — `Botswana` became `Bolswana` in 4 of 4
+# runs — and the model transcribed the invention faithfully. Lanczos at the
+# same output size and the same token cost was clean.
+#
+# Cost at the floor: ~1400 image tokens and ~9s prefill, against ~516 and ~3s
+# for a typical native panel crop.
+_MIN_VISION_PIXELS = int(os.environ.get("OUROBOROS_VISION_MIN_PIXELS", 1_000_000))
+# Beyond ~3190px on the long side the server resizes back down, so upscaling
+# past it buys tokens and no resolution (measured: 3x cost more than 2x and
+# scored worse).
+_MAX_VISION_LONG_SIDE = int(os.environ.get("OUROBOROS_VISION_MAX_SIDE", 3190))
+
 _FIG_PROMPT = """You are reading one figure from a scientific paper on materials science.
 
 Caption / surrounding text from the paper:
@@ -175,6 +204,52 @@ def _llmvp_ready(url: str, timeout: float = 5.0) -> bool:
         return False
 
 
+def upscale_factor(width: int, height: int) -> float:
+    """How much to enlarge a crop to clear the resolution floor.
+
+    1.0 means send it unchanged. Pure arithmetic and no I/O, so the policy is
+    testable without an image or a server.
+    """
+    px = width * height
+    if px <= 0 or px >= _MIN_VISION_PIXELS:
+        return 1.0
+    f = (_MIN_VISION_PIXELS / px) ** 0.5
+    # Never past the point where the server resizes it back down again.
+    long_side = max(width, height)
+    if long_side * f > _MAX_VISION_LONG_SIDE:
+        f = _MAX_VISION_LONG_SIDE / long_side
+    return max(1.0, f)
+
+
+def _read_at_floor(image_path: str) -> bytes:
+    """The image bytes, enlarged to the floor if it sits below it.
+
+    Failure here must never cost the batch a figure: any problem reading or
+    resizing falls back to the original bytes, because a small image still
+    produces a usable figtext and a crashed dispatch produces none.
+    """
+    with open(image_path, "rb") as f:
+        raw = f.read()
+    try:
+        import io
+
+        from PIL import Image  # lazy: module scope stays stdlib-only
+
+        im = Image.open(io.BytesIO(raw))
+        f_up = upscale_factor(*im.size)
+        if f_up <= 1.0:
+            return raw
+        w, h = int(im.width * f_up), int(im.height * f_up)
+        buf = io.BytesIO()
+        # LANCZOS, deliberately — see the _MIN_VISION_PIXELS note on what a
+        # learned upscaler does to printed text.
+        im.convert("RGB").resize((w, h), Image.LANCZOS).save(buf, format="PNG")
+        return buf.getvalue()
+    except Exception as exc:  # noqa: BLE001 — never lose a figure to resizing
+        print(f"fig_review: resize skipped for {image_path}: {exc}", file=sys.stderr)
+        return raw
+
+
 def _chat_figure(
     endpoint: str, model: str, image_path: str, caption: str, send_model: bool
 ) -> tuple[str, str]:
@@ -186,8 +261,7 @@ def _chat_figure(
     paths only under model.vision_image_roots, and the figure lives wherever
     the mission's workspace happens to be.
     """
-    with open(image_path, "rb") as f:
-        b64 = base64.b64encode(f.read()).decode()
+    b64 = base64.b64encode(_read_at_floor(image_path)).decode()
     payload = {
         "max_tokens": _MAX_FIGTEXT_TOKENS,
         "temperature": 0.2,
