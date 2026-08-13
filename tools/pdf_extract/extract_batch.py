@@ -80,6 +80,14 @@ _SPANS_PER_PAGE = 8
 # Vector-figure text filter: a text-layer block this short whose
 # characters are mostly digits is an axis tick / data label, not prose.
 _PROSE_MIN_BLOCK = 30  # chars; tick blocks are tiny ("20", "0.5", "2θ (°)")
+# A drawing covering at least this fraction of the page is a figure, not a
+# rule or an underline. Deliberately generous: over-excluding prose would
+# understate recall and fail faithful papers, so the bar is set where a plot
+# frame clears it and a table rule does not.
+_FIG_REGION_MIN_AREA_FRAC = 0.01
+# Scripts that do not delimit words with whitespace. Stripped from the truth
+# before SPAN sampling only — see _verify_page. Numerics are untouched.
+_CJK_RE = re.compile(r"[　-〿぀-ヿ㐀-䶿一-鿿가-힯＀-￯]+")
 _PROSE_DIGIT_FRAC = 0.5
 
 # ── Figure filter constants ───────────────────────────────────────────
@@ -249,18 +257,63 @@ def _norm(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+def _figure_regions(page) -> list:
+    """Rectangles on this page that are figures — vector art or raster.
+
+    A drawing this large is a plot frame, an axis or a shaded series, not a
+    rule or an underline. Small strokes are ignored precisely because a table
+    rule or a text underline would otherwise swallow the prose beside it.
+    """
+    rects = []
+    try:
+        page_area = abs(page.rect.width * page.rect.height) or 1.0
+        for d in page.get_drawings():
+            r = d.get("rect")
+            if r is None:
+                continue
+            area = abs(r.width * r.height)
+            if area / page_area >= _FIG_REGION_MIN_AREA_FRAC:
+                rects.append(r)
+        for img in page.get_images(full=True):
+            try:
+                rects.extend(page.get_image_rects(img[0]))
+            except Exception:  # noqa: BLE001 — an unreachable xref is not fatal
+                continue
+    except Exception:  # noqa: BLE001 — verification must not break extraction
+        return []
+    return rects
+
+
 def _prose_text(page) -> str:
     """Text-layer prose for verification — vector-figure text excluded.
 
     Publishers that draw figures as vector graphics (Nature's whole
     family, some RSC/Elsevier) emit axis ticks and data labels into the
     text layer. The VLM renders those figures as images, so against the
-    raw text layer every axis number counts as a miss. Drop short,
-    digit-dominated blocks; prose blocks keep all their numerics.
+    raw text layer every axis number counts as a miss.
+
+    TWO FILTERS, because one was not enough. The original rule — short AND
+    digit-dominated — catches axis ticks and misses everything else a figure
+    contains: legend entries, panel captions, inset annotations, sample codes.
+    On figure-dense papers that residue is large enough to sink a faithful
+    extraction. Measured 2026-08-12 on a live corpus: papers that FAILED the
+    quality gate averaged 38.3 figures against 23.2 for those that passed,
+    with numeric recall correlating negatively with figure count (r = -0.47).
+    The three worst carried 118, 112 and 48 figures.
+
+    So blocks are also dropped SPATIALLY — if a text block sits inside a
+    figure region, it is figure text whatever it looks like. That is the
+    property that actually distinguishes it, rather than a proxy for it.
+    A page with no detected figures behaves exactly as before.
     """
+    regions = _figure_regions(page)
     parts = []
     for block in page.get_text("blocks"):
-        text = block[4]
+        x0, y0, x1, y1, text = block[0], block[1], block[2], block[3], block[4]
+        if regions:
+            cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+            if any(r.x0 <= cx <= r.x1 and r.y0 <= cy <= r.y1 for r in regions):
+                continue
         stripped = re.sub(r"[\s,.\-–—°%()×±]+", "", text)
         if (
             len(text.strip()) < _PROSE_MIN_BLOCK
@@ -289,7 +342,23 @@ def _verify_page(md: str, truth: str) -> tuple[int, int, int, int]:
     nums = _NUM_RE.findall(truth_n)
     num_hit = sum(1 for n in nums if n in md_compact or n in md_n)
 
-    words = truth_n.split()
+    # SPAN IS A WHITESPACE METRIC. On a script that does not delimit words it
+    # measures nothing: a 5-"word" n-gram becomes one huge character run that
+    # never matches, and a faithful page scores near zero.
+    #
+    # CJK runs are dropped from the truth before sampling rather than the whole
+    # page being skipped, because the papers that hit this are BILINGUAL — the
+    # one that exposed it is a Chinese journal printing an English title,
+    # abstract and captions alongside the Chinese. Skipping whole pages threw
+    # away checkable English prose and still left mixed pages scoring badly
+    # (measured: span 0.29 -> 0.44, still under the gate). Stripping keeps
+    # every English span checkable and removes only what cannot be scored.
+    #
+    # Numerics are untouched — they are language-invariant, which is the whole
+    # reason the numeric check is the primary anchor.
+    truth_spanable = _CJK_RE.sub(" ", truth_n)
+
+    words = truth_spanable.split()
     if len(words) >= _SPAN_WORDS:
         step = max(1, (len(words) - _SPAN_WORDS) // _SPANS_PER_PAGE)
         spans = [

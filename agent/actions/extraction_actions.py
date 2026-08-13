@@ -306,6 +306,28 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
                     + (" (command timed out)" if result.timed_out else "")
                 )
             )
+            # WHAT THE RUN PRODUCED IS RECORDED EVEN WHEN THE GATE REJECTS IT.
+            # figure_count used to be written only on the success path, so a
+            # rejected paper carried figure_count=0 while its figures sat on
+            # disk — 345 orphaned PNGs across 9 papers on one live run, three
+            # of them holding 118, 112 and 48 figures. Nothing downstream
+            # could see them, and an analysis of the failures read "0 figures"
+            # as a property of the papers rather than of the bookkeeping.
+            #
+            # The status still gates the curator; this only stops the record
+            # from misdescribing what happened.
+            if rep:
+                rec["figure_count"] = rep.get("figures_kept", 0)
+                if rep.get("md_path"):
+                    rec["md_path"] = os.path.join("databank", rep["md_path"])
+                rec["extraction_quality"] = {
+                    "numeric_match_rate": round(rep.get("numeric_match_rate", 0), 4),
+                    "span_pass_rate": round(rep.get("span_pass_rate", 0), 4),
+                    "verified_pages": rep.get("verified_pages", 0),
+                    "unverified_pages": rep.get("unverified_pages", 0),
+                    "pages": rep.get("pages", 0),
+                    "seconds": rep.get("seconds", 0),
+                }
             if prior_retry:
                 rec["extraction_status"] = "extract_failed"
                 rec["failure_reason"] = f"extraction: {reason}"
