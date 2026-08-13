@@ -292,3 +292,38 @@ must come from something that MEASURES. Two sources already in the tree:
 
 Neither needs the VLM to know where anything is. Test either against these same
 10 figures before adopting.
+
+---
+
+# CORRECTION to 802250f's validation, 2026-08-13
+
+That commit claimed the verifier changes "recover 11 and regress ZERO" against
+the live corpus. **The measurement was wrong, and the real number is smaller.**
+
+`rescore.py` compared the WHOLE markdown against each page's prose layer.
+Production compares that PAGE's markdown against that page's prose
+(`extract_paper`, the `_verify_page(page_md, truth)` call). Whole-document
+matching lets a number on page 3 satisfy a truth token from page 7, so every
+rate came out flattering.
+
+The live run showed it immediately: extraction success moved 47.8% -> 49.0%
+across the fix, not the ~33% jump the rescore implied.
+
+RE-MEASURED PAGE-ALIGNED (page boundaries are recoverable — extract_paper joins
+pages with "\n\n---\n\n", and the reconstruction matches the PDF page count on
+40/40 papers checked):
+
+    recovered 10    regressed 1    unchanged 60    (n=71)
+
+So the fix is worth keeping — roughly +13% on the papers it touches — but it is
+not free. `doi_10.1038_srep01554` went 0.87 -> 0.83 numeric and now fails.
+Diagnosed: the spatial filter removed only **0.6%** of that paper's prose, but
+that fragment was numeric-dense and matching. A knife-edge against the 0.85
+gate rather than systematic over-exclusion, which is the failure mode that
+would have mattered.
+
+METHOD NOTE, since this is the second time today: a validation harness that
+does not reproduce the production code path measures something else. The tell
+was available immediately — the live pre/post rate barely moved while the
+rescore claimed a large gain — and disagreement between a harness and
+production should be treated as the harness being wrong until shown otherwise.
