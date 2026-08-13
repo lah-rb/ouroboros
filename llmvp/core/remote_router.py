@@ -92,11 +92,61 @@ def resolve_route(model: Optional[str]) -> Optional[Tuple[Any, Any]]:
     active = model_registry.active_name()
     if model == active:
         return None
+
+    # A HOT SECONDARY is served locally too — the local path resolves which
+    # backend via resolve_local_backend(). Checked before the inactive error
+    # because "loaded but not primary" is now a real state (Phase 2b), where
+    # it used to be impossible and therefore an error.
+    from core import resident_models
+
+    if resident_models.is_resident(model):
+        return None
+
     known = {e.name for e in model_registry.list_models()}
     if model in known:
         raise InactiveLocalModel(
             f"model {model!r} is a local config but {active!r} is resident — "
-            f"run swapModel first (a completion never loads weights)"
+            f"run swapModel or loadModel first (a completion never loads weights)"
+        )
+    raise KeyError(f"unknown model {model!r} — see the models query")
+
+
+def resolve_local_backend(model: Optional[str]) -> Optional[Any]:
+    """The hot SECONDARY backend for ``model``, or None for "use the primary".
+
+    Split from ``resolve_route`` because the two answer different questions:
+    that one decides local-vs-remote, this one decides WHICH local backend.
+    Folding them would mean returning two incompatible shapes from one
+    function and every caller unpacking both.
+
+    STRICT BY DESIGN. A named model that is not hot RAISES rather than
+    returning None, because None means "serve with the primary" — so a typo,
+    an unloaded model, or an OpenAI client sending its own idea of a model
+    name would be answered by a DIFFERENT model, correctly formatted, with no
+    error anywhere. That is the silent-wrong-output failure mode this codebase
+    has paid for repeatedly. Only an empty name, or the active model's own
+    name, may resolve to the primary.
+    """
+    if not model:
+        return None
+    from core import model_registry, resident_models
+
+    if model == model_registry.active_name():
+        return None
+    backend = resident_models.get_resident(model)
+    if backend is not None:
+        return backend
+
+    if get_adapter(model) is not None:
+        raise InactiveLocalModel(
+            f"{model!r} is a REMOTE registry entry — it cannot serve a local "
+            f"path (no sessions, no vision); use the text completion route"
+        )
+    known = {e.name for e in model_registry.list_models()}
+    if model in known:
+        raise InactiveLocalModel(
+            f"model {model!r} is a local config but is not hot — run "
+            f"loadModel({model!r}) first (a request never loads weights)"
         )
     raise KeyError(f"unknown model {model!r} — see the models query")
 

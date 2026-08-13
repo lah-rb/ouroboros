@@ -1,0 +1,117 @@
+# PaddleOCR-VL-1.6 — the OCR reader, as a HOT SECONDARY (Phase 2b residency).
+#
+# WHAT THIS REPLACES. tools/pdf_extract/extract_batch.py has spawned its own
+# `llama-server` per batch since the toolchain was written: ~84 spawns across
+# the 2026-08-13 overnight scrape, each loading weights, serving two PDFs and
+# dying. That works, but the OCR stage then lives outside LLMVP entirely —
+# Ouroboros owns a server lifecycle, model choice is a constant in a tool, and
+# nothing in the fleet's model management can see it.
+#
+# WHY IT IS SAFE TO BRING IN-PROCESS NOW. MULTI_MODEL_PLAN's P0.b parked local
+# co-residency on a 2026-07-16 verdict of "concurrent == solo SUM, plus a
+# greedy divergence". Re-measured 2026-08-13 on the current build, BOTH halves
+# fell: the divergence was a probe artifact (KV accumulated across arms because
+# the instance was never restored — it vanishes with a per-decode restore), and
+# topology turned out not to be the variable at all. Same pair, same protocol:
+# in-process 0.619, cross-process 0.575. Full record in
+# dev/PARALLEL_LANES_2026-08-13.md §7d.
+#
+# WHAT ACTUALLY GOVERNS THROUGHPUT is the workload PAIR. Measured the same day:
+# this model's OCR against muse's text decode overlaps at 0.342 — the best of
+# every pair tried — because a compute-bound tenant fills the gaps a
+# bandwidth-bound decoder leaves. Against muse's VISION it is 0.524, and two
+# text decoders are ~0.6. So OCR belongs paired with the TEXT lane.
+#
+# ── VISION-ONLY ENTRY, deliberately ─────────────────────────────────
+# Reachable only through POST /v1/vision (or visionCompletion) with
+# `model: paddle-ocr-vl`. The TEXT path must not route here and cannot:
+# run_completion builds its prompt from the ACTIVE config's tokenizer and
+# static buffer, so a text request routed to a secondary would tokenize with
+# the primary's tokenizer and prepend the primary's static head — silently
+# wrong tokens, no error. Only the vision path is safe, because the mtmd
+# handler builds the prompt from THIS model's own chat template.
+#
+# Driving it as a text decoder is also just meaningless: with no image
+# attached it degenerated after 57 tokens (`cycle period 2 x 12`) in the
+# 2026-08-13 pair probe. A vision model with nothing to look at has no work.
+#
+# family: paddleocr resolves PaddleOCRChatHandler via
+# inference/vision_handlers._FAMILY_HANDLERS, matching general.architecture in
+# the GGUF. There is no formats/paddleocr.yaml and none is needed —
+# vision_text.stop_strings returns [] for a family it does not know, and this
+# model's template closes on its own `</s>` (eos id 2), which llama.cpp honours
+# natively. The template is a plain
+# `User: <|IMAGE_START|><|IMAGE_PLACEHOLDER|><|IMAGE_END|>{text}\nAssistant:\n`.
+#
+# ── Budget ───────────────────────────────────────────────────────────
+# weights 498 MB (Q8_0) + projector 882 MB + KV. Tiny beside muse's 18.3 GB,
+# which is what makes holding both hot uncontroversial: the governor prices
+# this pair at ~27 GB against a ~105 GB budget.
+#
+# n_ctx is small ON PURPOSE — the text pool is never used, so paying KV for it
+# would be pure waste. vision_n_ctx is what OCR actually consumes, and 32768 is
+# four times the `-c 8192` per slot the subprocess path was measured under
+# (2026-08-12: numeric recall 0.935 / span 0.900 held at 1, 4 and 8 slots).
+
+app:
+  host: "0.0.0.0"
+  port: 8008
+  log_level: "info"
+  cors_origins: ["*"]
+  backend_timeout: 300
+
+graphql:
+  max_query_depth: 10
+  max_tokens: 32768
+  max_aliases: 50
+  introspection_enabled: true
+
+model:
+  name: "paddle-ocr-vl"
+  family: "paddleocr"
+  path: /Users/lah-rb/.lmstudio/models/mradermacher/PaddleOCR-VL-1.6-GGUF/PaddleOCR-VL-1.6.Q8_0.gguf
+  mmproj_path: /Users/lah-rb/.lmstudio/models/PaddlePaddle/PaddleOCR-VL-1.6-GGUF/PaddleOCR-VL-1.6-GGUF-mmproj.gguf
+  # Text pool: minimal. This entry is never a text target.
+  n_ctx: 4096
+  # Vision: the window OCR crops actually land in.
+  vision_n_ctx: 32768
+  vision_image_roots:
+    - "~/corpora"
+    - "~/ouroboros-runs"
+  n_gpu_layers: -1
+  seed: -1
+  verbose: false
+  thinking_available: false
+  thinking: "off"
+
+prompt:
+  persona_file: "./knowledge/SOUL.md"
+
+generation:
+  # OCR answers are page/region transcriptions — bounded, and a runaway on a
+  # dense figure costs the whole batch's wall time.
+  max_tokens_default: 4096
+  temperature_default: 0.1
+  top_p: 0.95
+  top_k: 0
+  min_p: 0.00
+  presence_penalty: 0.0
+  repeat_penalty: 1.05
+  streaming_default: false
+
+knowledge:
+  tokens_bin: "./data/paddle-ocr-vl.tokens.bin"
+  token_limit: 2048
+
+resources:
+  cpu_threads: 15
+  max_concurrent_requests: 1
+  decode_mode: "pool"
+
+tools:
+  enabled: false
+  max_iterations: 3
+
+logging:
+  enabled: false
+  directory: "./logs"

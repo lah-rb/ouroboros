@@ -222,11 +222,23 @@ async def vision_completions(request: Request):
             messages=messages,
             max_tokens=body.get("max_tokens"),
             temperature=body.get("temperature"),
+            # OpenAI clients already send `model`; honouring it routes to a
+            # hot secondary (loadModel). resolve_local_backend is STRICT — an
+            # unknown or not-hot name raises instead of quietly serving the
+            # primary under someone else's model name. Clients that send a
+            # cosmetic model string must omit it or name a real entry.
+            model=body.get("model"),
         )
     except ImageIntakeError as exc:
         # 400, not 500: the caller sent an image we will not read (outside the
         # allowlist, traversal, oversize, or a remote URL we refuse to fetch).
         return JSONResponse(status_code=400, content={"error": str(exc)})
+    except KeyError as exc:
+        # An unknown `model` name. Caller error, and the ONE thing the caller
+        # needs to read — an OpenAI client that discovered its model string
+        # from somewhere else gets a name it can act on instead of a bare 500.
+        # KeyError stringifies with its own quotes; strip them.
+        return JSONResponse(status_code=400, content={"error": str(exc).strip("\"'")})
     except RuntimeError as exc:
         return JSONResponse(status_code=503, content={"error": str(exc)})
     return {

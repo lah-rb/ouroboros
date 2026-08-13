@@ -324,6 +324,9 @@ class VisionCompletionRequest:
     images: List[VisionImage]
     max_tokens: Optional[int] = strawberry.field(default=None)
     temperature: Optional[float] = strawberry.field(default=None)
+    # Route to a HOT SECONDARY (loadModel) instead of the primary. None =
+    # the primary, which is every pre-existing caller.
+    model: Optional[str] = strawberry.field(default=None)
 
 
 @strawberry.input
@@ -455,6 +458,25 @@ class ModelInfoGQL:
     active: bool
     provider: str = "local_llama"
     error: Optional[str] = None
+    # Phase 2b residency. "active" is the primary (swapModel's target);
+    # "hot" is a loaded SECONDARY servable by name; "cold" is catalog only.
+    # Kept distinct from `active` rather than folded into it, because the
+    # primary and a secondary are reached through different machinery and a
+    # single boolean would hide that.
+    state: str = "cold"
+    footprint_gb: float = 0.0
+
+
+@strawberry.type
+class ResidencyResult:
+    """Outcome of loadModel / unloadModel."""
+
+    ok: bool
+    name: str
+    state: str
+    footprint_gb: float = 0.0
+    resident_count: int = 0
+    detail: str = ""
 
 
 @strawberry.type
@@ -965,9 +987,30 @@ class Query:
 
     @strawberry.field
     def models(self) -> List[ModelInfoGQL]:
-        """Swappable model configs (the registry catalog) with the active
-        one flagged. Targets for the swapModel mutation."""
-        from core import model_registry
+        """The registry catalog, with the active primary flagged and any HOT
+        secondaries marked. Targets for swapModel (primary) and
+        loadModel/unloadModel (secondaries)."""
+        from core import model_registry, resident_models
+
+        hot = {r["name"]: r for r in resident_models.list_resident()}
+
+        # The ACTIVE model is not in the resident registry (it lives in the
+        # factory), so without this it would report footprintGb 0.00 — which
+        # reads as "free" for the single largest allocation on the machine.
+        # Priced the same way the governor prices it, or omitted if it cannot
+        # be sized; never defaulted to zero.
+        active_gb = 0.0
+        try:
+            from inference.backends import factory
+
+            primary = factory.get_backend()
+            if primary is not None:
+                active_gb = round(
+                    resident_models.estimate_footprint_bytes(primary.config) / 1024**3,
+                    2,
+                )
+        except Exception:  # noqa: BLE001 — a display field never fails the query
+            active_gb = 0.0
 
         return [
             ModelInfoGQL(
@@ -979,6 +1022,14 @@ class Query:
                 active=e.active,
                 provider=e.provider,
                 error=e.error,
+                state=("active" if e.active else ("hot" if e.name in hot else "cold")),
+                footprint_gb=(
+                    active_gb
+                    if e.active
+                    else round(
+                        hot.get(e.name, {}).get("footprintBytes", 0) / 1024**3, 2
+                    )
+                ),
             )
             for e in model_registry.list_models()
         ]
@@ -1059,6 +1110,7 @@ class Mutation:
                 messages=[{"role": "user", "content": parts}],
                 max_tokens=request.max_tokens,
                 temperature=request.temperature,
+                model=request.model,
             )
         except ImageIntakeError as exc:
             # Caller error (bad path, outside the allowlist, oversize) — the
@@ -1145,6 +1197,83 @@ class Mutation:
             reason=r.get("reason", reason),
             elapsed_s=r.get("elapsed_s"),
             total_refreshes=r.get("total_refreshes", 0),
+        )
+
+    @strawberry.mutation
+    async def load_model(self, name: str) -> ResidencyResult:
+        """Make a second local model HOT alongside the primary (Phase 2b).
+
+        Distinct from swapModel, which REPLACES the served model and drains
+        everything to do it. This adds a model; nothing is drained, no
+        session is expired, and the primary keeps serving throughout.
+
+        Admission is governed on wired memory (see core/resident_models):
+        a hot model is counted at FULL weights + FULL KV until explicitly
+        unloaded, because P0.a measured that models do not idle-unwire.
+        Over budget returns ok=false with the arithmetic, rather than
+        letting Metal discover it.
+        """
+        from core import resident_models
+
+        try:
+            await resident_models.load(name)
+        except MemoryError as exc:  # governor refusal — expected, not a crash
+            return ResidencyResult(
+                ok=False,
+                name=name,
+                state="cold",
+                resident_count=len(resident_models.list_resident()),
+                detail=str(exc),
+            )
+        except (KeyError, ValueError, RuntimeError) as exc:
+            return ResidencyResult(
+                ok=False,
+                name=name,
+                state="cold",
+                resident_count=len(resident_models.list_resident()),
+                detail=f"{type(exc).__name__}: {exc}",
+            )
+        entries = resident_models.list_resident()
+        mine = next((e for e in entries if e["name"] == name), {})
+        return ResidencyResult(
+            ok=True,
+            name=name,
+            state="hot",
+            footprint_gb=round(mine.get("footprintBytes", 0) / 1024**3, 2),
+            resident_count=len(entries),
+        )
+
+    @strawberry.mutation
+    async def unload_model(self, name: str) -> ResidencyResult:
+        """Free a hot secondary and its wired memory.
+
+        A teardown that RAISES burns the name for this process: the C
+        contexts may still hold GPU memory and the entry was the only handle
+        that could reach them, so re-loading would stack a second copy on
+        top of orphans — the reboot class this codebase has already paid for.
+        """
+        from core import resident_models
+
+        try:
+            await resident_models.unload(name)
+        except KeyError as exc:
+            return ResidencyResult(ok=False, name=name, state="cold", detail=str(exc))
+        except Exception as exc:  # noqa: BLE001 — report the burn, don't crash
+            return ResidencyResult(
+                ok=False,
+                name=name,
+                state="burned",
+                resident_count=len(resident_models.list_resident()),
+                detail=(
+                    f"shutdown FAILED ({exc}) — wired memory may be orphaned; "
+                    f"{name!r} cannot be re-loaded in this process. Restart it."
+                ),
+            )
+        return ResidencyResult(
+            ok=True,
+            name=name,
+            state="cold",
+            resident_count=len(resident_models.list_resident()),
         )
 
     @strawberry.mutation

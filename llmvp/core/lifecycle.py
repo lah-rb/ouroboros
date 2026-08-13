@@ -221,6 +221,13 @@ async def shutdown_server_async(skip_knowledge: bool | None = None) -> None:
     """
     skip = skip_knowledge if skip_knowledge is not None else _skip_knowledge
     try:
+        # Hot SECONDARIES first, while the process is still alive to report a
+        # failure. They hold their own contexts and wired GPU memory; tearing
+        # the primary down first would leave them orphaned with no handle.
+        from core import resident_models
+
+        await resident_models.shutdown_all()
+
         # Shutdown backend — awaits until cleanup is complete.
         await shutdown_backend_async()
         log.info("✅ Backend shutdown complete")

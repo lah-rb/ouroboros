@@ -314,9 +314,14 @@ def _approximate_token_count(text: str) -> int:
     return max(1, len(text) // 4)
 
 
-async def _get_backend():
+async def _get_backend(model: Optional[str] = None):
     """
     Get or initialize the backend instance.
+
+    ``model`` names a HOT SECONDARY (Phase 2b resident registry) to serve
+    this request instead of the primary. Absent or naming the active config
+    means the primary, which is every pre-existing caller — so the eight
+    call sites that pass nothing keep their exact behaviour.
 
     Under normal operation the backend is already initialized by
     ``startup_event`` in the API layer.  This fallback exists only
@@ -338,6 +343,13 @@ async def _get_backend():
         # unchanged (proven through the KV-eviction and restart windows),
         # so the request succeeds once the swap gate reopens.
         raise ModelSwapInProgress(f"model swap in progress ({state}) — retry shortly")
+
+    if model:
+        from core.remote_router import resolve_local_backend
+
+        secondary = resolve_local_backend(model)
+        if secondary is not None:
+            return secondary
 
     backend = get_backend()
     if backend is None:
@@ -1276,6 +1288,7 @@ async def run_vision_completion(
     messages: list,
     max_tokens: Optional[int] = None,
     temperature: Optional[float] = None,
+    model: Optional[str] = None,
 ) -> VisionOutcome:
     """Run one image+text completion through the mtmd handler.
 
@@ -1283,6 +1296,16 @@ async def run_vision_completion(
     base64 data URI (``image_url``) or a local path (``image_path``) under a
     configured root — see inference/vision_images.resolve_image_part, which is
     also where the path allowlist is enforced.
+
+    ``model`` routes to a HOT SECONDARY (Phase 2b). Vision is the path where
+    that works with almost no surgery, and the reason is structural: unlike
+    ``run_completion`` it never touches ``static_tokens_manager`` or
+    ``get_cached_tokenizer`` — the mtmd handler builds the prompt from the
+    model's OWN chat template. The text path resolves its tokenizer and static
+    buffer through the ACTIVE config, so routing text to a secondary would
+    tokenize with the primary's tokenizer and prepend the primary's static
+    head: silently wrong tokens, no error. De-globalizing that is the Phase 2
+    "de-globalize the request path" work and is NOT done here.
     """
     import time as _time
 
@@ -1296,7 +1319,13 @@ async def run_vision_completion(
     from inference.vision_text import clean as vision_clean
     from inference.vision_text import stop_strings as vision_stop_strings
 
-    mcfg = config.model
+    # Resolve the SERVING backend first, then read its own config — not the
+    # global ActiveConfigView, which is the primary's. Cheap for a resident
+    # secondary (a dict lookup); the expensive lazy vision-context build is
+    # still below every intake check, so bad input fails before Metal moves.
+    backend = await _get_backend(model)
+    serving = getattr(backend, "config", None) or config
+    mcfg = serving.model
     if not getattr(mcfg, "mmproj_path", None):
         raise RuntimeError(
             f"vision is not configured for {mcfg.name!r}: set model.mmproj_path"
@@ -1332,13 +1361,20 @@ async def run_vision_completion(
             "no image parts in the request — use the text endpoint for text-only"
         )
 
-    backend = await _get_backend()
     if not hasattr(backend, "get_vision_instance"):
         raise RuntimeError("the active backend does not support vision")
     inst = await backend.get_vision_instance()
 
-    resolved_max = resolve_max_tokens(max_tokens)
-    resolved_temp = resolve_temperature(temperature)
+    # Budget defaults follow the SERVING model too — resolve_* read the active
+    # config, which is the wrong model's generation block for a secondary.
+    if max_tokens is None and serving is not config:
+        resolved_max = int(serving.generation.max_tokens_default)
+    else:
+        resolved_max = resolve_max_tokens(max_tokens)
+    if temperature is None and serving is not config:
+        resolved_temp = float(serving.generation.temperature_default)
+    else:
+        resolved_temp = resolve_temperature(temperature)
 
     # SEAL THE TURN WITH THE FAMILY'S OWN TERMINATOR. The mtmd handler builds
     # its prompt from the model's chat template and never consults the FSM, so
