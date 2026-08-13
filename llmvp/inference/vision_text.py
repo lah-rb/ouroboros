@@ -97,10 +97,11 @@ def clean(text: str, family: str) -> str:
        the channel split — otherwise a re-answer that follows a completed turn
        would win over the real one. (Caught by
        test_content_after_a_terminator_is_cut.)
-    2. Within what survives, if the stream opened a CONTENT channel, keep what
-       follows the LAST one. Last, not first: inside a single unterminated
-       turn the final pass is the complete one, since an earlier pass is what
-       the restart interrupted.
+    2. Within what survives, if the stream opened a CONTENT channel, keep the
+       LONGEST pass. Not the last: when the budget cuts a restart short, the
+       last pass is a fragment and the complete answer is the earlier one.
+       Not the first either: a pass interrupted BY a restart is the short one.
+       Longest picks correctly in both directions.
     3. Strip any residual declared markers.
 
     Never returns empty when the input was non-empty: if stripping would erase
@@ -122,7 +123,22 @@ def clean(text: str, family: str) -> str:
             text = text[:idx]
 
     if content_head and content_head in text:
-        text = text.rsplit(content_head, 1)[1]
+        # LONGEST pass, not the last one. "Last" was wrong and cost real
+        # answers: measured 2026-08-12, the model wrote a complete 2,360-char
+        # reading, emitted the content head to start over, and max_tokens cut
+        # the second pass at 193 chars — so "last" returned the fragment and
+        # discarded the finished answer. Longest is right in both directions:
+        # a first pass interrupted by a restart is short, and a final pass
+        # truncated by the budget is short.
+        parts = text.split(content_head)
+        preamble, passes = parts[0], parts[1:]
+        # Text before the first content head counts as an answer ONLY if it
+        # was not marked as reasoning — otherwise a long deliberation would
+        # out-measure a short but correct answer.
+        if preamble.strip() and not (reasoning_head and reasoning_head in preamble):
+            passes = [preamble] + passes
+        if passes:
+            text = max(passes, key=len)
     elif reasoning_head and reasoning_head in text:
         # Reasoning opened but the content channel never did. Everything after
         # the reasoning head is deliberation, not an answer — but dropping it

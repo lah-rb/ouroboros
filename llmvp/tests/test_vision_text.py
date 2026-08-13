@@ -50,11 +50,29 @@ def test_the_leaked_marker_is_removed():
     assert got == "The card reads 00-071-0879."
 
 
-def test_a_re_answer_keeps_the_LAST_complete_pass():
-    """When the model restarts, the final pass is the complete one — an
-    earlier pass may have been cut off by the restart itself."""
-    raw = f"first partial ans{CONTENT_HEAD}the full answer{EOT}"
-    assert clean(raw, MUSE) == "the full answer"
+def test_a_restart_after_a_short_first_pass_keeps_the_later_one():
+    """A pass interrupted BY a restart is the short one."""
+    raw = f"cut off{CONTENT_HEAD}the full and complete answer here{EOT}"
+    assert clean(raw, MUSE) == "the full and complete answer here"
+
+
+def test_a_restart_TRUNCATED_BY_THE_BUDGET_keeps_the_EARLIER_pass():
+    """THE BUG THIS GUARDS. Measured 2026-08-12: the model wrote a complete
+    2,360-char reading, emitted the content head to start again, and
+    max_tokens cut the second pass at 193 chars. Taking the LAST pass returned
+    the fragment and threw the finished answer away — silently, in production
+    figtext."""
+    complete = "a complete reading of the figure with axes and values"
+    raw = f"{complete}{CONTENT_HEAD}restarted but cut"
+    assert clean(raw, MUSE) == complete
+
+
+def test_the_pass_choice_is_by_length_not_position():
+    """Neither 'first' nor 'last' is right; longest is right in both
+    directions, which is the whole point."""
+    long_mid = "x" * 200
+    raw = f"short{CONTENT_HEAD}{long_mid}{CONTENT_HEAD}also short"
+    assert clean(raw, MUSE) == long_mid
 
 
 def test_deliberation_before_the_content_channel_is_dropped():
