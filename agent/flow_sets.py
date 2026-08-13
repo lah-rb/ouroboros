@@ -243,9 +243,12 @@ SCRAPER_PHASES: tuple[PhaseRule, ...] = (
 # The extractor set: scraper v2's stage-pipeline sibling. Operates on an
 # EXISTING databank (working_dir shared with a completed scraper
 # mission): one corpus-level pdf_extract goal sweeps OA PDFs through the
-# Paddle-MLX toolchain in batches, then a fully deterministic gate
+# PaddleOCR-VL toolchain in batches, then a fully deterministic gate
 # verifies every record reached a terminal extraction state. Contains
 # ZERO LLM turns — deterministic findings stay deterministic end-to-end.
+# (The toolchain is served by the fleet LLMVP since 2026-08-13, so it now
+# SHARES a GPU with whatever the primary is doing. Still zero LLM turns:
+# no judgement is delegated here, only pixels-to-text.)
 EXTRACTOR_PHASES: tuple[PhaseRule, ...] = (
     PhaseRule(
         kind="goal_type_incomplete",

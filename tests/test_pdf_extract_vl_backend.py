@@ -131,15 +131,41 @@ def test_unknown_backend_is_refused(spawn):
         spawn(backend="vllm", model="m", port=1)
 
 
-# ── the default is llama.cpp, deliberately ────────────────────────────
+# ── the default is the fleet server, deliberately ─────────────────────
 
 
-def test_llamacpp_is_the_default_backend():
-    """MLX is ~1.15x faster and runs on one machine; llama.cpp is
-    fidelity-identical and runs on all of them. The default is the portable
-    one — flipping it back is a decision, not a typo."""
-    assert _MOD._DEFAULT_VL_BACKEND == "llamacpp"
-    assert _MOD._VL_BACKENDS[0] == "llamacpp"
+def test_llmvp_is_the_default_backend():
+    """The fleet server, not a spawned subprocess (2026-08-13).
+
+    NOT for speed — the A/B was a wash: verification rates identical to
+    sixteen decimal places on both papers, paper time +4.6% resident, wall
+    +1.0% once the ~6.5s spawn it no longer pays is netted out. It is for
+    MANAGEMENT: model choice lives in LLMVP's config instead of a constant
+    here, the OCR stage is visible to fleet telemetry, and it travels to
+    CUDA with the fleet. Flipping it back is a decision, not a typo.
+    """
+    assert _MOD._DEFAULT_VL_BACKEND == "llmvp"
+    assert _MOD._VL_BACKENDS[0] == "llmvp"
+
+
+def test_the_spawned_backends_survive_the_default_flip():
+    """llamacpp is the fallback when no fleet server runs, and mlx is still
+    the station opt-in — neither may be dropped by the flip."""
+    assert set(_MOD._VL_BACKENDS) == {"llmvp", "llamacpp", "mlx"}
+
+
+def test_llmvp_needs_no_local_weights_and_spawns_nothing():
+    """`model` is a registry NAME there, not a path — and asking the tool to
+    spawn a fleet server is a caller error, not a silent second copy of
+    paddle beside the hot one."""
+    kwargs = _MOD._vl_pipe_kwargs("llmvp", "", 8008)
+    assert kwargs["vl_rec_api_model_name"] == _MOD._LLMVP_MODEL
+    # THE /v1 IS LOAD-BEARING: AsyncOpenAI appends "/chat/completions", and
+    # LLMVP mounts its shim only under /v1 (llama-server answers at both,
+    # which is why the spawned backend gets away with a root URL).
+    assert kwargs["vl_rec_server_url"].endswith("/v1/")
+    with pytest.raises(ValueError, match="nothing to spawn"):
+        _MOD._spawn_vl_server("llmvp", "m", "p", 1)
 
 
 def test_the_llamacpp_default_resolves_to_a_gguf_AND_a_projector():

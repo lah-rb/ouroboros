@@ -49,26 +49,46 @@ logger = logging.getLogger(__name__)
 # polite_request by the pacer, so this does not need to know about hosts.
 _ACQUIRE_CONCURRENCY = 5
 
-# One GPU. Paddle owns it exclusively while it runs.
+# One OCR dispatch at a time. Not because the GPU can only do one thing —
+# it demonstrably cannot be saturated by paddle alone (OCR against text decode
+# overlaps at serialization 0.342, the best pair measured 2026-08-13) — but
+# because a second dispatch would select the same pending records as the
+# first. Nothing claims a paper before extraction: extraction_status is only
+# written AFTER the fact, so two lanes would OCR the same PDFs twice. Widen
+# this only behind a claim/lease.
 _OCR_CONCURRENCY = 1
+
+# Default PDFs per OCR dispatch.
+#
+# WAS 2 to amortise a server start (~20-40s for mlx_vlm.server, ~6.5s for
+# llama-server). The fleet backend has NO server start — paddle is already
+# hot inside LLMVP — so that reason is gone and the batch size is now purely
+# about lane GRANULARITY: a smaller dispatch returns control to the
+# acquisition lane sooner and lets the two interleave more finely, which is
+# the whole point of the overlap.
+_OVERLAP_PDFS_FLEET = 1
+_OVERLAP_PDFS_SPAWNED = 2
 
 
 def _overlap_pdfs() -> int:
     """How many PDFs to OCR per dispatch. 0 disables the OCR lane.
 
-    Default 2, not 1: extract_batch.py loops PDFs inside ONE process, so a
-    strict batch-of-1 would pay the ~20-40s mlx_vlm.server start every single
-    dispatch. Two amortises it while keeping the lane short enough to finish
-    inside a normal acquisition window.
+    Follows the VL backend, because the right answer depends on whether a
+    dispatch pays a server start. An explicit env var beats both.
     """
     raw = os.environ.get("OUROBOROS_SCRAPER_OVERLAP_PDFS", "").strip()
+    default = (
+        _OVERLAP_PDFS_FLEET
+        if os.environ.get("OUROBOROS_VL_BACKEND", "llmvp") == "llmvp"
+        else _OVERLAP_PDFS_SPAWNED
+    )
     if not raw:
-        return 2
+        return default
     try:
         return max(0, int(raw))
     except ValueError:
         logger.warning("OUROBOROS_SCRAPER_OVERLAP_PDFS=%r not an integer", raw)
-        return 2
+        return default
 
 
 async def _acquire_one(step_input: StepInput, rec: dict) -> dict:

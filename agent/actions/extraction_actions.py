@@ -43,14 +43,31 @@ _TOOL_PY = "tools/pdf_extract/.venv/bin/python"
 _TOOL_SCRIPT = "tools/pdf_extract/extract_batch.py"
 
 # WHICH ENGINE READ THE PAGE IS PROVENANCE, so extraction_method carries the
-# backend rather than a constant. llama.cpp is the default (2026-08-12): it is
-# fidelity-identical to MLX on the pipeline's own truth-recall check (numeric
-# 0.935 / span 0.900 on every run, both backends) and ~1.15x slower, but it
-# runs on every station while MLX runs on one. Records written before the
-# switch keep "paddleocr-vl-1.6-mlx-8bit" — they WERE extracted that way, and
-# the field is only ever written, never filtered on.
-_VL_BACKEND = os.environ.get("OUROBOROS_VL_BACKEND", "llamacpp")
+# backend rather than a constant.
+#
+# THE FLEET SERVER IS THE DEFAULT (2026-08-13). paddle is held hot inside
+# LLMVP as a Phase 2b secondary and reached over its endpoint, instead of the
+# tool spawning a private llama-server per batch.
+#
+# THE REASON IS NOT SPEED, and pretending otherwise would misdirect the next
+# person to profile this. The A/B on two papers came out a WASH: verification
+# rates identical to sixteen decimal places on both papers, paper time +4.6%
+# for the resident path, wall +1.0% once the ~6.5s spawn it no longer pays is
+# netted out — inside the noise. What the move buys is that model choice
+# lives in LLMVP's config rather than a constant in a tool, the OCR stage is
+# visible to the fleet's model management and telemetry, Ouroboros stops
+# owning a server lifecycle, and the stage travels with the fleet to CUDA.
+# Full record: dev/PARALLEL_LANES_2026-08-13.md §7e.
+#
+# `llamacpp` spawns the private server exactly as before and is the fallback
+# when no fleet server is running; `mlx` remains the station-dependent
+# opt-in. Records written earlier keep their own method string — they WERE
+# extracted that way, and the field is only ever written, never filtered on.
+_VL_BACKEND = os.environ.get("OUROBOROS_VL_BACKEND", "llmvp")
 _EXTRACTION_METHODS = {
+    # Same weights, same quant, three ways of reaching them — the suffix says
+    # which, because that is the part a later audit cannot reconstruct.
+    "llmvp": "paddleocr-vl-1.6-q8_0-llmvp",
     "llamacpp": "paddleocr-vl-1.6-q8_0-llamacpp",
     "mlx": "paddleocr-vl-1.6-mlx-8bit",
 }

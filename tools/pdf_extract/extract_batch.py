@@ -63,6 +63,7 @@ import sys
 import tempfile
 import time
 import urllib.request
+from typing import Optional
 
 import fitz  # pymupdf
 from PIL import Image
@@ -146,8 +147,8 @@ def _free_port() -> int:
 # architecture (paddleocr) is newer than that build. A performance verdict
 # is only as good as the binary under it — cf. DeepSeek-V4, where a stale
 # build cost 4.2x decode.
-_VL_BACKENDS = ("llamacpp", "mlx", "llmvp")
-_DEFAULT_VL_BACKEND = os.environ.get("OUROBOROS_VL_BACKEND", "llamacpp")
+_VL_BACKENDS = ("llmvp", "llamacpp", "mlx")
+_DEFAULT_VL_BACKEND = os.environ.get("OUROBOROS_VL_BACKEND", "llmvp")
 _LLAMA_SERVER = os.environ.get("OUROBOROS_LLAMA_SERVER", "llama-server")
 
 # The fleet server: paddle held hot as a Phase 2b secondary rather than
@@ -264,30 +265,76 @@ def _vl_pipe_kwargs(backend: str, model: str, port: int, concurrency: int = 0) -
     return kwargs
 
 
-def _wait_llmvp(port: int, model: str, timeout: float = 10.0) -> bool:
-    """True once LLMVP answers AND lists ``model`` as servable.
+def _llmvp_models(port: int, timeout: float = 3.0) -> Optional[set]:
+    """Model ids the fleet server will serve, or None if it is not answering."""
+    try:
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/v1/models", timeout=timeout
+        ) as r:
+            return {m.get("id") for m in json.load(r).get("data", [])}
+    except Exception:  # noqa: BLE001 — down, starting, or not listening
+        return None
+
+
+def _llmvp_load(port: int, model: str, timeout: float = 300.0) -> tuple[bool, str]:
+    """Ask LLMVP to make ``model`` hot. Returns (ok, detail).
+
+    THIS IS ORCHESTRATION, NOT A SIDE EFFECT OF INFERENCE, and the distinction
+    is LLMVP's own: a completion never loads weights, because a multi-minute
+    load hiding inside a request is how a timeout becomes a mystery. loadModel
+    is the explicit door, so the batch knocks on it once at startup and
+    reports what it hears — including a governor refusal, which is a sizing
+    decision the operator needs to read rather than a crash.
+    """
+    q = {
+        "query": "mutation($n:String!){ loadModel(name:$n){ ok state "
+        "footprintGb detail } }",
+        "variables": {"n": model},
+    }
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/graphql",
+        data=json.dumps(q).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            body = json.load(r)
+    except Exception as exc:  # noqa: BLE001 — report, the caller decides
+        return False, f"{type(exc).__name__}: {exc}"
+    if body.get("errors"):
+        return False, json.dumps(body["errors"])[:300]
+    res = (body.get("data") or {}).get("loadModel") or {}
+    return bool(res.get("ok")), res.get("detail") or ""
+
+
+def _ensure_llmvp_model(port: int, model: str) -> tuple[bool, str]:
+    """Server up AND ``model`` servable, loading it if it is merely cold.
 
     Readiness and routability are one question here: LLMVP serves several
     models from one port with STRICT routing, so a server that is up but has
-    not loaded the OCR model would refuse every crop. Checking the listing
-    turns that into one clear failure before any page is rendered.
+    not loaded the OCR model would refuse every crop. Resolving it before any
+    page is rendered turns a per-crop failure into one clear startup answer.
     """
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        try:
-            with urllib.request.urlopen(
-                f"http://127.0.0.1:{port}/v1/models", timeout=3
-            ) as r:
-                names = {m.get("id") for m in json.load(r).get("data", [])}
-            if model in names:
-                return True
-        except Exception:  # noqa: BLE001 — not up yet, or not listening
-            pass
-        time.sleep(1)
-    return False
+    names = _llmvp_models(port)
+    if names is None:
+        return False, "not reachable"
+    if model in names:
+        return True, "already hot"
+    ok, detail = _llmvp_load(port, model)
+    if not ok:
+        return False, f"loadModel refused: {detail}"
+    names = _llmvp_models(port)
+    if names is None or model not in names:
+        return False, "loadModel reported ok but the model is not listed"
+    return True, "loaded"
 
 
 def _wait_health(port: int, timeout: float = 120.0) -> bool:
+    """Readiness for a SPAWNED server (llama-server / mlx_vlm.server).
+
+    Not usable for the fleet server: /health is a llama-server route and
+    LLMVP answers 404 there (it is GraphQL-first). See _ensure_llmvp_model.
+    """
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
@@ -675,18 +722,14 @@ def main() -> int:
     server = None
     if args.vl_backend == "llmvp":
         port = int(_LLMVP_URL.rsplit(":", 1)[-1])
-        # NOT _wait_health: /health is a llama-server route and LLMVP answers
-        # 404 there (it is GraphQL-first). /v1/models is the readiness signal
-        # that also proves the thing we actually need — that the named model
-        # is hot — so a server that is up but has not loaded paddle fails
-        # here with a message that says so, instead of at the first crop.
-        if not _wait_llmvp(port, args.model, timeout=10.0):
+        ok, why = _ensure_llmvp_model(port, args.model)
+        if not ok:
             print(
                 json.dumps(
                     {
-                        "error": f"LLMVP not reachable at {_LLMVP_URL} — start it "
-                        f"and loadModel({_LLMVP_MODEL!r}), or use "
-                        f"--vl-backend llamacpp to spawn a private server"
+                        "error": f"LLMVP at {_LLMVP_URL} cannot serve "
+                        f"{args.model!r}: {why}. Start the server, or use "
+                        f"--vl-backend llamacpp to spawn a private one."
                     }
                 )
             )
