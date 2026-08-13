@@ -92,10 +92,25 @@ _MIN_VISION_PIXELS = int(os.environ.get("OUROBOROS_VISION_MIN_PIXELS", 1_000_000
 # scored worse).
 _MAX_VISION_LONG_SIDE = int(os.environ.get("OUROBOROS_VISION_MAX_SIDE", 3190))
 
+# The caption block used to be injected raw, with nothing said about what it
+# was for — and the model copied it. Measured 2026-08-12 on 4 figures: 3 of 4
+# answers reproduced caption text VERBATIM, up to 199 characters, which the
+# curator then reads as a VLM claim about the image. Worse, it corrupts the one
+# signal meant to catch that: numeric_overlap_rate scores figtext numerics
+# against the paper markdown, so a figtext that echoes the caption scores
+# perfect grounding by construction (one such answer measured 1.000).
+#
+# The caption still earns its place — without it the same figures produced
+# 205-943 chars against 1390-2652 with it. So it stays, and its ROLE is stated.
 _FIG_PROMPT = """You are reading one figure from a scientific paper on materials science.
 
-Caption / surrounding text from the paper:
+CONTEXT ONLY — the paper's caption and surrounding prose, to orient you:
 {caption}
+
+That text is not your source and not your output. Do not quote or paraphrase
+it. Anything you report must be something you can SEE in the image; where the
+context names something you cannot find in the image, say that you cannot see
+it rather than repeating the claim.
 
 Describe the figure's DATA content as plain text: what is plotted (axes and
 units), the series/conditions shown, notable values, and the trends. Report
