@@ -1,0 +1,76 @@
+# PaddleOCR-VL-1.6 — CONTENTION PROBE CONFIG. Not a serving config.
+#
+# WHY IT EXISTS. `dev/probe_dual_model_strategies.py` re-measured P0.b's
+# in-process dual-model question on the current llama.cpp build and found the
+# July verdict had moved. The pair it used is July's pair: Olmo-32B (25 GB)
+# against Devstral-24B (11 GB) — roughly 2:1. Our ACTUAL pair is muse-glimmer
+# (18 GB) against paddle (0.5 GB), roughly 36:1. A serialization figure taken
+# on a 2:1 pair has no claim on a 36:1 pair; the small model's kernels may
+# interleave into the large model's decode gaps in a way two comparable models
+# never could. This config exists so that question is measurable.
+#
+# WHAT IT IS NOT. Paddle is a VISION model — its production job is OCR over
+# region crops through the paddleocr pipeline, served by llama-server
+# (tools/pdf_extract/extract_batch.py). This config drives it as a plain text
+# decoder purely to hold the GPU, which is the variable a contention probe
+# manipulates. Nothing here is a claim about paddle as a text model, and this
+# entry must never become a swap or routing target.
+#
+# family: chatml is a PLACEHOLDER. The probe tokenizes a raw string and calls
+# generate_stream_sync directly, so no renderer or FSM runs. A real paddle
+# serving entry would need its own format family and the mmproj bound — see
+# muse-glimmer-30b.yaml for what a real vision entry looks like.
+
+app:
+  host: "0.0.0.0"
+  port: 8009          # never 8008 — must not collide with the live server
+  log_level: "warning"
+  cors_origins: ["*"]
+  backend_timeout: 180
+
+graphql:
+  max_query_depth: 10
+  max_tokens: 8192
+  max_aliases: 50
+  introspection_enabled: true
+
+model:
+  name: "paddle-ocr-vl-probe"
+  family: "chatml"    # placeholder — see header
+  path: /Users/lah-rb/.lmstudio/models/mradermacher/PaddleOCR-VL-1.6-GGUF/PaddleOCR-VL-1.6.Q8_0.gguf
+  n_ctx: 8192
+  n_gpu_layers: -1
+  seed: -1
+  verbose: false
+  thinking_available: false
+  thinking: "off"
+
+prompt:
+  persona_file: "./knowledge/SOUL.md"
+
+generation:
+  max_tokens_default: 1024
+  temperature_default: 0.7
+  top_p: 0.95
+  top_k: 0
+  min_p: 0.00
+  presence_penalty: 0.0
+  repeat_penalty: 1.05
+  streaming_default: true
+
+knowledge:
+  tokens_bin: "./data/paddle-ocr-vl-probe.tokens.bin"
+  token_limit: 2048
+
+resources:
+  cpu_threads: 15
+  max_concurrent_requests: 1
+  decode_mode: "pool"
+
+tools:
+  enabled: false
+  max_iterations: 3
+
+logging:
+  enabled: false
+  directory: "./logs"

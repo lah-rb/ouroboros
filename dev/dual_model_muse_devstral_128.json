@@ -1,0 +1,82 @@
+{
+  "pair": [
+    "muse",
+    "devstral"
+  ],
+  "max_tokens": 128,
+  "questions": 6,
+  "median_serialization": 0.603,
+  "total_solo_sum_s": 44.6,
+  "total_concurrent_s": 39.4,
+  "wall_saved_pct": 11.8,
+  "failures": [],
+  "clean": true,
+  "rows": [
+    {
+      "q": 0,
+      "solo_a_s": 1.96,
+      "solo_b_s": 4.02,
+      "solo_sum_s": 5.98,
+      "alternated_s": 5.94,
+      "concurrent_s": 5.4,
+      "serialization": 0.706,
+      "solo_tps": 25.41,
+      "concurrent_tps": 28.13
+    },
+    {
+      "q": 1,
+      "solo_a_s": 6.52,
+      "solo_b_s": 4.32,
+      "solo_sum_s": 10.84,
+      "alternated_s": 10.86,
+      "concurrent_s": 9.12,
+      "serialization": 0.603,
+      "solo_tps": 23.61,
+      "concurrent_tps": 28.06
+    },
+    {
+      "q": 2,
+      "solo_a_s": 6.47,
+      "solo_b_s": 2.39,
+      "solo_sum_s": 8.85,
+      "alternated_s": 8.88,
+      "concurrent_s": 7.89,
+      "serialization": 0.597,
+      "solo_tps": 22.14,
+      "concurrent_tps": 24.83
+    },
+    {
+      "q": 3,
+      "solo_a_s": 2.14,
+      "solo_b_s": 0.98,
+      "solo_sum_s": 3.12,
+      "alternated_s": 3.13,
+      "concurrent_s": 2.69,
+      "serialization": 0.561,
+      "solo_tps": 20.51,
+      "concurrent_tps": 23.8
+    },
+    {
+      "q": 4,
+      "solo_a_s": 3.68,
+      "solo_b_s": 4.31,
+      "solo_sum_s": 7.99,
+      "alternated_s": 7.9,
+      "concurrent_s": 6.98,
+      "serialization": 0.727,
+      "solo_tps": 24.78,
+      "concurrent_tps": 28.35
+    },
+    {
+      "q": 5,
+      "solo_a_s": 6.51,
+      "solo_b_s": 1.32,
+      "solo_sum_s": 7.84,
+      "alternated_s": 7.84,
+      "concurrent_s": 7.28,
+      "serialization": 0.582,
+      "solo_tps": 20.8,
+      "concurrent_tps": 22.38
+    }
+  ]
+}

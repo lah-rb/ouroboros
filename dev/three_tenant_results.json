@@ -1,0 +1,805 @@
+{
+  "pdfs": [
+    "doi_10.1038_ncomms6678.pdf",
+    "doi_10.1002_jrs.6234.pdf"
+  ],
+  "calls": 14,
+  "vision_key": "doi_10.1007_s11214-012-9873-5",
+  "wired_start_mb": 37556,
+  "solo_T1_text": {
+    "wall_s": 197.1,
+    "legs": [
+      {
+        "arm": "T1",
+        "wall_s": 197.1,
+        "calls": 14,
+        "generated": 3718,
+        "decode_tps": 19.37,
+        "rows": [
+          {
+            "i": 0,
+            "wall_s": 15.95,
+            "gen": 307,
+            "prefill_ms": 360.0,
+            "decode_ms": 15550.0,
+            "text": "Yes, the paper belongs in a corpus about remote mineral identification.\n\nLaser-induced breakdown spectroscopy is an in-situ/remote elemental analysis technique used for mineral identification on planetary surfaces and in field geology.\n\nCalibration of Mg/Si in basaltic glass against certified reference materials directly supports quantitative remote mineralogical discrimination of mafic lithologies.",
+            "errors": null
+          },
+          {
+            "i": 1,
+            "wall_s": 12.47,
+            "gen": 237,
+            "prefill_ms": 330.0,
+            "decode_ms": 12120.0,
+            "text": "Yes, the paper belongs in a corpus about remote mineral identification. Thermal emission spectroscopy in the 400\u20131400 cm\u207b\u00b9 mid-infrared region is the spectral range used for orbital and telescopic detection of silicate and carbonate minerals on planetary surfaces. Measuring carbonate-bearing dust spectra and fitting a two-component mixing model directly addresses spectral unmixing and mineral abundance retrieval relevant to remote sensing.",
+            "errors": null
+          },
+          {
+            "i": 2,
+            "wall_s": 11.48,
+            "gen": 218,
+            "prefill_ms": 320.0,
+            "decode_ms": 11130.0,
+            "text": "No, the paper does not belong in a corpus about remote mineral identification. The described task is agricultural land cover classification at 30 m resolution, which targets crop types and vegetation patterns rather than mineral spectral signatures. Remote mineral identification requires focus on lithology, alteration minerals, and geological mapping, a domain distinct from agronomic land cover analysis.",
+            "errors": null
+          },
+          {
+            "i": 3,
+            "wall_s": 15.45,
+            "gen": 296,
+            "prefill_ms": 320.0,
+            "decode_ms": 15090.0,
+            "text": "No. The paper derives laboratory optical constants from pressed-pellet reflectance, which is a fundamental spectroscopic characterization rather than a remote mineral identification study.\n\nRemote mineral identification corpora require spectra or identification methods representative of natural surfaces and remote sensing geometries, e.g., field, airborne or orbital measurements and their interpretation.\n\nPressed-pellet measurements and derived optical constants are not directly comparable to remote sensing observations and therefore do not support remote mineral identification tasks.",
+            "errors": null
+          },
+          {
+            "i": 4,
+            "wall_s": 16.08,
+            "gen": 307,
+            "prefill_ms": 330.0,
+            "decode_ms": 15730.0,
+            "text": "Yes, the paper belongs in a corpus about remote mineral identification.\n\nLaser-induced breakdown spectroscopy is an in-situ/remote elemental analysis technique used for mineral identification on planetary surfaces and in field geology.\n\nCalibration of Mg/Si in basaltic glass against certified reference materials directly supports quantitative remote mineralogical discrimination of mafic lithologies.",
+            "errors": null
+          },
+          {
+            "i": 5,
+            "wall_s": 12.62,
+            "gen": 237,
+            "prefill_ms": 330.0,
+            "decode_ms": 12260.0,
+            "text": "Yes, the paper belongs in a corpus about remote mineral identification. Thermal emission spectroscopy in the 400\u20131400 cm\u207b\u00b9 mid-infrared region is the spectral range used for orbital and telescopic detection of silicate and carbonate minerals on planetary surfaces. Measuring carbonate-bearing dust spectra and fitting a two-component mixing model directly addresses spectral unmixing and mineral abundance retrieval relevant to remote sensing.",
+            "errors": null
+          },
+          {
+            "i": 6,
+            "wall_s": 11.74,
+            "gen": 218,
+            "prefill_ms": 320.0,
+            "decode_ms": 11370.0,
+            "text": "No, the paper does not belong in a corpus about remote mineral identification. The described task is agricultural land cover classification at 30 m resolution, which targets crop types and vegetation patterns rather than mineral spectral signatures. Remote mineral identification requires focus on lithology, alteration minerals, and geological mapping, a domain distinct from agronomic land cover analysis.",
+            "errors": null
+          },
+          {
+            "i": 7,
+            "wall_s": 15.89,
+            "gen": 296,
+            "prefill_ms": 330.0,
+            "decode_ms": 15520.0,
+            "text": "No. The paper derives laboratory optical constants from pressed-pellet reflectance, which is a fundamental spectroscopic characterization rather than a remote mineral identification study.\n\nRemote mineral identification corpora require spectra or identification methods representative of natural surfaces and remote sensing geometries, e.g., field, airborne or orbital measurements and their interpretation.\n\nPressed-pellet measurements and derived optical constants are not directly comparable to remote sensing observations and therefore do not support remote mineral identification tasks.",
+            "errors": null
+          },
+          {
+            "i": 8,
+            "wall_s": 16.42,
+            "gen": 307,
+            "prefill_ms": 330.0,
+            "decode_ms": 16060.0,
+            "text": "Yes, the paper belongs in a corpus about remote mineral identification.\n\nLaser-induced breakdown spectroscopy is an in-situ/remote elemental analysis technique used for mineral identification on planetary surfaces and in field geology.\n\nCalibration of Mg/Si in basaltic glass against certified reference materials directly supports quantitative remote mineralogical discrimination of mafic lithologies.",
+            "errors": null
+          },
+          {
+            "i": 9,
+            "wall_s": 12.72,
+            "gen": 237,
+            "prefill_ms": 330.0,
+            "decode_ms": 12360.0,
+            "text": "Yes, the paper belongs in a corpus about remote mineral identification. Thermal emission spectroscopy in the 400\u20131400 cm\u207b\u00b9 mid-infrared region is the spectral range used for orbital and telescopic detection of silicate and carbonate minerals on planetary surfaces. Measuring carbonate-bearing dust spectra and fitting a two-component mixing model directly addresses spectral unmixing and mineral abundance retrieval relevant to remote sensing.",
+            "errors": null
+          },
+          {
+            "i": 10,
+            "wall_s": 11.78,
+            "gen": 218,
+            "prefill_ms": 320.0,
+            "decode_ms": 11420.0,
+            "text": "No, the paper does not belong in a corpus about remote mineral identification. The described task is agricultural land cover classification at 30 m resolution, which targets crop types and vegetation patterns rather than mineral spectral signatures. Remote mineral identification requires focus on lithology, alteration minerals, and geological mapping, a domain distinct from agronomic land cover analysis.",
+            "errors": null
+          },
+          {
+            "i": 11,
+            "wall_s": 15.84,
+            "gen": 296,
+            "prefill_ms": 330.0,
+            "decode_ms": 15470.0,
+            "text": "No. The paper derives laboratory optical constants from pressed-pellet reflectance, which is a fundamental spectroscopic characterization rather than a remote mineral identification study.\n\nRemote mineral identification corpora require spectra or identification methods representative of natural surfaces and remote sensing geometries, e.g., field, airborne or orbital measurements and their interpretation.\n\nPressed-pellet measurements and derived optical constants are not directly comparable to remote sensing observations and therefore do not support remote mineral identification tasks.",
+            "errors": null
+          },
+          {
+            "i": 12,
+            "wall_s": 16.3,
+            "gen": 307,
+            "prefill_ms": 330.0,
+            "decode_ms": 15940.0,
+            "text": "Yes, the paper belongs in a corpus about remote mineral identification.\n\nLaser-induced breakdown spectroscopy is an in-situ/remote elemental analysis technique used for mineral identification on planetary surfaces and in field geology.\n\nCalibration of Mg/Si in basaltic glass against certified reference materials directly supports quantitative remote mineralogical discrimination of mafic lithologies.",
+            "errors": null
+          },
+          {
+            "i": 13,
+            "wall_s": 12.32,
+            "gen": 237,
+            "prefill_ms": 330.0,
+            "decode_ms": 11950.0,
+            "text": "Yes, the paper belongs in a corpus about remote mineral identification. Thermal emission spectroscopy in the 400\u20131400 cm\u207b\u00b9 mid-infrared region is the spectral range used for orbital and telescopic detection of silicate and carbonate minerals on planetary surfaces. Measuring carbonate-bearing dust spectra and fitting a two-component mixing model directly addresses spectral unmixing and mineral abundance retrieval relevant to remote sensing.",
+            "errors": null
+          }
+        ]
+      }
+    ]
+  },
+  "solo_T2_ocr": {
+    "wall_s": 182.5,
+    "legs": [
+      {
+        "arm": "T2",
+        "wall_s": 182.5,
+        "rc": 0,
+        "papers_s": 176.3,
+        "papers": [
+          {
+            "key": "doi_10.1038_ncomms6678",
+            "pages": 12,
+            "chars": 82421,
+            "numeric": 0.9028384279475983,
+            "span": 0.9583333333333334,
+            "seconds": 104.1,
+            "error": ""
+          },
+          {
+            "key": "doi_10.1002_jrs.6234",
+            "pages": 10,
+            "chars": 37771,
+            "numeric": 0.9359756097560976,
+            "span": 0.9,
+            "seconds": 72.2,
+            "error": ""
+          }
+        ]
+      }
+    ]
+  },
+  "solo_T3_vision": {
+    "wall_s": 249.6,
+    "legs": [
+      {
+        "arm": "T3",
+        "wall_s": 249.6,
+        "rc": 0,
+        "figs": 5,
+        "seconds": 249.5,
+        "error": "",
+        "chars": 10483
+      }
+    ]
+  },
+  "pair_T1_T2": {
+    "wall_s": 259.6,
+    "legs": [
+      {
+        "arm": "T1_p12",
+        "wall_s": 259.6,
+        "calls": 14,
+        "generated": 3718,
+        "decode_tps": 14.66,
+        "rows": [
+          {
+            "i": 0,
+            "wall_s": 17.68,
+            "gen": 307,
+            "prefill_ms": 320.0,
+            "decode_ms": 17320.0,
+            "text": "Yes, the paper belongs in a corpus about remote mineral identification.\n\nLaser-induced breakdown spectroscopy is an in-situ/remote elemental analysis technique used for mineral identification on planetary surfaces and in field geology.\n\nCalibration of Mg/Si in basaltic glass against certified reference materials directly supports quantitative remote mineralogical discrimination of mafic lithologies.",
+            "errors": null
+          },
+          {
+            "i": 1,
+            "wall_s": 16.64,
+            "gen": 237,
+            "prefill_ms": 570.0,
+            "decode_ms": 16050.0,
+            "text": "Yes, the paper belongs in a corpus about remote mineral identification. Thermal emission spectroscopy in the 400\u20131400 cm\u207b\u00b9 mid-infrared region is the spectral range used for orbital and telescopic detection of silicate and carbonate minerals on planetary surfaces. Measuring carbonate-bearing dust spectra and fitting a two-component mixing model directly addresses spectral unmixing and mineral abundance retrieval relevant to remote sensing.",
+            "errors": null
+          },
+          {
+            "i": 2,
+            "wall_s": 15.56,
+            "gen": 218,
+            "prefill_ms": 320.0,
+            "decode_ms": 15210.0,
+            "text": "No, the paper does not belong in a corpus about remote mineral identification. The described task is agricultural land cover classification at 30 m resolution, which targets crop types and vegetation patterns rather than mineral spectral signatures. Remote mineral identification requires focus on lithology, alteration minerals, and geological mapping, a domain distinct from agronomic land cover analysis.",
+            "errors": null
+          },
+          {
+            "i": 3,
+            "wall_s": 19.31,
+            "gen": 296,
+            "prefill_ms": 560.0,
+            "decode_ms": 18710.0,
+            "text": "No. The paper derives laboratory optical constants from pressed-pellet reflectance, which is a fundamental spectroscopic characterization rather than a remote mineral identification study.\n\nRemote mineral identification corpora require spectra or identification methods representative of natural surfaces and remote sensing geometries, e.g., field, airborne or orbital measurements and their interpretation.\n\nPressed-pellet measurements and derived optical constants are not directly comparable to remote sensing observations and therefore do not support remote mineral identification tasks.",
+            "errors": null
+          },
+          {
+            "i": 4,
+            "wall_s": 20.55,
+            "gen": 307,
+            "prefill_ms": 520.0,
+            "decode_ms": 20020.0,
+            "text": "Yes, the paper belongs in a corpus about remote mineral identification.\n\nLaser-induced breakdown spectroscopy is an in-situ/remote elemental analysis technique used for mineral identification on planetary surfaces and in field geology.\n\nCalibration of Mg/Si in basaltic glass against certified reference materials directly supports quantitative remote mineralogical discrimination of mafic lithologies.",
+            "errors": null
+          },
+          {
+            "i": 5,
+            "wall_s": 16.77,
+            "gen": 237,
+            "prefill_ms": 320.0,
+            "decode_ms": 16420.0,
+            "text": "Yes, the paper belongs in a corpus about remote mineral identification. Thermal emission spectroscopy in the 400\u20131400 cm\u207b\u00b9 mid-infrared region is the spectral range used for orbital and telescopic detection of silicate and carbonate minerals on planetary surfaces. Measuring carbonate-bearing dust spectra and fitting a two-component mixing model directly addresses spectral unmixing and mineral abundance retrieval relevant to remote sensing.",
+            "errors": null
+          },
+          {
+            "i": 6,
+            "wall_s": 17.72,
+            "gen": 218,
+            "prefill_ms": 320.0,
+            "decode_ms": 17370.0,
+            "text": "No, the paper does not belong in a corpus about remote mineral identification. The described task is agricultural land cover classification at 30 m resolution, which targets crop types and vegetation patterns rather than mineral spectral signatures. Remote mineral identification requires focus on lithology, alteration minerals, and geological mapping, a domain distinct from agronomic land cover analysis.",
+            "errors": null
+          },
+          {
+            "i": 7,
+            "wall_s": 23.93,
+            "gen": 296,
+            "prefill_ms": 350.0,
+            "decode_ms": 23540.0,
+            "text": "No. The paper derives laboratory optical constants from pressed-pellet reflectance, which is a fundamental spectroscopic characterization rather than a remote mineral identification study.\n\nRemote mineral identification corpora require spectra or identification methods representative of natural surfaces and remote sensing geometries, e.g., field, airborne or orbital measurements and their interpretation.\n\nPressed-pellet measurements and derived optical constants are not directly comparable to remote sensing observations and therefore do not support remote mineral identification tasks.",
+            "errors": null
+          },
+          {
+            "i": 8,
+            "wall_s": 24.12,
+            "gen": 307,
+            "prefill_ms": 450.0,
+            "decode_ms": 23640.0,
+            "text": "Yes, the paper belongs in a corpus about remote mineral identification.\n\nLaser-induced breakdown spectroscopy is an in-situ/remote elemental analysis technique used for mineral identification on planetary surfaces and in field geology.\n\nCalibration of Mg/Si in basaltic glass against certified reference materials directly supports quantitative remote mineralogical discrimination of mafic lithologies.",
+            "errors": null
+          },
+          {
+            "i": 9,
+            "wall_s": 16.02,
+            "gen": 237,
+            "prefill_ms": 350.0,
+            "decode_ms": 15630.0,
+            "text": "Yes, the paper belongs in a corpus about remote mineral identification. Thermal emission spectroscopy in the 400\u20131400 cm\u207b\u00b9 mid-infrared region is the spectral range used for orbital and telescopic detection of silicate and carbonate minerals on planetary surfaces. Measuring carbonate-bearing dust spectra and fitting a two-component mixing model directly addresses spectral unmixing and mineral abundance retrieval relevant to remote sensing.",
+            "errors": null
+          },
+          {
+            "i": 10,
+            "wall_s": 15.23,
+            "gen": 218,
+            "prefill_ms": 350.0,
+            "decode_ms": 14860.0,
+            "text": "No, the paper does not belong in a corpus about remote mineral identification. The described task is agricultural land cover classification at 30 m resolution, which targets crop types and vegetation patterns rather than mineral spectral signatures. Remote mineral identification requires focus on lithology, alteration minerals, and geological mapping, a domain distinct from agronomic land cover analysis.",
+            "errors": null
+          },
+          {
+            "i": 11,
+            "wall_s": 19.99,
+            "gen": 296,
+            "prefill_ms": 350.0,
+            "decode_ms": 19610.0,
+            "text": "No. The paper derives laboratory optical constants from pressed-pellet reflectance, which is a fundamental spectroscopic characterization rather than a remote mineral identification study.\n\nRemote mineral identification corpora require spectra or identification methods representative of natural surfaces and remote sensing geometries, e.g., field, airborne or orbital measurements and their interpretation.\n\nPressed-pellet measurements and derived optical constants are not directly comparable to remote sensing observations and therefore do not support remote mineral identification tasks.",
+            "errors": null
+          },
+          {
+            "i": 12,
+            "wall_s": 22.14,
+            "gen": 307,
+            "prefill_ms": 360.0,
+            "decode_ms": 21740.0,
+            "text": "Yes, the paper belongs in a corpus about remote mineral identification.\n\nLaser-induced breakdown spectroscopy is an in-situ/remote elemental analysis technique used for mineral identification on planetary surfaces and in field geology.\n\nCalibration of Mg/Si in basaltic glass against certified reference materials directly supports quantitative remote mineralogical discrimination of mafic lithologies.",
+            "errors": null
+          },
+          {
+            "i": 13,
+            "wall_s": 13.96,
+            "gen": 237,
+            "prefill_ms": 380.0,
+            "decode_ms": 13550.0,
+            "text": "Yes, the paper belongs in a corpus about remote mineral identification. Thermal emission spectroscopy in the 400\u20131400 cm\u207b\u00b9 mid-infrared region is the spectral range used for orbital and telescopic detection of silicate and carbonate minerals on planetary surfaces. Measuring carbonate-bearing dust spectra and fitting a two-component mixing model directly addresses spectral unmixing and mineral abundance retrieval relevant to remote sensing.",
+            "errors": null
+          }
+        ]
+      },
+      {
+        "arm": "T2_p12",
+        "wall_s": 251.6,
+        "rc": 0,
+        "papers_s": 244.9,
+        "papers": [
+          {
+            "key": "doi_10.1038_ncomms6678",
+            "pages": 12,
+            "chars": 82421,
+            "numeric": 0.9028384279475983,
+            "span": 0.9583333333333334,
+            "seconds": 148.2,
+            "error": ""
+          },
+          {
+            "key": "doi_10.1002_jrs.6234",
+            "pages": 10,
+            "chars": 37771,
+            "numeric": 0.9359756097560976,
+            "span": 0.9,
+            "seconds": 96.7,
+            "error": ""
+          }
+        ]
+      }
+    ]
+  },
+  "pair_T1_T3": {
+    "wall_s": 402.0,
+    "legs": [
+      {
+        "arm": "T1_p13",
+        "wall_s": 385.5,
+        "calls": 14,
+        "generated": 3718,
+        "decode_tps": 9.81,
+        "rows": [
+          {
+            "i": 0,
+            "wall_s": 36.81,
+            "gen": 307,
+            "prefill_ms": 330.0,
+            "decode_ms": 36460.0,
+            "text": "Yes, the paper belongs in a corpus about remote mineral identification.\n\nLaser-induced breakdown spectroscopy is an in-situ/remote elemental analysis technique used for mineral identification on planetary surfaces and in field geology.\n\nCalibration of Mg/Si in basaltic glass against certified reference materials directly supports quantitative remote mineralogical discrimination of mafic lithologies.",
+            "errors": null
+          },
+          {
+            "i": 1,
+            "wall_s": 21.7,
+            "gen": 237,
+            "prefill_ms": 340.0,
+            "decode_ms": 21330.0,
+            "text": "Yes, the paper belongs in a corpus about remote mineral identification. Thermal emission spectroscopy in the 400\u20131400 cm\u207b\u00b9 mid-infrared region is the spectral range used for orbital and telescopic detection of silicate and carbonate minerals on planetary surfaces. Measuring carbonate-bearing dust spectra and fitting a two-component mixing model directly addresses spectral unmixing and mineral abundance retrieval relevant to remote sensing.",
+            "errors": null
+          },
+          {
+            "i": 2,
+            "wall_s": 19.94,
+            "gen": 218,
+            "prefill_ms": 340.0,
+            "decode_ms": 19560.0,
+            "text": "No, the paper does not belong in a corpus about remote mineral identification. The described task is agricultural land cover classification at 30 m resolution, which targets crop types and vegetation patterns rather than mineral spectral signatures. Remote mineral identification requires focus on lithology, alteration minerals, and geological mapping, a domain distinct from agronomic land cover analysis.",
+            "errors": null
+          },
+          {
+            "i": 3,
+            "wall_s": 35.56,
+            "gen": 296,
+            "prefill_ms": 370.0,
+            "decode_ms": 35170.0,
+            "text": "No. The paper derives laboratory optical constants from pressed-pellet reflectance, which is a fundamental spectroscopic characterization rather than a remote mineral identification study.\n\nRemote mineral identification corpora require spectra or identification methods representative of natural surfaces and remote sensing geometries, e.g., field, airborne or orbital measurements and their interpretation.\n\nPressed-pellet measurements and derived optical constants are not directly comparable to remote sensing observations and therefore do not support remote mineral identification tasks.",
+            "errors": null
+          },
+          {
+            "i": 4,
+            "wall_s": 27.95,
+            "gen": 307,
+            "prefill_ms": 350.0,
+            "decode_ms": 27570.0,
+            "text": "Yes, the paper belongs in a corpus about remote mineral identification.\n\nLaser-induced breakdown spectroscopy is an in-situ/remote elemental analysis technique used for mineral identification on planetary surfaces and in field geology.\n\nCalibration of Mg/Si in basaltic glass against certified reference materials directly supports quantitative remote mineralogical discrimination of mafic lithologies.",
+            "errors": null
+          },
+          {
+            "i": 5,
+            "wall_s": 21.68,
+            "gen": 237,
+            "prefill_ms": 340.0,
+            "decode_ms": 21310.0,
+            "text": "Yes, the paper belongs in a corpus about remote mineral identification. Thermal emission spectroscopy in the 400\u20131400 cm\u207b\u00b9 mid-infrared region is the spectral range used for orbital and telescopic detection of silicate and carbonate minerals on planetary surfaces. Measuring carbonate-bearing dust spectra and fitting a two-component mixing model directly addresses spectral unmixing and mineral abundance retrieval relevant to remote sensing.",
+            "errors": null
+          },
+          {
+            "i": 6,
+            "wall_s": 28.75,
+            "gen": 218,
+            "prefill_ms": 340.0,
+            "decode_ms": 28370.0,
+            "text": "No, the paper does not belong in a corpus about remote mineral identification. The described task is agricultural land cover classification at 30 m resolution, which targets crop types and vegetation patterns rather than mineral spectral signatures. Remote mineral identification requires focus on lithology, alteration minerals, and geological mapping, a domain distinct from agronomic land cover analysis.",
+            "errors": null
+          },
+          {
+            "i": 7,
+            "wall_s": 26.8,
+            "gen": 296,
+            "prefill_ms": 340.0,
+            "decode_ms": 26430.0,
+            "text": "No. The paper derives laboratory optical constants from pressed-pellet reflectance, which is a fundamental spectroscopic characterization rather than a remote mineral identification study.\n\nRemote mineral identification corpora require spectra or identification methods representative of natural surfaces and remote sensing geometries, e.g., field, airborne or orbital measurements and their interpretation.\n\nPressed-pellet measurements and derived optical constants are not directly comparable to remote sensing observations and therefore do not support remote mineral identification tasks.",
+            "errors": null
+          },
+          {
+            "i": 8,
+            "wall_s": 27.99,
+            "gen": 307,
+            "prefill_ms": 340.0,
+            "decode_ms": 27640.0,
+            "text": "Yes, the paper belongs in a corpus about remote mineral identification.\n\nLaser-induced breakdown spectroscopy is an in-situ/remote elemental analysis technique used for mineral identification on planetary surfaces and in field geology.\n\nCalibration of Mg/Si in basaltic glass against certified reference materials directly supports quantitative remote mineralogical discrimination of mafic lithologies.",
+            "errors": null
+          },
+          {
+            "i": 9,
+            "wall_s": 30.67,
+            "gen": 237,
+            "prefill_ms": 1590.0,
+            "decode_ms": 29050.0,
+            "text": "Yes, the paper belongs in a corpus about remote mineral identification. Thermal emission spectroscopy in the 400\u20131400 cm\u207b\u00b9 mid-infrared region is the spectral range used for orbital and telescopic detection of silicate and carbonate minerals on planetary surfaces. Measuring carbonate-bearing dust spectra and fitting a two-component mixing model directly addresses spectral unmixing and mineral abundance retrieval relevant to remote sensing.",
+            "errors": null
+          },
+          {
+            "i": 10,
+            "wall_s": 20.36,
+            "gen": 218,
+            "prefill_ms": 330.0,
+            "decode_ms": 19990.0,
+            "text": "No, the paper does not belong in a corpus about remote mineral identification. The described task is agricultural land cover classification at 30 m resolution, which targets crop types and vegetation patterns rather than mineral spectral signatures. Remote mineral identification requires focus on lithology, alteration minerals, and geological mapping, a domain distinct from agronomic land cover analysis.",
+            "errors": null
+          },
+          {
+            "i": 11,
+            "wall_s": 27.5,
+            "gen": 296,
+            "prefill_ms": 340.0,
+            "decode_ms": 27130.0,
+            "text": "No. The paper derives laboratory optical constants from pressed-pellet reflectance, which is a fundamental spectroscopic characterization rather than a remote mineral identification study.\n\nRemote mineral identification corpora require spectra or identification methods representative of natural surfaces and remote sensing geometries, e.g., field, airborne or orbital measurements and their interpretation.\n\nPressed-pellet measurements and derived optical constants are not directly comparable to remote sensing observations and therefore do not support remote mineral identification tasks.",
+            "errors": null
+          },
+          {
+            "i": 12,
+            "wall_s": 37.68,
+            "gen": 307,
+            "prefill_ms": 340.0,
+            "decode_ms": 37310.0,
+            "text": "Yes, the paper belongs in a corpus about remote mineral identification.\n\nLaser-induced breakdown spectroscopy is an in-situ/remote elemental analysis technique used for mineral identification on planetary surfaces and in field geology.\n\nCalibration of Mg/Si in basaltic glass against certified reference materials directly supports quantitative remote mineralogical discrimination of mafic lithologies.",
+            "errors": null
+          },
+          {
+            "i": 13,
+            "wall_s": 22.1,
+            "gen": 237,
+            "prefill_ms": 340.0,
+            "decode_ms": 21730.0,
+            "text": "Yes, the paper belongs in a corpus about remote mineral identification. Thermal emission spectroscopy in the 400\u20131400 cm\u207b\u00b9 mid-infrared region is the spectral range used for orbital and telescopic detection of silicate and carbonate minerals on planetary surfaces. Measuring carbonate-bearing dust spectra and fitting a two-component mixing model directly addresses spectral unmixing and mineral abundance retrieval relevant to remote sensing.",
+            "errors": null
+          }
+        ]
+      },
+      {
+        "arm": "T3_p13",
+        "wall_s": 402.0,
+        "rc": 0,
+        "figs": 5,
+        "seconds": 401.9,
+        "error": "",
+        "chars": 10827
+      }
+    ]
+  },
+  "pair_T2_T3": {
+    "wall_s": 345.2,
+    "legs": [
+      {
+        "arm": "T2_p23",
+        "wall_s": 345.2,
+        "rc": 0,
+        "papers_s": 338.8,
+        "papers": [
+          {
+            "key": "doi_10.1038_ncomms6678",
+            "pages": 12,
+            "chars": 82421,
+            "numeric": 0.9028384279475983,
+            "span": 0.9583333333333334,
+            "seconds": 211.8,
+            "error": ""
+          },
+          {
+            "key": "doi_10.1002_jrs.6234",
+            "pages": 10,
+            "chars": 37771,
+            "numeric": 0.9359756097560976,
+            "span": 0.9,
+            "seconds": 127.0,
+            "error": ""
+          }
+        ]
+      },
+      {
+        "arm": "T3_p23",
+        "wall_s": 339.0,
+        "rc": 0,
+        "figs": 5,
+        "seconds": 339.0,
+        "error": "",
+        "chars": 10728
+      }
+    ]
+  },
+  "triple": {
+    "wall_s": 481.3,
+    "legs": [
+      {
+        "arm": "T1_x",
+        "wall_s": 476.1,
+        "calls": 14,
+        "generated": 3718,
+        "decode_tps": 8.24,
+        "rows": [
+          {
+            "i": 0,
+            "wall_s": 43.67,
+            "gen": 307,
+            "prefill_ms": 340.0,
+            "decode_ms": 43300.0,
+            "text": "Yes, the paper belongs in a corpus about remote mineral identification.\n\nLaser-induced breakdown spectroscopy is an in-situ/remote elemental analysis technique used for mineral identification on planetary surfaces and in field geology.\n\nCalibration of Mg/Si in basaltic glass against certified reference materials directly supports quantitative remote mineralogical discrimination of mafic lithologies.",
+            "errors": null
+          },
+          {
+            "i": 1,
+            "wall_s": 44.69,
+            "gen": 237,
+            "prefill_ms": 370.0,
+            "decode_ms": 25380.0,
+            "text": "Yes, the paper belongs in a corpus about remote mineral identification. Thermal emission spectroscopy in the 400\u20131400 cm\u207b\u00b9 mid-infrared region is the spectral range used for orbital and telescopic detection of silicate and carbonate minerals on planetary surfaces. Measuring carbonate-bearing dust spectra and fitting a two-component mixing model directly addresses spectral unmixing and mineral abundance retrieval relevant to remote sensing.",
+            "errors": null
+          },
+          {
+            "i": 2,
+            "wall_s": 34.68,
+            "gen": 218,
+            "prefill_ms": 330.0,
+            "decode_ms": 34310.0,
+            "text": "No, the paper does not belong in a corpus about remote mineral identification. The described task is agricultural land cover classification at 30 m resolution, which targets crop types and vegetation patterns rather than mineral spectral signatures. Remote mineral identification requires focus on lithology, alteration minerals, and geological mapping, a domain distinct from agronomic land cover analysis.",
+            "errors": null
+          },
+          {
+            "i": 3,
+            "wall_s": 32.27,
+            "gen": 296,
+            "prefill_ms": 370.0,
+            "decode_ms": 31870.0,
+            "text": "No. The paper derives laboratory optical constants from pressed-pellet reflectance, which is a fundamental spectroscopic characterization rather than a remote mineral identification study.\n\nRemote mineral identification corpora require spectra or identification methods representative of natural surfaces and remote sensing geometries, e.g., field, airborne or orbital measurements and their interpretation.\n\nPressed-pellet measurements and derived optical constants are not directly comparable to remote sensing observations and therefore do not support remote mineral identification tasks.",
+            "errors": null
+          },
+          {
+            "i": 4,
+            "wall_s": 39.08,
+            "gen": 307,
+            "prefill_ms": 340.0,
+            "decode_ms": 38700.0,
+            "text": "Yes, the paper belongs in a corpus about remote mineral identification.\n\nLaser-induced breakdown spectroscopy is an in-situ/remote elemental analysis technique used for mineral identification on planetary surfaces and in field geology.\n\nCalibration of Mg/Si in basaltic glass against certified reference materials directly supports quantitative remote mineralogical discrimination of mafic lithologies.",
+            "errors": null
+          },
+          {
+            "i": 5,
+            "wall_s": 40.22,
+            "gen": 237,
+            "prefill_ms": 490.0,
+            "decode_ms": 39690.0,
+            "text": "Yes, the paper belongs in a corpus about remote mineral identification. Thermal emission spectroscopy in the 400\u20131400 cm\u207b\u00b9 mid-infrared region is the spectral range used for orbital and telescopic detection of silicate and carbonate minerals on planetary surfaces. Measuring carbonate-bearing dust spectra and fitting a two-component mixing model directly addresses spectral unmixing and mineral abundance retrieval relevant to remote sensing.",
+            "errors": null
+          },
+          {
+            "i": 6,
+            "wall_s": 25.97,
+            "gen": 218,
+            "prefill_ms": 560.0,
+            "decode_ms": 25400.0,
+            "text": "No, the paper does not belong in a corpus about remote mineral identification. The described task is agricultural land cover classification at 30 m resolution, which targets crop types and vegetation patterns rather than mineral spectral signatures. Remote mineral identification requires focus on lithology, alteration minerals, and geological mapping, a domain distinct from agronomic land cover analysis.",
+            "errors": null
+          },
+          {
+            "i": 7,
+            "wall_s": 33.69,
+            "gen": 296,
+            "prefill_ms": 350.0,
+            "decode_ms": 33320.0,
+            "text": "No. The paper derives laboratory optical constants from pressed-pellet reflectance, which is a fundamental spectroscopic characterization rather than a remote mineral identification study.\n\nRemote mineral identification corpora require spectra or identification methods representative of natural surfaces and remote sensing geometries, e.g., field, airborne or orbital measurements and their interpretation.\n\nPressed-pellet measurements and derived optical constants are not directly comparable to remote sensing observations and therefore do not support remote mineral identification tasks.",
+            "errors": null
+          },
+          {
+            "i": 8,
+            "wall_s": 45.22,
+            "gen": 307,
+            "prefill_ms": 580.0,
+            "decode_ms": 44610.0,
+            "text": "Yes, the paper belongs in a corpus about remote mineral identification.\n\nLaser-induced breakdown spectroscopy is an in-situ/remote elemental analysis technique used for mineral identification on planetary surfaces and in field geology.\n\nCalibration of Mg/Si in basaltic glass against certified reference materials directly supports quantitative remote mineralogical discrimination of mafic lithologies.",
+            "errors": null
+          },
+          {
+            "i": 9,
+            "wall_s": 29.16,
+            "gen": 237,
+            "prefill_ms": 370.0,
+            "decode_ms": 28760.0,
+            "text": "Yes, the paper belongs in a corpus about remote mineral identification. Thermal emission spectroscopy in the 400\u20131400 cm\u207b\u00b9 mid-infrared region is the spectral range used for orbital and telescopic detection of silicate and carbonate minerals on planetary surfaces. Measuring carbonate-bearing dust spectra and fitting a two-component mixing model directly addresses spectral unmixing and mineral abundance retrieval relevant to remote sensing.",
+            "errors": null
+          },
+          {
+            "i": 10,
+            "wall_s": 20.34,
+            "gen": 218,
+            "prefill_ms": 370.0,
+            "decode_ms": 19940.0,
+            "text": "No, the paper does not belong in a corpus about remote mineral identification. The described task is agricultural land cover classification at 30 m resolution, which targets crop types and vegetation patterns rather than mineral spectral signatures. Remote mineral identification requires focus on lithology, alteration minerals, and geological mapping, a domain distinct from agronomic land cover analysis.",
+            "errors": null
+          },
+          {
+            "i": 11,
+            "wall_s": 36.59,
+            "gen": 296,
+            "prefill_ms": 340.0,
+            "decode_ms": 36220.0,
+            "text": "No. The paper derives laboratory optical constants from pressed-pellet reflectance, which is a fundamental spectroscopic characterization rather than a remote mineral identification study.\n\nRemote mineral identification corpora require spectra or identification methods representative of natural surfaces and remote sensing geometries, e.g., field, airborne or orbital measurements and their interpretation.\n\nPressed-pellet measurements and derived optical constants are not directly comparable to remote sensing observations and therefore do not support remote mineral identification tasks.",
+            "errors": null
+          },
+          {
+            "i": 12,
+            "wall_s": 28.49,
+            "gen": 307,
+            "prefill_ms": 340.0,
+            "decode_ms": 28110.0,
+            "text": "Yes, the paper belongs in a corpus about remote mineral identification.\n\nLaser-induced breakdown spectroscopy is an in-situ/remote elemental analysis technique used for mineral identification on planetary surfaces and in field geology.\n\nCalibration of Mg/Si in basaltic glass against certified reference materials directly supports quantitative remote mineralogical discrimination of mafic lithologies.",
+            "errors": null
+          },
+          {
+            "i": 13,
+            "wall_s": 22.04,
+            "gen": 237,
+            "prefill_ms": 340.0,
+            "decode_ms": 21670.0,
+            "text": "Yes, the paper belongs in a corpus about remote mineral identification. Thermal emission spectroscopy in the 400\u20131400 cm\u207b\u00b9 mid-infrared region is the spectral range used for orbital and telescopic detection of silicate and carbonate minerals on planetary surfaces. Measuring carbonate-bearing dust spectra and fitting a two-component mixing model directly addresses spectral unmixing and mineral abundance retrieval relevant to remote sensing.",
+            "errors": null
+          }
+        ]
+      },
+      {
+        "arm": "T2_x",
+        "wall_s": 370.4,
+        "rc": 0,
+        "papers_s": 363.8,
+        "papers": [
+          {
+            "key": "doi_10.1038_ncomms6678",
+            "pages": 12,
+            "chars": 82421,
+            "numeric": 0.9028384279475983,
+            "span": 0.9583333333333334,
+            "seconds": 222.5,
+            "error": ""
+          },
+          {
+            "key": "doi_10.1002_jrs.6234",
+            "pages": 10,
+            "chars": 37771,
+            "numeric": 0.9359756097560976,
+            "span": 0.9,
+            "seconds": 141.3,
+            "error": ""
+          }
+        ]
+      },
+      {
+        "arm": "T3_x",
+        "wall_s": 481.3,
+        "rc": 0,
+        "figs": 5,
+        "seconds": 481.2,
+        "error": "",
+        "chars": 10571
+      }
+    ]
+  },
+  "verdict": {
+    "solo_s": {
+      "text": 197.1,
+      "ocr": 182.5,
+      "vision": 249.6
+    },
+    "T1_T2_text_x_ocr": {
+      "t_together_s": 259.6,
+      "legs_solo_s": [
+        197.1,
+        182.5
+      ],
+      "ideal_s": 197.1,
+      "serialized_s": 379.7,
+      "serialization": 0.342,
+      "recovered_s": 120.0,
+      "recovered_pct": 31.6
+    },
+    "T1_T3_text_x_vision": {
+      "t_together_s": 402.0,
+      "legs_solo_s": [
+        197.1,
+        249.6
+      ],
+      "ideal_s": 249.6,
+      "serialized_s": 446.7,
+      "serialization": 0.773,
+      "recovered_s": 44.7,
+      "recovered_pct": 10.0
+    },
+    "T2_T3_ocr_x_vision": {
+      "t_together_s": 345.2,
+      "legs_solo_s": [
+        182.5,
+        249.6
+      ],
+      "ideal_s": 249.6,
+      "serialized_s": 432.1,
+      "serialization": 0.524,
+      "recovered_s": 86.9,
+      "recovered_pct": 20.1
+    },
+    "T1_T2_T3_all": {
+      "t_together_s": 481.3,
+      "legs_solo_s": [
+        197.1,
+        182.5,
+        249.6
+      ],
+      "ideal_s": 249.6,
+      "serialized_s": 629.3,
+      "serialization": 0.61,
+      "recovered_s": 148.0,
+      "recovered_pct": 23.5
+    },
+    "wired_end_mb": 38401,
+    "text_identical": {
+      "pair_T1_T2": "14/14",
+      "pair_T1_T3": "14/14",
+      "triple": "14/14"
+    },
+    "vision_chars": {
+      "pair_T1_T3": [
+        10483,
+        10827
+      ],
+      "pair_T2_T3": [
+        10483,
+        10728
+      ],
+      "triple": [
+        10483,
+        10571
+      ]
+    },
+    "ocr_chars_identical": {
+      "pair_T1_T2": "2/2",
+      "pair_T2_T3": "2/2",
+      "triple": "2/2"
+    }
+  }
+}

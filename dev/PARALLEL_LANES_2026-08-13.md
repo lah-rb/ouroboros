@@ -212,6 +212,96 @@ The finding that matters: *co-residency was never the blocker.* The OCR path
 has been cross-process since it was written. What was missing is a second
 lane asking the machine for work while the first one held the GPU.
 
+## 7d. ADDENDUM — topology is NOT the variable; the workload pair is
+
+*Measured 2026-08-13 after §7c was written. It changes §7c's conclusion.*
+
+§7c ranked the options on the P0.b verdict: in-process co-residency buys no
+parallelism, cross-process does, so keep paddle in its own process. **Both
+halves of that turned out to be wrong, and the second one is why.**
+
+`llmvp/dev/probe_dual_model_strategies.py` re-ran P0.b on the current build,
+then ran the SAME pair, SAME questions, SAME arm protocol across two
+processes — the control that isolates topology. One `run_arms()` serves both
+paths so the protocol cannot drift between them.
+
+| topology | pair | tokens | serialization | clean |
+|---|---|---|---|---|
+| in-process | olmo+devstral | 128 | **0.619** | yes |
+| in-process | olmo+devstral | 512 | **0.622** | yes |
+| in-process | muse+devstral | 128 | **0.603** | yes |
+| cross-process | olmo+devstral | 128 | **0.575** | yes |
+
+**Δ(in-process, cross-process) = 0.044**, and the probe biases *against*
+cross-process (pipe overhead lands in the concurrent wall, not in ta/tb), so
+the true gap is at most that. Two models in one process cost essentially
+nothing versus two processes. P0.b's "true parallelism = cross-process" does
+not hold on this build.
+
+**So what produced 0.342?** Not process separation — that run was
+cross-process too. The other variable: it paired prefill-heavy OCR against
+bandwidth-bound text decode, where every ~0.6 measurement pairs two text
+decoders. Ordering every pair measured today:
+
+| pair | shape | serialization |
+|---|---|---|
+| paddle OCR × muse text | compute-bound × bandwidth-bound | **0.342** |
+| paddle OCR × muse vision | compute × compute | **0.524** |
+| text decode × text decode | bandwidth × bandwidth | **0.575–0.622** |
+| muse text × muse vision | one server, `generation_guard` | **0.773** |
+
+Consistent with unified memory bandwidth being the shared bottleneck: two
+decoders saturate it and contend, while a compute-bound tenant fills gaps
+they leave. That is a HYPOTHESIS fitting the ordering — no bandwidth
+counters were read — but the ordering is what a scheduler should act on.
+
+**Revised guidance.** Pair complementary workload SHAPES; do not pay for
+process separation expecting throughput. Concretely §7c's ranking inverts:
+holding paddle and muse both hot inside LLMVP is free, so the hot-registry
+integration the operator wants costs nothing in throughput — and pairing the
+OCR lane against the text lane (0.342) beats pairing it against the vision
+lane (0.524).
+
+### Two measurement traps found, both of which had corrupted a verdict
+
+1. **KV accumulation across arms.** `generate_stream_sync` runs
+   `Llama.generate(reset=False)` by design. A probe reusing one instance
+   across every arm accumulates dynamic context: ~7k tokens at
+   `max_tokens=128` (under the 8192 ceiling by luck), ~32k at 512 — four
+   times over, which sent one run to 4x its predicted wall at 98% GPU.
+   It also manufactures "corruption": the same prompt at a different context
+   depth sees a different KV state, so greedy picks differently. That
+   produced divergences at exactly q4/q5 — late, when the context was
+   nearly full — and never at q0–q3. With a per-decode restore the
+   divergences vanish entirely and serialization tightens from a 0.20–1.09
+   scatter to 0.61–0.62. **P0.b's lone divergence is the same shape, and its
+   DIRTY verdict rested on it.**
+2. **`% wall saved` is not a transferable figure.** At identical
+   serialization (0.619 vs 0.622) it fell 11.6% → 4.1%, purely because
+   olmo is a thinking model that spends the whole 512-token budget while
+   devstral stops early, pushing the legs from 2.31:1 to 8.41:1. Two legs
+   overlap only over the span they share, so the ceiling is `ideal/serial`
+   (0.698 → 0.894). **Report serialization; treat leg balance as a separate
+   scheduling lever** — and note the scraper's 2.7:1 OCR-to-inference ratio
+   is exactly this problem.
+
+### Void arm, recorded so it is not re-run blind
+
+muse × paddle in-process **did not measure anything**. Paddle contributed
+1.4% of summed leg time (0.05–0.12 s against muse's 2–6.5 s) and threw
+`DegenerateGenerationError: cycle period 2 x 12` — a vision model with no
+image has nothing to do. With `serial ≈ ideal` the ratio's denominator
+collapses: two questions returned NEGATIVE serialization and one NaN, and
+the script still printed a tidy "median 0.067". **That number is division by
+approximately zero, not near-free overlap.** Testing the production pair
+needs paddle doing real vision work in-process — its mmproj bound through
+LLMVP the way muse's is — which is a build, not a config file.
+
+Still untested: the SIZE-ratio variable. muse+paddle is 36:1 where every
+clean pair here is 1.65–2.31:1, and there is no sub-1 GB text decoder on
+disk to stand in (fleet floor is devstral at 11.1 GB; the smallest GGUF of
+any kind is paddle itself).
+
 ## 8. Open
 
 * Repeat the probe at n≥3 before trusting the 89.7 m projection as a number

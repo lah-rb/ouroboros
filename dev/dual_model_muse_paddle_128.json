@@ -1,0 +1,87 @@
+{
+  "pair": [
+    "muse",
+    "paddle"
+  ],
+  "max_tokens": 128,
+  "questions": 6,
+  "median_serialization": 0.067,
+  "total_solo_sum_s": 27.7,
+  "total_concurrent_s": 27.3,
+  "wall_saved_pct": 1.5,
+  "failures": [
+    "q5 solo paddle: DegenerateGenerationError: cycle period 2 x 12 (aborted after 57 generated tokens)",
+    "q5 solo paddle: DegenerateGenerationError: cycle period 2 x 12 (aborted after 57 generated tokens)",
+    "q5 concurrent paddle: DegenerateGenerationError: cycle period 2 x 12 (aborted after 57 generated tokens)",
+    "q5 alternated paddle: DegenerateGenerationError: cycle period 2 x 12 (aborted after 57 generated tokens)"
+  ],
+  "clean": false,
+  "rows": [
+    {
+      "q": 0,
+      "solo_a_s": 1.95,
+      "solo_b_s": 0.12,
+      "solo_sum_s": 2.06,
+      "alternated_s": 2.02,
+      "concurrent_s": 1.96,
+      "serialization": 0.076,
+      "solo_tps": 19.86,
+      "concurrent_tps": 20.96
+    },
+    {
+      "q": 1,
+      "solo_a_s": 6.5,
+      "solo_b_s": 0.07,
+      "solo_sum_s": 6.57,
+      "alternated_s": 6.58,
+      "concurrent_s": 6.51,
+      "serialization": 0.067,
+      "solo_tps": 20.24,
+      "concurrent_tps": 20.44
+    },
+    {
+      "q": 2,
+      "solo_a_s": 6.5,
+      "solo_b_s": 0.07,
+      "solo_sum_s": 6.57,
+      "alternated_s": 6.57,
+      "concurrent_s": 6.5,
+      "serialization": -0.075,
+      "solo_tps": 20.39,
+      "concurrent_tps": 20.62
+    },
+    {
+      "q": 3,
+      "solo_a_s": 2.14,
+      "solo_b_s": 0.05,
+      "solo_sum_s": 2.19,
+      "alternated_s": 2.21,
+      "concurrent_s": 2.14,
+      "serialization": 0.078,
+      "solo_tps": 20.59,
+      "concurrent_tps": 21.01
+    },
+    {
+      "q": 4,
+      "solo_a_s": 3.69,
+      "solo_b_s": 0.07,
+      "solo_sum_s": 3.76,
+      "alternated_s": 3.74,
+      "concurrent_s": 3.68,
+      "serialization": -0.035,
+      "solo_tps": 20.23,
+      "concurrent_tps": 20.64
+    },
+    {
+      "q": 5,
+      "solo_a_s": 6.53,
+      "solo_b_s": 0.0,
+      "solo_sum_s": 6.53,
+      "alternated_s": 6.92,
+      "concurrent_s": 6.48,
+      "serialization": NaN,
+      "solo_tps": 19.61,
+      "concurrent_tps": 19.74
+    }
+  ]
+}
