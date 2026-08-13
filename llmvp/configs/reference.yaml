@@ -377,6 +377,20 @@ model:
   # ceiling-sized value is accounted for at boot rather than discovered later.
   # Default: 8192
   vision_n_ctx: 8192
+  # [O] Type: int — how many PRIVATE single-sequence vision contexts to serve
+  # from. 1 (the default) is the original single-instance behaviour. Raise it
+  # for a workload that fans out: PaddleOCR fires region crops concurrently
+  # and its subprocess path was MEASURED to saturate at 4 (2026-08-12), so a
+  # 1-wide pool serves those crops strictly serially.
+  # WIDTH IS CONTEXTS, NOT SEQUENCES, and that is the safety argument:
+  # MTMDChatHandler is written against seq 0 and keeps its token ledger on the
+  # Llama object (n_tokens, input_ids), so N sequences in ONE context would
+  # race on that ledger whatever seq id the eval was handed. N contexts each
+  # holding one sequence keeps every handler assumption true by construction.
+  # Weights are shared (the projector binds the MODEL), so the cost is KV
+  # only: vision_n_ctx x kv_bytes_per_token x width. Paddle at 32768 is
+  # 0.56 GB per context. Default: 1
+  vision_pool_size: 1
   # [O] Type: int — reject an image larger than this rather than letting mtmd
   # OOM. Default: 33554432 (32MB)
   vision_max_image_bytes: 33554432

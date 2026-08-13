@@ -85,8 +85,61 @@ def test_estimate_counts_weights_mmproj_and_kv(monkeypatch):
     )
     monkeypatch.setattr(rm.os.path, "getsize", lambda p: 500)
 
-    # weights 1000 + mmproj 500 + kv 7*1000
-    assert rm.estimate_footprint_bytes(cfg) == 1_000 + 500 + 7_000
+    # weights 1000 + mmproj 500 + text kv 7*1000 + vision kv 7*8192*1
+    # (vision_n_ctx and vision_pool_size fall back to their defaults here)
+    assert rm.estimate_footprint_bytes(cfg) == 1_000 + 500 + 7_000 + 7 * 8192
+
+
+def test_estimate_prices_the_vision_pool(monkeypatch):
+    """The pool is real KV and is often LARGER than the weights: paddle at
+    vision_n_ctx 32768 x 4 is 2.25 GB against 1.36 GB of weights+projector.
+    Charging only the text n_ctx would let the governor admit a model whose
+    actual footprint it never saw."""
+    cfg = _cfg("m", n_ctx=100)
+    cfg.model.mmproj_path = "/proj.gguf"
+    cfg.model.vision_n_ctx = 1000
+    cfg.model.vision_pool_size = 4
+
+    monkeypatch.setitem(
+        sys.modules,
+        "inference.backends.llama_cpp_backend",
+        types.SimpleNamespace(
+            LlamaCppBackend=types.SimpleNamespace(
+                weights_bytes_total=staticmethod(lambda p: 0)
+            )
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "core.context_probe",
+        types.SimpleNamespace(kv_bytes_per_token=lambda p, m: 10),
+    )
+    monkeypatch.setattr(rm.os.path, "getsize", lambda p: 0)
+
+    # text kv 10*100 + vision kv 10*1000*4
+    assert rm.estimate_footprint_bytes(cfg) == 1_000 + 40_000
+
+
+def test_no_mmproj_means_no_vision_kv_charged(monkeypatch):
+    """A text-only model must not be charged for a pool it cannot build."""
+    cfg = _cfg("m", n_ctx=100)
+    cfg.model.vision_pool_size = 8  # ignored: no projector, so no vision
+
+    monkeypatch.setitem(
+        sys.modules,
+        "inference.backends.llama_cpp_backend",
+        types.SimpleNamespace(
+            LlamaCppBackend=types.SimpleNamespace(
+                weights_bytes_total=staticmethod(lambda p: 0)
+            )
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "core.context_probe",
+        types.SimpleNamespace(kv_bytes_per_token=lambda p, m: 10),
+    )
+    assert rm.estimate_footprint_bytes(cfg) == 1_000
 
 
 def test_estimate_prefers_measured_weights_over_file_size(monkeypatch):

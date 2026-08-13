@@ -135,6 +135,16 @@ def estimate_footprint_bytes(config: Any) -> int:
             str(mcfg.path), getattr(mcfg, "probe_verified_kv_bytes_per_token", None)
         )
         total += per_tok * int(mcfg.n_ctx)
+        # THE VISION POOL IS REAL KV and must be priced. Each pool member is a
+        # private context of its own — paddle at vision_n_ctx 32768 x 4 is
+        # 2.25 GB, which is larger than its weights and projector combined.
+        # Charging only the text n_ctx would let the governor admit a model
+        # whose actual footprint it never saw. Counted whether or not vision
+        # has been used yet: the pool is built on first request and never
+        # released, so "not yet allocated" is a timing detail, not a saving.
+        if mmproj:
+            width = max(1, int(getattr(mcfg, "vision_pool_size", 1) or 1))
+            total += per_tok * int(getattr(mcfg, "vision_n_ctx", 8192) or 8192) * width
     except Exception as exc:  # noqa: BLE001 — header shapes vary by arch
         raise ValueError(
             f"cannot compute KV geometry for {mcfg.name}: {exc} — "

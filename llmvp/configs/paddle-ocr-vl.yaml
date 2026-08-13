@@ -75,6 +75,10 @@ model:
   n_ctx: 4096
   # Vision: the window OCR crops actually land in.
   vision_n_ctx: 32768
+  # Matches the subprocess path's --vl-parallel 4, its measured saturation
+  # point. 4 x 32768 x 18432 B/tok = 2.25 GB of KV, on top of 1.36 GB of
+  # weights + projector.
+  vision_pool_size: 4
   vision_image_roots:
     - "~/corpora"
     - "~/ouroboros-runs"

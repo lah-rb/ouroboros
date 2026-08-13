@@ -349,6 +349,23 @@ class ModelConfig(BaseModel):
     # carries no static prefix, so it needs room for one image plus a turn,
     # not a session.
     vision_n_ctx: int = 8192
+    # How many PRIVATE single-sequence vision contexts to serve from.
+    #
+    # 1 (the default) preserves the original single-instance behaviour.
+    # Raise it for a vision workload that fans out — PaddleOCR fires region
+    # crops concurrently and its subprocess path was MEASURED to saturate at
+    # 4 (2026-08-12), so a 1-wide pool serves those crops strictly serially
+    # and gives back exactly that parallelism.
+    #
+    # WIDTH IS CONTEXTS, NOT SEQUENCES, and that is the whole safety argument.
+    # MTMDChatHandler.__call__ is written against seq 0 and keeps its token
+    # ledger on the Llama object (`n_tokens`, `input_ids`), so N sequences in
+    # ONE context would race on that ledger no matter what seq id the eval
+    # was handed. N contexts each holding one sequence keeps every one of the
+    # handler's assumptions true by construction. Weights are shared
+    # (mtmd_init_from_file binds the MODEL), so the cost is KV only:
+    # vision_n_ctx x kv_bytes_per_token x width.
+    vision_pool_size: int = 1
     # Reject an image larger than this rather than letting mtmd OOM. 32MB.
     vision_max_image_bytes: int = 33_554_432
     # Directories a vision request may read image PATHS from. Empty = paths are

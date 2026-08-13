@@ -216,6 +216,10 @@ class LlamaCppBackend(BaseBackend):
         # a pool slot (see _create_vision_instance for why that would silently
         # corrupt the text path's KV bands). Shutdown closes it explicitly.
         self._vision_instance: Optional[Any] = None
+        # The vision POOL: N private single-seq contexts, checked out one
+        # owner at a time. None until the first vision request builds it.
+        self._vision_instances: list = []
+        self._vision_pool: Optional[asyncio.Queue] = None
         self._llama_module = None
         self._tokenizer = None
         # Hybrid/recurrent model support
@@ -814,8 +818,8 @@ class LlamaCppBackend(BaseBackend):
         )
         return inst
 
-    async def get_vision_instance(self) -> Any:
-        """The vision instance, built on first use.
+    async def _build_vision_pool(self) -> None:
+        """Build the vision contexts on first use (idempotent).
 
         Lazy so a config that declares a projector pays nothing until a vision
         request actually arrives. Built under BOTH the spawn lock (one builder)
@@ -823,19 +827,70 @@ class LlamaCppBackend(BaseBackend):
         live on the same Metal device crashes ggml, which is the same reason
         _jit_batch_scale_up drains first.
         """
-        if self._vision_instance is not None:
-            return self._vision_instance
+        if self._vision_pool is not None:
+            return
         if not getattr(self.config.model, "mmproj_path", None):
             raise RuntimeError(
                 "vision is not configured: set model.mmproj_path for "
                 f"{self.config.model.name!r}"
             )
         async with self._spawn_lock:
-            if self._vision_instance is None:  # re-check under the lock
-                async with self.generation_guard():
-                    self._vision_instance = self._create_vision_instance(
-                        self._primary_instance
-                    )
+            if self._vision_pool is not None:  # re-check under the lock
+                return
+            width = max(1, int(getattr(self.config.model, "vision_pool_size", 1) or 1))
+            pool: asyncio.Queue = asyncio.Queue()
+            built: list = []
+            async with self.generation_guard():
+                for _ in range(width):
+                    inst = self._create_vision_instance(self._primary_instance)
+                    built.append(inst)
+                    pool.put_nowait(inst)
+            self._vision_instances = built
+            # Back-compat: single-instance callers and the teardown path.
+            self._vision_instance = built[0]
+            self._vision_pool = pool
+            log.info(
+                "👁️  vision pool ready: %d context(s) @ n_ctx %d",
+                width,
+                int(getattr(self.config.model, "vision_n_ctx", 8192) or 8192),
+            )
+
+    @contextlib.asynccontextmanager
+    async def acquire_vision_instance(self):
+        """Check out ONE vision context for the life of a request.
+
+        THE EXCLUSION IS THE POINT, not just the concurrency. Before this,
+        every vision request shared one instance and nothing serialized them:
+        ``generation_guard`` is a COUNTING guard (it holds off drains and
+        scaling, and deliberately lets generations run together), so two
+        concurrent vision calls landed on the same Llama object and raced on
+        the handler's own token ledger — ``n_tokens`` and ``input_ids`` — plus
+        its KV. It never fired only because every caller so far is sequential:
+        fig_review loops figures one at a time. A queue gives exactly one
+        owner per context, so the race is gone at width 1 and the pool is
+        genuinely parallel above it.
+
+        The instance is returned even when the request raises; losing one to
+        an exception would shrink the pool silently until vision deadlocked.
+        """
+        await self._build_vision_pool()
+        assert self._vision_pool is not None
+        inst = await self._vision_pool.get()
+        try:
+            yield inst
+        finally:
+            self._vision_pool.put_nowait(inst)
+
+    async def get_vision_instance(self) -> Any:
+        """One vision instance, built on first use.
+
+        RETAINED FOR CALLERS THAT DO NOT CHECK OUT. It hands back a shared
+        instance with no exclusion, which is safe only for a caller that
+        guarantees it is the sole in-flight vision request. Prefer
+        ``acquire_vision_instance()``; this exists so the pre-pool signature
+        keeps working.
+        """
+        await self._build_vision_pool()
         return self._vision_instance
 
     # ------------------------------------------------------------------
@@ -3236,16 +3291,24 @@ class LlamaCppBackend(BaseBackend):
         # Free the vision instance FIRST — it holds a context over the shared
         # model plus an mtmd context of its own, and the primary's close() will
         # not free the handler because the handler lives here, not there.
-        if self._vision_instance is not None:
-            handler = getattr(self._vision_instance, "chat_handler", None)
+        # EVERY vision context, not just the first. Each pool member owns its
+        # own mtmd_ctx and its own llama_context; freeing only _vision_instance
+        # would strand the rest — wired GPU memory with no handle left, which
+        # is the leak class the factory's teardown latch exists for.
+        for vinst in self._vision_instances or (
+            [self._vision_instance] if self._vision_instance is not None else []
+        ):
+            handler = getattr(vinst, "chat_handler", None)
             if handler is not None:
                 try:
                     handler.close()  # frees mtmd_ctx
                 except Exception as exc:  # noqa: BLE001 — teardown must finish
                     log.warning(f"⚠️ Error closing vision handler: {exc}")
-                self._vision_instance.chat_handler = None
-            self._close_shared_context(self._vision_instance)
-            self._vision_instance = None
+                vinst.chat_handler = None
+            self._close_shared_context(vinst)
+        self._vision_instances = []
+        self._vision_pool = None
+        self._vision_instance = None
 
         # Free shared instances' contexts (not the model).
         for inst in reversed(self._all_instances):

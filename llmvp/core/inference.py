@@ -1361,9 +1361,8 @@ async def run_vision_completion(
             "no image parts in the request — use the text endpoint for text-only"
         )
 
-    if not hasattr(backend, "get_vision_instance"):
+    if not hasattr(backend, "acquire_vision_instance"):
         raise RuntimeError("the active backend does not support vision")
-    inst = await backend.get_vision_instance()
 
     # Budget defaults follow the SERVING model too — resolve_* read the active
     # config, which is the wrong model's generation block for a secondary.
@@ -1386,18 +1385,29 @@ async def run_vision_completion(
     # correctly on its own.
     stops = vision_stop_strings(mcfg.family)
 
-    # Serialize with text generation: one Metal command queue, and the handler
-    # drives its own decode loop outside the engine's scheduling.
+    # TWO DIFFERENT GUARDS, doing two different jobs — the comment here used
+    # to say this "serializes with text generation", which is wrong and was
+    # worth catching: generation_guard is a COUNTING guard. It holds off drains,
+    # JIT scaling and swap teardown while GPU work is live, and deliberately
+    # lets generations run CONCURRENTLY. It never excluded anything from this
+    # call. The exclusion that matters — one owner per vision context, so
+    # concurrent requests cannot race on the handler's token ledger — comes
+    # from the checkout below.
     t0 = _time.time()
-    async with backend.generation_guard():
-        result = await run_in_threadpool(
-            lambda: inst.create_chat_completion(
-                messages=prepared,
-                max_tokens=resolved_max,
-                temperature=resolved_temp,
-                **({"stop": stops} if stops else {}),
+    async with backend.acquire_vision_instance() as inst:
+        # Read while we still OWN the instance. Once the checkout closes the
+        # context belongs to the next request, and reaching back into it for
+        # telemetry is how a harmless-looking read becomes a race later.
+        handler = type(getattr(inst, "chat_handler", None)).__name__
+        async with backend.generation_guard():
+            result = await run_in_threadpool(
+                lambda: inst.create_chat_completion(
+                    messages=prepared,
+                    max_tokens=resolved_max,
+                    temperature=resolved_temp,
+                    **({"stop": stops} if stops else {}),
+                )
             )
-        )
     decode_ms = (_time.time() - t0) * 1000.0
 
     choice = (result.get("choices") or [{}])[0]
@@ -1421,7 +1431,6 @@ async def run_vision_completion(
             resolved_max,
         )
 
-    handler = type(getattr(inst, "chat_handler", None)).__name__
     return VisionOutcome(
         text=text,
         generated_tokens=generated,
