@@ -302,6 +302,97 @@ clean pair here is 1.65–2.31:1, and there is no sub-1 GB text decoder on
 disk to stand in (fleet floor is devstral at 11.1 GB; the smallest GGUF of
 any kind is paddle itself).
 
+## 7e. BUILT + MEASURED — in-process residency, and what it actually buys
+
+*2026-08-13, after §7d. Commits 7c59761 (registry), 0218b8e (vision pool),
+this one (toolchain).*
+
+Phase 2b shipped on §7d's evidence: N models hot at once, addressable by
+name, **without** the decode lock Phase 2 had settled on — that lock existed
+to contain a hazard the re-measure showed was a probe artifact.
+
+**The end-to-end A/B, same PDFs, same flags, one paper per batch:**
+
+| | LLMVP resident | subprocess | |
+|---|---|---|---|
+| paper 1 numeric / span | 0.8401826484018264 / 0.9444444444444444 | **identical** | 9/9 verified |
+| paper 2 numeric / span | 0.9359756097560976 / 0.9 | **identical** | 10/10 verified |
+| figures kept / dropped | 12/27, 14/14 | **identical** | |
+| paper seconds | 60.2 + 77.7 = 137.9 | 55.0 + 76.8 = 131.8 | +4.6% |
+| wall seconds | 64.3 + 81.8 = 146.1 | 61.4 + 83.2 = 144.6 | **+1.0%** |
+
+Verification rates match to sixteen decimal places on both papers, on both
+paths. Markdown differs by 0.23% of characters — different wording in
+places, same numbers and same spans recovered, i.e. sampling.
+
+**THROUGHPUT IS A WASH.** Resident costs ~4.6% of compute and saves the
+~6.5 s per-batch spawn, netting ~1% of wall at n=2 — inside the noise. At
+production's batch-of-2 the spawn amortises further, so the subprocess edges
+ahead on compute-bound batches and residency edges ahead on small ones.
+
+**So residency is a MANAGEMENT win, not a speed win, and the honest framing
+matters**: model choice moves out of a constant in a tool and into LLMVP's
+config; the OCR stage becomes visible to the fleet's model management and
+telemetry; Ouroboros stops owning a server lifecycle; and the stage travels
+with the fleet to CUDA instead of being pinned to a locally-spawned binary.
+It does NOT make OCR faster, and the earlier expectation that removing ~84
+spawns would matter was already measured wrong in §4 (6.5 s each, 2.4%).
+
+The overlap story is UNCHANGED by residency, which is easy to get backwards:
+the subprocess path was already cross-process and already overlapped at
+0.342. Residency does not unlock the pairing win — §7d showed topology is
+not the variable. It just puts the tenant under one roof.
+
+### The vision pool, and the race it closed
+
+The design had to answer why paddle's `--vl-parallel 4` did not obviously
+survive the move, since `_create_vision_instance` builds ONE context at
+`n_seq_max=1`. Two findings:
+
+* `mtmd_helper_eval_chunk_single`'s **seq_id is a real C parameter** the
+  Python wrapper hard-codes to 0 — so the binding is patchable. But patching
+  it alone buys nothing: the handler keeps its token ledger (`n_tokens`,
+  `input_ids`) on the Llama OBJECT, so N sequences in one context race on
+  that ledger whatever seq id the eval is handed. N private contexts keep
+  every assumption true by construction, in our own code, with no fork of a
+  vendored file that a reinstall would revert.
+* **A live race predated all of this.** Every vision request shared one
+  instance with no mutual exclusion; the call sat inside `generation_guard`
+  under a comment claiming that "serializes with text generation". It does
+  not — the guard is a COUNTING guard that holds off drains and scaling and
+  deliberately lets generations run together. Two concurrent vision requests
+  would have raced. It never fired only because every caller is sequential.
+  A checkout queue closes it at width 1 and makes width > 1 parallel.
+
+Measured, 4 figures at temperature 0: serial 8.7 s → concurrent 5.2 s
+(**1.66x**, serialization 0.30), character counts IDENTICAL both ways
+(856/690/7/281). Short of 4x because the legs are 5:1 unequal — the same
+leg-balance ceiling as §7d, not a pool defect.
+
+**Correction to the docstring this feature was designed around:**
+`memory_clear(True)` — the "clears EVERY sequence" hazard cited as the reason
+vision must be private — fires only on the HYBRID branch. A plain transformer
+takes `memory_seq_rm(0, longest_prefix, -1)`, scoped to seq 0. The
+private-context conclusion still holds and the hazard is real for
+hybrid/recurrent architectures, but as written it overstates the danger for
+the models actually served.
+
+### Governor gaps found by building on it
+
+Pricing the pool surfaced that **vision KV was never priced at all**: muse
+goes 26.1 → 32.6 GB once its 131k vision context is counted, paddle 1.36 →
+3.61 GB with 4 x 32768. The pool is built on first request and never
+released, so "not allocated yet" was a timing detail, not a saving.
+
+### Two integration defects, both found live rather than reasoned about
+
+* An unknown `model` name returned a bare **500** — `KeyError` escaped the
+  REST handler. Now 400 with the name, which is the one thing a caller needs.
+* `AsyncOpenAI` appends `/chat/completions` to its base URL, so a bare host
+  posts to `/chat/completions`. llama-server answers there AND under `/v1`,
+  which is why the spawned backend works with a root URL; LLMVP mounts its
+  shim only under `/v1` and 404s. Cost one live run to find.
+
 ## 8. Open
 
 * Repeat the probe at n≥3 before trusting the 89.7 m projection as a number

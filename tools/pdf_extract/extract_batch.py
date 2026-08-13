@@ -146,9 +146,16 @@ def _free_port() -> int:
 # architecture (paddleocr) is newer than that build. A performance verdict
 # is only as good as the binary under it — cf. DeepSeek-V4, where a stale
 # build cost 4.2x decode.
-_VL_BACKENDS = ("llamacpp", "mlx")
+_VL_BACKENDS = ("llamacpp", "mlx", "llmvp")
 _DEFAULT_VL_BACKEND = os.environ.get("OUROBOROS_VL_BACKEND", "llamacpp")
 _LLAMA_SERVER = os.environ.get("OUROBOROS_LLAMA_SERVER", "llama-server")
+
+# The fleet server: paddle held hot as a Phase 2b secondary rather than
+# spawned per batch. No weights load, no teardown, and the OCR stage becomes
+# visible to LLMVP's model management instead of being a private subprocess.
+# The port is the SERVER's, so nothing here picks a free one.
+_LLMVP_URL = os.environ.get("OUROBOROS_LLMVP_URL", "http://127.0.0.1:8008")
+_LLMVP_MODEL = os.environ.get("OUROBOROS_LLMVP_VL_MODEL", "paddle-ocr-vl")
 
 # Weights live in models/ (gitignored — operator-placed, as the MLX model
 # always has been). Env overrides let a station point elsewhere without a
@@ -193,6 +200,10 @@ def _spawn_vl_server(
     exact shape of defect that poisons a corpus without failing a run.
     Scaling here makes the knob mean what a caller thinks it means.
     """
+    if backend == "llmvp":
+        raise ValueError(
+            "the llmvp backend uses the RUNNING fleet server — nothing to spawn"
+        )
     if backend == "mlx":
         cmd = [sys.executable, "-m", "mlx_vlm.server", "--port", str(port)]
     elif backend == "llamacpp":
@@ -224,8 +235,14 @@ def _vl_pipe_kwargs(backend: str, model: str, port: int, concurrency: int = 0) -
     """PaddleOCRVL kwargs for `backend`.
 
     The api model name is passed for MLX (mlx_vlm.server loads per request,
-    so the name IS the model) and left unset for llama.cpp, whose model is
-    fixed at spawn and discovered from /v1/models.
+    so the name IS the model) and left unset for a spawned llama.cpp server,
+    whose model is fixed at spawn and discovered from /v1/models.
+
+    `llmvp` is the FLEET server: no subprocess, no spawn, paddle already hot
+    beside the primary as a Phase 2b secondary. The name MUST be sent there —
+    LLMVP serves several models from one port and its routing is strict, so
+    an unnamed request would be answered by the primary rather than by
+    paddle. That is also the reason its /v1/models lists the hot entries.
     """
     kwargs: dict = {
         "vl_rec_backend": "mlx-vlm-server" if backend == "mlx" else "llama-cpp-server",
@@ -233,9 +250,41 @@ def _vl_pipe_kwargs(backend: str, model: str, port: int, concurrency: int = 0) -
     }
     if backend == "mlx":
         kwargs["vl_rec_api_model_name"] = model
+    elif backend == "llmvp":
+        # THE /v1 IS LOAD-BEARING. paddlex builds an AsyncOpenAI client from
+        # this URL, and the OpenAI SDK appends "/chat/completions" to it —
+        # so a bare host posts to /chat/completions. llama-server answers
+        # there AND at /v1/chat/completions, which is why the spawned backend
+        # gets away with a root URL; LLMVP mounts its shim only under /v1 and
+        # 404s. Cost one live run to find.
+        kwargs["vl_rec_server_url"] = f"{_LLMVP_URL.rstrip('/')}/v1/"
+        kwargs["vl_rec_api_model_name"] = model or _LLMVP_MODEL
     if concurrency:
         kwargs["vl_rec_max_concurrency"] = concurrency
     return kwargs
+
+
+def _wait_llmvp(port: int, model: str, timeout: float = 10.0) -> bool:
+    """True once LLMVP answers AND lists ``model`` as servable.
+
+    Readiness and routability are one question here: LLMVP serves several
+    models from one port with STRICT routing, so a server that is up but has
+    not loaded the OCR model would refuse every crop. Checking the listing
+    turns that into one clear failure before any page is rendered.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/v1/models", timeout=3
+            ) as r:
+                names = {m.get("id") for m in json.load(r).get("data", [])}
+            if model in names:
+                return True
+        except Exception:  # noqa: BLE001 — not up yet, or not listening
+            pass
+        time.sleep(1)
+    return False
 
 
 def _wait_health(port: int, timeout: float = 120.0) -> bool:
@@ -601,7 +650,13 @@ def main() -> int:
 
     # Resolve weights together, so a half-specified pair cannot silently mix
     # an explicit model with a default projector from the other quant.
-    if not args.model:
+    # The llmvp backend loads NO local weights — the fleet server already
+    # holds them. `model` there is a registry NAME, not a path, so resolving
+    # a GGUF for it would be meaningless and the mmproj is the server's.
+    if args.vl_backend == "llmvp":
+        args.model = args.model or _LLMVP_MODEL
+        args.mmproj = ""
+    elif not args.model:
         args.model, default_mmproj = _default_vl_model(args.vl_backend)
         if not args.mmproj:
             args.mmproj = default_mmproj
@@ -613,32 +668,68 @@ def main() -> int:
         print(json.dumps({"error": "keys/pdfs length mismatch"}))
         return 2
 
-    port = _free_port()
+    # The llmvp backend attaches to the RUNNING fleet server: no spawn, no
+    # teardown, and the batch fails fast if it is not up rather than silently
+    # falling back to a subprocess (which would load a second copy of paddle
+    # alongside the hot one).
+    server = None
+    if args.vl_backend == "llmvp":
+        port = int(_LLMVP_URL.rsplit(":", 1)[-1])
+        # NOT _wait_health: /health is a llama-server route and LLMVP answers
+        # 404 there (it is GraphQL-first). /v1/models is the readiness signal
+        # that also proves the thing we actually need — that the named model
+        # is hot — so a server that is up but has not loaded paddle fails
+        # here with a message that says so, instead of at the first crop.
+        if not _wait_llmvp(port, args.model, timeout=10.0):
+            print(
+                json.dumps(
+                    {
+                        "error": f"LLMVP not reachable at {_LLMVP_URL} — start it "
+                        f"and loadModel({_LLMVP_MODEL!r}), or use "
+                        f"--vl-backend llamacpp to spawn a private server"
+                    }
+                )
+            )
+            return 3
+    else:
+        port = _free_port()
+        try:
+            server = _spawn_vl_server(
+                args.vl_backend, args.model, args.mmproj, port, args.vl_parallel
+            )
+        except (ValueError, OSError) as exc:
+            print(json.dumps({"error": f"{type(exc).__name__}: {exc}"}))
+            return 2
     try:
-        server = _spawn_vl_server(
-            args.vl_backend, args.model, args.mmproj, port, args.vl_parallel
-        )
-    except (ValueError, OSError) as exc:
-        print(json.dumps({"error": f"{type(exc).__name__}: {exc}"}))
-        return 2
-    try:
-        if not _wait_health(port):
+        if server is not None and not _wait_health(port):
             print(json.dumps({"error": f"{args.vl_backend} server failed to start"}))
             return 3
         from paddleocr import PaddleOCRVL
 
         pipe = PaddleOCRVL(
-            **_vl_pipe_kwargs(args.vl_backend, args.model, port),
+            **_vl_pipe_kwargs(
+                args.vl_backend,
+                args.model,
+                port,
+                # The fleet server's parallelism is its OWN vision_pool_size,
+                # not a flag here — but the CLIENT still has to fan out to use
+                # it, so the crop concurrency is passed through.
+                concurrency=args.vl_parallel if args.vl_backend == "llmvp" else 0,
+            ),
         )
         for pdf, key in zip(args.pdfs, keys):
             report = extract_paper(pipe, pdf, key, args.databank_dir, args.dpi)
             print(json.dumps(report, ensure_ascii=False), flush=True)
     finally:
-        server.terminate()
-        try:
-            server.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            server.kill()
+        # Guard the whole TEARDOWN, not the return. A `return` inside finally
+        # swallows any in-flight exception and overrides the exit code; and
+        # the llmvp backend owns no subprocess to reap.
+        if server is not None:
+            server.terminate()
+            try:
+                server.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                server.kill()
     return 0
 
 

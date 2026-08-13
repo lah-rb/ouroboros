@@ -105,6 +105,88 @@ async def completions(request: Request):
             raise HTTPException(status_code=500, detail=str(exc))
 
 
+def _has_image_part(messages: list) -> bool:
+    """Does any message carry an image content part?
+
+    Shape-based on purpose (see the call site): the presence of an image is
+    what decides the pipeline, not the model name and not a flag.
+    """
+    for msg in messages:
+        content = (msg or {}).get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if (part or {}).get("type") in ("image_url", "image_path"):
+                return True
+    return False
+
+
+async def _serve_vision_as_chat(
+    messages: list,
+    max_tokens: Optional[int],
+    temperature: Optional[float],
+    model: Optional[str],
+):
+    """Run an image request through the vision path, answering in the OpenAI
+    chat envelope the caller expects."""
+    from fastapi.responses import JSONResponse
+
+    from core.inference import run_vision_completion
+    from inference.vision_images import ImageIntakeError
+
+    try:
+        outcome = await run_vision_completion(
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            model=model,
+        )
+    except ImageIntakeError as exc:
+        return JSONResponse(status_code=400, content={"error": str(exc)})
+    except KeyError as exc:
+        return JSONResponse(status_code=400, content={"error": str(exc).strip("\"'")})
+    except RuntimeError as exc:
+        return JSONResponse(status_code=503, content={"error": str(exc)})
+    return {
+        "id": "chatcmpl-llmvp",
+        "object": "chat.completion",
+        "model": outcome.vision_model,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": outcome.text},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": outcome.prompt_tokens,
+            "completion_tokens": outcome.generated_tokens,
+            "total_tokens": outcome.prompt_tokens + outcome.generated_tokens,
+        },
+    }
+
+
+@router.get("/models")
+async def list_models():
+    """OpenAI-shaped model list: the ACTIVE model plus any hot secondaries.
+
+    PaddleOCR's llama-cpp-server backend discovers its model name from here
+    when none is configured (tools/pdf_extract `_vl_pipe_kwargs` leaves it
+    unset for llamacpp, because a subprocess server has exactly one model).
+    Against LLMVP that is no longer true, so listing the hot entries is what
+    lets a client name the one it wants — and routing is strict, so a name
+    that is not listed is refused rather than answered by the primary.
+    """
+    from core import model_registry, resident_models
+
+    out = [{"id": model_registry.active_name(), "object": "model", "owned_by": "llmvp"}]
+    out += [
+        {"id": e["name"], "object": "model", "owned_by": "llmvp"}
+        for e in resident_models.list_resident()
+    ]
+    return {"object": "list", "data": out}
+
+
 @router.post("/chat/completions")
 async def chat_completions(request: Request):
     """OpenAI-compatible chat completion endpoint.
@@ -125,6 +207,20 @@ async def chat_completions(request: Request):
     max_tokens = body.get("max_tokens")
     temperature = body.get("temperature")
     model = body.get("model") or config.model.name
+
+    # IMAGES ARRIVE HERE, not at /v1/vision, because that is where OpenAI
+    # clients send them — PaddleOCR's llama-cpp-server backend posts region
+    # crops to /v1/chat/completions and has no notion of a separate vision
+    # route. The message shape is already identical, so this is a delegation,
+    # not a translation: run_vision_completion re-normalises the parts and
+    # routes by `model` exactly as the vision endpoint does.
+    #
+    # Detection is on CONTENT SHAPE, not on the model name. A text request
+    # must keep going down the text path even when it names a vision model,
+    # and an image request must never fall through to run_chat_completion,
+    # which flattens content to str and would silently drop the image.
+    if _has_image_part(messages):
+        return await _serve_vision_as_chat(messages, max_tokens, temperature, model)
 
     try:
         answer, tokens_out = await run_chat_completion(
