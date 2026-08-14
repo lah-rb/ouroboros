@@ -81,6 +81,10 @@ def why(rec: dict) -> str:
     # beside a crashed worker. Two entirely different things to do about them.
     if "degenerate decode" in fr:
         return "degenerate"
+    # The extraction is FINE and the asset is wrong — the only bucket here
+    # whose fix is re-acquisition rather than anything the extractor can do.
+    if "truncated acquisition" in fr:
+        return "truncated"
     m = re.search(r"numeric=([0-9.]+), span=([0-9.]+)", fr)
     if m:
         n, s = float(m.group(1)), float(m.group(2))
