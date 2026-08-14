@@ -42,8 +42,19 @@ sections:
         a NEW key only for a quantity the registry genuinely lacks.
       - Key style: lower_snake_case, unit-suffixed where a unit is
         fixed (e.g. "hardness_hv"), value carries the number.
-      - Group repeated measurements as lists of objects under one key
-        (e.g. "tensile_tests": [{"temperature_k": 77, ...}, ...]).
+      - AN ENTITY NAME NEVER APPEARS IN A KEY. Sample ids, specimen
+        labels, star names, site names, mineral names — these are
+        VALUES. Group the repeated measurement as a list of objects
+        under ONE key and carry the identity inside each object:
+            ✅ "disk_models": [{"object": "MWC 480", "stellar_mass_msun": 1.9},
+                               {"object": "CQ Tau",  "stellar_mass_msun": 1.5}]
+            ❌ "fitted_mwc480_stellar_mass_msun": 1.9,
+               "fitted_cqtau_stellar_mass_msun": 1.5
+        The ❌ form is why this rule is emphatic: one paper packed that
+        way contributed 71 keys, six of them the same quantity under six
+        names. The registry is a SHARED vocabulary — a key only earns its
+        place if the next paper can reuse it, and no other paper will ever
+        measure "cqtau_stellar_mass".
       - Numbers VERBATIM from the paper (text, tables, or the labeled
         figure readings). Never average, convert units, extrapolate, or
         estimate — if the paper says "approximately 1.2 GPa", pack 1.2.

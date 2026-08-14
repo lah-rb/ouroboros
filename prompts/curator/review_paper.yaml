@@ -60,6 +60,33 @@ sections:
         dropped. If you notice something off but think "that's probably
         okay" — it is NOT okay: record it in "issues" either way.
 
+  - id: deny_category
+    content: |
+      When the verdict is "deny", also set "deny_category" to the ONE that
+      best explains it. A denial is not a deletion — the paper is kept, and
+      this field is what decides whether anyone can ever act on it:
+
+      - "corpus_fit"        the subject does not serve this corpus.
+      - "extraction_damage" our extraction mangled the paper: garbled text,
+                            tables broken apart, passages truncated. The
+                            PAPER may be fine.
+      - "data_not_in_text"  the paper is sound and the values are simply not
+                            in the text — they live in figures, or in table
+                            cells encoded graphically (shading, hatching,
+                            checkmarks, colour) that a text pass cannot read.
+                            Empty-looking table cells with a pattern legend
+                            nearby are THIS, not extraction damage.
+      - "no_usable_data"    the paper genuinely reports no extractable
+                            values: a review, an editorial, a position piece.
+      - "implausible"       internal contradictions or values that cannot be
+                            right.
+
+      Distinguish "extraction_damage" from "data_not_in_text" honestly. The
+      first says our pipeline failed and a re-run might fix it; the second
+      says the pipeline worked and a different modality is needed. Guessing
+      the first when it is the second sends a good paper to be re-OCR'd
+      forever, to the same result.
+
   - id: output_format
     content: |
       ✅ CORRECT:
@@ -71,6 +98,16 @@ sections:
           "Fig 3 VLM reading reports 2.1 GPa where prose says 1.2 GPa — prefer prose value",
           "Table 2 header garbled by extraction"
         ]
+      }
+      ```
+
+      ✅ CORRECT — a denial that says what could be done about it:
+      ```json
+      {
+        "verdict": "deny",
+        "deny_category": "data_not_in_text",
+        "summary": "Mineral presence per sample is complete but encoded as cell shading against a pattern legend; no values appear in the text.",
+        "issues": ["Tables 2-9: presence marks are hatch fills, not text"]
       }
       ```
 

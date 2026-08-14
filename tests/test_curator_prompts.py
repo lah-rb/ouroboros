@@ -107,3 +107,61 @@ def test_without_a_subject_fit_is_not_guessed():
     )
     assert "THE CORPUS YOU ARE CURATING FOR" not in rendered
     assert "do NOT guess one" in rendered
+
+
+# ── a denial has to say what could be done about it ───────────────────
+
+
+def test_review_prompt_asks_for_a_deny_category():
+    """A denial keeps the paper, so the only question that matters afterwards
+    is whether anything can recover it."""
+    from agent.loader import PromptRenderer
+    from agent.actions.curation_actions import _prompts_dir
+
+    out = PromptRenderer(_prompts_dir()).render(
+        "curator/review_paper", {"input": {}, "context": {}, "meta": {}}
+    )
+    for category in (
+        "corpus_fit",
+        "extraction_damage",
+        "data_not_in_text",
+        "no_usable_data",
+        "implausible",
+    ):
+        assert category in out, category
+
+
+def test_review_prompt_separates_our_damage_from_graphical_data():
+    """Measured on the PTAL paper: its mineral matrix looked like empty table
+    cells in BOTH the PDF text layer and our markdown — because the presence
+    marks are hatch fills, not text. The extraction was faithful. Calling that
+    'extraction_damage' sends a sound paper to be re-OCR'd forever, to exactly
+    the same result."""
+    from agent.loader import PromptRenderer
+    from agent.actions.curation_actions import _prompts_dir
+
+    out = PromptRenderer(_prompts_dir()).render(
+        "curator/review_paper", {"input": {}, "context": {}, "meta": {}}
+    )
+    assert "Empty-looking table cells with a pattern legend" in out
+    assert "a different modality is needed" in out
+
+
+def test_pack_prompt_forbids_entity_names_in_keys():
+    """One pilot paper contributed 71 keys by flattening object names into
+    them — six keys for one quantity. The registry is a SHARED vocabulary; a
+    key only earns its place if the next paper can reuse it."""
+    from agent.loader import PromptRenderer
+    from agent.actions.curation_actions import _prompts_dir
+
+    out = PromptRenderer(_prompts_dir()).render(
+        "curator/pack_data",
+        {
+            "input": {},
+            "context": {"key_registry_block": "", "gate_feedback": ""},
+            "meta": {},
+        },
+    )
+    assert "AN ENTITY NAME NEVER APPEARS IN A KEY" in out
+    assert "fitted_mwc480_stellar_mass_msun" in out  # the ❌ exemplar
+    assert '"disk_models"' in out  # the ✅ shape

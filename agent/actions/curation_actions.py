@@ -908,6 +908,16 @@ async def action_curate_ingest_review(step_input):
             "status": verdict,
             "summary": str(review.get("summary") or "").strip(),
             "issues": [str(i) for i in (review.get("issues") or [])][:20],
+            # WHAT COULD BE DONE ABOUT IT. A denial keeps the paper, so the
+            # only question that matters afterwards is whether anything can
+            # recover it. Unrecognized values are kept verbatim rather than
+            # coerced: an unexpected category is a signal about the prompt,
+            # and silently rewriting it to "other" would erase that.
+            "deny_category": (
+                str(review.get("deny_category") or "").strip().lower()
+                if verdict == "denied"
+                else ""
+            ),
         }
         # Pin the post-review context: pack (turn 2) continues live; the
         # pack RETRY forks from here with the review still in context.
@@ -1198,6 +1208,7 @@ async def action_curate_book_result(step_input):
     rec["review_status"] = review.get("status") or "review_failed"
     rec["review_summary"] = review.get("summary") or ""
     rec["review_issues"] = review.get("issues") or []
+    rec["deny_category"] = review.get("deny_category") or ""
     rec["tag_review_agreement"] = tag_review_agreement(rec)
 
     outcome = rec["review_status"]
