@@ -59,21 +59,14 @@ _BUCKET_NOTE = {
 }
 
 
-def bucket(failure_reason: str) -> str:
-    """Classify one failure. Order matters: 403 wins over everything, because
-    a walled response can also be text/html."""
-    f = (failure_reason or "").lower()
-    if "403" in f:
-        return "hard_wall"
-    if "text/html" in f:
-        return "landing_page"
-    if "not a pdf" in f or "magic" in f:
-        return "wrong_asset"
-    if "202" in f:
-        return "async_pending"
-    if "404" in f:
-        return "gone"
-    return "other"
+# ONE definition, and it lives beside the code that WRITES failure_reason
+# (agent/actions/scholarly_actions.py). A second copy here would drift the
+# moment a failure string changed, and this tool's whole job is reading those
+# strings correctly. The repo root goes on the path because tools/ is not a
+# package; the import is stdlib-only downstream.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from agent.actions.scholarly_actions import classify_failure as bucket  # noqa: E402
 
 
 def read_records(databank: Path) -> dict:

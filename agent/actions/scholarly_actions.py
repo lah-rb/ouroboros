@@ -57,6 +57,171 @@ RELEVANCE_TIERS = ("exact", "close", "adjacent")
 MAX_REFERENCE_DOIS = 200
 CATALOG_BATCH_SIZE = 5
 
+# Publisher hosts MEASURED to refuse a polite crawler (2026-08-13): Cloudflare
+# 403 on every attempt, unmoved by the browser User-Agent we already send or by
+# following redirects. Used to skip them when harvesting alternate locations —
+# a repository copy is worth trying, a fifth URL at the same walled host is not.
+WALLED_HOSTS = (
+    "sciencedirect.com",
+    "onlinelibrary.wiley.com",
+    "link.springer.com",
+    "www.mdpi.com",
+    "iopscience.iop.org",
+    "pubs.rsc.org",
+)
+
+
+def classify_failure(failure_reason: str) -> str:
+    """Which KIND of acquisition failure this was.
+
+    `access_status: oa_unresolved` lumps together populations that need
+    opposite responses, and the difference is already in `failure_reason` —
+    it simply had no name. Measured over 485 unresolved records on
+    2026-08-13:
+
+      hard_wall     51%  403 WAF. Nothing client-side moves it.
+      landing_page  41%  the fetch SUCCEEDED; we got a real page and failed
+                         to find the PDF link on it. Tractable.
+      async_pending  2%  202, publisher still preparing the file.
+      wrong_asset    2%  we followed a link to a figure, not the paper.
+      gone           1%  404.
+
+    Order matters: 403 wins over everything, because a walled response is
+    also served as text/html and would otherwise land in landing_page.
+
+    Defined HERE, next to the code that writes failure_reason, so the string
+    and its meaning cannot drift apart; tools/oa_triage.py imports it.
+    """
+    f = (failure_reason or "").lower()
+    if "403" in f:
+        return "hard_wall"
+    if "text/html" in f:
+        return "landing_page"
+    if "not a pdf" in f or "magic" in f:
+        return "wrong_asset"
+    if "202" in f:
+        return "async_pending"
+    if "404" in f:
+        return "gone"
+    return "other"
+
+
+# Buckets a re-attempt can actually help, best-yield first. Measured on plain
+# re-fetch with our own production headers: landing_page 35% (7/20, Springer
+# 6/6), hard_wall 5% (1/20).
+RETRYABLE_BUCKETS = ("landing_page", "wrong_asset", "async_pending", "other")
+
+
+# Days before a failed OA location is worth trying again.
+#
+# ONE DAY, AND THE NUMBER IS MEASURED RATHER THAN INTUITED. The reasoning that
+# produced this feature said "weeks pass and transient blocks lift" — that was
+# wrong about the timescale, and a 7-day default would have been DEAD CODE
+# here. The whole retryable population of the spectra corpus was last touched
+# between 0.05 and 2.16 days ago (median 0.81), because a live corpus keeps
+# getting re-worked. Yet the 35% recovery (Springer 6/6) was measured against
+# exactly those records. So the block lifts in HOURS, not weeks.
+#
+# Live filter chain on the spectra corpus right after a run (2026-08-13):
+#   485 unresolved -> 261 actually had a URL tried -> 135 in a retryable
+#   bucket -> 8 last touched >= 1 day ago. The other 127 sit at a median age
+#   of 0.57 d and become eligible within a day, which is the point: the lane
+#   drips rather than dumping, and a corpus worked daily keeps feeding it.
+#
+# It is still not IMMEDIATE retry, which was separately measured to yield
+# nothing — the floor exists so a URL that just failed is not hammered inside
+# the same run.
+_RETRY_AFTER_DAYS_DEFAULT = 1
+
+
+def retry_after_days() -> int:
+    """Age past which a failed OA location is worth trying again. 0 disables."""
+    raw = os.environ.get("OUROBOROS_OA_RETRY_AFTER_DAYS", "").strip()
+    if not raw:
+        return _RETRY_AFTER_DAYS_DEFAULT
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        logger.warning("OUROBOROS_OA_RETRY_AFTER_DAYS=%r not an integer", raw)
+        return _RETRY_AFTER_DAYS_DEFAULT
+
+
+def _iso_age_days(value: str, *, missing: float = float("inf")) -> float:
+    """Days since an ISO timestamp.
+
+    THE DEFAULT FOR "MISSING" IS PER-FIELD, and getting it wrong once already
+    broke an invariant this codebase relies on:
+
+      `oa_retried_at` absent means NEVER RE-ARMED -> must read as infinitely
+      old, so a first re-arm is allowed.
+
+      `updated_at` absent means UNKNOWN AGE, not old. Every real write stamps
+      it, so a record without one is a fixture or a hand-made row — and
+      treating unknown as stale re-arms records whose locations were
+      deliberately burned, which is exactly what
+      `test_exhausted_locations_are_not_retried_forever` forbids.
+
+    Hence the explicit ``missing`` parameter rather than one baked-in answer.
+    """
+    from datetime import datetime, timezone
+
+    if not value:
+        return missing
+    try:
+        ts = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return missing
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - ts).total_seconds() / 86400.0
+
+
+def _skip_hopeless() -> bool:
+    """Skip the Unpaywall call when OpenAlex already found no OA route?
+
+    OFF by default, deliberately. The measured saving is real (67.5% of what
+    verification checks turns out closed) but OpenAlex is not the last word on
+    open access, and a paper wrongly marked `closed` never gets looked at
+    again. The safe half of this optimisation — ordering OA-likely records
+    first — is always on and lives in the sweep selector.
+    """
+    return os.environ.get("OUROBOROS_SKIP_HOPELESS_UNPAYWALL", "") == "1"
+
+
+def _openalex_found_nothing(rec: dict) -> bool:
+    """OpenAlex looked at this paper and found no OA location.
+
+    The `openalex_id` guard is load-bearing: records sourced from Semantic
+    Scholar or CORE also carry no `oa_pdf_urls`, and treating those as
+    hopeless would be skipping papers nobody has actually checked.
+    """
+    return bool(rec.get("openalex_id")) and not (rec.get("oa_pdf_urls") or [])
+
+
+def is_stale_retry_candidate(rec: dict) -> bool:
+    """Is this an old acquisition failure worth one more attempt?
+
+    `oa_retried_at` is what stops a record being re-armed every cycle —
+    without it the same handful would refill the batch reservation forever
+    and the corpus goal could never complete.
+    """
+    if rec.get("access_status") != "oa_unresolved":
+        return False
+    if not (rec.get("oa_attempted") or rec.get("oa_pdf_urls")):
+        return False
+    horizon = retry_after_days()
+    if horizon <= 0:
+        return False
+    if classify_failure(rec.get("failure_reason", "")) not in RETRYABLE_BUCKETS:
+        return False  # hard_wall 5%, gone 0% — not worth a slot
+    return (
+        # never re-armed -> eligible
+        _iso_age_days(rec.get("oa_retried_at", "")) >= horizon
+        # unknown age -> NOT eligible; staleness must be positively established
+        and _iso_age_days(rec.get("updated_at", ""), missing=-1.0) >= horizon
+    )
+
+
 # ── Politeness ────────────────────────────────────────────────────────
 
 _HTTP_STATE_KEY = "scraper_http_state"
@@ -360,6 +525,71 @@ _S2_SEARCH_FIELDS = (
 )
 _OPENALEX_BASE = "https://api.openalex.org"
 _CORE_BASE = "https://api.core.ac.uk/v3"
+_EUROPEPMC_BASE = "https://www.ebi.ac.uk/europepmc/webservices/rest"
+# `is_oa` alone is weak — it admits bronze OA (free to read on the publisher's
+# own site, no PDF url), which is most of what it would keep. Pairing it with
+# has_fulltext is what moved the retrievable-location share to 92%.
+_OPENALEX_OA_FILTER = "is_oa:true,has_fulltext:true"
+
+
+def _is_walled(url: str) -> bool:
+    """Is this URL at a host measured to refuse a polite crawler?"""
+    host = url.split("/")[2].lower() if "//" in (url or "") else ""
+    return any(w in host for w in WALLED_HOSTS)
+
+
+async def _alt_host_urls(effects: Any, doi: str, rec: dict) -> list:
+    """PDF locations at hosts that are neither the publisher nor CORE.
+
+    Two sources, both serving from their OWN domain, which is the only
+    property that matters once the publisher has 403'd us:
+
+      * OpenAlex `locations[]` minus the walled publisher hosts. Unpaywall
+        ranks the version-of-record first and we take that ordering for
+        figure fidelity; here we want exactly what it deprioritised.
+      * Europe PMC full text, for anything that resolves to a PMCID.
+
+    Measured 1/18 (6%) on live test 2026-08-13 — low, and worth having only
+    because it is a few lines on an existing chain. Never raises: a bonus
+    tier must not fail a resolution.
+    """
+    found: list = []
+    try:
+        oa = await polite_request(
+            effects,
+            "GET",
+            f"{_OPENALEX_BASE}/works/doi:{doi}",
+            params={"mailto": _contact_email(), "select": "locations"},
+        )
+        if oa.status == 200 and isinstance(oa.json_data, dict):
+            for loc in oa.json_data.get("locations") or []:
+                url = (loc or {}).get("pdf_url")
+                if url and not _is_walled(url):
+                    found.append(url)
+    except Exception as exc:  # noqa: BLE001 — bonus tier, never fatal
+        logger.debug("alt-host OpenAlex lookup failed for %s: %s", doi, exc)
+
+    try:
+        pmc = await polite_request(
+            effects,
+            "GET",
+            f"{_EUROPEPMC_BASE}/search",
+            params={"query": f'DOI:"{doi}"', "format": "json", "resultType": "core"},
+        )
+        if pmc.status == 200 and isinstance(pmc.json_data, dict):
+            results = (pmc.json_data.get("resultList") or {}).get("result") or []
+            for item in results[:1]:
+                pmcid = (item or {}).get("pmcid")
+                if pmcid:
+                    found.append(f"{_EUROPEPMC_BASE}/{pmcid}/fullTextPdf")
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("alt-host EuropePMC lookup failed for %s: %s", doi, exc)
+
+    if found:
+        logger.info("alt-host: %d extra location(s) for %s", len(found), doi)
+    return found
+
+
 _OPENALEX_SELECT = (
     "id,doi,title,abstract_inverted_index,publication_year,primary_location,"
     "authorships,open_access,best_oa_location,locations,ids,language,"
@@ -566,6 +796,15 @@ async def action_scholarly_search(step_input: StepInput) -> StepOutput:
         ]
     aspect_name = str(step_input.params.get("aspect_name") or "")
     max_per_query = int(step_input.params.get("max_per_query") or 20)
+    # OA-FIRST BY DEFAULT, breadth still reachable. Measured 2026-08-13 on one
+    # aspect query: papers holding a retrievable OA location go 22% -> 92% of
+    # the returned page under this filter, at a cost of 6% of matching corpus
+    # (13,516 -> 12,652). Downstream fetch success is UNCHANGED (~17% either
+    # way) — the filter does not beat the publisher wall, it stops us
+    # discovering papers that were never going to yield a PDF.
+    # Pass oa_only: false for a breadth / citation-graph pass.
+    oa_only = step_input.params.get("oa_only")
+    oa_only = True if oa_only is None else bool(oa_only)
 
     candidates: list[dict] = []
     s2_count = openalex_count = core_count = 0
@@ -597,6 +836,7 @@ async def action_scholarly_search(step_input: StepInput) -> StepOutput:
                 "per-page": max_per_query,
                 "select": _OPENALEX_SELECT,
                 "mailto": _contact_email(),
+                **({"filter": _OPENALEX_OA_FILTER} if oa_only else {}),
             },
         )
         if oa.status == 200 and isinstance(oa.json_data, dict):
@@ -870,6 +1110,21 @@ async def action_resolve_oa_pdf(step_input: StepInput) -> StepOutput:
     batch = list(step_input.context.get("catalog_batch") or [])
     resolved = closed = 0
     for rec in batch:
+        # THE STALE RE-ARM. Clearing oa_attempted makes known locations look
+        # untried, so the normal resolve -> download path runs again. Nothing
+        # is fetched here. Stamped so the record cannot be re-armed next cycle.
+        if is_stale_retry_candidate(rec):
+            from agent.persistence.models import _now_iso
+
+            rec["oa_attempted"] = []
+            rec["oa_retried_at"] = _now_iso()
+            logger.info(
+                "OA re-arm: %s (%s, last tried %s)",
+                rec.get("paper_key", "?"),
+                classify_failure(rec.get("failure_reason", "")),
+                rec.get("updated_at", "?"),
+            )
+
         urls = _dedup_urls(rec.get("oa_pdf_urls") or [rec.get("oa_pdf_url")])
         attempted = set(rec.get("oa_attempted") or [])
         # Ask Unpaywall when there is nothing to fall back to -- no location
@@ -877,6 +1132,17 @@ async def action_resolve_oa_pdf(step_input: StepInput) -> StepOutput:
         # paper that arrived with several live alternates needs no call.
         if len(urls) < 2 or not (set(urls) - attempted):
             doi = str(rec.get("doi") or "").strip()
+            if doi and _skip_hopeless() and _openalex_found_nothing(rec):
+                # OPT-IN ONLY. OpenAlex saying "no OA route" is not
+                # authoritative -- Unpaywall sometimes knows better -- and a
+                # wrong `closed` is a silent corpus loss, so the default keeps
+                # the call and merely deprioritises these records in the
+                # sweep. Set OUROBOROS_SKIP_HOPELESS_UNPAYWALL=1 to trade that
+                # accuracy for throughput.
+                rec["access_status"] = "closed"
+                rec["oa_check"] = "openalex_only"
+                closed += 1
+                continue
             if doi:
                 up = await polite_request(
                     effects,
@@ -920,6 +1186,13 @@ async def action_resolve_oa_pdf(step_input: StepInput) -> StepOutput:
                             if isinstance(work, dict)
                         ]
                     )
+            # LAST TIER: hosts that are neither the publisher nor CORE. Low
+            # yield -- 1 of 18 on live test (6%) -- but it is the only route
+            # left for a paper walled everywhere else, and it composes with
+            # the stale re-arm above. Publisher hosts are filtered out: a
+            # fifth URL at a domain measured to 403 us is not a candidate.
+            if doi and not (set(urls) - attempted):
+                urls = _dedup_urls(urls + await _alt_host_urls(effects, doi, rec))
         if urls:
             rec["oa_pdf_urls"] = urls
             rec["oa_pdf_url"] = urls[0]
@@ -995,6 +1268,232 @@ async def action_download_papers(step_input: StepInput) -> StepOutput:
     return StepOutput(
         result={"downloaded": downloaded, "failed": failed},
         observations=f"Downloads: {downloaded} fetched, {failed} unresolved",
+        context_updates={"catalog_batch": batch},
+    )
+
+
+# ── LLM landing-page navigation ───────────────────────────────────────
+#
+# WHAT THIS IS FOR, AND WHAT IT IS NOT. 41% of unresolved papers failed with
+# the fetch SUCCEEDING: we hold a real landing page and simply did not find
+# the PDF link on it. Every publisher lays that page out differently, which is
+# exactly where fixed selectors lose and a model wins. This is BETTER
+# NAVIGATION of a page we were served and are allowed to read.
+#
+# It is NOT a way past the 403s. Those return a 408-byte block page with no
+# content to reason about, and the classifier below refuses to spend inference
+# on them.
+
+# One attempt per record, capped per dispatch, killable outright. Inference
+# volume in the acquisition lane is the historical cause of run losses, so the
+# ceiling is explicit rather than emergent.
+_NAV_PER_DISPATCH = 2
+_NAV_MAX_HTML_BYTES = 400_000
+_NAV_MAX_CANDIDATES = 40
+
+# Hosts that legitimately serve a PDF for a paper whose landing page lives
+# elsewhere — repositories and aggregators. Anything else must match the
+# landing page's own registrable domain.
+_NAV_ALLOWED_HOSTS = (
+    "core.ac.uk",
+    "ebi.ac.uk",
+    "europepmc.org",
+    "ncbi.nlm.nih.gov",
+    "arxiv.org",
+    "zenodo.org",
+    "figshare.com",
+    "osti.gov",
+    "hal.science",
+)
+
+_NAV_PROMPT = """You are given the links found on a scientific paper's landing page.
+
+Return the URL that downloads the FULL-TEXT PDF of the paper itself.
+
+Rules:
+- Reply with the URL ONLY. No prose, no markdown, no quotes.
+- If no link downloads the paper's full text, reply exactly: NONE
+- Do NOT pick supplementary material, a figure, a cited reference, a different
+  article, a citation-export file, or a "related articles" link.
+
+Paper: {title}
+Landing page: {page_url}
+
+Links:
+{links}"""
+
+
+def _registrable(host: str) -> str:
+    """Last two labels of a hostname — a cheap eTLD+1 stand-in.
+
+    Good enough for "is this the same publisher": it treats
+    agupubs.onlinelibrary.wiley.com and onlinelibrary.wiley.com as one site.
+    It over-merges under multi-part suffixes like .co.uk, which for THIS use
+    (deciding whether to follow a link the model picked, then requiring PDF
+    magic before accepting it) fails safe.
+    """
+    parts = [p for p in (host or "").lower().split(".") if p]
+    return ".".join(parts[-2:]) if len(parts) >= 2 else (host or "").lower()
+
+
+def _extract_links(html: str, page_url: str) -> list:
+    """(absolute_url, anchor_text) for links plausibly leading to a PDF.
+
+    The page is REDUCED before it ever reaches the model — a publisher page
+    runs to hundreds of KB of navigation chrome, and sending it whole would
+    cost a large prefill to answer a question about a handful of hrefs.
+    """
+    import re as _re
+    from urllib.parse import urljoin
+
+    out: list = []
+    seen = set()
+    for m in _re.finditer(
+        r"<a\b[^>]*?href=[\"']([^\"']+)[\"'][^>]*>(.*?)</a>",
+        html[:_NAV_MAX_HTML_BYTES],
+        _re.I | _re.S,
+    ):
+        href, text = m.group(1).strip(), _re.sub(r"<[^>]+>", " ", m.group(2))
+        text = " ".join(text.split())[:80]
+        if href.startswith(("#", "javascript:", "mailto:")):
+            continue
+        url = urljoin(page_url, href)
+        if not url.lower().startswith(("http://", "https://")):
+            continue
+        blob = f"{url} {text}".lower()
+        # Keep only links that LOOK paper-ish. A page has hundreds of anchors;
+        # the model should be choosing among plausible ones, not reading a nav
+        # bar. Anything mentioning pdf/download/fulltext/epdf qualifies.
+        if not any(
+            t in blob for t in ("pdf", "download", "fulltext", "full-text", "epdf")
+        ):
+            continue
+        if url in seen:
+            continue
+        seen.add(url)
+        out.append((url, text))
+        if len(out) >= _NAV_MAX_CANDIDATES:
+            break
+    return out
+
+
+def _nav_url_is_allowed(candidate: str, page_url: str) -> bool:
+    """May we fetch what the model returned?
+
+    THE MODEL MUST NOT BE ABLE TO SEND US ANYWHERE. It is choosing from links
+    on a page we fetched, but its output is free text and a prompt-injected
+    page could name any URL at all. Restricting to the landing page's own site
+    or a known repository keeps a compromised page from turning the crawler
+    into a request generator against a third party.
+    """
+    from urllib.parse import urlparse
+
+    try:
+        cand, page = urlparse(candidate), urlparse(page_url)
+    except ValueError:
+        return False
+    if cand.scheme not in ("http", "https") or not cand.netloc:
+        return False
+    if _registrable(cand.netloc) == _registrable(page.netloc):
+        return True
+    return any(h in cand.netloc.lower() for h in _NAV_ALLOWED_HOSTS)
+
+
+async def action_navigate_landing_page(step_input: StepInput) -> StepOutput:
+    """Find the PDF link on a landing page we already fetched successfully.
+
+    Runs ONLY for records whose failure was `landing_page` — the bucket where
+    the request succeeded and the page is in hand. Hard-walled papers cost no
+    inference at all.
+
+    Context: catalog_batch
+    Result: navigated, attempted; Publishes: catalog_batch
+    """
+    from agent.persistence.models import _now_iso
+
+    effects = step_input.effects
+    batch = list(step_input.context.get("catalog_batch") or [])
+    if not effects or os.environ.get("OUROBOROS_LLM_NAV", "1") == "0":
+        return StepOutput(
+            result={"navigated": 0, "attempted": 0},
+            observations="LLM landing-page navigation disabled",
+            context_updates={"catalog_batch": batch},
+        )
+
+    navigated = attempted = 0
+    for rec in batch:
+        if attempted >= _NAV_PER_DISPATCH:
+            break
+        if rec.get("pdf_path") or rec.get("access_status") != "oa_unresolved":
+            continue
+        if classify_failure(rec.get("failure_reason", "")) != "landing_page":
+            continue
+        if rec.get("nav_attempted_at"):
+            continue  # one attempt per record, ever — never a loop
+        page_url = rec.get("oa_pdf_url") or ""
+        if not page_url:
+            continue
+
+        attempted += 1
+        rec["nav_attempted_at"] = _now_iso()
+
+        page = await polite_request(effects, "GET", page_url)
+        if page.status != 200 or not page.text:
+            rec["failure_reason"] = f"nav: landing page unavailable ({page.status})"
+            continue
+        links = _extract_links(page.text, page_url)
+        if not links:
+            rec["failure_reason"] = "nav: no candidate links on the landing page"
+            continue
+
+        res = await effects.run_inference(
+            _NAV_PROMPT.format(
+                title=(rec.get("title") or "")[:200],
+                page_url=page_url,
+                links="\n".join(f"- {u}  [{t}]" for u, t in links),
+            ),
+            {"temperature": "0.1"},
+        )
+        answer = (getattr(res, "text", "") or "").strip().split()
+        choice = answer[-1].strip("<>\"'`") if answer else ""
+        if not choice or choice.upper() == "NONE":
+            rec["failure_reason"] = "nav: model found no full-text link"
+            continue
+        if not _nav_url_is_allowed(choice, page_url):
+            logger.warning(
+                "nav: REJECTED off-domain URL %r for %s (page %s)",
+                choice[:120],
+                rec.get("paper_key", "?"),
+                page_url,
+            )
+            rec["failure_reason"] = "nav: model returned an off-domain URL"
+            continue
+
+        key = rec.get("paper_key") or paper_key(rec)
+        path = f"{PDF_DIR}/{key}.pdf"
+        dl = await effects.http_download(choice, path)
+        rec.setdefault("oa_attempted", []).append(choice)
+        if dl.success:
+            # http_download already refuses anything that is not a document;
+            # accepting on its verdict keeps ONE definition of "is a PDF".
+            rec["pdf_path"] = path
+            rec["oa_pdf_url"] = choice
+            rec["access_status"] = "oa_pdf"
+            rec["status"] = "acquired"
+            rec["failure_reason"] = ""
+            rec["retrieval_method"] = "llm_nav"
+            navigated += 1
+            logger.info("nav: recovered %s via %s", key, choice[:120])
+        else:
+            rec["failure_reason"] = f"nav: {dl.error or dl.status}"
+
+    return StepOutput(
+        result={"navigated": navigated, "attempted": attempted},
+        observations=(
+            f"Landing-page navigation: {navigated}/{attempted} recovered"
+            if attempted
+            else "Landing-page navigation: nothing eligible"
+        ),
         context_updates={"catalog_batch": batch},
     )
 

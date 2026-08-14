@@ -209,6 +209,31 @@ async def action_acquire_batch(step_input: StepInput) -> StepOutput:
     )
 
     # ── serial booking from here ──────────────────────────────────────
+    #
+    # REPAIR PASS, AFTER THE CHEAP PATH AND ACROSS THE WHOLE BATCH. Two
+    # reasons it lives here rather than inside _acquire_one:
+    #
+    #   ORDERING — a plain download recovers 35% of landing-page failures for
+    #   free (Springer 6/6 on live re-fetch), so navigation must see only what
+    #   download could not get. Running it per-record before the batch settles
+    #   would spend inference on papers already in hand.
+    #
+    #   THE CAP — _NAV_PER_DISPATCH is counted within one action call. Called
+    #   from _acquire_one it would run once per RECORD, so a 5-record batch
+    #   could fire five navigations against a cap that reads like two. Here it
+    #   sees the batch and the ceiling means what it says.
+    from agent.actions.scholarly_actions import action_navigate_landing_page
+
+    nav = {"navigated": 0, "attempted": 0}
+    try:
+        nav_out = await action_navigate_landing_page(
+            step_input.model_copy(update={"context": {"catalog_batch": records}})
+        )
+        nav = dict(nav_out.result or {})
+        records = list(nav_out.context_updates.get("catalog_batch") or records)
+    except Exception as exc:  # noqa: BLE001 — a repair must not sink the batch
+        logger.warning("landing-page navigation failed: %s", exc)
+
     downloaded = sum(1 for r in records if r.get("pdf_path"))
     failed = len(records) - downloaded
     pacer_stats = _pacer().stats()
@@ -218,16 +243,20 @@ async def action_acquire_batch(step_input: StepInput) -> StepOutput:
     ocr_note = ""
     if ocr.get("attempted"):
         ocr_note = f"; OCR {ocr['attempted']} pdf(s) in parallel"
+    nav_note = ""
+    if nav.get("attempted"):
+        nav_note = f"; nav recovered {nav.get('navigated', 0)}/{nav['attempted']}"
     return StepOutput(
         result={
             "downloaded": downloaded,
             "failed": failed,
             "ocr": ocr,
+            "nav": nav,
             "http": {"requests": requests, "throttled": throttled},
         },
         observations=(
             f"Acquired {downloaded}/{len(records)} concurrently"
-            f"{ocr_note} — {requests} requests, {throttled} throttled"
+            f"{ocr_note}{nav_note} — {requests} requests, {throttled} throttled"
         ),
         context_updates={"catalog_batch": list(records)},
     )

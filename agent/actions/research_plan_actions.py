@@ -265,11 +265,69 @@ async def action_discovery_sweep_next(step_input: StepInput) -> StepOutput:
     )
 
 
+# How many of a 5-record batch may be stale re-arms. Small on purpose: the
+# repair lane must never starve new acquisition.
+_STALE_RETRY_PER_BATCH = 2
+
+
+def _stale_retry_keys(databank: dict) -> list:
+    """Previously-unresolved papers worth re-arming, best-yield first.
+
+    The staleness PREDICATE lives in scholarly_actions beside the record
+    schema, because the resolver applies the same test to do the actual
+    re-arm — two copies would drift and the selector would queue papers the
+    resolver then declined to touch.
+    """
+    from agent.actions.scholarly_actions import (
+        RETRYABLE_BUCKETS,
+        classify_failure,
+        is_stale_retry_candidate,
+    )
+
+    out = []
+    for key, rec in databank.items():
+        if not is_stale_retry_candidate(rec):
+            continue
+        out.append(
+            (
+                RETRYABLE_BUCKETS.index(
+                    classify_failure(rec.get("failure_reason", ""))
+                ),
+                key,
+            )
+        )
+    return [k for _, k in sorted(out)]
+
+
+def _oa_first(items: list) -> list:
+    """Candidate keys, OA-likely ones first.
+
+    `_normalize_openalex` already stores every OA location it found into
+    `oa_pdf_urls`, so a record carrying an `openalex_id` with NO urls is one
+    OpenAlex looked at and found no route for. Verification confirms 67.5% of
+    what it checks is closed; working the likely ones first means PDFs arrive
+    far sooner from the same total effort.
+
+    Ordering only — every paper is still verified eventually, so nothing is
+    lost if the signal is wrong. The hard skip is opt-in and lives in the
+    resolver.
+    """
+
+    def rank(kr: tuple) -> tuple:
+        _, rec = kr
+        hopeless = bool(rec.get("openalex_id")) and not (rec.get("oa_pdf_urls") or [])
+        return (1 if hopeless else 0, kr[0])
+
+    return [k for k, _ in sorted(items, key=rank)]
+
+
 async def action_catalog_sweep_next(step_input: StepInput) -> StepOutput:
     """Dispatch the next acquire+catalog batch from the worklist.
 
     needs_retag records (gate grounding failures) take priority over
-    fresh candidates. Empty worklist completes the corpus goal.
+    fresh candidates, which are themselves ordered OA-likely-first. A capped
+    tail of STALE re-arms repairs old acquisition failures without starving
+    new work. Empty worklist completes the corpus goal.
 
     Context: mission
     Result: needs_catalog (+ dispatch_config) | sweep_complete
@@ -323,8 +381,16 @@ async def action_catalog_sweep_next(step_input: StepInput) -> StepOutput:
 
     databank = await read_databank(effects)
     retag = [k for k, r in databank.items() if r.get("status") == "needs_retag"]
-    fresh = [k for k, r in databank.items() if r.get("status") == "candidate"]
-    batch = (sorted(retag) + sorted(fresh))[:CATALOG_BATCH_SIZE]
+    fresh = _oa_first(
+        [(k, r) for k, r in databank.items() if r.get("status") == "candidate"]
+    )
+    stale = _stale_retry_keys(databank)
+    # Stale re-arms get a CAPPED reservation, so repairing old failures can
+    # never crowd out new acquisition — and when there are none, the whole
+    # batch is fresh work exactly as before.
+    stale_slots = min(len(stale), _STALE_RETRY_PER_BATCH)
+    batch = (sorted(retag) + fresh)[: CATALOG_BATCH_SIZE - stale_slots]
+    batch += stale[:stale_slots]
 
     if not batch:
         goal.status = "complete"
