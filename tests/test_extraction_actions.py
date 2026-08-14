@@ -302,4 +302,14 @@ async def test_batch_zero_verified_pages_never_passes():
     from agent.actions.scholarly_actions import read_databank
 
     bank = await read_databank(fx)
-    assert bank["jpeg_asset"]["extraction_status"] == "needs_reextract"
+    # extract_unverified, NOT needs_reextract. The invariant this test exists
+    # for is unchanged — unverifiable output must not pass — but the outcome
+    # is now its own terminal state. Re-running OCR over a document with no
+    # text layer yields the same unverifiable result and the same refusal, so
+    # queuing a retry burned GPU for a foregone conclusion. It is preserved
+    # for inspection instead (tools/extract_triage.py).
+    rec = bank["jpeg_asset"]
+    assert rec["extraction_status"] == "extract_unverified"
+    assert rec["extraction_status"] != "extracted", "must never pass the gate"
+    # And the reason must name the real cause, not the two rates it passed.
+    assert "no verifiable text layer" in (rec.get("failure_reason") or "")
