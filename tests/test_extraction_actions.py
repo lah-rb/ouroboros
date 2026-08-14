@@ -487,3 +487,51 @@ async def test_batch_without_page_metadata_is_unaffected():
 
     bank = await read_databank(fx)
     assert bank["nobiblio"]["extraction_status"] == "extracted"
+
+
+# ── oversize referral ─────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_batch_refers_a_book_instead_of_attempting_it():
+    """A dispatch shares ONE timeout across its whole batch, so a book does
+    not merely fail — it burns the budget its companions needed. One corpus
+    asset is a 560-page volume; 30 minutes went into discovering it could not
+    fit. This is a referral, not a quality verdict, so it gets its own
+    terminal state and says why."""
+    import os
+
+    from agent.actions import extraction_actions as ea
+
+    fx = _fx([_bank_line("book")])
+    tool = os.path.join(ea._repo_root(), ea._TOOL_PY)
+    payload = json.loads(_report("book"))
+    payload.update({"oversize": True, "pages": 560, "verified_pages": 0, "md_path": ""})
+    fx._commands[tool] = CommandResult(
+        return_code=0, stdout=json.dumps(payload), stderr="", command="x"
+    )
+    await action_extract_pdf_batch(_si(inputs=_batch_inputs(["book"]), effects=fx))
+    from agent.actions.scholarly_actions import read_databank
+
+    bank = await read_databank(fx)
+    rec = bank["book"]
+    assert rec["extraction_status"] == "extract_oversize"
+    assert "oversize" in rec["failure_reason"] and "560" in rec["failure_reason"]
+    # Oversize outranks the no-text-layer branch: the report carries 0 verified
+    # pages only because nothing was READ, and calling that "unverifiable"
+    # would send a book to the wrong queue.
+    assert "no verifiable text layer" not in rec["failure_reason"]
+
+
+@pytest.mark.asyncio
+async def test_oversize_is_terminal_for_the_sweep():
+    """Terminal, or the sweep offers the same book every cycle forever."""
+    from agent.actions.extraction_actions import _extraction_pending
+
+    assert not _extraction_pending(
+        {
+            "access_status": "oa_pdf",
+            "pdf_path": "pdfs/book.pdf",
+            "extraction_status": "extract_oversize",
+        }
+    )

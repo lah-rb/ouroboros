@@ -12,9 +12,14 @@ Record fields owned by this stage. They are written to the sidecar
 databank/extraction.jsonl (last-wins) and overlaid onto the scraper's
 papers.jsonl by read_databank, so this stage never writes that file:
   extraction_status: "" | "needs_reextract" | "extracted" | "extract_failed"
-                     | "extract_unverified"  (OCR ran, no text layer to
-                       check it against — preserved for spot check, never
-                       auto-promoted; see tools/extract_triage.py)
+                     | "extract_unverified"  (OCR ran, no text layer to check
+                       it against. The status is NOT rewritten when such a
+                       paper is later accepted — it is the only record that
+                       the paper was admitted on curator judgement rather than
+                       machine verification, and an audit needs it.)
+                     | "extract_oversize"    (a book: referred for a human
+                       decision instead of attempted, because a dispatch
+                       shares one timeout across its batch)
   md_path, figure_count, extraction_method, extraction_quality{...}
 """
 
@@ -35,7 +40,15 @@ EXTRACT_TIMEOUT_S = 1800
 # Statuses this stage will not revisit. extract_unverified belongs here:
 # another OCR pass over a scan with no text layer yields the same
 # unverifiable result, so re-queuing it burns GPU forever.
-_TERMINAL_EXTRACTION = ("extracted", "extract_failed", "extract_unverified")
+_TERMINAL_EXTRACTION = (
+    "extracted",
+    "extract_failed",
+    "extract_unverified",
+    # A book, referred for a human decision rather than attempted. Terminal
+    # here so the sweep stops offering it; it is a REVIEW QUEUE, not a
+    # rejection — see the oversize branch below.
+    "extract_oversize",
+)
 
 # QUALITY POLICY — recalibrated 2026-08-14 against blind judgement.
 #
@@ -364,9 +377,11 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
         rep = reports.get(k)
         prior_retry = rec.get("extraction_status") == "needs_reextract"
         truncated = bool(rep) and acquisition_is_truncated(rec, rep.get("pages", 0))
+        oversize = bool(rep) and bool(rep.get("oversize"))
         ok = (
             rep is not None
             and not rep.get("error")
+            and not oversize
             # The asset is a fragment of the article. The extraction may be
             # flawless and still must not enter the corpus.
             and not truncated
@@ -414,6 +429,12 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
             # say so.
             if rep and rep.get("error"):
                 reason = rep["error"]
+            elif oversize:
+                reason = (
+                    f"oversize — {rep.get('pages', 0)} pages, referred for "
+                    f"review before any OCR pass (a dispatch shares one "
+                    f"timeout, so a book takes its batch down with it)"
+                )
             elif truncated:
                 reason = (
                     f"truncated acquisition — the PDF holds {rep.get('pages', 0)} "
@@ -486,7 +507,14 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
             # preserved, distinguishable, and queued for the spot check that
             # tools/extract_triage.py exists to serve.
             unverifiable = bool(rep) and rep.get("verified_pages", 0) <= 0
-            if truncated:
+            if oversize:
+                # NOT a quality verdict. The document is intact and probably
+                # valuable; it is simply too large to feed a shared dispatch
+                # budget, and that is a decision for a person.
+                rec["extraction_status"] = "extract_oversize"
+                rec["failure_reason"] = f"extraction: {reason}"
+                failed += 1
+            elif truncated:
                 # TERMINAL on the first attempt, and deliberately so: another
                 # OCR pass reads the same fragment and reaches the same
                 # verdict. The fix is re-ACQUISITION, which is the scraper's

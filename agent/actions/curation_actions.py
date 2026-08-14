@@ -376,10 +376,30 @@ def _prompts_dir():
     return os.path.join(_repo_root(), "prompts")
 
 
+# EXTRACTION STATES THIS STAGE WILL CONSUME.
+#
+# `extract_unverified` is here by operator decision (2026-08-14). It means OCR
+# produced a document but the source PDF has NO TEXT LAYER to check it against
+# — which is the scanned-paper case OCR exists for. Verification cannot ever
+# succeed there: there is nothing to compare with, and re-running produces the
+# same unverifiable result, so holding these forever only guaranteed they were
+# never looked at.
+#
+# The curator is a competent judge of them because its own gate does not depend
+# on the missing text layer: `grounding_check` matches the extracted data
+# against the CURATOR DOC — the markdown itself — so it works identically on a
+# scan. What it cannot detect is an OCR that hallucinated the scan wholesale
+# and reads plausibly; that residual risk is the reason the STATUS IS NOT
+# REWRITTEN. A promoted paper keeps `extract_unverified`, so an audit can
+# always separate "machine-verified against a publisher text layer" from
+# "admitted on curator judgement alone".
+_EXTRACTION_USABLE = ("extracted", "extract_unverified")
+
+
 def _fig_pending(record: dict) -> bool:
     """A record the fig-review pass still owes work to."""
     return (
-        record.get("extraction_status") == "extracted"
+        record.get("extraction_status") in _EXTRACTION_USABLE
         and int(record.get("figure_count") or 0) > 0
         and record.get("figtext_status") not in ("figtext_done", "figtext_failed")
     )
@@ -398,7 +418,7 @@ def _curation_pending(record: dict) -> bool:
     Terminal review states: denied, review_failed. An accepted paper
     stays pending until its pack reaches packed | pack_failed.
     """
-    if record.get("extraction_status") != "extracted":
+    if record.get("extraction_status") not in _EXTRACTION_USABLE:
         return False
     if not _figtext_ready(record):
         return False
@@ -479,7 +499,7 @@ async def action_derive_curation_goals(step_input):
 
     databank = await read_databank(effects)
     extracted = sum(
-        1 for r in databank.values() if r.get("extraction_status") == "extracted"
+        1 for r in databank.values() if r.get("extraction_status") in _EXTRACTION_USABLE
     )
     if not extracted:
         return StepOutput(

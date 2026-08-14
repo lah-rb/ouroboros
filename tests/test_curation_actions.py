@@ -409,3 +409,55 @@ async def test_gate_fails_with_pending_then_reopen():
     )
     assert out2.result["reopened"] is True
     assert all(g.status == "incomplete" for g in mission.goals)
+
+
+# ── unverifiable papers reach the curator ─────────────────────────────
+
+
+def test_curator_consumes_papers_with_no_text_layer():
+    """`extract_unverified` means OCR produced a document but the source has
+    NO TEXT LAYER to check it against — the scanned-paper case OCR exists for.
+    Verification can never succeed there, so holding these only guaranteed
+    nobody looked at them.
+
+    The curator is a competent judge because its own gate does not depend on
+    the missing layer: grounding_check matches against the CURATOR DOC, so it
+    behaves identically on a scan.
+    """
+    from agent.actions.curation_actions import _curation_pending, _fig_pending
+
+    scan = {
+        "extraction_status": "extract_unverified",
+        "figure_count": 4,
+        "md_path": "databank/markdown/scan.md",
+    }
+    assert _fig_pending(scan) is True
+    scan_no_figs = dict(scan, figure_count=0)
+    assert _curation_pending(scan_no_figs) is True
+
+
+def test_curator_still_refuses_the_genuinely_rejected():
+    """Admitting the unverifiable must not admit everything else with it."""
+    from agent.actions.curation_actions import _curation_pending, _fig_pending
+
+    for status in ("extract_failed", "extract_oversize", "needs_reextract", ""):
+        rec = {"extraction_status": status, "figure_count": 4}
+        assert _fig_pending(rec) is False, status
+        assert _curation_pending(dict(rec, figure_count=0)) is False, status
+
+
+def test_unverified_status_survives_curation():
+    """The status is deliberately NOT rewritten to `extracted` on acceptance:
+    it is the only record that a paper entered on curator judgement rather
+    than machine verification, and an audit needs to tell those apart."""
+    from agent.actions.curation_actions import _curation_pending
+
+    accepted = {
+        "extraction_status": "extract_unverified",
+        "figure_count": 0,
+        "review_status": "accepted",
+        "pack_status": "packed",
+    }
+    # Terminal once packed — but still flagged as never machine-verified.
+    assert _curation_pending(accepted) is False
+    assert accepted["extraction_status"] == "extract_unverified"

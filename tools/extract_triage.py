@@ -45,7 +45,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-REJECTED = ("extract_failed", "extract_unverified")
+REJECTED = ("extract_failed", "extract_unverified", "extract_oversize")
 
 # Read from the gate rather than restated, so a recalibration cannot leave this
 # tool bucketing failures against thresholds the pipeline no longer uses.
@@ -85,6 +85,9 @@ def why(rec: dict) -> str:
     # whose fix is re-acquisition rather than anything the extractor can do.
     if "truncated acquisition" in fr:
         return "truncated"
+    # Referred, not rejected: a book awaiting a decision before any GPU pass.
+    if "oversize" in fr:
+        return "oversize"
     m = re.search(r"numeric=([0-9.]+), span=([0-9.]+)", fr)
     if m:
         n, s = float(m.group(1)), float(m.group(2))

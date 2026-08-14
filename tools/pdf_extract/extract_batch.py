@@ -127,6 +127,11 @@ _FURNITURE = re.compile(
     re.I,
 )
 
+# Above this, a document is a book and gets a human decision instead of an OCR
+# pass — see extract_paper. Above every paper that has succeeded on this corpus
+# (max 177 pages), below the 560-page volume that cannot fit a dispatch budget.
+_MAX_EXTRACT_PAGES = int(os.environ.get("OUROBOROS_MAX_EXTRACT_PAGES", "200"))
+
 # Degenerate-decode detection — see _max_repeat_words.
 _REPEAT_MAX_PERIOD = 24  # longest phrase treated as a loop unit
 
@@ -772,6 +777,7 @@ def extract_paper(pipe, pdf_path: str, key: str, databank_dir: str, dpi: int) ->
         "numeric_match_rate": 0.0,
         "span_pass_rate": 0.0,
         "max_repeat_words": 0,
+        "oversize": False,
         "table_token_leak": 0,
         "largest_table_rows": 0,
         "figures_kept": 0,
@@ -786,6 +792,21 @@ def extract_paper(pipe, pdf_path: str, key: str, databank_dir: str, dpi: int) ->
     try:
         doc = fitz.open(pdf_path)
         report["pages"] = len(doc)
+        # OVERSIZE: MEASURED, NOT ATTEMPTED. A dispatch shares one timeout
+        # across its whole batch, so a book does not merely fail — it burns
+        # the budget its companions needed and takes them down with it. One
+        # corpus asset is a 560-page USGS volume; at ~7 s/page it cannot fit,
+        # and 30 minutes were spent discovering that. The threshold sits above
+        # every paper that has ever succeeded here (largest: 177 pages) and
+        # well below a book, so this refuses volumes without touching long
+        # review articles. Not a failure — a referral: these are substantial
+        # documents that deserve a decision before any GPU is spent on them.
+        if len(doc) > _MAX_EXTRACT_PAGES:
+            report["oversize"] = True
+            report["error"] = ""
+            report["seconds"] = round(time.time() - t0, 1)
+            doc.close()
+            return report
         page_mds: list[str] = []
         num_hit = num_total = span_hit = span_total = 0
 
