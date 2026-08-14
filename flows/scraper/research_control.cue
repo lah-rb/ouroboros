@@ -137,6 +137,7 @@ research_control: #FlowDefinition & {
 					seed_queries:       {$ref: "context.dispatch_config.seed_queries", default: []}
 					coverage_target:    {$ref: "context.dispatch_config.coverage_target", default: 10}
 					have_count:         {$ref: "context.dispatch_config.have_count", default: 0}
+					corpus_languages:   {$ref: "context.dispatch_config.corpus_languages", default: []}
 					working_directory:  {$ref: "context.mission.config.working_directory"}
 				}
 			}

@@ -36,6 +36,19 @@ sections:
       systems, or methodological phrasings. Terse noun phrases only —
       no boolean operators, no quotes (the APIs do relevance ranking).
 
+  - id: languages
+    when: input.corpus_languages
+    content: |
+      This corpus also collects literature published in: {input.corpus_languages}
+
+      Write some of your queries in those languages, using the terminology a
+      researcher publishing in that language would actually use — not a
+      word-for-word rendering of the English phrasing. The native term is the
+      point: it reaches work the English one never indexes.
+
+      Keep emitting English queries too. The language pass is additive, not a
+      replacement.
+
   - id: output_format
     content: |
       ✅ CORRECT:

@@ -59,6 +59,19 @@ class MissionConfig(BaseModel):
     # invertible | repair | answer | plain. Gates which completion oracle rung
     # fires (agent/actions/oracle_actions). "" disables profile-gated rungs.
     task_profile: str = ""
+    # CORPUS LANGUAGES to discover in, beyond English. Empty (the default) is
+    # today's behaviour exactly: English-only queries, no translation pass.
+    #
+    # A flag rather than a constant because the answer is per-corpus. Chinese
+    # spectroscopy journals are worth a Chinese pass; a corpus of NIST reports
+    # is not, and paying for query fan-out and a translation stage on a corpus
+    # that has no foreign-language literature is pure waste.
+    #
+    # OpenAlex language codes ("zh", "es", "pt", "de", "fr", "ja"). English is
+    # implicit and must never be listed: a mission that named it would run the
+    # English pass twice and queue the corpus for translation into its own
+    # language.
+    corpus_languages: list[str] = Field(default_factory=list)
     # How the structural phase creates files. "batch" (named "parallel"
     # until 2026-07-23 — renamed because true parallelism now means the
     # swarm/batched-engine paths): one batch generation produces every file

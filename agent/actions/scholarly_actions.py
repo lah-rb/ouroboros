@@ -492,6 +492,72 @@ async def polite_request(
 # ── Databank helpers ──────────────────────────────────────────────────
 
 
+# A title shorter than this is not evidence of anything. "Editorial",
+# "Introduction", "Raman spectroscopy" all recur across unrelated papers, and
+# collapsing on one would suppress real work.
+_TITLE_DUP_MIN_CHARS = 40
+
+
+def _title_fingerprint(title: Any) -> str:
+    """Normalized title, or "" when it is too short to identify a paper."""
+    text = " ".join(str(title or "").lower().split())
+    # Punctuation varies between sources for the same paper (en-dash vs
+    # hyphen, curly vs straight quotes), so it cannot participate.
+    text = "".join(c for c in text if c.isalnum() or c.isspace())
+    text = " ".join(text.split())
+    return text if len(text) >= _TITLE_DUP_MIN_CHARS else ""
+
+
+def _title_index(databank: dict) -> dict[str, str]:
+    """fingerprint -> paper_key, preferring the record worth keeping.
+
+    When two existing records already share a title, the one with a retrieved
+    PDF wins, then the one with a DOI: a later duplicate should be pointed at
+    the copy we can actually use.
+    """
+    index: dict[str, str] = {}
+    for key, rec in databank.items():
+        fp = _title_fingerprint(rec.get("title"))
+        if not fp:
+            continue
+        held = index.get(fp)
+        if held is None:
+            index[fp] = key
+            continue
+        current, other = databank.get(held) or {}, rec
+        rank = lambda r: (  # noqa: E731 — local ordering, not an API
+            bool(r.get("pdf_path")),
+            r.get("access_status") == "oa_pdf",
+            bool(r.get("doi")),
+        )
+        if rank(other) > rank(current):
+            index[fp] = key
+    return index
+
+
+def corpus_languages(step_input: Any) -> list[str]:
+    """Extra languages this mission collects in — normalized, English removed.
+
+    Reads MissionConfig.corpus_languages, overridable per step via params so a
+    single flow can scope a pass without changing the mission.
+
+    English is stripped however it is spelled. A mission that listed it would
+    run the English pass twice and, downstream, queue English papers to be
+    translated into English.
+    """
+    mission = getattr(step_input, "context", {}).get("mission")
+    configured = getattr(getattr(mission, "config", None), "corpus_languages", None)
+    raw = step_input.params.get("corpus_languages") or configured or []
+    if isinstance(raw, str):
+        raw = raw.replace(",", " ").split()
+    out: list[str] = []
+    for code in raw:
+        c = str(code).strip().lower()
+        if c and c not in ("en", "eng", "english") and c not in out:
+            out.append(c)
+    return out
+
+
 def paper_key(record: dict) -> str:
     """Stable identity: normalized DOI, else arXiv id, else S2 id."""
     doi = str(record.get("doi") or "").strip().lower()
@@ -888,6 +954,13 @@ async def action_scholarly_search(step_input: StepInput) -> StepOutput:
     oa_only = step_input.params.get("oa_only")
     oa_only = True if oa_only is None else bool(oa_only)
 
+    # MULTILINGUAL FAN-OUT, off unless the mission asks for it. Each extra
+    # language is another full pass over every query against all three APIs,
+    # so this is a real cost multiplier and belongs to the operator, not to a
+    # default. English is always run and never listed (see
+    # MissionConfig.corpus_languages).
+    languages = corpus_languages(step_input)
+
     candidates: list[dict] = []
     s2_count = openalex_count = core_count = 0
     for query in queries:
@@ -909,26 +982,37 @@ async def action_scholarly_search(step_input: StepInput) -> StepOutput:
         else:
             logger.warning("S2 search failed for %r: %s", query, s2.error or s2.status)
 
-        oa = await polite_request(
-            effects,
-            "GET",
-            f"{_OPENALEX_BASE}/works",
-            params={
-                "search": query,
-                "per-page": max_per_query,
-                "select": _OPENALEX_SELECT,
-                "mailto": _contact_email(),
-                **({"filter": _OPENALEX_OA_FILTER} if oa_only else {}),
-            },
-        )
-        if oa.status == 200 and isinstance(oa.json_data, dict):
-            for work in oa.json_data.get("results") or []:
-                candidates.append(_normalize_openalex(work, aspect_name))
-                openalex_count += 1
-        else:
-            logger.warning(
-                "OpenAlex search failed for %r: %s", query, oa.error or oa.status
+        # One unfiltered pass (English and whatever else the query reaches),
+        # then one narrowed pass per configured language. OpenAlex is the only
+        # one of the three APIs that filters by language, so the fan-out lives
+        # here alone rather than being faked against S2/CORE.
+        for lang in [""] + languages:
+            filters = [_OPENALEX_OA_FILTER] if oa_only else []
+            if lang:
+                filters.append(f"language:{lang}")
+            oa = await polite_request(
+                effects,
+                "GET",
+                f"{_OPENALEX_BASE}/works",
+                params={
+                    "search": query,
+                    "per-page": max_per_query,
+                    "select": _OPENALEX_SELECT,
+                    "mailto": _contact_email(),
+                    **({"filter": ",".join(filters)} if filters else {}),
+                },
             )
+            if oa.status == 200 and isinstance(oa.json_data, dict):
+                for work in oa.json_data.get("results") or []:
+                    candidates.append(_normalize_openalex(work, aspect_name))
+                    openalex_count += 1
+            else:
+                logger.warning(
+                    "OpenAlex search failed for %r%s: %s",
+                    query,
+                    f" [{lang}]" if lang else "",
+                    oa.error or oa.status,
+                )
 
         # CORE last: S2 and OpenAlex are the metadata authorities, but
         # CORE is the one that brings a fetchable PDF with it, and the
@@ -1101,11 +1185,31 @@ async def action_merge_candidates(step_input: StepInput) -> StepOutput:
         else:
             batch[key] = dict(cand)
 
+    # SAME PAPER, DIFFERENT IDENTIFIER. Identifier dedup is already exact —
+    # measured on a 5,556-paper corpus, zero DOIs and zero OpenAlex ids appear
+    # on more than one key. What it cannot catch is one work reaching us
+    # through two identities: a Research Square preprint beside its journal
+    # DOI, an S2 record with no DOI beside the DOI record for the same paper,
+    # the same article in a Spanish and an English venue. Measured: 55 title
+    # groups, 58 surplus records.
+    #
+    # FLAGGED, NOT MERGED. A wrong merge destroys a record and cannot be
+    # undone from the databank; a wrong flag costs one paper's acquisition and
+    # is visible. Since the whole point is to avoid SPENDING on a paper we
+    # already hold — fetch, OCR, and now translation — suppression buys the
+    # entire benefit at none of the risk.
+    title_index = _title_index(databank)
+    dup_count = 0
+
     to_append: list[dict] = []
     new_count = merged_count = 0
     for key, cand in batch.items():
         existing = databank.get(key)
         if existing is None:
+            twin = title_index.get(_title_fingerprint(cand.get("title")))
+            if twin and twin != key:
+                cand["duplicate_of"] = twin
+                dup_count += 1
             to_append.append(cand)
             databank[key] = cand
             new_count += 1
@@ -1129,16 +1233,26 @@ async def action_merge_candidates(step_input: StepInput) -> StepOutput:
         "status": "success" if (new_count or merged_count or not raw) else "partial",
         "summary": (
             f"Discovery for aspect '{aspect_name}': {new_count} new candidate(s), "
-            f"{merged_count} existing paper(s) gained the aspect; the aspect now "
-            f"has {aspect_total} candidate(s) in the databank."
+            f"{merged_count} existing paper(s) gained the aspect"
+            + (
+                f", {dup_count} flagged as a duplicate of a paper already held "
+                f"(same title, different identifier — not acquired)"
+                if dup_count
+                else ""
+            )
+            + f"; the aspect now has {aspect_total} candidate(s) in the databank."
         ),
-        "headline": f"aspect '{aspect_name}': +{new_count} candidates ({aspect_total} total)",
+        "headline": (
+            f"aspect '{aspect_name}': +{new_count} candidates ({aspect_total} total)"
+            + (f", {dup_count} dup(s) suppressed" if dup_count else "")
+        ),
         "checks_passed": [f"aspect:{aspect_name} candidates:{aspect_total}"],
     }
     return StepOutput(
         result={
             "new_candidates": new_count,
             "merged_existing": merged_count,
+            "duplicates_flagged": dup_count,
             "aspect_total": aspect_total,
         },
         observations=report["headline"],

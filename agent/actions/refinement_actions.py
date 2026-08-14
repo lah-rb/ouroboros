@@ -591,6 +591,15 @@ async def action_extract_search_queries(step_input: StepInput) -> StepOutput:
     raw = step_input.context.get("inference_response", "")
     max_queries = int(step_input.params.get("max_queries", 3))
 
+    # THE CAP HAS TO SCALE WITH THE LANGUAGES, or it silently defeats them.
+    # Models emit the English queries first, so a fixed cap of 4 truncates
+    # exactly the native-language phrasings the language pass exists to
+    # produce — and it would do so invisibly, leaving a multilingual mission
+    # running English-only queries while reporting success.
+    languages = step_input.params.get("corpus_languages") or []
+    if languages:
+        max_queries *= 1 + len(languages)
+
     parsed = _parse_search_queries(str(raw), max_queries)
 
     if not parsed:

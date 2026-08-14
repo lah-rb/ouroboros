@@ -248,6 +248,13 @@ async def action_discovery_sweep_next(step_input: StepInput) -> StepOutput:
                     "seed_queries": list(aspect.seed_queries),
                     "coverage_target": aspect.coverage_target,
                     "have_count": have,
+                    # Carried into the query-refinement prompt so the model can
+                    # emit native-language phrasings, not translations of the
+                    # English wording. Empty for an English-only mission, and
+                    # the prompt section is `when`-gated on it.
+                    "corpus_languages": list(
+                        getattr(mission.config, "corpus_languages", None) or []
+                    ),
                     "flow_directive": (
                         f"Find candidate papers for the aspect '{aspect.name}' "
                         f"({aspect.description or 'no description'}). The aspect "
@@ -381,8 +388,16 @@ async def action_catalog_sweep_next(step_input: StepInput) -> StepOutput:
 
     databank = await read_databank(effects)
     retag = [k for k, r in databank.items() if r.get("status") == "needs_retag"]
+    # `duplicate_of` means this paper reached us twice under two identities and
+    # the other copy is the one to work. Suppressed HERE rather than at merge,
+    # so the record still exists and the flag stays reversible — but no fetch,
+    # no OCR and no translation is ever spent on it.
     fresh = _oa_first(
-        [(k, r) for k, r in databank.items() if r.get("status") == "candidate"]
+        [
+            (k, r)
+            for k, r in databank.items()
+            if r.get("status") == "candidate" and not r.get("duplicate_of")
+        ]
     )
     stale = _stale_retry_keys(databank)
     # Stale re-arms get a CAPPED reservation, so repairing old failures can

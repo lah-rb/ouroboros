@@ -38,7 +38,7 @@ discover: #FlowDefinition & {
 				context_keys: []
 				input_keys: [
 					"aspect_name", "aspect_description", "seed_queries",
-					"coverage_target", "have_count",
+					"coverage_target", "have_count", "corpus_languages",
 				]
 			}
 			config: temperature: "t*0.5"
@@ -57,7 +57,12 @@ discover: #FlowDefinition & {
 			action:      "extract_search_queries"
 			description: "Parse refined queries into a structured list"
 			context: required: ["inference_response"]
-			params: max_queries: 4
+			params: {
+				max_queries: 4
+				// Scales the cap: without this the English queries fill every
+				// slot and the native-language ones are truncated away.
+				corpus_languages: {$ref: "input.corpus_languages", default: []}
+			}
 			resolver: {
 				type: "rule"
 				rules: [

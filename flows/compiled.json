@@ -23747,7 +23747,8 @@
             "aspect_description",
             "seed_queries",
             "coverage_target",
-            "have_count"
+            "have_count",
+            "corpus_languages"
           ]
         },
         "config": {
@@ -23782,7 +23783,11 @@
           "optional": []
         },
         "params": {
-          "max_queries": 4
+          "max_queries": 4,
+          "corpus_languages": {
+            "$ref": "input.corpus_languages",
+            "default": []
+          }
         },
         "config": {},
         "resolver": {
@@ -24423,6 +24428,10 @@
             "have_count": {
               "$ref": "context.dispatch_config.have_count",
               "default": 0
+            },
+            "corpus_languages": {
+              "$ref": "context.dispatch_config.corpus_languages",
+              "default": []
             },
             "working_directory": {
               "$ref": "context.mission.config.working_directory"
