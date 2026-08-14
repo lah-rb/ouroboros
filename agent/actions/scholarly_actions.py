@@ -1052,6 +1052,102 @@ async def action_scholarly_search(step_input: StepInput) -> StepOutput:
     )
 
 
+_BIBLIO_BATCH = 40  # OR-filter length; 50 is fine for ids, 40 is safe for DOIs
+
+
+async def action_enrich_page_extent(step_input: StepInput) -> StepOutput:
+    """Fill first_page/last_page for retrieved papers that lack them.
+
+    WHY THIS IS IN THE FLOW and not only in tools/backfill_biblio.py: 41% of
+    acquired papers carry NO openalex_id — they reached us through S2 or CORE —
+    so `_normalize_openalex` can never supply the field for them however recent
+    they are. This is not a migration that shrinks to zero, it is a permanent
+    gap for four papers in ten. The tool remains, for records already on disk.
+
+    Placed at ACQUISITION because that is where the population is smallest and
+    already known to matter: only papers whose PDF we actually hold, one
+    batched lookup per dispatch, in a stage that already does polite HTTP.
+    The extent is read later by extraction_actions.acquisition_is_truncated,
+    which is the only thing that can tell a faithful extraction of the WRONG
+    DOCUMENT from a faithful extraction of the right one.
+
+    Context: catalog_batch (mutated in place; the tagging step persists it)
+    Result: enriched, looked_up
+    """
+    effects = step_input.effects
+    batch = list(step_input.context.get("catalog_batch") or [])
+    # Only papers we actually hold, and only those still missing the field.
+    todo = [
+        r
+        for r in batch
+        if r.get("pdf_path")
+        and not (r.get("first_page") or r.get("last_page"))
+        and (r.get("doi") or r.get("openalex_id"))
+    ]
+    if not todo or not effects:
+        return StepOutput(
+            result={"enriched": 0, "looked_up": 0},
+            observations="No page extents to enrich",
+            context_updates={"catalog_batch": batch},
+        )
+
+    by_doi = {str(r["doi"]).lower(): r for r in todo if r.get("doi")}
+    by_id = {
+        str(r["openalex_id"]).rsplit("/", 1)[-1]: r
+        for r in todo
+        if not r.get("doi") and r.get("openalex_id")
+    }
+    enriched = 0
+
+    async def _apply(filter_value: str, lookup: dict, key_of) -> None:
+        nonlocal enriched
+        resp = await polite_request(
+            effects,
+            "GET",
+            f"{_OPENALEX_BASE}/works",
+            params={
+                "filter": filter_value,
+                "select": "id,doi,biblio",
+                "per-page": _BIBLIO_BATCH,
+                "mailto": _contact_email(),
+            },
+        )
+        if resp.status != 200 or not isinstance(resp.json_data, dict):
+            logger.warning("page-extent lookup failed: %s", resp.error or resp.status)
+            return
+        for work in resp.json_data.get("results") or []:
+            rec = lookup.get(key_of(work))
+            if rec is None:
+                continue
+            biblio = work.get("biblio") or {}
+            first = str(biblio.get("first_page") or "")
+            last = str(biblio.get("last_page") or "")
+            if first or last:
+                rec["first_page"], rec["last_page"] = first, last
+                enriched += 1
+
+    for i in range(0, len(by_doi), _BIBLIO_BATCH):
+        chunk = list(by_doi)[i : i + _BIBLIO_BATCH]
+        await _apply(
+            "doi:" + "|".join(chunk),
+            by_doi,
+            lambda w: str(w.get("doi") or "").lower().split("doi.org/")[-1],
+        )
+    for i in range(0, len(by_id), _BIBLIO_BATCH):
+        chunk = list(by_id)[i : i + _BIBLIO_BATCH]
+        await _apply(
+            "openalex_id:" + "|".join(chunk),
+            by_id,
+            lambda w: str(w.get("id") or "").rsplit("/", 1)[-1],
+        )
+
+    return StepOutput(
+        result={"enriched": enriched, "looked_up": len(todo)},
+        observations=f"Page extent: {enriched}/{len(todo)} paper(s) enriched",
+        context_updates={"catalog_batch": batch},
+    )
+
+
 _SNOWBALL_BATCH = 50  # OpenAlex OR-filter ceiling per request
 
 

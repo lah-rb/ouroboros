@@ -177,3 +177,89 @@ async def test_flagged_duplicates_are_never_dispatched_for_acquisition():
     )
     assert "keep" in dispatched
     assert "dupe" not in dispatched
+
+
+# ── page extent enrichment at acquisition ─────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_page_extent_is_enriched_for_papers_we_actually_hold():
+    """WHY THIS IS IN THE FLOW: 41% of acquired papers carry no openalex_id —
+    they came from S2 or CORE — so _normalize_openalex can never supply the
+    page extent for them, however recent they are. Not a migration that
+    shrinks to zero; a permanent gap for four papers in ten."""
+    from agent.actions.scholarly_actions import action_enrich_page_extent
+
+    held = {
+        "paper_key": "doi_a",
+        "doi": "10.1016/j.nimb.2013.05.098",
+        "pdf_path": "pdfs/a.pdf",
+    }
+    from agent.effects.protocol import HttpResult
+
+    fx = MockEffects(
+        http_responses={
+            "https://api.openalex.org/works": HttpResult(
+                status=200,
+                url="https://api.openalex.org/works",
+                json_data={
+                    "results": [
+                        {
+                            "id": "https://openalex.org/W1",
+                            "doi": "https://doi.org/10.1016/j.nimb.2013.05.098",
+                            "biblio": {"first_page": "37", "last_page": "41"},
+                        }
+                    ]
+                },
+            )
+        }
+    )
+    si = StepInput(
+        context={"catalog_batch": [held]},
+        inputs={},
+        params={},
+        meta=FlowMeta(flow_name="acquire", step_id="t"),
+        effects=fx,
+    )
+    out = await action_enrich_page_extent(si)
+    assert out.result["enriched"] == 1
+    assert held["first_page"] == "37" and held["last_page"] == "41"
+
+
+@pytest.mark.asyncio
+async def test_page_extent_skips_papers_we_did_not_get():
+    """A lookup for a paper with no PDF buys nothing — the truncation check
+    only ever runs on documents we hold."""
+    from agent.actions.scholarly_actions import action_enrich_page_extent
+
+    si = StepInput(
+        context={"catalog_batch": [{"paper_key": "k", "doi": "10.1/x"}]},
+        inputs={},
+        params={},
+        meta=FlowMeta(flow_name="acquire", step_id="t"),
+        effects=MockEffects(),
+    )
+    out = await action_enrich_page_extent(si)
+    assert out.result == {"enriched": 0, "looked_up": 0}
+
+
+@pytest.mark.asyncio
+async def test_page_extent_does_not_refetch_what_it_has():
+    from agent.actions.scholarly_actions import action_enrich_page_extent
+
+    rec = {
+        "paper_key": "k",
+        "doi": "10.1/x",
+        "pdf_path": "pdfs/k.pdf",
+        "first_page": "12",
+        "last_page": "20",
+    }
+    si = StepInput(
+        context={"catalog_batch": [rec]},
+        inputs={},
+        params={},
+        meta=FlowMeta(flow_name="acquire", step_id="t"),
+        effects=MockEffects(),
+    )
+    out = await action_enrich_page_extent(si)
+    assert out.result["looked_up"] == 0

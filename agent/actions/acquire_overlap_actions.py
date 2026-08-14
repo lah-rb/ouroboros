@@ -234,6 +234,22 @@ async def action_acquire_batch(step_input: StepInput) -> StepOutput:
     except Exception as exc:  # noqa: BLE001 — a repair must not sink the batch
         logger.warning("landing-page navigation failed: %s", exc)
 
+    # PAGE EXTENT, once the batch has settled. Only papers whose PDF we now
+    # hold need it, so it runs after the repair pass rather than before: a
+    # record navigation just rescued is exactly one we want the extent for,
+    # and enriching earlier would look up papers we never got.
+    from agent.actions.scholarly_actions import action_enrich_page_extent
+
+    extent = {"enriched": 0, "looked_up": 0}
+    try:
+        ext_out = await action_enrich_page_extent(
+            step_input.model_copy(update={"context": {"catalog_batch": records}})
+        )
+        extent = dict(ext_out.result or {})
+        records = list(ext_out.context_updates.get("catalog_batch") or records)
+    except Exception as exc:  # noqa: BLE001 — enrichment must not sink a batch
+        logger.warning("page-extent enrichment failed: %s", exc)
+
     downloaded = sum(1 for r in records if r.get("pdf_path"))
     failed = len(records) - downloaded
     pacer_stats = _pacer().stats()
@@ -246,17 +262,22 @@ async def action_acquire_batch(step_input: StepInput) -> StepOutput:
     nav_note = ""
     if nav.get("attempted"):
         nav_note = f"; nav recovered {nav.get('navigated', 0)}/{nav['attempted']}"
+    extent_note = ""
+    if extent.get("looked_up"):
+        extent_note = f"; page extent {extent.get('enriched', 0)}/{extent['looked_up']}"
     return StepOutput(
         result={
             "downloaded": downloaded,
             "failed": failed,
             "ocr": ocr,
             "nav": nav,
+            "page_extent": extent,
             "http": {"requests": requests, "throttled": throttled},
         },
         observations=(
             f"Acquired {downloaded}/{len(records)} concurrently"
-            f"{ocr_note}{nav_note} — {requests} requests, {throttled} throttled"
+            f"{ocr_note}{nav_note}{extent_note} — {requests} requests, "
+            f"{throttled} throttled"
         ),
         context_updates={"catalog_batch": list(records)},
     )
