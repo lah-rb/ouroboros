@@ -57,17 +57,35 @@ RELEVANCE_TIERS = ("exact", "close", "adjacent")
 MAX_REFERENCE_DOIS = 200
 CATALOG_BATCH_SIZE = 5
 
-# Publisher hosts MEASURED to refuse a polite crawler (2026-08-13): Cloudflare
-# 403 on every attempt, unmoved by the browser User-Agent we already send or by
-# following redirects. Used to skip them when harvesting alternate locations —
-# a repository copy is worth trying, a fifth URL at the same walled host is not.
+# Publisher hosts MEASURED to refuse a polite crawler: Cloudflare 403, unmoved
+# by the browser User-Agent we already send or by following redirects. Used to
+# skip them when harvesting alternate locations, and to keep the capped
+# re-arm slots off records that cannot recover.
+#
+# HOST IS THE VARIABLE THAT PREDICTS RECOVERY — not the failure bucket, which
+# is what the first version of the re-arm sorted on and why it returned 0/6 on
+# its first live batch. Plain re-fetch yield, sampled per host 2026-08-13:
+#
+#   link.springer.com        4/6   (and 9/9, 4/4 in two earlier samples)
+#   onlinelibrary.wiley.com  0/6
+#   www.sciencedirect.com    0/6
+#   doi.org                  0/6
+#   www.mdpi.com             0/6
+#
+# link.springer.com was in this list and should NOT have been. It was added
+# from a table of failure COUNTS (93 failures) without asking whether those
+# failures were durable — they were transient, and Springer serves PDFs on a
+# retry more often than not. Counting failures is not measuring refusal.
 WALLED_HOSTS = (
     "sciencedirect.com",
     "onlinelibrary.wiley.com",
-    "link.springer.com",
     "www.mdpi.com",
     "iopscience.iop.org",
     "pubs.rsc.org",
+    # The DOI resolver itself: it lands on a meta-refresh stub that forwards
+    # into the publisher (measured: linkinghub.elsevier.com -> sciencedirect),
+    # so a doi.org URL in an unresolved record is a wall one hop away.
+    "doi.org",
 )
 
 
@@ -214,6 +232,13 @@ def is_stale_retry_candidate(rec: dict) -> bool:
         return False
     if classify_failure(rec.get("failure_reason", "")) not in RETRYABLE_BUCKETS:
         return False  # hard_wall 5%, gone 0% — not worth a slot
+    # HOST OVER BUCKET. The first live batch re-armed six landing_page records
+    # and recovered ZERO, because bucket-only ordering happened to draw six
+    # Wiley DOIs — and Wiley re-fetches at 0/6 where Springer runs 4/6. A
+    # record still pointing at a walled host has nothing to gain from another
+    # attempt, whatever its failure string says.
+    if _is_walled(rec.get("oa_pdf_url") or ""):
+        return False
     return (
         # never re-armed -> eligible
         _iso_age_days(rec.get("oa_retried_at", "")) >= horizon

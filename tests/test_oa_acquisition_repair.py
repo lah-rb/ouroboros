@@ -172,6 +172,37 @@ def test_walled_host_detection(url, walled):
     assert SA._is_walled(url) is walled
 
 
+def test_springer_is_NOT_walled():
+    """It was on the list and should not have been.
+
+    It got there from a table of failure COUNTS (93 failures) without asking
+    whether those failures were durable. They were transient: Springer serves
+    a PDF on plain re-fetch at 4/6, 9/9 and 4/4 across three samples — the
+    best-recovering host in the corpus. Counting failures is not measuring
+    refusal, and listing it here silently excluded the one publisher worth
+    retrying from both the re-arm queue and the alt-host tier.
+    """
+    assert SA._is_walled("https://link.springer.com/content/pdf/10.1/x.pdf") is False
+
+
+def test_doi_org_is_walled():
+    """doi.org resolves to a meta-refresh stub that forwards into the
+    publisher (measured: linkinghub.elsevier.com -> sciencedirect), so an
+    unresolved record still pointing at it is a wall one hop away."""
+    assert SA._is_walled("https://doi.org/10.1016/j.sab.2024.107003") is True
+
+
+def test_walled_host_record_is_not_re_armed(monkeypatch):
+    """HOST OVER BUCKET — the fix for a live 0/6. Bucket-only ordering drew
+    six Wiley DOIs and recovered nothing; Wiley re-fetches at 0/6 where
+    Springer runs 4/6."""
+    monkeypatch.delenv("OUROBOROS_OA_RETRY_AFTER_DAYS", raising=False)
+    wiley = _unresolved(oa_pdf_url="https://onlinelibrary.wiley.com/doi/pdf/10.1/x")
+    springer = _unresolved(oa_pdf_url="https://link.springer.com/content/pdf/10.1/x")
+    assert SA.is_stale_retry_candidate(wiley) is False
+    assert SA.is_stale_retry_candidate(springer) is True
+
+
 # ── item 4: LLM navigation, and its blast radius ──────────────────────
 
 
