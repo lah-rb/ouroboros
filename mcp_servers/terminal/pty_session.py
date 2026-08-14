@@ -162,6 +162,36 @@ def _pgrp_cpu_seconds(pgrp: int) -> float | None:
     """
     if pgrp <= 0:
         return None
+
+    # LINUX READS /proc, AND MUST. The `ps` form below is a BSD/macOS idiom
+    # that does not merely differ on Linux — it silently returns nothing:
+    #   * procps has no `utime` column at all, so it prints "-"
+    #   * procps `stime` is START TIME, not system time — "17:04" is a clock
+    #   * procps `-g` selects by effective GROUP ID, not process group
+    # Every line therefore fails to parse, `seen` stays False, and this
+    # returns None forever. None means "no CPU signal", so the settle scheme
+    # quietly falls back to byte-idle alone and truncates any response with a
+    # compute pause in it. Nothing errors; the capability just goes away.
+    if os.path.isdir("/proc"):
+        ticks = os.sysconf("SC_CLK_TCK") or 100
+        total, seen = 0.0, False
+        for entry in os.listdir("/proc"):
+            if not entry.isdigit():
+                continue
+            try:
+                with open(f"/proc/{entry}/stat", "rb") as fh:
+                    raw = fh.read().decode("utf-8", "replace")
+                # comm is parenthesised and may itself contain spaces or ')',
+                # so split from the RIGHT of the final ") ".
+                fields = raw.rsplit(") ", 1)[1].split()
+                if int(fields[2]) != pgrp:  # pgrp, 0-based after the comm
+                    continue
+                total += (int(fields[11]) + int(fields[12])) / ticks
+                seen = True
+            except (OSError, ValueError, IndexError):
+                continue  # the process exited mid-scan, or is not ours
+        return total if seen else None
+
     try:
         out = subprocess.run(
             ["ps", "-o", "utime=,stime=", "-g", str(pgrp)],

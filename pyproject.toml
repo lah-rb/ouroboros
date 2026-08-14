@@ -41,6 +41,14 @@ dependencies = [
     # undeclared, because nothing fails to tell you about it.
     "joblib>=1.5",
     "scikit-learn>=1.9",
+    # PyMuPDF. The extractor toolchain has its own venv and imports fitz
+    # there, but the TESTS for it import the tool by path and so need it in
+    # whatever venv runs pytest. It was undeclared and merely happened to be
+    # present on the development machine; porting to Linux surfaced that as
+    # two collection errors and — worse — four tests that SKIPPED rather than
+    # failed, including the truth-oracle suite guarding the extraction gate.
+    # A silently-skipped test is a test that is not protecting anything.
+    "pymupdf>=1.26",
 ]
 
 [project.optional-dependencies]

@@ -303,3 +303,57 @@ async def test_a_plain_shell_command_still_settles(tmp_path):
         assert "still-here" in result.output
     finally:
         await mgr.close_session(sid)
+
+
+def test_pgrp_cpu_sampling_works_on_this_platform():
+    """The CPU-idle settle depends on this returning a real number.
+
+    It is the one signal that distinguishes "the child is computing" from
+    "the child is done", and it fails OPEN: None means no signal, the settle
+    falls back to byte-idle alone, and any response with a compute pause in it
+    truncates. Nothing raises — the capability just disappears.
+
+    That is exactly what the Linux port hit. `ps -o utime=,stime= -g PGID` is a
+    BSD idiom; on procps `utime` is not a column (prints "-"), `stime` is START
+    TIME rather than system time, and `-g` selects by effective GROUP ID. Every
+    line failed to parse and the function returned None on every call.
+    """
+    import os
+    import subprocess
+    import time
+
+    from mcp_servers.terminal.pty_session import _pgrp_cpu_seconds
+
+    child = subprocess.Popen(
+        [
+            "python3",
+            "-c",
+            "import time\ne=time.perf_counter()+2.0\nwhile time.perf_counter()<e: pass",
+        ],
+        start_new_session=True,
+    )
+    try:
+        pgrp = os.getpgid(child.pid)
+        time.sleep(0.4)
+        first = _pgrp_cpu_seconds(pgrp)
+        assert (
+            first is not None
+        ), "no CPU signal — the settle would fall back to byte-idle"
+        time.sleep(0.6)
+        second = _pgrp_cpu_seconds(pgrp)
+        assert second is not None
+        # A busy-spinning group must ACCRUE cpu. A constant reading would look
+        # exactly like an idle child and settle just as wrongly.
+        assert second > first, f"cpu did not accrue while spinning: {first} -> {second}"
+    finally:
+        child.kill()
+        child.wait()
+
+
+def test_pgrp_cpu_sampling_declines_a_dead_group():
+    """None is the honest answer for a group that is gone, and callers rely on
+    it meaning 'no signal' rather than 'idle'."""
+    from mcp_servers.terminal.pty_session import _pgrp_cpu_seconds
+
+    assert _pgrp_cpu_seconds(0) is None
+    assert _pgrp_cpu_seconds(-1) is None
