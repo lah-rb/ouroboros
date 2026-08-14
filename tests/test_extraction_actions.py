@@ -1,8 +1,15 @@
 """Extractor flow set actions: worklist, quality policy, gate verdict.
 
-Scraper v2 stage two. Every action is deterministic; the quality
-thresholds were calibrated on live corpus extractions (faithful band:
-numeric 0.89-0.95, span 0.83-0.88 — thresholds sit below it).
+Scraper v2 stage two. Every action is deterministic.
+
+The quality thresholds were RE-calibrated 2026-08-14 against blind judgement of
+48 extractions read against their source PDFs. The earlier "faithful band" of
+numeric 0.89-0.95 turned out to be an artifact of the truth oracle counting
+margin line numbers and publisher furniture; with that fixed the numeric rate
+correlates with judged quality at r = +0.02, so the rates are now a floor
+against catastrophe rather than a quality bar, and the defect they cannot see
+at all — a looped decode, which keeps every number — gets its own check.
+See dev/EXTRACTION_GATE_CALIBRATION_2026-08-14.md.
 """
 
 from __future__ import annotations
@@ -131,7 +138,7 @@ async def test_sweep_skips_terminal_and_non_oa():
 # ── batch quality policy ──────────────────────────────────────────────
 
 
-def _report(key, num=0.92, span=0.85, error=""):
+def _report(key, num=0.92, span=0.85, error="", repeat=0):
     return json.dumps(
         {
             "paper_key": key,
@@ -141,6 +148,7 @@ def _report(key, num=0.92, span=0.85, error=""):
             "unverified_pages": 1,
             "numeric_match_rate": num,
             "span_pass_rate": span,
+            "max_repeat_words": repeat,
             "figures_kept": 4,
             "figures_dropped": 2,
             "seconds": 70.0,
@@ -264,6 +272,87 @@ async def test_gate_fails_with_pending_then_reopen():
     )
     assert out2.result["reopened"] is True
     assert mission.goals[0].status == "incomplete"
+
+
+@pytest.mark.asyncio
+async def test_batch_degenerate_decode_fails_despite_clean_rates():
+    """A looped decode keeps every number, so BOTH rates stay clean while the
+    document is ruined. Live: one extraction held 1,598 words of back-to-back
+    repetition and another 675, and the rate metrics — which only ask whether
+    a number appears ANYWHERE on the page — saw nothing wrong with either.
+    The longest repeat across every paper judged fit to train was 19 words."""
+    import os
+
+    from agent.actions import extraction_actions as ea
+
+    fx = _fx([_bank_line("looped")])
+    tool = os.path.join(ea._repo_root(), ea._TOOL_PY)
+    fx._commands[tool] = CommandResult(
+        return_code=0,
+        # Rates ABOVE both thresholds — the only failing signal is the loop.
+        stdout=_report("looped", num=0.98, span=0.95, repeat=1598),
+        stderr="",
+        command="x",
+    )
+    await action_extract_pdf_batch(_si(inputs=_batch_inputs(["looped"]), effects=fx))
+    from agent.actions.scholarly_actions import read_databank
+
+    bank = await read_databank(fx)
+    rec = bank["looped"]
+    assert rec["extraction_status"] != "extracted", "a loop must never pass"
+    # And the reason must name THIS gate, not the two rates it passed.
+    assert "degenerate decode" in rec["failure_reason"]
+    assert "1598" in rec["failure_reason"]
+    assert rec["extraction_quality"]["max_repeat_words"] == 1598
+
+
+@pytest.mark.asyncio
+async def test_batch_report_without_repeat_field_still_passes():
+    """An older report predates max_repeat_words. Absent must read as clean,
+    not as zero-that-fails — otherwise adding the metric retroactively fails
+    every extraction already on disk."""
+    import os
+
+    from agent.actions import extraction_actions as ea
+
+    fx = _fx([_bank_line("legacy")])
+    payload = json.loads(_report("legacy"))
+    del payload["max_repeat_words"]
+    tool = os.path.join(ea._repo_root(), ea._TOOL_PY)
+    fx._commands[tool] = CommandResult(
+        return_code=0, stdout=json.dumps(payload), stderr="", command="x"
+    )
+    await action_extract_pdf_batch(_si(inputs=_batch_inputs(["legacy"]), effects=fx))
+    from agent.actions.scholarly_actions import read_databank
+
+    bank = await read_databank(fx)
+    assert bank["legacy"]["extraction_status"] == "extracted"
+
+
+@pytest.mark.asyncio
+async def test_batch_admits_the_recalibrated_band():
+    """0.78/0.72 was REJECTED by the old 0.85/0.75 gate and is squarely inside
+    the band a blind audit judged fit to train. The old thresholds were fitted
+    to a 'faithful band' that was itself an artifact of the truth oracle
+    counting margin line numbers and publisher furniture."""
+    import os
+
+    from agent.actions import extraction_actions as ea
+
+    fx = _fx([_bank_line("mid")])
+    tool = os.path.join(ea._repo_root(), ea._TOOL_PY)
+    fx._commands[tool] = CommandResult(
+        return_code=0,
+        stdout=_report("mid", num=0.78, span=0.72),
+        stderr="",
+        command="x",
+    )
+    out = await action_extract_pdf_batch(_si(inputs=_batch_inputs(["mid"]), effects=fx))
+    assert out.result["status"] == "success"
+    from agent.actions.scholarly_actions import read_databank
+
+    bank = await read_databank(fx)
+    assert bank["mid"]["extraction_status"] == "extracted"
 
 
 @pytest.mark.asyncio

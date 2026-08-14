@@ -32,18 +32,40 @@ logger = logging.getLogger(__name__)
 EXTRACT_BATCH_SIZE = 3  # ~33 pages/paper × ~7s/page ≈ 12 min/dispatch
 EXTRACT_TIMEOUT_S = 1800
 
-# Quality policy, calibrated on live corpus extractions (milestone 1):
-# faithful papers measured numeric 0.89-0.95 and span 0.83-0.88
-# (corpus-weighted, truth-recall direction); broken extractions score
-# near zero. Thresholds sit below the faithful band to avoid false
-# flags while still catching real failures.
 # Statuses this stage will not revisit. extract_unverified belongs here:
 # another OCR pass over a scan with no text layer yields the same
 # unverifiable result, so re-queuing it burns GPU forever.
 _TERMINAL_EXTRACTION = ("extracted", "extract_failed", "extract_unverified")
 
-MIN_NUMERIC_RATE = 0.85
-MIN_SPAN_RATE = 0.75
+# QUALITY POLICY — recalibrated 2026-08-14 against blind judgement.
+#
+# 48 extractions (29 the gate rejected, 19 it passed, shuffled and
+# de-identified) were tiered by independent judges reading each markdown
+# against its source PDF, 10 spot-checks apiece. The result overturned the
+# previous calibration: the rate thresholds had been fitted to a "faithful
+# band" of 0.89-0.95 that was itself an artifact of two measurement bugs in
+# the truth oracle (margin line numbers, publisher furniture — both fixed in
+# extract_batch._prose_text). With the oracle corrected, the numeric rate
+# correlates with judged quality at r = +0.02. It does not rank quality and no
+# threshold on it can.
+#
+# So the rates are now a FLOOR AGAINST CATASTROPHE, not a quality bar, and sit
+# where they cost nothing: at 0.75/0.70 every paper judged fit to train is
+# admitted, while the four worst documents in the sample are still caught. The
+# old 0.85/0.75 rejected 42% of trainable papers, including three of the five
+# judged fully faithful.
+#
+# Full record: dev/EXTRACTION_GATE_CALIBRATION_2026-08-14.md
+MIN_NUMERIC_RATE = 0.75
+MIN_SPAN_RATE = 0.70
+
+# DEGENERATE DECODE. The rates are RECALL — "does this number appear anywhere
+# on the page" — so a decode that falls into a loop still scores clean while
+# the document is ruined. This catches what they cannot see. The longest
+# back-to-back repeat across all 19 papers judged fit to train was 19 words;
+# the two degenerate documents scored 675 and 1598, and the worst non-
+# degenerate defect scored 107. The cut sits in that empty gap.
+MAX_REPEAT_WORDS = 200
 
 CORPUS_GOAL_SIGNATURE = "corpus-pdf-extract"
 
@@ -306,6 +328,10 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
             and rep.get("verified_pages", 0) > 0
             and rep.get("numeric_match_rate", 0) >= MIN_NUMERIC_RATE
             and rep.get("span_pass_rate", 0) >= MIN_SPAN_RATE
+            # A looped decode keeps every number and so passes both rates.
+            # An older report has no such field; absent reads as 0 = clean,
+            # which is the right default for a metric that did not exist.
+            and rep.get("max_repeat_words", 0) <= MAX_REPEAT_WORDS
         )
         if ok:
             rec["extraction_status"] = "extracted"
@@ -315,6 +341,7 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
             rec["extraction_quality"] = {
                 "numeric_match_rate": round(rep.get("numeric_match_rate", 0), 4),
                 "span_pass_rate": round(rep.get("span_pass_rate", 0), 4),
+                "max_repeat_words": rep.get("max_repeat_words", 0),
                 "verified_pages": rep.get("verified_pages", 0),
                 "unverified_pages": rep.get("unverified_pages", 0),
                 "pages": rep.get("pages", 0),
@@ -341,6 +368,13 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
                 reason = (
                     f"no verifiable text layer ({rep.get('pages', 0)} page(s), "
                     f"0 verified) — rates are vacuous, not earned"
+                )
+            elif rep and rep.get("max_repeat_words", 0) > MAX_REPEAT_WORDS:
+                reason = (
+                    "degenerate decode — "
+                    f"{rep['max_repeat_words']} words of back-to-back repetition "
+                    f"(limit {MAX_REPEAT_WORDS}); the rates are clean because a "
+                    "loop keeps every number"
                 )
             elif rep:
                 reason = (
@@ -369,6 +403,7 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
                 rec["extraction_quality"] = {
                     "numeric_match_rate": round(rep.get("numeric_match_rate", 0), 4),
                     "span_pass_rate": round(rep.get("span_pass_rate", 0), 4),
+                    "max_repeat_words": rep.get("max_repeat_words", 0),
                     "verified_pages": rep.get("verified_pages", 0),
                     "unverified_pages": rep.get("unverified_pages", 0),
                     "pages": rep.get("pages", 0),

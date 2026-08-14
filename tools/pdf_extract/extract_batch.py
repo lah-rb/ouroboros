@@ -91,6 +91,34 @@ _FIG_REGION_MIN_AREA_FRAC = 0.01
 _CJK_RE = re.compile(r"[　-〿぀-ヿ㐀-䶿一-鿿가-힯＀-￯]+")
 _PROSE_DIGIT_FRAC = 0.5
 
+# Margin-furniture detection — see _gutter_spans.
+_PURE_DIGIT = re.compile(r"\d{1,4}")
+_MARGIN_PAD = 6.0  # pt of slack, so a hanging indent is not read as a margin
+_MIN_PROSE_SPANS = 5  # below this there is no column to measure against
+
+# PUBLISHER FURNITURE. Every pattern must be one a body sentence cannot
+# plausibly contain, because this drops the whole LINE. Deliberately narrower
+# than the pattern that first exposed the problem: that probe also matched a
+# bare "licence"/"email", which a Methods section legitimately uses. Each entry
+# below is anchored to boilerplate structure — a URL form, a labelled field, a
+# copyright year — rather than to a word.
+_FURNITURE = re.compile(
+    r"this content was downloaded"
+    r"|downloaded from .{0,40}ip address"
+    r"|\bdoi\s*:\s*10\.|\bdoi\.org/|dx\.doi\.org"
+    r"|creativecommons\.org|creative commons attribution"
+    r"|\bissn\b|\be-?issn\b"
+    r"|all rights reserved"
+    r"|see front matter"
+    r"|©\s*\d{4}|\(c\)\s*(?:19|20)\d{2}"
+    r"|\b(?:tel|fax)\.?\s*:\s*[+\d]"
+    r"|published by (?:elsevier|springer|wiley|iop|the royal society)",
+    re.I,
+)
+
+# Degenerate-decode detection — see _max_repeat_words.
+_REPEAT_MAX_PERIOD = 24  # longest phrase treated as a loop unit
+
 # ── Figure filter constants ───────────────────────────────────────────
 
 _MIN_FIG_PX = 96  # short side below this = rule/ornament, drop
@@ -380,6 +408,43 @@ def _figure_regions(page) -> list:
     return rects
 
 
+def _gutter_spans(page) -> set:
+    """Anchors of pure-digit spans lying OUTSIDE the page's prose column.
+
+    A manuscript's line-number column is such a span. PyMuPDF's "blocks"
+    output merges it into the prose line beside it, so block-level reading
+    cannot separate them and the number enters the truth as if it were
+    content. Detection is geometric, never sequential: a pure-digit span
+    outside the horizontal extent of the prose is furniture — a line number
+    or a folio — and never a measurement.
+    """
+    prose_x0, prose_x1, digits = [], [], []
+    try:
+        for blk in page.get_text("dict")["blocks"]:
+            for ln in blk.get("lines", []):
+                for sp in ln["spans"]:
+                    t = sp["text"].strip()
+                    if not t:
+                        continue
+                    if _PURE_DIGIT.fullmatch(t):
+                        digits.append(sp["bbox"])
+                    else:
+                        prose_x0.append(sp["bbox"][0])
+                        prose_x1.append(sp["bbox"][2])
+    except Exception:  # noqa: BLE001 — verification must not break extraction
+        return set()
+    # Too little prose to establish a column: refuse to guess. Dropping digits
+    # on a table-only page would delete the data we are trying to verify.
+    if not digits or len(prose_x0) < _MIN_PROSE_SPANS:
+        return set()
+    left, right = min(prose_x0), max(prose_x1)
+    return {
+        (round(b[0], 1), round(b[1], 1))
+        for b in digits
+        if b[2] < left - _MARGIN_PAD or b[0] > right + _MARGIN_PAD
+    }
+
+
 def _prose_text(page) -> str:
     """Text-layer prose for verification — vector-figure text excluded.
 
@@ -401,15 +466,51 @@ def _prose_text(page) -> str:
     figure region, it is figure text whatever it looks like. That is the
     property that actually distinguishes it, rather than a proxy for it.
     A page with no detected figures behaves exactly as before.
+
+    TWO MORE, added 2026-08-14 after a blind audit found the numeric rate
+    UNCORRELATED (r = +0.02) with judged document quality. Both were counting
+    numbers the extractor is RIGHT to drop, so a faithful extraction was
+    charged for its own correctness:
+
+    - MARGIN LINE NUMBERS. Assembled from SPANS rather than blocks so a
+      line-number can be removed without taking the prose line PyMuPDF merged
+      it into. On a line-numbered manuscript this was ~40 phantom misses per
+      page; 12 of 12 affected papers in the audit sample were failing the gate,
+      median numeric 0.528 -> 0.977.
+    - PUBLISHER FURNITURE. The access stamp a publisher injects at download
+      time, the DOI/ISSN, the copyright footer. A fixed cost against a small
+      denominator, so it sinks SHORT faithful papers hardest: one tier-A
+      conference paper lost 47 of its 47 numbers to an IOP download stamp.
+
+    The figure-region test stays at BLOCK granularity on purpose. Moving it to
+    spans would change a second thing at once, and the measurement that
+    justified this could no longer attribute its own delta.
     """
     regions = _figure_regions(page)
+    gutters = _gutter_spans(page)
     parts = []
-    for block in page.get_text("blocks"):
-        x0, y0, x1, y1, text = block[0], block[1], block[2], block[3], block[4]
+    try:
+        blocks = page.get_text("dict")["blocks"]
+    except Exception:  # noqa: BLE001 — fall back to the block reader
+        blocks = []
+    for blk in blocks:
+        bbox = blk.get("bbox")
+        if bbox is None or "lines" not in blk:
+            continue
         if regions:
-            cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+            cx, cy = (bbox[0] + bbox[2]) / 2.0, (bbox[1] + bbox[3]) / 2.0
             if any(r.x0 <= cx <= r.x1 and r.y0 <= cy <= r.y1 for r in regions):
                 continue
+        chunks = []
+        for ln in blk["lines"]:
+            for sp in ln["spans"]:
+                if (round(sp["bbox"][0], 1), round(sp["bbox"][1], 1)) in gutters:
+                    continue
+                chunks.append(sp["text"])
+            chunks.append("\n")
+        text = "".join(chunks)
+        if not text.strip():
+            continue
         stripped = re.sub(r"[\s,.\-–—°%()×±]+", "", text)
         if (
             len(text.strip()) < _PROSE_MIN_BLOCK
@@ -417,8 +518,43 @@ def _prose_text(page) -> str:
             and sum(c.isdigit() for c in stripped) / len(stripped) > _PROSE_DIGIT_FRAC
         ):
             continue
-        parts.append(text)
+        # Furniture is dropped LINE-wise, not block-wise: a running footer is
+        # often glued to the last line of real prose.
+        text = "\n".join(ln for ln in text.split("\n") if not _FURNITURE.search(ln))
+        if text.strip():
+            parts.append(text)
     return "\n".join(parts)
+
+
+def _max_repeat_words(md: str, max_period: int = _REPEAT_MAX_PERIOD) -> int:
+    """Words spanned by the longest back-to-back repeated block.
+
+    The gate's rate metrics are RECALL — "does this number appear anywhere on
+    the page" — so they are blind to the VLM's worst failure mode: a decode
+    that falls into a loop and emits the same clause hundreds of times. Every
+    number is still present, so the rates stay clean while the document is
+    ruined. Measured on the audit sample: the longest repeat across all 19
+    papers judged fit to train was 19 words; the two degenerate documents
+    scored 675 and 1598.
+
+    For a period p, a run of L consecutive positions with w[i] == w[i+p] means
+    a p-word block repeats; the repeated region spans L + p words. L >= p is
+    required so one coincidental match cannot register as a loop.
+    """
+    words = re.findall(r"\S+", md)
+    best = 0
+    for p in range(1, max_period + 1):
+        if len(words) <= p:
+            break
+        run = 0
+        for i in range(len(words) - p):
+            if words[i] == words[i + p]:
+                run += 1
+                if run >= p:
+                    best = max(best, run + p)
+            else:
+                run = 0
+    return best
 
 
 def _verify_page(md: str, truth: str) -> tuple[int, int, int, int]:
@@ -587,6 +723,7 @@ def extract_paper(pipe, pdf_path: str, key: str, databank_dir: str, dpi: int) ->
         "unverified_pages": 0,
         "numeric_match_rate": 0.0,
         "span_pass_rate": 0.0,
+        "max_repeat_words": 0,
         "figures_kept": 0,
         "figures_dropped": 0,
         "seconds": 0.0,
@@ -653,6 +790,9 @@ def extract_paper(pipe, pdf_path: str, key: str, databank_dir: str, dpi: int) ->
         report["md_path"] = os.path.relpath(md_path, databank_dir)
         report["numeric_match_rate"] = num_hit / num_total if num_total else 1.0
         report["span_pass_rate"] = span_hit / span_total if span_total else 1.0
+        # Measured on the joined document: a loop can straddle a page boundary,
+        # and the rates above cannot see one at all.
+        report["max_repeat_words"] = _max_repeat_words(joined)
     except Exception as e:  # noqa: BLE001 - report, don't crash the batch
         report["error"] = f"{type(e).__name__}: {e}"
         if os.path.isdir(fig_dir) and not os.listdir(fig_dir):

@@ -47,6 +47,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 REJECTED = ("extract_failed", "extract_unverified")
 
+# Read from the gate rather than restated, so a recalibration cannot leave this
+# tool bucketing failures against thresholds the pipeline no longer uses.
+try:
+    from agent.actions.extraction_actions import MIN_NUMERIC_RATE, MIN_SPAN_RATE
+except Exception:  # noqa: BLE001 — stdlib-only fallback, keep the tool runnable
+    MIN_NUMERIC_RATE, MIN_SPAN_RATE = 0.75, 0.70
+
 
 def read_extraction(databank: Path) -> dict:
     """paper_key -> record from the extractor's own sidecar, last-wins."""
@@ -69,12 +76,17 @@ def why(rec: dict) -> str:
     fr = rec.get("failure_reason") or ""
     if "no verifiable text layer" in fr or re.search(r"numeric=1\.00, span=1\.00", fr):
         return "no-text-layer"
+    # A looped decode passes BOTH rates — it keeps every number — so it carries
+    # no numeric=/span= pair to parse and would otherwise land in `error`
+    # beside a crashed worker. Two entirely different things to do about them.
+    if "degenerate decode" in fr:
+        return "degenerate"
     m = re.search(r"numeric=([0-9.]+), span=([0-9.]+)", fr)
     if m:
         n, s = float(m.group(1)), float(m.group(2))
-        if n < 0.85 and s < 0.75:
+        if n < MIN_NUMERIC_RATE and s < MIN_SPAN_RATE:
             return "both-gates"
-        return "numeric" if n < 0.85 else "span"
+        return "numeric" if n < MIN_NUMERIC_RATE else "span"
     if "timed out" in fr or "no report" in fr:
         return "toolchain"
     return "error"
