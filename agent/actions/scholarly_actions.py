@@ -149,19 +149,55 @@ RETRYABLE_BUCKETS = ("landing_page", "wrong_asset", "async_pending", "other")
 # It is still not IMMEDIATE retry, which was separately measured to yield
 # nothing — the floor exists so a URL that just failed is not hammered inside
 # the same run.
-_RETRY_AFTER_DAYS_DEFAULT = 1
+_RETRY_AFTER_DAYS_DEFAULT = 1.0
+
+# After this many failed re-arms a record stops being offered a slot at all.
+# 4 spans 1 + 2 + 4 + 8 = 15 days of patience under the default base, which is
+# well past any transient block we have measured.
+_MAX_OA_RETRIES = 4
 
 
-def retry_after_days() -> int:
-    """Age past which a failed OA location is worth trying again. 0 disables."""
+def retry_after_days() -> float:
+    """BASE age past which a failed OA location is worth trying again.
+
+    FRACTIONAL, because integer days made the knob unusable on the corpus it
+    was built for. A live corpus is re-worked daily, so its whole retryable
+    population sits under 24h old (measured: max 0.94 d right after a run) —
+    with an int floor of 1 the lane could only ever fire on a workspace that
+    had been left alone, which is the opposite of the busy case it exists to
+    serve. Also the only way to exercise it without waiting a day.
+
+    0 disables the lane.
+    """
     raw = os.environ.get("OUROBOROS_OA_RETRY_AFTER_DAYS", "").strip()
     if not raw:
         return _RETRY_AFTER_DAYS_DEFAULT
     try:
-        return max(0, int(raw))
+        return max(0.0, float(raw))
     except ValueError:
-        logger.warning("OUROBOROS_OA_RETRY_AFTER_DAYS=%r not an integer", raw)
+        logger.warning("OUROBOROS_OA_RETRY_AFTER_DAYS=%r not a number", raw)
         return _RETRY_AFTER_DAYS_DEFAULT
+
+
+def retry_backoff_days(attempts: int) -> float:
+    """How long THIS record must wait, given how often it has already failed.
+
+    A FLAT horizon never gives up. The 2026-08-13 run re-armed 26 records and
+    recovered none; under a flat cadence those same 26 would return every
+    horizon, fail again, and re-consume the capped slots indefinitely —
+    crowding out records that have not had their turn. Doubling makes a
+    hopeless record cheap (it backs off to fortnightly then stops) while a
+    genuinely transient one is still caught on the first or second pass, which
+    is where every recovery we have measured actually happened.
+
+    Returns inf once the attempt cap is spent: never eligible again.
+    """
+    base = retry_after_days()
+    if base <= 0:
+        return float("inf")
+    if attempts >= _MAX_OA_RETRIES:
+        return float("inf")
+    return base * (2 ** max(0, attempts))
 
 
 def _iso_age_days(value: str, *, missing: float = float("inf")) -> float:
@@ -239,9 +275,15 @@ def is_stale_retry_candidate(rec: dict) -> bool:
     # attempt, whatever its failure string says.
     if _is_walled(rec.get("oa_pdf_url") or ""):
         return False
+    # PER-RECORD BACKOFF, not a flat cadence. A record that has already burned
+    # attempts waits longer each time and eventually stops qualifying, so a
+    # hopeless one cannot re-consume the capped slots forever.
+    wait = retry_backoff_days(int(rec.get("oa_retry_count") or 0))
+    if wait == float("inf"):
+        return False
     return (
         # never re-armed -> eligible
-        _iso_age_days(rec.get("oa_retried_at", "")) >= horizon
+        _iso_age_days(rec.get("oa_retried_at", "")) >= wait
         # unknown age -> NOT eligible; staleness must be positively established
         and _iso_age_days(rec.get("updated_at", ""), missing=-1.0) >= horizon
     )
@@ -1143,11 +1185,21 @@ async def action_resolve_oa_pdf(step_input: StepInput) -> StepOutput:
 
             rec["oa_attempted"] = []
             rec["oa_retried_at"] = _now_iso()
+            # Count BEFORE the attempt, not after a verdict: the download runs
+            # in a later step and may not come back here at all. An attempt
+            # that is not booked the moment it is granted is an attempt that
+            # repeats for free.
+            attempts = int(rec.get("oa_retry_count") or 0) + 1
+            rec["oa_retry_count"] = attempts
+            nxt = retry_backoff_days(attempts)
             logger.info(
-                "OA re-arm: %s (%s, last tried %s)",
+                "OA re-arm: %s (%s, attempt %d/%d, last tried %s, next in %s)",
                 rec.get("paper_key", "?"),
                 classify_failure(rec.get("failure_reason", "")),
+                attempts,
+                _MAX_OA_RETRIES,
                 rec.get("updated_at", "?"),
+                "never" if nxt == float("inf") else f"{nxt:g}d",
             )
 
         urls = _dedup_urls(rec.get("oa_pdf_urls") or [rec.get("oa_pdf_url")])

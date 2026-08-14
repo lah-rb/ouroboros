@@ -94,6 +94,70 @@ def test_zero_days_disables_the_lane(monkeypatch):
     assert SA.is_stale_retry_candidate(_unresolved()) is False
 
 
+def test_horizon_accepts_fractions(monkeypatch):
+    """Integer days made the knob unusable on the corpus it was built for: a
+    live workspace is re-worked daily, so its whole retryable population sits
+    under 24h old and an int floor of 1 could only ever fire on a workspace
+    left alone."""
+    monkeypatch.setenv("OUROBOROS_OA_RETRY_AFTER_DAYS", "0.5")
+    assert SA.retry_after_days() == 0.5
+    rec = _unresolved(updated_at=_iso(0.7))  # 0.7d old: stale at 0.5, fresh at 1
+    assert SA.is_stale_retry_candidate(rec) is True
+    monkeypatch.setenv("OUROBOROS_OA_RETRY_AFTER_DAYS", "1")
+    assert SA.is_stale_retry_candidate(rec) is False
+
+
+def test_garbled_horizon_falls_back(monkeypatch):
+    monkeypatch.setenv("OUROBOROS_OA_RETRY_AFTER_DAYS", "soon")
+    assert SA.retry_after_days() == SA._RETRY_AFTER_DAYS_DEFAULT
+
+
+# ── backoff: a flat cadence never gives up ────────────────────────────
+
+
+def test_backoff_doubles_then_stops(monkeypatch):
+    monkeypatch.setenv("OUROBOROS_OA_RETRY_AFTER_DAYS", "1")
+    assert [SA.retry_backoff_days(n) for n in range(SA._MAX_OA_RETRIES)] == [
+        1.0,
+        2.0,
+        4.0,
+        8.0,
+    ]
+    assert SA.retry_backoff_days(SA._MAX_OA_RETRIES) == float("inf")
+    assert SA.retry_backoff_days(99) == float("inf")
+
+
+def test_backoff_scales_with_the_base(monkeypatch):
+    monkeypatch.setenv("OUROBOROS_OA_RETRY_AFTER_DAYS", "0.5")
+    assert SA.retry_backoff_days(0) == 0.5
+    assert SA.retry_backoff_days(2) == 2.0
+
+
+def test_disabled_lane_backs_off_to_never(monkeypatch):
+    monkeypatch.setenv("OUROBOROS_OA_RETRY_AFTER_DAYS", "0")
+    assert SA.retry_backoff_days(0) == float("inf")
+
+
+def test_exhausted_record_is_never_re_armed_again(monkeypatch):
+    """THE POINT OF THE EXPANSION. The 2026-08-13 run re-armed 26 records and
+    recovered none; under a flat horizon those same 26 return every cycle,
+    fail again, and crowd out records that have not had a turn."""
+    monkeypatch.delenv("OUROBOROS_OA_RETRY_AFTER_DAYS", raising=False)
+    spent = _unresolved(
+        updated_at=_iso(400), oa_retried_at=_iso(400), oa_retry_count=SA._MAX_OA_RETRIES
+    )
+    assert SA.is_stale_retry_candidate(spent) is False
+
+
+def test_a_second_attempt_waits_longer_than_the_first(monkeypatch):
+    monkeypatch.setenv("OUROBOROS_OA_RETRY_AFTER_DAYS", "1")
+    # Re-armed 1.5 days ago: fine for attempt 0 (wait 1d), too soon after
+    # attempt 1 (wait 2d).
+    rec = _unresolved(updated_at=_iso(30), oa_retried_at=_iso(1.5))
+    assert SA.is_stale_retry_candidate({**rec, "oa_retry_count": 0}) is True
+    assert SA.is_stale_retry_candidate({**rec, "oa_retry_count": 1}) is False
+
+
 def test_undated_record_is_NOT_re_armed(monkeypatch):
     """Unknown age must not read as stale.
 
