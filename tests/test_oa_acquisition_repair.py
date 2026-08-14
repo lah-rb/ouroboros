@@ -339,7 +339,12 @@ class _FakeEffects:
         return None
 
 
-def _run_nav(records, effects, monkeypatch):
+def _run_nav(records, effects, monkeypatch, enabled="1"):
+    # The feature is OFF by default (30 live attempts, 0 recoveries), so a
+    # test of its behaviour has to switch it on deliberately. setdefault, not
+    # a hard set: the kill-switch test passes enabled="0" and must win.
+    monkeypatch.setenv("OUROBOROS_LLM_NAV", enabled)
+
     # polite_request is a MODULE function taking effects first — not the
     # effect's own bound method. Patching it with the bound method silently
     # shifts every argument by one.
@@ -381,10 +386,40 @@ def test_nav_respects_the_per_dispatch_cap(monkeypatch):
 
 
 def test_nav_kill_switch(monkeypatch):
-    monkeypatch.setenv("OUROBOROS_LLM_NAV", "0")
     fx = _FakeEffects(PAGE, "https://pub.example/doi/pdf/10.1/x", True)
-    out = _run_nav([_unresolved(oa_pdf_url="https://pub.example/a")], fx, monkeypatch)
+    out = _run_nav(
+        [_unresolved(oa_pdf_url="https://pub.example/a")], fx, monkeypatch, enabled="0"
+    )
     assert out.result["attempted"] == 0
+
+
+def test_nav_is_OFF_unless_explicitly_enabled(monkeypatch):
+    """The default flipped to off after 30 live attempts and 0 recoveries.
+
+    Re-measured through the production download path (n=30 unresolved): 23%
+    recover outright with no inference at all (Springer 7/7), 40% are hard
+    walls, and 6 of the 8 remaining `landing_page` records are doi.org
+    meta-refresh stubs forwarding INTO a wall. Nothing in that sample was the
+    case this action exists for. Flipping the default back is a decision that
+    should follow a fresh measurement, so it is pinned here.
+    """
+    monkeypatch.delenv("OUROBOROS_LLM_NAV", raising=False)
+
+    async def _fake_polite(fx, method, url, **kw):
+        return await fx.http_request(method, url, **kw)
+
+    monkeypatch.setattr(SA, "polite_request", _fake_polite)
+    fx = _FakeEffects(PAGE, "https://pub.example/doi/pdf/10.1/x", True)
+    si = SimpleNamespace(
+        effects=fx,
+        context={"catalog_batch": [_unresolved(oa_pdf_url="https://pub.example/a")]},
+        params={},
+        inputs={},
+    )
+    si.model_copy = lambda **kw: si
+    out = asyncio.run(SA.action_navigate_landing_page(si))
+    assert out.result["attempted"] == 0
+    assert fx.inference_calls == 0
     assert fx.inference_calls == 0
 
 

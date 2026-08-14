@@ -1490,7 +1490,25 @@ async def action_navigate_landing_page(step_input: StepInput) -> StepOutput:
 
     effects = step_input.effects
     batch = list(step_input.context.get("catalog_batch") or [])
-    if not effects or os.environ.get("OUROBOROS_LLM_NAV", "1") == "0":
+    # OFF BY DEFAULT — the evidence says this feature is not worth its cost.
+    #
+    # Lifetime record: 30 attempts across four runs, 0 recoveries. The reason
+    # is not the implementation; it is that the population it was built for
+    # barely exists. The `landing_page` bucket was largely a CLIENT ARTIFACT —
+    # httpx receiving a 3KB WAF interstitial where urllib receives the PDF —
+    # and the transport fallback in http_download now takes those directly.
+    #
+    # Re-measured through the production path after that fix (n=30 unresolved):
+    #   23%  RECOVERED outright (Springer 7/7, no inference involved)
+    #   40%  hard_wall  (ScienceDirect, Wiley) — nothing to navigate
+    #   27%  landing_page — but 6 of 8 are doi.org meta-refresh stubs that
+    #        forward INTO a wall, not pages with a findable PDF link
+    # Zero in that sample were the case this action exists for.
+    #
+    # Kept rather than deleted because the code is sound and tested, and a
+    # publisher-mix shift could make it earn its place. Set
+    # OUROBOROS_LLM_NAV=1 to re-enable — and re-measure before trusting it.
+    if not effects or os.environ.get("OUROBOROS_LLM_NAV", "0") == "0":
         return StepOutput(
             result={"navigated": 0, "attempted": 0},
             observations="LLM landing-page navigation disabled",

@@ -1,5 +1,31 @@
 # Scraper / corpus backlog
 
+> **2026-08-13 EVENING — EVERY YIELD FIGURE BELOW WAS MEASURED WITH THE WRONG
+> CLIENT.** The numbers in §"The shape of the problem" and items 1/2/7 were
+> taken with `urllib`, then projected onto a production path that uses
+> `httpx`. Same URL and same headers, five Springer OA PDFs: urllib returned
+> the PDF 5/5, httpx returned a 3,036-byte WAF interstitial 5/5. So they
+> measured *urllib vs the WAF*, not *us vs the WAF*.
+>
+> One root cause explained every negative result of that day: 0/26 on the
+> stale re-arm, 21/26 nav attempts reporting "no candidate links" (the model
+> was handed 3KB block pages and correctly declined), and a `landing_page`
+> bucket that was substantially a **client artifact** rather than a population
+> of real landing pages. Fixed in `dc737d9` — one stdlib re-request when a
+> document download comes back HTML.
+>
+> **RE-DERIVED through the production path afterwards (n=30 unresolved):**
+>
+> | outcome | share | note |
+> |---|---|---|
+> | **RECOVERED** | **23%** | Springer 7/7, no inference — ~116 of 496 |
+> | hard_wall | 40% | ScienceDirect, Wiley — genuinely walled |
+> | landing_page | 27% | but 6 of 8 are doi.org meta-refresh stubs into walls |
+> | wrong_asset / gone / other | 10% | |
+>
+> Read the sections below as the *reasoning that got here*, not as live
+> numbers.
+
 *Consolidated 2026-08-13 from live measurement on `~/corpora/ouroboros-spectra`
 (5,556 unique papers). Every size here is MEASURED unless marked ESTIMATE —
 this pipeline has a history of fixture-shaped estimates collapsing under live
