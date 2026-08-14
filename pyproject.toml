@@ -30,6 +30,17 @@ dependencies = [
     "tree-sitter-language-pack>=1.8.1",
     "weasyprint>=68.1",
     "jedi>=0.20.0",
+    # The adaptive reasoning router (agent/reasoning_router.py) loads
+    # models/reasoning_router_v1.joblib, whose artifact unpickles a
+    # sklearn FeatureUnion + LogisticRegression — so BOTH are needed, and
+    # both are CORE rather than an extra because that module runs on every
+    # mission. They were undeclared: the import sits inside a try/except
+    # with a negative cache, so their absence does not crash, it silently
+    # drops the router back to a fixed policy and loses the measured
+    # -42% decode/turn. A quiet capability loss is the worst kind to leave
+    # undeclared, because nothing fails to tell you about it.
+    "joblib>=1.5",
+    "scikit-learn>=1.9",
 ]
 
 [project.optional-dependencies]
@@ -42,6 +53,33 @@ swe = [
     "swebench>=3.0.0",
     "datasets>=2.0.0",
 ]
+# adapters/tb — BOTH benchmark generations, and they are separate packages.
+# `terminal-bench` is TB1 (BaseAgent/TmuxSession); `harbor` is TB2, imported by
+# adapters/tb/harbor_agent.py and NOT pulled in by terminal-bench. Omitting it
+# was the one genuine miss when this file was first written — a sync would have
+# left TB2 uninstallable while every test that imports it silently skipped.
+# terminal-bench's own metadata pulls litellm/openai/anthropic, so declaring it
+# restores that whole subtree THROUGH THE RESOLVER rather than by hand.
+tb = [
+    "terminal-bench>=0.2.18",
+    "harbor>=0.20.0",
+]
+# adapters/tau — the official tau-bench, which is NOT on PyPI. Pinned to the
+# upstream commit the τ work was validated against (gold replay 6/6, reward
+# 1.0). It was previously an editable install from a local clone; that clone
+# is an UNMODIFIED checkout of this exact revision, so nothing is lost by
+# resolving it here — and a fresh machine no longer needs a side-loaded repo.
+tau = [
+    "tau_bench",
+]
+# dev/ plotting scripts only (plot_swarm_perf, plot_run_throughput). Kept out
+# of core because nothing the agent runs draws a chart.
+plots = [
+    "matplotlib>=3.11",
+]
+
+[tool.uv.sources]
+tau_bench = { git = "https://github.com/sierra-research/tau-bench.git", rev = "59a200c6d575d595120f1cb70fea53cef0632f6b" }
 
 [tool.black]
 # Defaults, stated explicitly so the standard is a decision rather than
