@@ -311,18 +311,36 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
             }
             extracted += 1
         else:
-            reason = (
-                rep.get("error")
-                if rep and rep.get("error")
-                else (
+            # NAME THE GATE THAT ACTUALLY REJECTED. The `ok` test above has
+            # THREE conditions, and this message used to report only two — so
+            # a paper failed for having no verifiable text layer was told it
+            # was "below quality threshold (numeric=1.00, span=1.00)". Both
+            # rates perfect and rejected anyway reads as a broken gate; it is
+            # in fact a correct rejection with a false explanation, and it
+            # cost a live investigation to unpick. 8 of 81 lifetime failures
+            # carry that misleading string.
+            #
+            # A vacuous 1.00 is what an unverifiable extraction SCORES: the
+            # rates are hit/total with an empty total, so nothing checkable
+            # means nothing missed. The rejection is right. The reason has to
+            # say so.
+            if rep and rep.get("error"):
+                reason = rep["error"]
+            elif rep and rep.get("verified_pages", 0) <= 0:
+                reason = (
+                    f"no verifiable text layer ({rep.get('pages', 0)} page(s), "
+                    f"0 verified) — rates are vacuous, not earned"
+                )
+            elif rep:
+                reason = (
                     "below quality threshold "
                     f"(numeric={rep.get('numeric_match_rate', 0):.2f}, "
                     f"span={rep.get('span_pass_rate', 0):.2f})"
-                    if rep
-                    else "no report from toolchain"
-                    + (" (command timed out)" if result.timed_out else "")
                 )
-            )
+            else:
+                reason = "no report from toolchain" + (
+                    " (command timed out)" if result.timed_out else ""
+                )
             # WHAT THE RUN PRODUCED IS RECORDED EVEN WHEN THE GATE REJECTS IT.
             # figure_count used to be written only on the success path, so a
             # rejected paper carried figure_count=0 while its figures sat on
