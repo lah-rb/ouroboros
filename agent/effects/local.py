@@ -714,6 +714,86 @@ class LocalEffects:
                 elapsed_ms=(time.monotonic() - start) * 1000,
             )
 
+    async def _retry_download_stdlib(
+        self,
+        url: str,
+        resolved: str,
+        path: str,
+        timeout: float,
+        max_bytes: int,
+        start: float,
+    ) -> "DownloadResult | None":
+        """Re-request a document that came back as HTML, over urllib.
+
+        WHY A SECOND TRANSPORT AT ALL. Measured 2026-08-13, same URL, same
+        headers, five Springer OA PDFs: urllib returned the PDF on 5/5, httpx
+        returned a 3,036-byte interstitial on 5/5. Across a mixed sample of
+        failed records, 6/14 (43%) were recoverable purely by changing client
+        — roughly 78 of 183 `landing_page` records, all Springer. It is not
+        the headers: HTTP/2 off, ALPN stripped, `Accept-Encoding: identity`
+        and `Connection: close` all still return HTML. The discriminator is
+        the TLS handshake, below anything httpx exposes.
+
+        THIS IS NOT EVASION AND MUST NOT BECOME IT. Same honest User-Agent,
+        same contact email, same per-host pacer, no challenge solving, no IP
+        rotation, no retry storm — one extra request, on content the publisher
+        has designated open access and intends us to read. If this ever needs
+        a spoofed fingerprint to keep working, that is the point to stop, not
+        to escalate.
+
+        Returns a DownloadResult only on SUCCESS; None means "fall through to
+        the original rejection", so a failure here can never mask the real
+        answer httpx already gave.
+        """
+        if os.environ.get("OUROBOROS_DOWNLOAD_FALLBACK", "1") == "0":
+            return None
+        import asyncio
+        import urllib.error
+        import urllib.request
+
+        # The identity headers live on the shared client, not on the call.
+        hdrs = dict(self._get_http_client().headers)
+
+        def _fetch() -> tuple[int, str, bytes]:
+            req = urllib.request.Request(url, headers=hdrs)
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return (
+                    r.status,
+                    r.headers.get("content-type", ""),
+                    r.read(max_bytes + 1),
+                )
+
+        try:
+            status, ctype, body = await asyncio.to_thread(_fetch)
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            self._log_entry("http_download", url, f"stdlib retry failed: {exc}", start)
+            return None
+
+        if status != 200 or "text/html" in ctype or len(body) > max_bytes:
+            return None
+        if path.lower().endswith(".pdf") and not body.startswith(b"%PDF"):
+            return None  # same magic rule as the primary path
+
+        os.makedirs(os.path.dirname(resolved) or ".", exist_ok=True)
+        with open(resolved, "wb") as f:
+            f.write(body)
+        self._log_entry(
+            "http_download", url, f"stdlib retry RECOVERED {len(body)}B", start
+        )
+        logger.info(
+            "download: httpx got HTML, stdlib got %d bytes — recovered %s",
+            len(body),
+            url[:120],
+        )
+        return DownloadResult(
+            success=True,
+            url=url,
+            path=path,
+            bytes_written=len(body),
+            status=status,
+            content_type=ctype,
+        )
+
     async def http_download(
         self,
         url: str,
@@ -749,7 +829,15 @@ class LocalEffects:
                         error=f"HTTP {response.status_code}",
                     )
                 if "text/html" in content_type:
-                    # Paywall/login redirect pages masquerade as the PDF.
+                    # Paywall/login redirect pages masquerade as the PDF —
+                    # but so does a WAF that simply dislikes this client, and
+                    # the two are indistinguishable from here. Ask again on a
+                    # different transport before believing it.
+                    alt = await self._retry_download_stdlib(
+                        url, resolved, path, timeout, max_bytes, start
+                    )
+                    if alt is not None:
+                        return alt
                     self._log_entry("http_download", url, "rejected text/html", start)
                     return DownloadResult(
                         success=False,
