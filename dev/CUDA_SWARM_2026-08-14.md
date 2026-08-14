@@ -98,6 +98,38 @@ muse-glimmer-30B-kquant-dynamic on the 3090:
 both greedy single-stream. That is the first hard number on whether the move
 was worth it for decode, and it is before any tuning.
 
+## Serial vs parallel on ONE server — and size helps
+
+Two processes cannot even be attempted for muse: 19.65 GB twice does not fit a
+24 GB card. The only concurrency available to a large model is slots inside one
+context, so the question becomes N calls back to back versus N at once, with
+
+    S = (t_parallel - t_one) / (t_serial - t_one)
+
+| N | muse-30B S | speedup | Qwen-7B S | speedup |
+|---|---|---|---|---|
+| 2 | **0.054** | 1.90x | 0.147 | 1.76x |
+| 4 | **0.148** | 2.76x | 0.213 | 2.46x |
+| 8 | **0.196** | 3.38x | 0.269 | 2.79x |
+
+**The LARGER model parallelises BETTER at every level** — lower serialization
+and higher speedup, against the naive expectation that a heavier model would
+concurrency worse. At N=2 muse's second call costs 5.4% of its solo time.
+
+It is the bandwidth argument again, from the other side. A forward pass reads
+19.65 GB of weights for muse and 4.68 GB for the 7B; batching amortises that
+one read across every sequence in the pass, so the model with more to amortise
+gains more from a slot. Single-stream both sit near 70% of the 3090's ~936 GB/s
+(muse 684 GB/s effective, 7B 651 GB/s), which is what makes them comparable.
+
+*A first version of this probe discarded the response body and timed the call
+alone. It reported `t_one = 0.11 s` for a 30B — 1163 tok/s, impossible — and
+every S computed from it was meaningless, because with t_one ~ 0 the formula
+collapses to t_parallel/t_serial, the inverse speedup wearing another metric's
+name. The probe now returns tokens generated, sets `ignore_eos` so every call
+does identical work, refuses to run when the baseline comes up short, and
+reports both arms' token counts (verified equal: 256/256, 512/512, 1024/1024).*
+
 ## What this means for the pipeline
 
 1. **Put muse on the 3090 and paddle on the 3060.** That is the OCR × text pair
