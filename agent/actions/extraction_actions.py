@@ -67,6 +67,12 @@ MIN_SPAN_RATE = 0.70
 # degenerate defect scored 107. The cut sits in that empty gap.
 MAX_REPEAT_WORDS = 200
 
+# TRUNCATED ACQUISITION. A PDF holding at most this fraction of the article's
+# published page extent is a fragment, not the paper. Half rather than any
+# shortfall, because a publisher asset legitimately differs from the print
+# extent by a page.
+_TRUNCATED_FRACTION = 0.5
+
 CORPUS_GOAL_SIGNATURE = "corpus-pdf-extract"
 
 _TOOL_PY = "tools/pdf_extract/.venv/bin/python"
@@ -104,6 +110,46 @@ _EXTRACTION_METHODS = {
 EXTRACTION_METHOD = _EXTRACTION_METHODS.get(
     _VL_BACKEND, f"paddleocr-vl-1.6-{_VL_BACKEND}"
 )
+
+
+def expected_page_extent(record: dict) -> int:
+    """Pages the PUBLISHER says this article runs to, or 0 if unknowable.
+
+    OpenAlex `biblio` gives first/last page as free-form strings: roman
+    numerals for front matter, "S17" for supplements, "e01505" for article
+    numbers that are not pages at all. Only a clean numeric pair yields an
+    extent; everything else returns 0, which every caller must read as "no
+    opinion" rather than "zero pages".
+    """
+    first, last = record.get("first_page") or "", record.get("last_page") or ""
+    if not (first.strip().isdigit() and last.strip().isdigit()):
+        return 0
+    extent = int(last) - int(first) + 1
+    # A negative or absurd span means the deposit is wrong, not the PDF.
+    return extent if 1 <= extent <= 200 else 0
+
+
+def acquisition_is_truncated(record: dict, pdf_pages: int) -> bool:
+    """The PDF holds materially less than the article it claims to be.
+
+    THE DEFECT NO QUALITY METRIC CAN SEE. Verification compares our markdown
+    against the PDF's own text layer, so an extraction of page 1 of a 5-page
+    article is *perfectly faithful* — to a fragment. One corpus paper is
+    exactly this: a single-page PDF of an article running pages 37-41, which
+    scored 0.88/1.00 and was judged unusable by a human on sight.
+
+    Only the publisher's own page extent can catch it, and only when the
+    publisher deposited one, so this is a targeted check and not a general
+    one: it fires only on a clean numeric extent and a real shortfall.
+    """
+    expected = expected_page_extent(record)
+    if not expected or pdf_pages <= 0:
+        return False
+    # Half. Not "any shortfall": a PDF legitimately differs from the print
+    # extent — a final page carrying only references may be dropped by the
+    # publisher's own asset, and offprints re-paginate. Losing half or more
+    # of an article is not that.
+    return pdf_pages <= expected * _TRUNCATED_FRACTION
 
 
 def _extraction_pending(record: dict) -> bool:
@@ -317,9 +363,13 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
         rec = dict(databank.get(k) or {"paper_key": k})
         rep = reports.get(k)
         prior_retry = rec.get("extraction_status") == "needs_reextract"
+        truncated = bool(rep) and acquisition_is_truncated(rec, rep.get("pages", 0))
         ok = (
             rep is not None
             and not rep.get("error")
+            # The asset is a fragment of the article. The extraction may be
+            # flawless and still must not enter the corpus.
+            and not truncated
             # ZERO verified pages passes the rate thresholds vacuously
             # (nothing checkable -> nothing missed). Live: a JPEG served
             # as the "PDF" produced a 1-page, 0-verified, 276-byte
@@ -364,6 +414,14 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
             # say so.
             if rep and rep.get("error"):
                 reason = rep["error"]
+            elif truncated:
+                reason = (
+                    f"truncated acquisition — the PDF holds {rep.get('pages', 0)} "
+                    f"page(s) of an article published across "
+                    f"{expected_page_extent(rec)} (pp. {rec.get('first_page')}-"
+                    f"{rec.get('last_page')}); the extraction is faithful to a "
+                    "fragment"
+                )
             elif rep and rep.get("verified_pages", 0) <= 0:
                 reason = (
                     f"no verifiable text layer ({rep.get('pages', 0)} page(s), "
@@ -428,7 +486,15 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
             # preserved, distinguishable, and queued for the spot check that
             # tools/extract_triage.py exists to serve.
             unverifiable = bool(rep) and rep.get("verified_pages", 0) <= 0
-            if unverifiable:
+            if truncated:
+                # TERMINAL on the first attempt, and deliberately so: another
+                # OCR pass reads the same fragment and reaches the same
+                # verdict. The fix is re-ACQUISITION, which is the scraper's
+                # job, so burning a second GPU pass here buys nothing.
+                rec["extraction_status"] = "extract_failed"
+                rec["failure_reason"] = f"extraction: {reason}"
+                failed += 1
+            elif unverifiable:
                 rec["extraction_status"] = "extract_unverified"
                 rec["failure_reason"] = f"extraction: {reason}"
                 failed += 1

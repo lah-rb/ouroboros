@@ -36,20 +36,45 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import fitz  # noqa: E402
-from extract_batch import (
+from extract_batch import (  # noqa: E402
     _NUM_RE,
+    _largest_table_rows,
     _max_repeat_words,
     _norm,
     _prose_text,
     _SPAN_WORDS,
     _SPANS_PER_PAGE,
-)  # noqa: E402
+    _TABLE_TOKEN_LEAK,
+)
 
 # Mirrors agent/actions/extraction_actions.py (tool venv can't import
 # agent code); keep in sync.
 MIN_NUMERIC_RATE = 0.75
 MIN_SPAN_RATE = 0.70
 MAX_REPEAT_WORDS = 200
+_TRUNCATED_FRACTION = 0.5
+
+
+def _expected_page_extent(rec: dict) -> int:
+    """Mirror of extraction_actions.expected_page_extent — keep in sync.
+
+    Only a clean numeric pair is an extent. Article numbers ("e01505",
+    "153904"), roman front matter and supplement pages all appear in
+    OpenAlex biblio and none of them is a page count.
+    """
+    first = str(rec.get("first_page") or "").strip()
+    last = str(rec.get("last_page") or "").strip()
+    if not (first.isdigit() and last.isdigit()):
+        return 0
+    extent = int(last) - int(first) + 1
+    return extent if 1 <= extent <= 200 else 0
+
+
+def _is_truncated(rec: dict, pdf_pages: int) -> bool:
+    expected = _expected_page_extent(rec)
+    if not expected or pdf_pages <= 0:
+        return False
+    return pdf_pages <= expected * _TRUNCATED_FRACTION
 
 
 def _rates(pdf_path: str, md: str) -> tuple[float, float, int, int]:
@@ -155,11 +180,13 @@ def main() -> None:
         md = open(md_path).read()
         num, span, verified, unverified = _rates(pdf_path, md)
         repeat = _max_repeat_words(md)
+        truncated = _is_truncated(rec, verified + unverified)
         old_status = rec["extraction_status"]
         # verified_pages > 0 is part of the shipping gate: with nothing
         # checkable the rates are vacuous 1.00s, not earned ones.
         passed = (
             verified > 0
+            and not truncated
             and num >= MIN_NUMERIC_RATE
             and span >= MIN_SPAN_RATE
             and repeat <= MAX_REPEAT_WORDS
@@ -173,6 +200,10 @@ def main() -> None:
             passed = True
         if passed:
             rec["extraction_status"] = "extracted"
+        elif truncated:
+            # The asset is a fragment; re-OCR reads the same fragment. The fix
+            # is re-acquisition, which is the scraper's job.
+            rec["extraction_status"] = "extract_failed"
         elif verified <= 0:
             # Its own terminal state, matching the shipping policy: another OCR
             # pass over a scan with no text layer yields the same unverifiable
@@ -184,6 +215,10 @@ def main() -> None:
             "numeric_match_rate": round(num, 4),
             "span_pass_rate": round(span, 4),
             "max_repeat_words": repeat,
+            # Recorded, never gated — the inputs to a scoping decision about
+            # tables, which no available detector can make automatically.
+            "table_token_leak": len(_TABLE_TOKEN_LEAK.findall(md)),
+            "largest_table_rows": _largest_table_rows(md),
             "verified_pages": verified,
             "unverified_pages": unverified,
             "oracle": "prose-v3-wholedoc",
@@ -195,6 +230,14 @@ def main() -> None:
                 len(os.listdir(fig_dir)) if os.path.isdir(fig_dir) else 0
             )
             rec["failure_reason"] = ""
+        elif truncated:
+            rec["failure_reason"] = (
+                f"extraction: truncated acquisition — the PDF holds "
+                f"{verified + unverified} page(s) of an article published "
+                f"across {_expected_page_extent(rec)} "
+                f"(pp. {rec.get('first_page')}-{rec.get('last_page')}); "
+                f"the extraction is faithful to a fragment"
+            )
         elif verified <= 0:
             rec["failure_reason"] = (
                 f"extraction: no verifiable text layer "

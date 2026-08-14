@@ -402,3 +402,88 @@ async def test_batch_zero_verified_pages_never_passes():
     assert rec["extraction_status"] != "extracted", "must never pass the gate"
     # And the reason must name the real cause, not the two rates it passed.
     assert "no verifiable text layer" in (rec.get("failure_reason") or "")
+
+
+# ── truncated acquisition ─────────────────────────────────────────────
+
+
+def test_expected_page_extent_declines_what_it_cannot_parse():
+    """OpenAlex biblio is free-form. Roman numerals, supplement pages and
+    article numbers are all real, and none of them is an extent — a check
+    that guessed here would reject correct papers on invented arithmetic."""
+    from agent.actions.extraction_actions import expected_page_extent as ext
+
+    assert ext({"first_page": "37", "last_page": "41"}) == 5
+    assert ext({"first_page": "37", "last_page": "37"}) == 1
+    assert ext({}) == 0
+    assert ext({"first_page": "e01505", "last_page": ""}) == 0
+    assert ext({"first_page": "xvii", "last_page": "xxi"}) == 0
+    assert ext({"first_page": "S17", "last_page": "S20"}) == 0
+    # Reversed or absurd deposits are the metadata's fault, not the PDF's.
+    assert ext({"first_page": "41", "last_page": "37"}) == 0
+    assert ext({"first_page": "1", "last_page": "9999"}) == 0
+
+
+def test_acquisition_truncation_needs_a_real_shortfall():
+    from agent.actions.extraction_actions import acquisition_is_truncated as trunc
+
+    rec = {"first_page": "37", "last_page": "41"}  # 5 pages
+    assert trunc(rec, 1) is True
+    assert trunc(rec, 2) is True
+    assert trunc(rec, 3) is False  # a publisher asset may drop a page
+    assert trunc(rec, 5) is False
+    # No metadata, no opinion — silence must never read as truncation.
+    assert trunc({}, 1) is False
+    assert trunc(rec, 0) is False
+
+
+@pytest.mark.asyncio
+async def test_batch_rejects_a_faithful_extraction_of_a_fragment():
+    """The defect no quality metric can see: this scored 0.88/1.00 because it
+    IS a faithful extraction — of page 1 of a 5-page article. Terminal on the
+    first attempt, because re-OCR reads the same fragment; the fix is
+    re-acquisition."""
+    import os
+
+    from agent.actions import extraction_actions as ea
+
+    line = json.loads(_bank_line("fragment"))
+    line["first_page"], line["last_page"] = "37", "41"
+    fx = _fx([json.dumps(line)])
+    tool = os.path.join(ea._repo_root(), ea._TOOL_PY)
+    payload = json.loads(_report("fragment", num=0.88, span=1.0))
+    payload["pages"] = 1
+    payload["verified_pages"] = 1
+    fx._commands[tool] = CommandResult(
+        return_code=0, stdout=json.dumps(payload), stderr="", command="x"
+    )
+    await action_extract_pdf_batch(_si(inputs=_batch_inputs(["fragment"]), effects=fx))
+    from agent.actions.scholarly_actions import read_databank
+
+    bank = await read_databank(fx)
+    rec = bank["fragment"]
+    assert rec["extraction_status"] == "extract_failed", "must not retry a fragment"
+    assert "truncated acquisition" in rec["failure_reason"]
+    assert "pp. 37-41" in rec["failure_reason"]
+
+
+@pytest.mark.asyncio
+async def test_batch_without_page_metadata_is_unaffected():
+    """Most records carry no biblio. The check must be silent there, not
+    strict — otherwise adding it rejects the corpus."""
+    import os
+
+    from agent.actions import extraction_actions as ea
+
+    fx = _fx([_bank_line("nobiblio")])
+    tool = os.path.join(ea._repo_root(), ea._TOOL_PY)
+    payload = json.loads(_report("nobiblio"))
+    payload["pages"] = 1
+    fx._commands[tool] = CommandResult(
+        return_code=0, stdout=json.dumps(payload), stderr="", command="x"
+    )
+    await action_extract_pdf_batch(_si(inputs=_batch_inputs(["nobiblio"]), effects=fx))
+    from agent.actions.scholarly_actions import read_databank
+
+    bank = await read_databank(fx)
+    assert bank["nobiblio"]["extraction_status"] == "extracted"

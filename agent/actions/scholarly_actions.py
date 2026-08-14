@@ -660,6 +660,14 @@ async def _alt_host_urls(effects: Any, doi: str, rec: dict) -> list:
 _OPENALEX_SELECT = (
     "id,doi,title,abstract_inverted_index,publication_year,primary_location,"
     "authorships,open_access,best_oa_location,locations,ids,language,"
+    # The article's PAGE EXTENT, free in a request we already make. It is the
+    # only signal that can tell a faithful extraction of the WRONG DOCUMENT
+    # from a faithful extraction of the right one: one corpus paper is a
+    # single-page PDF of an article that runs pages 37-41, and the extraction
+    # is perfectly faithful to the fragment it was handed. No text-comparison
+    # metric can see that, because there is nothing to compare against except
+    # the fragment itself.
+    "biblio,"
     # Snowball fuel, free in a request we already make. S2's references
     # endpoint 429s hard -- it reached only 96 of 620 papers on the first
     # corpus run -- and these are OpenAlex ids, which the expansion can
@@ -828,6 +836,13 @@ def _normalize_openalex(work: dict, aspect_name: str) -> dict:
         ),
         "language": str(work.get("language") or ""),
         "license": str(best_oa.get("license") or ""),
+        # Page extent, when the publisher deposited one. Kept as STRINGS
+        # because OpenAlex returns them that way and roman numerals, "S17"
+        # supplement pages and "e01505" article numbers all occur — parsing
+        # is the consumer's problem, and a consumer that cannot parse a pair
+        # must decline rather than guess an extent.
+        "first_page": str((work.get("biblio") or {}).get("first_page") or ""),
+        "last_page": str((work.get("biblio") or {}).get("last_page") or ""),
         "referenced_works": [
             str(w) for w in (work.get("referenced_works") or [])[:MAX_REFERENCE_DOIS]
         ],

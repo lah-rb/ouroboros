@@ -29,10 +29,21 @@ Pipeline per paper:
      vector art put axis ticks in the text layer, and the engine
      legitimately renders those figures as images (live: 26 of 26
      Nature-family papers failed at numeric 0.54-0.84 while faithful;
-     prose-only rescored them 0.91-1.00). Calibration (live corpus):
-     faithful extractions measure numeric 0.89-0.95, span 0.83-0.88;
-     residual misses are affiliation postal codes, reference page
-     ranges, and crystallographic overline notation.
+     prose-only rescored them 0.91-1.00). "Prose" also excludes MARGIN
+     LINE NUMBERS and PUBLISHER FURNITURE (see _prose_text) — both were
+     counting numbers a faithful extraction is right to drop.
+  5. Degenerate-decode detection (_max_repeat_words). The rates above
+     are RECALL, so a decode that falls into a loop keeps every number
+     and scores clean while the document is ruined. Measured: the
+     longest repeat across every paper judged fit to train was 19
+     words; the two degenerate ones scored 675 and 1598.
+
+The earlier calibration note here claimed faithful extractions measure
+numeric 0.89-0.95 / span 0.83-0.88. That band was an ARTIFACT of the two
+oracle bugs now fixed in _prose_text; a blind audit of 48 extractions
+found the numeric rate correlates with judged quality at r = +0.02, so
+it ranks nothing and the thresholds are a floor, not a quality bar.
+Full record: dev/EXTRACTION_GATE_CALIBRATION_2026-08-14.md
 
 Output: one JSON report line per paper on stdout. The agent action
 (extraction_actions.extract_pdf_batch) parses these and applies the
@@ -118,6 +129,43 @@ _FURNITURE = re.compile(
 
 # Degenerate-decode detection — see _max_repeat_words.
 _REPEAT_MAX_PERIOD = 24  # longest phrase treated as a loop unit
+
+# PaddleOCR's internal table-cell tokens. They mark cell boundaries inside the
+# model's table representation and must never reach output; when they do, a
+# table was emitted as raw token soup instead of markup. Measured on the audit
+# sample: 3 of 48 papers leak, ALL THREE tier C, none in A/B — perfect
+# precision, low recall. BARE, not angle-wrapped: the first version of this
+# pattern looked for <lcel> and found nothing while `lcel` sat in the text.
+_TABLE_TOKEN_LEAK = re.compile(r"\b(?:lcel|fcel|ecel|ucel)\b", re.I)
+
+# TABLE SIZE IS A RISK PREDICTOR, and the only one that survived measurement.
+# Table damage — rows silently dropped, values bound to the wrong column — is
+# the largest defect class in the blind audit (8 of 25 tier-C papers) and the
+# rate metrics cannot see any of it: every number is still present. Nor can it
+# be detected after the fact. Two candidate detectors were built and measured
+# against the audit tiers, and both were discarded:
+#
+#   find_tables() row/cell comparison — ran BACKWARDS (damaged papers scored
+#   0.625 row-keep vs 0.214 for everything else) because PyMuPDF's table
+#   detection is unreliable on this corpus.
+#   absence of <th> — not a defect at all: 93% of tables in the corpus carry
+#   no header markup, so it measures the output format, not damage.
+#
+# What DOES separate is how big the biggest table is: median 22 rows in papers
+# whose dominant defect is table structure, against 9 everywhere else and 9 in
+# the papers judged fit to train. Recorded so a consumer can scope around it —
+# the PROSE of these papers is repeatedly faithful even where the tables are
+# wrecked, so dropping the paper would be the wrong trade.
+_TABLE_ROW = re.compile(r"<tr\b", re.I)
+_TABLE_BLOCK = re.compile(r"<table.*?</table>", re.S | re.I)
+
+
+def _largest_table_rows(md: str) -> int:
+    return max(
+        (len(_TABLE_ROW.findall(t)) for t in _TABLE_BLOCK.findall(md)),
+        default=0,
+    )
+
 
 # ── Figure filter constants ───────────────────────────────────────────
 
@@ -724,6 +772,8 @@ def extract_paper(pipe, pdf_path: str, key: str, databank_dir: str, dpi: int) ->
         "numeric_match_rate": 0.0,
         "span_pass_rate": 0.0,
         "max_repeat_words": 0,
+        "table_token_leak": 0,
+        "largest_table_rows": 0,
         "figures_kept": 0,
         "figures_dropped": 0,
         "seconds": 0.0,
@@ -793,6 +843,13 @@ def extract_paper(pipe, pdf_path: str, key: str, databank_dir: str, dpi: int) ->
         # Measured on the joined document: a loop can straddle a page boundary,
         # and the rates above cannot see one at all.
         report["max_repeat_words"] = _max_repeat_words(joined)
+        # RECORDED, NOT GATED. The signal is real (3 for 3 on the audit
+        # sample, no false positives) but only one paper carried enough of
+        # them to justify a cut, and fitting a threshold to one example is how
+        # a checker gets shipped that measures nothing. Surfaced for triage
+        # until there is enough of it to calibrate against.
+        report["table_token_leak"] = len(_TABLE_TOKEN_LEAK.findall(joined))
+        report["largest_table_rows"] = _largest_table_rows(joined)
     except Exception as e:  # noqa: BLE001 - report, don't crash the batch
         report["error"] = f"{type(e).__name__}: {e}"
         if os.path.isdir(fig_dir) and not os.listdir(fig_dir):
