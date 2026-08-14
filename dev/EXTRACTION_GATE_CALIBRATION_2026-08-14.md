@@ -257,3 +257,52 @@ Table binding — the largest C-tier defect class at 8 of 25 — remains uncheck
 `corrected.py` (both fixes, A/B against the shipping oracle),
 `key.json` / `verdicts.json` (sample and blind tiers).
 Promote to `dev/` if the fixes land.
+
+## Postscript: graphically-encoded tables are recoverable, and vision already saw them
+
+The PTAL paper (`doi_10.1002_jrs.5652`) was denied for "tables rendered with
+empty cells", read as extraction damage. It is not. Its mineral-detection matrix
+encodes presence as **cell fill patterns** — stipple, vertical hatch, horizontal
+hatch — against a legend printed below the table. The PDF's own text layer holds
+exactly the same empty cells our markdown does, because there is no text to
+read. The extraction was faithful.
+
+**Vision had already seen it.** PaddleOCR-VL *is* a VL model; the layout stage
+classified the region as a table and a vision model transcribed it. It returned
+correct row labels and column headers with empty data cells, because it was
+asked to transcribe a TABLE and the fills are not cell text. The lever is not
+"get vision onto the region" — it is **what the model is asked to produce for
+it**.
+
+Probed directly: the same region cropped at 300 dpi with its legend, handed to
+muse-glimmer-30b over `/v1/chat/completions` with a "read the fills against the
+legend" ask.
+
+```
+23 of 23 filled cells correct, twice, on independent runs
+  ~95 s per table region, ~1.4k completion tokens
+```
+
+Every mineral, every sample row, and every legend mapping — including the
+three-way distinction between "both methods", "RLS simulator" and "microRaman".
+
+### What this does NOT justify
+
+**Reclassifying such tables as figures.** The row labels, sample IDs and column
+headers extract correctly today; swapping the grid for a prose description
+trades a reliable structure for a generated one. The recovery path is BOTH —
+keep the HTML table, and additionally crop the table region into the figure set
+so figtext reads the fills. Both are text by the time the curator sees them, so
+grounding still works.
+
+**A heuristic trigger.** Measured across 40 papers: "cells mostly empty AND
+dense vector fill inside the table bbox" fires on **43.7% of detected tables**,
+because it rides on `find_tables()`, which is unreliable on this corpus (one
+"table" carried 834 vector objects across 3 rows — a figure). There is no cheap
+detector.
+
+The trigger already exists and is better: `deny_category: data_not_in_text` is a
+per-paper, reasoned verdict from the curator. Papers carrying it are the work
+list for a targeted re-pass. Curator flags → crop that paper's table regions →
+figtext reads them → re-review. A feedback loop rather than a guess, and it only
+spends the ~95 s where something said it would pay.

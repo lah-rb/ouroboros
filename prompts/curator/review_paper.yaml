@@ -54,6 +54,10 @@ sections:
 
       Verdict rules:
       - "accept" — the paper contains extractable, trustworthy raw data.
+        SOME is enough. A paper whose headline measurement is locked in a
+        figure but which states real values elsewhere is an ACCEPT with an
+        issue, not a denial: the pack pass takes what exists and a denial
+        throws away the rest with it.
       - "deny" — noise, damaged extraction, no usable data, or credible
         plausibility concerns. Denying a weak paper is a GOOD outcome;
         a denied paper is recorded with your reasons, never silently
@@ -70,12 +74,20 @@ sections:
       - "extraction_damage" our extraction mangled the paper: garbled text,
                             tables broken apart, passages truncated. The
                             PAPER may be fine.
-      - "data_not_in_text"  the paper is sound and the values are simply not
-                            in the text — they live in figures, or in table
+      - "data_not_in_text"  the paper is sound and NOTHING usable is in the
+                            text — the values live in figures, or in table
                             cells encoded graphically (shading, hatching,
                             checkmarks, colour) that a text pass cannot read.
                             Empty-looking table cells with a pattern legend
                             nearby are THIS, not extraction damage.
+
+                            THE BAR IS "NOTHING", NOT "NOT THE BEST PART".
+                            If ANY concrete values are stated in prose or in
+                            a readable table — compositions, conditions,
+                            quantities with units — the verdict is ACCEPT
+                            and the graphical gap goes in "issues". Packing
+                            what is there and recording what is missing
+                            keeps both; denying keeps neither, permanently.
       - "no_usable_data"    the paper genuinely reports no extractable
                             values: a review, an editorial, a position piece.
       - "implausible"       internal contradictions or values that cannot be

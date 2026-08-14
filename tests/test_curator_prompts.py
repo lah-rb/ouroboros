@@ -165,3 +165,19 @@ def test_pack_prompt_forbids_entity_names_in_keys():
     assert "AN ENTITY NAME NEVER APPEARS IN A KEY" in out
     assert "fitted_mwc480_stellar_mass_msun" in out  # the ❌ exemplar
     assert '"disk_models"' in out  # the ✅ shape
+
+
+def test_partial_text_data_is_an_accept_not_a_denial():
+    """Measured: muse denied a gallstones paper as data_not_in_text while its
+    OWN summary quoted text-resident values — "pigment 550+/-53 ug/mg, calcium
+    41.7+/-1.8 ug/mg are reported in text". The verdict contradicted its
+    evidence, and denying threw those values away permanently. The bar is
+    NOTHING usable, not "not the best part"."""
+    from agent.loader import PromptRenderer
+    from agent.actions.curation_actions import _prompts_dir
+
+    out = PromptRenderer(_prompts_dir()).render(
+        "curator/review_paper", {"input": {}, "context": {}, "meta": {}}
+    )
+    assert 'THE BAR IS "NOTHING", NOT "NOT THE BEST PART"' in out
+    assert "SOME is enough" in out
