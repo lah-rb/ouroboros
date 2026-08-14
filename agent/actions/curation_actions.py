@@ -893,6 +893,56 @@ async def action_curate_ingest_review(step_input):
         )
 
 
+def tag_review_agreement(rec: dict) -> str:
+    """Did the curator's full-text verdict confirm the scraper's tag?
+
+    THE TWO REVIEW LAYERS NEVER TALKED. The scraper sorts every paper into
+    exact/close/adjacent from ABSTRACT AND METADATA ONLY, in one batched turn,
+    before the PDF is even fetched — so the pipeline commits its relevance
+    decision on the weakest evidence it will ever hold. The curator then reads
+    the FULL TEXT and accepts or denies. When those two disagree, the pipeline
+    has learned something specific about its own sorting and, until now,
+    silently discarded it.
+
+    This records the comparison. It changes NO decision: the review verdict
+    still governs, the tag is not rewritten, nothing is re-sorted. It exists
+    so the disagreement is queryable — as a corpus-quality signal now (a rising
+    over_rated rate means the tagger is drifting or the aspect definitions are
+    too loose), and as the training signal a re-sorting pass would need later.
+
+      over_rated    tagged exact/close, denied on full text
+      under_rated   tagged adjacent only, accepted on full text
+      confirmed     the two agree
+      unknown       no tags, or the review did not reach a verdict
+
+    `adjacent` is the discriminator on purpose: coverage is satisfied by
+    exact+close only (check_aspect_coverage), so those are the tags that
+    actually admitted the paper to the corpus.
+    """
+    from agent.actions.scholarly_actions import RELEVANCE_TIERS
+
+    status = rec.get("review_status") or ""
+    if status not in ("accepted", "denied"):
+        return "unknown"
+    # Only RECOGNISED tiers count. Tags are parsed model output, so a dict
+    # with no `relevance`, or a junk value, must read as "no evidence about
+    # this paper" — not as a weak tier, which would silently score an
+    # unparseable tag as agreement.
+    tiers = {
+        str(t.get("relevance") or "").strip().lower()
+        for t in (rec.get("tags") or [])
+        if isinstance(t, dict)
+    } & set(RELEVANCE_TIERS)
+    if not tiers:
+        return "unknown"
+    strong = bool(tiers & {"exact", "close"})
+    if status == "denied" and strong:
+        return "over_rated"
+    if status == "accepted" and not strong:
+        return "under_rated"
+    return "confirmed"
+
+
 def _run_pack_gates(data: dict, doc: str, registry: dict) -> dict:
     """All deterministic pack gates; returns verdict + feedback text."""
     g = grounding_check(data, doc)
@@ -1103,6 +1153,7 @@ async def action_curate_book_result(step_input):
     rec["review_status"] = review.get("status") or "review_failed"
     rec["review_summary"] = review.get("summary") or ""
     rec["review_issues"] = review.get("issues") or []
+    rec["tag_review_agreement"] = tag_review_agreement(rec)
 
     outcome = rec["review_status"]
     if rec["review_status"] == "accepted":
