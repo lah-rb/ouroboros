@@ -1,0 +1,129 @@
+3.2 Martian protoliths analogues
+
+Legend:
+Both microRaman and RLS simulator = dotted fill
+RLS simulator = vertical lines
+microRaman = horizontal lines
+
+We need one line per filled cell: <ID code> | <sampling site> | <mineral> = <legend meaning>
+
+Omit empty cells.
+
+Let's parse rows.
+
+Row JA08-501 Jaroso Ravine
+Columns: Quartz empty, Hematite empty, Goethite empty, Jarosite dotted => Both microRaman and RLS simulator
+Pyrite empty, Biotite empty, Anatase vertical lines => RLS simulator
+Rutile empty, Calcite empty, Carbon empty, Barite empty
+
+Row JA08-502 Jaroso Ravine
+Quartz dotted => Both...
+Hematite empty
+Goethite horizontal => microRaman
+Jarosite empty
+Pyrite empty
+Biotite empty
+Anatase vertical => RLS simulator
+Rutile horizontal => microRaman
+Calcite empty
+Carbon horizontal => microRaman
+Barite empty
+
+Row JA08-503 Jaroso Ravine
+Quartz dotted => Both
+Hematite dotted => Both
+Goethite horizontal => microRaman
+Jarosite empty
+Pyrite empty
+Biotite horizontal => microRaman
+Anatase horizontal => microRaman? Wait Anatase column has horizontal lines? The cell looks like horizontal lines. Yes.
+Rutile empty
+Calcite vertical => RLS simulator
+Carbon dotted => Both
+Barite dotted => Both
+
+Row RT03-501 Rio Tinto
+Quartz dotted => Both
+Hematite dotted => Both
+Goethite dotted => Both
+Jarosite empty
+Pyrite empty
+Biotite empty
+Anatase empty
+Rutile empty
+Calcite empty
+Carbon empty
+Barite vertical => RLS simulator
+
+Row RT03-502 Rio Tinto
+Quartz empty
+Hematite horizontal => microRaman
+Goethite empty
+Jarosite empty
+Pyrite horizontal => microRaman
+Biotite empty
+Anatase empty
+Rutile empty
+Calcite empty
+Carbon empty
+Barite empty
+
+Row RT03-503 Rio Tinto
+Quartz dotted => Both
+Hematite empty
+Goethite empty
+Jarosite empty
+Pyrite dotted => Both
+Biotite empty
+Anatase empty
+Rutile empty
+Calcite empty
+Carbon empty
+Barite empty
+
+Now output each line.
+
+Format: <ID code> | <sampling site> | <mineral> = <legend meaning>
+
+Legend meaning strings: "Both microRaman and RLS simulator", "RLS simulator", "microRaman"
+
+Ensure exact.
+
+Let's list:
+
+JA08-501 | Jaroso Ravine | Jarosite = Both microRaman and RLS simulator
+JA08-501 | Jaroso Ravine | Anatase = RLS simulator
+
+JA08-502 | Jaroso Ravine | Quartz = Both microRaman and RLS simulator
+JA08-502 | Jaroso Ravine | Goethite = microRaman
+JA08-502 | Jaroso Ravine | Anatase = RLS simulator
+JA08-502 | Jaroso Ravine | Rutile = microRaman
+JA08-502 | Jaroso Ravine | Carbon = microRaman
+
+JA08-503 | Jaroso Ravine | Quartz = Both microRaman and RLS simulator
+JA08-503 | Jaroso Ravine | Hematite = Both microRaman and RLS simulator
+JA08-503 | Jaroso Ravine | Goethite = microRaman
+JA08-503 | Jaroso Ravine | Biotite = microRaman
+JA08-503 | Jaroso Ravine | Anatase = microRaman
+JA08-503 | Jaroso Ravine | Calcite = RLS simulator
+JA08-503 | Jaroso Ravine | Carbon = Both microRaman and RLS simulator
+JA08-503 | Jaroso Ravine | Barite = Both microRaman and RLS simulator
+
+RT03-501 | Rio Tinto | Quartz = Both microRaman and RLS simulator
+RT03-501 | Rio Tinto | Hematite = Both microRaman and RLS simulator
+RT03-501 | Rio Tinto | Goethite = Both microRaman and RLS simulator
+RT03-501 | Rio Tinto | Barite = RLS simulator
+
+RT03-502 | Rio Tinto | Hematite = microRaman
+RT03-502 | Rio Tinto | Pyrite = microRaman
+
+RT03-503 | Rio Tinto | Quartz = Both microRaman and RLS simulator
+RT03-503 | Rio Tinto | Pyrite = Both microRaman and RLS simulator
+
+Return immediately with result lines and nothing else.
+
+Probably keep order as rows top to bottom left to right.
+
+Output exactly lines.
+
+Let's produce.

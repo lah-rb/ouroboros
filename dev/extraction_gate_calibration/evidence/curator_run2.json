@@ -1,0 +1,52 @@
+{
+ "doi_10.1154_1.2135315": {
+  "review_status": "denied",
+  "review_summary": "The paper is a retrospective review of whole powder pattern decomposition methods (Pawley and Le Bail methods) for powder diffraction and ab initio structure determination from powder diffraction data. It discusses crystallographic methods, software, citation analysis and structure solution case studies, with no spectroscopy measurements or spectroscopic data.",
+  "review_issues": [
+   "Corpus fit failure: corpus is for extracted spectroscopy papers; this document is about powder diffraction crystallography, not spectroscopy.",
+   "Content is a methodological review and historical retrospection, not a report of concrete spectroscopic measurements with named compositions, conditions, units.",
+   "Figure VLM readings describe diffraction patterns (2\u03b8 vs Counts) consistent with powder diffraction, not spectroscopic spectra."
+  ],
+  "pack_status": null
+ },
+ "doi_10.1086_318427": {
+  "review_status": "accepted",
+  "review_summary": "Paper presents radiative-hydrostatic two-layer passive disk models with grain size distributions and laboratory optical constants, and fits to ISO LWS 43-195 \u00b5m spectra plus IR-mm photometry for MWC 480, HD 36112, CQ Tau, LkCa 15, AA Tau. Reports model input parameters, fitted stellar and disk parameters, temperature profiles, flaring index, and predicted silicate and water-ice emission bands at 10, 18, 45, 62 \u00b5m. Contains quantitative tables of fitted parameters and SED dependence studies.",
+  "review_issues": [
+   "VLM figure readings are degraded: fig_00.png reports no figure visible, fig_01.png contains only prose text, so figure data are not extractable from the provided extraction",
+   "Some tables and equations are truncated/garbled in the machine extraction, e.g., Table 1 and Table 2 formatting is broken and figure captions are interleaved with body text",
+   "Extraction contains repeated prose blocks and missing visual SED plots referenced in the text"
+  ],
+  "pack_status": "packed"
+ },
+ "doi_10.1002_jrs.5652": {
+  "review_status": "denied",
+  "review_summary": "Paper describes PTAL Raman database overview for 94 terrestrial analogue samples with >4500 Raman spectra from laboratory microRaman and RLS ExoMars Simulator, reporting mineral identifications and characteristic Raman peak positions in cm-1 for hydrated sulphates, Martian protolith analogues, and impact craters.",
+  "review_issues": [
+   "Extraction damage: mineral detection tables for Jaroso Ravine/Rio Tinto, Iceland, Grand Canary, Tenerife, John Day Formation, Leka, Oslo Rift, Impact Craters are rendered with headers but empty cells, preventing extraction of sample-by-sample detections",
+   "Figure content is only VLM reading summaries, not raw spectral data; peak lists are reported in prose but not in machine-readable tables",
+   "Multiple tables show placeholder rows with no checkmarks/values, so concrete per-sample measurements cannot be reliably extracted from the extracted text"
+  ],
+  "pack_status": null
+ },
+ "doi_10.1002_jrs.921": {
+  "review_status": "accepted",
+  "review_summary": "Raman microprobe and FTIR ATR study of basic copper chloride minerals atacamite Cu2Cl(OH)3 and nickeloan paratacamite at 298 K and 77 K. Reports band component analysis with wavenumbers in cm-1 for hydroxyl stretching ~3200-3500 cm-1, hydroxyl deformation ~800-1000 cm-1, Cu-O stretching ~450-610 cm-1, Cu-Cl stretching ~350-410 cm-1 and OCuO bending ~120-160 cm-1, with temperature shifts and bandwidths. Includes sample provenance, instrument parameters and assignment discussion.",
+  "review_issues": [
+   "Figure VLM readings are not scientific data figures: fig_00.png and fig_01.png are read as QUT logo / ePrints branding with no axes, data series or numerical values; actual Raman/IR plots referenced in text are missing from extraction",
+   "Table 1 extraction is heavily garbled with merged columns and misaligned headers, requiring manual reconstruction for reliable numeric extraction",
+   "Some prose band assignments refer to figures 1-6 which are not present in the extracted material"
+  ],
+  "pack_status": "packed"
+ },
+ "doi_10.1172_jci109793": {
+  "review_status": "accepted",
+  "review_summary": "Paper reports infrared spectroscopy of calcium bilirubinate pigment gallstones from nb/nb mice and sickle cell patients compared to synthetic calcium bilirubinate; includes quantitative composition data for pigment and calcium in stones, gallbladder bile composition tables with units for [H+], total/unconjugated/ionized bilirubin, calcium, bile acids, and histology counts.",
+  "review_issues": [
+   "VLM readings for figures are second-hand descriptions; Fig 1 infrared spectra axis labels are legible but peak absorbance values are not numerically readable in the VLM reading",
+   "Some tables are partially truncated in extraction; Table III organ weight rows are present but formatting is broken",
+   "Figure micrographs A/B/C VLM readings note labels A/B/C visible but cannot verify histological features named in caption"
+  ],
+  "pack_status": "packed"
+ }
+}

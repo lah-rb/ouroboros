@@ -1,0 +1,55 @@
+{
+ "doi_10.1154_1.2135315": {
+  "review_status": "denied",
+  "review_summary": "The paper is a methodological retrospection/review of whole powder pattern decomposition methods, Pawley and Le Bail methods, and their history/applications in powder diffraction. It discusses algorithms, software, citation metrics and literature surveys, not primary experimental measurements. No extractable raw data tables of compositions, conditions, units or computed results are presented; the content is qualitative historical and bibliometric discussion with references to other works.",
+  "review_issues": [
+   "Corpus fit: paper is about crystallographic methods and literature review, not primary materials-science measurement data; inclusion would poison a unified experimental dataset.",
+   "Content quality: no concrete, well-specified measurements or computations are reported in the paper itself; only summaries, citation counts and qualitative claims about applications.",
+   "Extraction damage: text contains garbled passages, truncated tables and figure captions; figure content is provided only as VLM readings, i.e., second-hand descriptions of plots, not data.",
+   "Plausibility: figure VLM readings are second-hand claims and contradict the expectation of numeric data extraction; e.g., Fig 1 VLM reading describes counts vs 2\u03b8 qualitatively without numeric tables, Fig 2 VLM reading describes a cumulative histogram with bar labels but no underlying data."
+  ],
+  "pack_status": null
+ },
+ "doi_10.1086_318427": {
+  "review_status": "denied",
+  "review_summary": "Paper is an astrophysics study of passive circumstellar disks around T Tauri and Herbig Ae stars, modeling SEDs, grain mineralogy, radiative-hydrostatic equilibrium, and ISO LWS observations. It contains no materials-science experimental data on alloys, ceramics, or processing-structure-property measurements. The corpus fit is unrelated to materials science.",
+  "review_issues": [
+   "Corpus mismatch: subject is protoplanetary disk radiative transfer and infrared spectroscopy, not materials science data curation.",
+   "Extraction damage evident: multiple '[FIGURE \u2014 VLM reading]' blocks contain only prose text, no figure data; figures referenced in text are missing or replaced by page text.",
+   "Content is model-based astrophysical inference with fitted parameters, not concrete materials measurements with named compositions, conditions, units for laboratory specimens."
+  ],
+  "pack_status": null
+ },
+ "doi_10.1002_jrs.5652": {
+  "review_status": "denied",
+  "review_summary": "Paper describes PTAL Raman database of 94 terrestrial analogue samples with over 4500 spectra, reporting mineral identifications, peak positions in cm-1, and instrument parameters for laboratory micro-Raman and RLS ExoMars Simulator. The prose contains concrete spectroscopic details and sample metadata, but the extracted tables are effectively empty/garbled, figure VLM readings are second-hand summaries, and many quantitative results are only described qualitatively in text.",
+  "review_issues": [
+   "Extraction damage: Tables 1-9 are rendered with empty cells and no checkmarks/data, making mineral presence/absence matrices unusable.",
+   "Truncated/garbled passages and formatting artifacts throughout, e.g., broken LaTeX, missing table headers, and incomplete sentences.",
+   "Figure VLM readings are provided as second-hand descriptions; e.g., Fig. 00 reading lists peak labels but no sample context, and Fig. 01 reading is truncated.",
+   "No machine-readable raw spectra or numeric tables are extractable from the provided extraction; only prose summaries of peak positions remain.",
+   "Corpus fit concern: paper is planetary analogue spectroscopy for Mars exploration, not a primary materials-science synthesis dataset."
+  ],
+  "pack_status": null
+ },
+ "doi_10.1002_jrs.921": {
+  "review_status": "accepted",
+  "review_summary": "Raman microprobe and FTIR ATR study of basic copper chloride minerals atacamite Cu2Cl(OH)3 and nickeloan paratacamite at 298 K and 77 K. Reports band component analysis for hydroxyl stretching ~3200-3500 cm-1, hydroxyl deformation ~700-1000 cm-1, Cu-O stretching ~450-610 cm-1, Cu-Cl stretching ~350-410 cm-1, OCuO bending ~120-150 cm-1 with specific wavenumbers, bandwidths and temperature shifts. Methods, samples, instrumentation and assignments are specified.",
+  "review_issues": [
+   "Figure VLM readings are unanchored and show only QUT ePrints branding/logo, no spectral data; Figures 1-6 referenced in text are not extractable from the VLM output.",
+   "Table 1 extraction is garbled with merged headers and misaligned columns; numeric values are present but table structure is damaged.",
+   "Some prose-table inconsistencies in formatting; e.g., infrared reference column labelled '23' appears corrupted."
+  ],
+  "pack_status": "packed"
+ },
+ "doi_10.1172_jci109793": {
+  "review_status": "denied",
+  "review_summary": "Paper is a biomedical study of pigment gallstone pathogenesis in normoblastic anemia mice, reporting hematology, bile biochemistry, histology and infrared spectroscopy of calcium bilirubinate stones. No materials-science subject matter is present; corpus fit is absent.",
+  "review_issues": [
+   "Corpus mismatch: the paper concerns hemolytic anemia and gallstone biology, not materials science.",
+   "VLM figure readings are second-hand descriptions of infrared spectra and histology micrographs; no extractable materials-science measurements, compositions or processing conditions are present.",
+   "Extraction contains truncated tables and prose; no usable materials data to curate."
+  ],
+  "pack_status": null
+ }
+}

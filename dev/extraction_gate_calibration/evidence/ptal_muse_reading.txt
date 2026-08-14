@@ -1,0 +1,94 @@
+3.2 Martian protoliths analogues
+
+Legend beneath table:
+- dotted pattern = Both microRaman and RLS simulator
+- vertical stripes = RLS simulator
+- horizontal stripes = microRaman
+
+Need for every sample row, list minerals whose cell is filled and which pattern fills it. Report as lines of the form:
+<ID code> | <sampling site> | <mineral>=<legend meaning>
+Leave out empty cells entirely. Do not guess a pattern you cannot see.
+
+Let's parse rows.
+
+JA08-501 | Jaroso Ravine
+Columns: Quartz empty, Hematite empty, Goethite empty, Jarosite filled with dotted? The cell looks dotted (small dots). So Jarosite=Both microRaman and RLS simulator
+Pyrite empty, Biotite empty, Anatase filled with vertical stripes. So Anatase=RLS simulator
+Rutile empty, Calcite empty, Carbon empty, Barite empty
+
+JA08-502 | Jaroso Ravine
+Quartz dotted => Quartz=Both microRaman and RLS simulator
+Hematite empty
+Goethite horizontal stripes => Goethite=microRaman
+Jarosite empty
+Pyrite empty
+Biotite empty
+Anatase vertical stripes => Anatase=RLS simulator
+Rutile horizontal stripes => Rutile=microRaman
+Calcite empty
+Carbon horizontal stripes => Carbon=microRaman
+Barite empty
+
+JA08-503 | Jaroso Ravine
+Quartz dotted => Quartz=Both...
+Hematite dotted => Hematite=Both...
+Goethite horizontal stripes => Goethite=microRaman
+Jarosite empty
+Pyrite empty
+Biotite horizontal stripes => Biotite=microRaman
+Anatase horizontal stripes => Anatase=microRaman
+Rutile empty
+Calcite vertical stripes => Calcite=RLS simulator
+Carbon dotted => Carbon=Both...
+Barite dotted => Barite=Both...
+
+RT03-501 | Rio Tinto
+Quartz dotted => Quartz=Both...
+Hematite dotted => Hematite=Both...
+Goethite dotted => Goethite=Both...
+Jarosite empty
+Pyrite empty
+Biotite empty
+Anatase empty
+Rutile empty
+Calcite empty
+Carbon empty
+Barite vertical stripes => Barite=RLS simulator
+
+RT03-502 | Rio Tinto
+Quartz empty
+Hematite horizontal stripes => Hematite=microRaman
+Goethite empty
+Jarosite empty
+Pyrite horizontal stripes => Pyrite=microRaman
+Biotite empty
+Anatase empty
+Rutile empty
+Calcite empty
+Carbon empty
+Barite empty
+
+RT03-503 | Rio Tinto
+Quartz dotted => Quartz=Both...
+Hematite empty
+Goethite empty
+Jarosite empty
+Pyrite dotted => Pyrite=Both...
+Biotite empty
+Anatase empty
+Rutile empty
+Calcite empty
+Carbon empty
+Barite empty
+
+Output lines. Probably each mineral on separate line.
+
+Let's produce.
+
+Ensure format: <ID code> | <sampling site> | <mineral>=<legend meaning>
+
+Legend meaning exactly as in legend: "Both microRaman and RLS simulator", "RLS simulator", "microRaman"
+
+Provide lines.
+
+Let's output.

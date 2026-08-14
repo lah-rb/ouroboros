@@ -251,12 +251,19 @@ tighter threshold.
 
 Table binding — the largest C-tier defect class at 8 of 25 — remains unchecked.
 
-## Scripts
+## Scripts and evidence
 
-`scratchpad/calib/`: `attribute.py` (per-page miss attribution),
-`corrected.py` (both fixes, A/B against the shipping oracle),
-`key.json` / `verdicts.json` (sample and blind tiers).
-Promote to `dev/` if the fixes land.
+Promoted to `dev/extraction_gate_calibration/` now that the fixes have landed —
+scripts, the 48 blind verdicts, the de-identification key, the rubric the judges
+were given, the curator before/after runs, and the PTAL vision probe. See the
+README there.
+
+Kept rather than regenerated: the tiers cost ~2.4M tokens across twelve
+independent judges and a re-run would produce different judgements, so the
+conclusions above are only auditable against the verdicts that produced them.
+`tableprobe.py` is kept for the opposite reason — it is the detector that
+FAILED, and the next person to reach for it should see it was measured, not
+assume it was overlooked.
 
 ## Postscript: graphically-encoded tables are recoverable, and vision already saw them
 
