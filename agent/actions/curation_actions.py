@@ -789,6 +789,21 @@ def _snapshot_key(paper_key: str) -> str:
 _curator_renderer = None  # lazily built PromptRenderer
 
 
+async def _corpus_subject(effects) -> str:
+    """What this corpus collects, in the operator's own words.
+
+    The mission objective is the only place the subject is stated, and it is
+    stated by the person who chose it. Empty when unavailable — the prompt
+    section is `when`-gated, so a missing objective degrades to the previous
+    behaviour instead of asserting a domain nobody chose.
+    """
+    try:
+        mission = await effects.load_mission()
+    except Exception:  # noqa: BLE001 — a missing mission must not fail curation
+        return ""
+    return str(getattr(mission, "objective", "") or "").strip()
+
+
 async def _render_prompt(template_id: str, context: dict) -> str:
     global _curator_renderer
     if _curator_renderer is None:
@@ -844,7 +859,17 @@ async def action_curate_ingest_review(step_input):
     # Self-heal a leaked snapshot from a crashed prior dispatch.
     await effects.purge_inference_snapshot(_snapshot_key(paper_key))
 
-    review_prompt = await _render_prompt("curator/review_paper", {})
+    # THE CORPUS HAS TO NAME ITSELF. The review prompt asks "is this paper
+    # about the corpus's subject matter?" — a question the model cannot answer
+    # unless it is told what the corpus collects. Left blank, it falls back on
+    # whatever domain the system role happens to mention, and the pilot showed
+    # exactly that: on a SPECTROSCOPY corpus, muse denied a planetary Raman
+    # database, a powder-diffraction methods review and an IR study of
+    # gallstones, each "not materials science" — three of four denials decided
+    # by a word in the prompt rather than by the paper.
+    review_prompt = await _render_prompt(
+        "curator/review_paper", {"corpus_subject": await _corpus_subject(effects)}
+    )
     session_id = await effects.start_inference_session(
         config={"ttl_seconds": CURATE_SESSION_TTL}
     )

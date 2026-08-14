@@ -234,15 +234,15 @@ async def action_acquire_batch(step_input: StepInput) -> StepOutput:
     except Exception as exc:  # noqa: BLE001 — a repair must not sink the batch
         logger.warning("landing-page navigation failed: %s", exc)
 
-    # PAGE EXTENT, once the batch has settled. Only papers whose PDF we now
+    # PAGE EXTENT AND LICENSE, once the batch has settled. Only papers whose PDF we now
     # hold need it, so it runs after the repair pass rather than before: a
     # record navigation just rescued is exactly one we want the extent for,
     # and enriching earlier would look up papers we never got.
-    from agent.actions.scholarly_actions import action_enrich_page_extent
+    from agent.actions.scholarly_actions import action_enrich_paper_metadata
 
     extent = {"enriched": 0, "looked_up": 0}
     try:
-        ext_out = await action_enrich_page_extent(
+        ext_out = await action_enrich_paper_metadata(
             step_input.model_copy(update={"context": {"catalog_batch": records}})
         )
         extent = dict(ext_out.result or {})

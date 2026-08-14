@@ -1055,14 +1055,21 @@ async def action_scholarly_search(step_input: StepInput) -> StepOutput:
 _BIBLIO_BATCH = 40  # OR-filter length; 50 is fine for ids, 40 is safe for DOIs
 
 
-async def action_enrich_page_extent(step_input: StepInput) -> StepOutput:
-    """Fill first_page/last_page for retrieved papers that lack them.
+async def action_enrich_paper_metadata(step_input: StepInput) -> StepOutput:
+    """Fill page extent and license for retrieved papers that lack them.
 
     WHY THIS IS IN THE FLOW and not only in tools/backfill_biblio.py: 41% of
     acquired papers carry NO openalex_id — they reached us through S2 or CORE —
-    so `_normalize_openalex` can never supply the field for them however recent
-    they are. This is not a migration that shrinks to zero, it is a permanent
-    gap for four papers in ten. The tool remains, for records already on disk.
+    so `_normalize_openalex` can never supply these fields for them however
+    recent they are. Not a migration that shrinks to zero; a permanent gap for
+    four papers in ten. The tool remains, for records already on disk.
+
+    TWO FIELDS, ONE CALL. Both come from the same OpenAlex work and both have
+    the same hole: measured on the live corpus, 128 of 270 curator-eligible
+    papers (47%) carry NO license at all. License is what makes a corpus
+    filterable before any training use, so an unlicensed paper is one that
+    cannot safely be used — the pilot packed its first paper as
+    `"license": "unknown"`.
 
     Placed at ACQUISITION because that is where the population is smallest and
     already known to matter: only papers whose PDF we actually hold, one
@@ -1076,14 +1083,22 @@ async def action_enrich_page_extent(step_input: StepInput) -> StepOutput:
     """
     effects = step_input.effects
     batch = list(step_input.context.get("catalog_batch") or [])
+
     # Only papers we actually hold, and only those still missing the field.
-    todo = [
-        r
-        for r in batch
-        if r.get("pdf_path")
-        and not (r.get("first_page") or r.get("last_page"))
-        and (r.get("doi") or r.get("openalex_id"))
-    ]
+    def _needs_lookup(rec: dict) -> bool:
+        # EITHER field missing is reason enough. Written out rather than
+        # squeezed into one boolean: `not (a or b and c)` parses as
+        # `not (a or (b and c))`, which silently skips every record that has a
+        # page extent but no license — precisely the 237 the backfill had
+        # already given an extent to.
+        if not rec.get("pdf_path"):
+            return False
+        if not (rec.get("doi") or rec.get("openalex_id")):
+            return False
+        missing_extent = not (rec.get("first_page") or rec.get("last_page"))
+        return missing_extent or not rec.get("license")
+
+    todo = [r for r in batch if _needs_lookup(r)]
     if not todo or not effects:
         return StepOutput(
             result={"enriched": 0, "looked_up": 0},
@@ -1107,7 +1122,7 @@ async def action_enrich_page_extent(step_input: StepInput) -> StepOutput:
             f"{_OPENALEX_BASE}/works",
             params={
                 "filter": filter_value,
-                "select": "id,doi,biblio",
+                "select": "id,doi,biblio,best_oa_location",
                 "per-page": _BIBLIO_BATCH,
                 "mailto": _contact_email(),
             },
@@ -1119,12 +1134,18 @@ async def action_enrich_page_extent(step_input: StepInput) -> StepOutput:
             rec = lookup.get(key_of(work))
             if rec is None:
                 continue
+            gained = False
             biblio = work.get("biblio") or {}
             first = str(biblio.get("first_page") or "")
             last = str(biblio.get("last_page") or "")
-            if first or last:
+            if (first or last) and not rec.get("first_page"):
                 rec["first_page"], rec["last_page"] = first, last
-                enriched += 1
+                gained = True
+            lic = str((work.get("best_oa_location") or {}).get("license") or "")
+            if lic and not rec.get("license"):
+                rec["license"] = lic
+                gained = True
+            enriched += 1 if gained else 0
 
     for i in range(0, len(by_doi), _BIBLIO_BATCH):
         chunk = list(by_doi)[i : i + _BIBLIO_BATCH]

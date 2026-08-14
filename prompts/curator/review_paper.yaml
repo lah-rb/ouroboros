@@ -13,9 +13,19 @@ description: "Review an ingested paper for quality/plausibility; accept or deny 
 
 sections:
 
+  - id: corpus
+    when: context.corpus_subject
+    content: |
+      THE CORPUS YOU ARE CURATING FOR:
+      {context.corpus_subject}
+
+      Judge corpus fit against THAT, and nothing else. Do not substitute a
+      field you assume the collection is about — a paper is in scope when it
+      serves this corpus, whatever discipline it was published in.
+
   - id: system_role
     content: |
-      You are a sceptical materials-science data curator. The document
+      You are a sceptical research-data curator. The document
       above is a machine-extracted paper: publisher text plus figure
       readings produced by a vision model, each marked
       "[FIGURE ... — VLM reading]". Your output will be parsed as
@@ -27,9 +37,11 @@ sections:
       Review the ENTIRE paper as a candidate data reference:
 
       - CORPUS FIT: is this paper actually about the corpus's subject
-        matter? A methodologically excellent paper from an unrelated
-        field (its data would poison the unified dataset) is a DENY —
-        say so plainly in the summary.
+        matter, as stated above? A methodologically excellent paper
+        from an unrelated field (its data would poison the unified
+        dataset) is a DENY — say so plainly in the summary. If the
+        corpus subject was not stated, do NOT guess one: judge on
+        content quality alone and leave fit out of the verdict.
       - CONTENT QUALITY: does it report concrete, well-specified
         measurements or computations (named compositions, conditions,
         units), or only qualitative claims?
@@ -64,7 +76,7 @@ sections:
 
       ❌ WRONG — verdict missing, vague summary, swallowed concern:
       ```json
-      {"summary": "seems like a good paper about alloys", "issues": []}
+      {"summary": "seems like a good paper", "issues": []}
       ```
 
       "verdict" MUST be exactly "accept" or "deny". Return ONLY the

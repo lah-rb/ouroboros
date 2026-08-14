@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Backfill the article PAGE EXTENT onto databank records from OpenAlex.
+"""Backfill the article PAGE EXTENT and LICENSE onto databank records.
 
 WHY. `agent.actions.extraction_actions.acquisition_is_truncated` catches the
 one defect no quality metric can: a PDF that is a *fragment* of the article it
@@ -67,7 +67,7 @@ def _fetch(filt: str, mailto: str) -> list:
     url = f"{_API}?" + urllib.parse.urlencode(
         {
             "filter": filt,
-            "select": "id,doi,biblio",
+            "select": "id,doi,biblio,best_oa_location",
             "per-page": _BATCH,
             "mailto": mailto,
         }
@@ -80,13 +80,19 @@ def _fetch(filt: str, mailto: str) -> list:
         return []
 
 
-def _pages(work: dict) -> tuple:
+def _fields(work: dict) -> tuple:
+    """(first_page, last_page, license) — whatever OpenAlex deposited."""
     b = work.get("biblio") or {}
-    return str(b.get("first_page") or ""), str(b.get("last_page") or "")
+    lic = (work.get("best_oa_location") or {}).get("license") or ""
+    return (
+        str(b.get("first_page") or ""),
+        str(b.get("last_page") or ""),
+        str(lic),
+    )
 
 
 def collect(records: dict, keys: list, mailto: str) -> dict:
-    """paper_key -> (first_page, last_page), by OpenAlex id then by DOI."""
+    """paper_key -> (first_page, last_page, license), by id then by DOI."""
     found: dict = {}
 
     by_id = [
@@ -100,7 +106,7 @@ def collect(records: dict, keys: list, mailto: str) -> dict:
         lookup = {w["id"].rsplit("/", 1)[-1]: w for w in results if w.get("id")}
         for key, wid in chunk:
             if wid in lookup:
-                found[key] = _pages(lookup[wid])
+                found[key] = _fields(lookup[wid])
         time.sleep(_PAUSE)
     print(f"  by OpenAlex id : {len(found)}/{len(by_id)}")
 
@@ -118,7 +124,7 @@ def collect(records: dict, keys: list, mailto: str) -> dict:
         }
         for key, doi in chunk:
             if doi in lookup:
-                found[key] = _pages(lookup[doi])
+                found[key] = _fields(lookup[doi])
         time.sleep(_PAUSE)
     print(f"  by DOI         : {len(found) - before}/{len(by_doi)}")
     return found
@@ -168,28 +174,38 @@ def main() -> int:
         if r.get("extraction_status")
         in ("extracted", "extract_failed", "extract_unverified")
         and k in records
-        and not (records[k].get("first_page") or records[k].get("last_page"))
+        and not (
+            (records[k].get("first_page") or records[k].get("last_page"))
+            and records[k].get("license")
+        )
     ]
-    print(f"{len(keys)} extraction record(s) missing a page extent")
+    print(f"{len(keys)} extraction record(s) missing a page extent or a license")
     if not keys:
         return 0
 
     found = collect(records, keys, args.mailto)
     usable = sum(
         1
-        for first, last in found.values()
+        for first, last, _ in found.values()
         if first.strip().isdigit() and last.strip().isdigit()
     )
+    licensed = sum(1 for *_, lic in found.values() if lic)
     print(
         f"resolved {len(found)}; {usable} carry a clean numeric pair "
         f"(the rest are article numbers, roman numerals or supplements — "
         f"expected_page_extent declines those)"
     )
 
+    print(f"  license recovered for {licensed} record(s)")
     updates = []
-    for key, (first, last) in found.items():
+    for key, (first, last, lic) in found.items():
         rec = dict(records[key])
-        rec["first_page"], rec["last_page"] = first, last
+        if first or last:
+            rec["first_page"], rec["last_page"] = first, last
+        # Never overwrite a license already recorded from the original
+        # normalization — that one came with the record's own OA location.
+        if lic and not rec.get("license"):
+            rec["license"] = lic
         updates.append(rec)
 
     if args.dry_run:

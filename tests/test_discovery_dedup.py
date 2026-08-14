@@ -188,7 +188,7 @@ async def test_page_extent_is_enriched_for_papers_we_actually_hold():
     they came from S2 or CORE — so _normalize_openalex can never supply the
     page extent for them, however recent they are. Not a migration that
     shrinks to zero; a permanent gap for four papers in ten."""
-    from agent.actions.scholarly_actions import action_enrich_page_extent
+    from agent.actions.scholarly_actions import action_enrich_paper_metadata
 
     held = {
         "paper_key": "doi_a",
@@ -221,7 +221,7 @@ async def test_page_extent_is_enriched_for_papers_we_actually_hold():
         meta=FlowMeta(flow_name="acquire", step_id="t"),
         effects=fx,
     )
-    out = await action_enrich_page_extent(si)
+    out = await action_enrich_paper_metadata(si)
     assert out.result["enriched"] == 1
     assert held["first_page"] == "37" and held["last_page"] == "41"
 
@@ -230,7 +230,7 @@ async def test_page_extent_is_enriched_for_papers_we_actually_hold():
 async def test_page_extent_skips_papers_we_did_not_get():
     """A lookup for a paper with no PDF buys nothing — the truncation check
     only ever runs on documents we hold."""
-    from agent.actions.scholarly_actions import action_enrich_page_extent
+    from agent.actions.scholarly_actions import action_enrich_paper_metadata
 
     si = StepInput(
         context={"catalog_batch": [{"paper_key": "k", "doi": "10.1/x"}]},
@@ -239,13 +239,13 @@ async def test_page_extent_skips_papers_we_did_not_get():
         meta=FlowMeta(flow_name="acquire", step_id="t"),
         effects=MockEffects(),
     )
-    out = await action_enrich_page_extent(si)
+    out = await action_enrich_paper_metadata(si)
     assert out.result == {"enriched": 0, "looked_up": 0}
 
 
 @pytest.mark.asyncio
-async def test_page_extent_does_not_refetch_what_it_has():
-    from agent.actions.scholarly_actions import action_enrich_page_extent
+async def test_metadata_enrichment_does_not_refetch_what_it_has():
+    from agent.actions.scholarly_actions import action_enrich_paper_metadata
 
     rec = {
         "paper_key": "k",
@@ -253,6 +253,7 @@ async def test_page_extent_does_not_refetch_what_it_has():
         "pdf_path": "pdfs/k.pdf",
         "first_page": "12",
         "last_page": "20",
+        "license": "cc-by",
     }
     si = StepInput(
         context={"catalog_batch": [rec]},
@@ -261,5 +262,51 @@ async def test_page_extent_does_not_refetch_what_it_has():
         meta=FlowMeta(flow_name="acquire", step_id="t"),
         effects=MockEffects(),
     )
-    out = await action_enrich_page_extent(si)
+    out = await action_enrich_paper_metadata(si)
     assert out.result["looked_up"] == 0
+
+
+@pytest.mark.asyncio
+async def test_a_page_extent_alone_does_not_satisfy_the_check():
+    """`not (a or b and c)` parses as `not (a or (b and c))` and would skip
+    every record that has an extent but no license — 47% of the live corpus
+    is missing a license, and it is what makes the corpus filterable before
+    any training use."""
+    from agent.actions.scholarly_actions import action_enrich_paper_metadata
+    from agent.effects.protocol import HttpResult
+
+    rec = {
+        "paper_key": "k",
+        "doi": "10.1/x",
+        "pdf_path": "pdfs/k.pdf",
+        "first_page": "12",
+        "last_page": "20",
+    }
+    fx = MockEffects(
+        http_responses={
+            "https://api.openalex.org/works": HttpResult(
+                status=200,
+                url="https://api.openalex.org/works",
+                json_data={
+                    "results": [
+                        {
+                            "id": "https://openalex.org/W1",
+                            "doi": "https://doi.org/10.1/x",
+                            "best_oa_location": {"license": "cc-by"},
+                        }
+                    ]
+                },
+            )
+        }
+    )
+    si = StepInput(
+        context={"catalog_batch": [rec]},
+        inputs={},
+        params={},
+        meta=FlowMeta(flow_name="acquire", step_id="t"),
+        effects=fx,
+    )
+    out = await action_enrich_paper_metadata(si)
+    assert out.result["looked_up"] == 1
+    assert rec["license"] == "cc-by"
+    assert rec["first_page"] == "12", "must not clobber an extent it already had"

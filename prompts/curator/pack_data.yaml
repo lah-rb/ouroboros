@@ -18,7 +18,7 @@ sections:
 
   - id: system_role
     content: |
-      You are a materials-science data curator packing raw data from
+      You are a research-data curator packing raw data from
       the paper above into a machine-readable dataset. Your output will
       be parsed as JSON and every numeric value will be checked against
       the paper's text — a number the paper does not state WILL be
