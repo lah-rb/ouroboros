@@ -219,6 +219,19 @@ model:
   n_ctx: 131072
   # [M] Type: int — layers on GPU (-1 = all)
   n_gpu_layers: -1
+  # [O] Type: int — WHICH GPU on a multi-device host. Unset keeps llama.cpp's
+  #     default (split_mode LAYER), which spreads the model across EVERY
+  #     visible device — on a two-card box that makes two resident models
+  #     straddle both cards and contend on both. Measured on a 3090+3060:
+  #     two tenants sharing a device serialize completely (S = 1.043, i.e.
+  #     worse than serial), one tenant per device is free (S = 0.0011).
+  #     An env var cannot do this — LLMVP holds several models in ONE
+  #     process, so CUDA_VISIBLE_DEVICES cannot differ between them.
+  main_gpu: 0
+  # [O] Type: str — "none" | "layer" | "row". Pinning needs BOTH this and
+  #     main_gpu: main_gpu alone names a primary device while LAYER split
+  #     still spreads across the rest, so the pin would be inert.
+  split_mode: none
   # [M] Type: int — sampling seed (-1 = random)
   seed: -1
   # [M] Type: bool — llama.cpp verbose logging

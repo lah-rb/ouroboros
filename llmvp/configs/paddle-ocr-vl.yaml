@@ -69,8 +69,8 @@ graphql:
 model:
   name: "paddle-ocr-vl"
   family: "paddleocr"
-  path: /Users/lah-rb/.lmstudio/models/mradermacher/PaddleOCR-VL-1.6-GGUF/PaddleOCR-VL-1.6.Q8_0.gguf
-  mmproj_path: /Users/lah-rb/.lmstudio/models/PaddlePaddle/PaddleOCR-VL-1.6-GGUF/PaddleOCR-VL-1.6-GGUF-mmproj.gguf
+  path: /home/lah-rb/models/PaddleOCR-VL-1.6.Q8_0.gguf
+  mmproj_path: /home/lah-rb/models/PaddleOCR-VL-1.6-GGUF-mmproj.gguf
   # Text pool: minimal. This entry is never a text target.
   n_ctx: 4096
   # Vision: the window OCR crops actually land in.
@@ -83,6 +83,11 @@ model:
     - "~/corpora"
     - "~/ouroboros-runs"
   n_gpu_layers: -1
+  # 3060. The OCR lane gets its own device so it never contends with the
+  # text lane — on the M1 that pair was the BEST available at 0.342; here
+  # the device split makes it ~0.00.
+  main_gpu: 1
+  split_mode: none
   seed: -1
   verbose: false
   thinking_available: false

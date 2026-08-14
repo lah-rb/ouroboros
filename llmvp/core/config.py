@@ -41,6 +41,24 @@ class ModelConfig(BaseModel):
     n_ctx: int
     model_max_context: Optional[int] = None
     n_gpu_layers: int
+    # WHICH GPU, on a multi-device host. Unset keeps llama.cpp's default,
+    # which is split_mode=LAYER — the model is spread across EVERY visible
+    # device. On a 3090+3060 box that is the worst possible placement for a
+    # fleet: two resident models each straddle both cards and contend on both.
+    #
+    # Measured on that rig (dev/CUDA_SWARM_2026-08-14.md): two tenants sharing
+    # one device serialize completely (S = 1.043, aggregate 0.98x), while one
+    # tenant per device is FREE (S = 0.0011, both throughputs unchanged). The
+    # whole win depends on being able to say where a model goes, so it is a
+    # config field rather than an environment variable — LLMVP holds several
+    # models in ONE process and CUDA_VISIBLE_DEVICES cannot differ between
+    # them.
+    #
+    # main_gpu alone is not enough: it names the primary device but LAYER
+    # split still spreads across the rest, so pinning requires split_mode
+    # "none" as well.
+    main_gpu: Optional[int] = None
+    split_mode: Optional[str] = None  # "none" | "layer" | "row"
     seed: int
     verbose: bool
 

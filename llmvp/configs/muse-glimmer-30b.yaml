@@ -156,12 +156,30 @@ graphql:
 model:
   name: "muse-glimmer-30b"
   family: "muse-glimmer"
-  path: /Users/lah-rb/.lmstudio/models/meta-models/Muse-Glimmer-30B-GGUF/muse-glimmer-30B-kquant-dynamic.gguf
-  n_ctx: 131072
+  path: /home/lah-rb/models/muse-glimmer-30B-kquant-dynamic.gguf
+  # SIZED TO THE CARD, not to the model's trained range. Computed from the
+  # GGUF header rather than guessed: 52 layers x 2 KV heads x (128+128) x 2 B
+  # = 52.0 KiB/token (lean — this is heavy GQA).
+  #
+  #     n_ctx 131072 -> 6.50 GiB KV + 18.3 weights + ~0.8 overhead = 25.6 GiB
+  #     n_ctx  32768 -> 1.62 GiB KV                               = 20.7 GiB
+  #
+  # The 3090 has 24 GiB, so the M1's 131072 does not fit and llama.cpp fails
+  # with "Failed to create llama context with model" — a message that names
+  # neither memory nor the context size. model_max_context stays at the
+  # trained 131072; stream_context_limit is min(n_ctx, that), so this caps the
+  # POOL without lying about what the model can do.
+  n_ctx: 32768
   probe_verified_weights_bytes: 19653957984
   probe_verified_n_ctx: 131072
   model_max_context: 131072
   n_gpu_layers: -1
+  # 3090. Pinned, not split: dev/CUDA_SWARM_2026-08-14.md measured two
+  # tenants sharing one device at serialization 1.043 (worse than serial)
+  # and one tenant per device at 0.0011 (free). split_mode must be "none"
+  # or LAYER split spreads the model over both cards and the pin is inert.
+  main_gpu: 0
+  split_mode: none
   seed: -1
   verbose: false
   flash_attn_type: auto
@@ -192,7 +210,7 @@ model:
   # lifetime — ~7GB at this ceiling, on top of the text path's ~30GB against a
   # 123.7GB budget. Headroom for many images in one request, or a long
   # transcription turn, instead of one figure and a short answer.
-  mmproj_path: /Users/lah-rb/.lmstudio/models/meta-models/Muse-Glimmer-30B-GGUF/mmproj-kquant.gguf
+  mmproj_path: /home/lah-rb/models/mmproj-kquant.gguf
   vision_n_ctx: 131072
   vision_image_roots:
     - "~/ouroboros-runs"

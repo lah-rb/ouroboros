@@ -156,3 +156,60 @@ reports both arms' token counts (verified equal: 256/256, 512/512, 1024/1024).*
 * Readiness must be HTTP 200 on `/health`, never a bare connection — the server
   binds its port before loading weights. The same trap produced 0.00 tok/s
   across every arm of the dflash probe on the M1.
+
+## Addendum: the OCR lane must be its own PROCESS here, not an LLMVP secondary
+
+Phase 2b residency was built on the M1 because a second process there meant a
+second weight load into the SAME unified memory. On this rig the 3060 has its
+own memory, so that reason is gone — and residency turns out to be actively
+blocked.
+
+Loading paddle as a hot secondary works for the WEIGHTS: `main_gpu: 1` put them
+on the 3060 (GPU1 went 236 -> 878 MiB). The first vision request then killed
+the server:
+
+```
+allocating 840.90 MiB on device 0: cudaMalloc failed: out of memory
+GGML_ASSERT(buffer) failed
+```
+
+**Device 0** — where muse already holds 21 GiB. The projector does not follow
+the model. `MTMDChatHandler.__init__` takes
+`(mmproj_path, verbose, use_gpu, image_min_tokens, image_max_tokens, ...)`:
+`use_gpu` is a BOOL and there is no device index anywhere in the signature, so
+the mmproj always lands on the default CUDA device. A resident secondary VL
+model cannot be placed on its own card through this binding.
+
+That is not worth fixing here, because the measurement says the alternative is
+free: cross-process AND cross-device was 0.0011. So on multi-GPU the OCR lane
+runs as its own `llama-server` pinned with `CUDA_VISIBLE_DEVICES=1`, which is
+what `--vl-backend llamacpp` already does.
+
+Smoked end to end on a real paper, 3060 only:
+
+```
+12 pages, 10 verified, numeric 0.972, span 0.938, 2 figures,
+max_repeat 43, 51.6 s  (~4.3 s/page against ~7 s/page on the M1)
+```
+
+**The M1's residency conclusion does not port.** It was correct there and is
+wrong here, for a reason that is about memory topology rather than about
+software: residency exists to avoid duplicating weights in a shared pool, and
+there is no shared pool.
+
+## More setup notes
+
+* `/tmp` is on the 106 GB ROOT partition, `/home` has 718 GB. The LLMVP suite
+  writes ~37 GB of pytest temp data and filled the root filesystem completely.
+  Run it with `TMPDIR=/home/lah-rb/tmp`.
+* `n_ctx: 131072` from the M1 config does NOT fit a 24 GB card. Computed from
+  the GGUF header: 52 layers x 2 KV heads x (128+128) x 2 B = 52.0 KiB/token,
+  so 131072 needs 6.50 GiB of KV on top of 18.3 GiB of weights = 25.6 GiB.
+  llama.cpp reports this as "Failed to create llama context with model", which
+  names neither memory nor context. 32768 fits at 20.7 GiB total.
+* muse's chat path spends its first tokens in a reasoning block. `max_tokens:
+  120` returned EMPTY content with `finish_reason: stop`; 700 returned a
+  correct 87-token answer. Agent turn budgets must clear the reasoning block or
+  turns come back blank rather than truncated.
+* `llama-server` must be on PATH for `--vl-backend llamacpp` (it spawns by
+  name, not by path).

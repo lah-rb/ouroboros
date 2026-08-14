@@ -503,6 +503,10 @@ class LlamaCppBackend(BaseBackend):
         return self._llama_module
 
     # Map the human-readable flash_attn_type config to the llama.cpp enum.
+    # llama.cpp LLAMA_SPLIT_MODE_*: 0 NONE, 1 LAYER, 2 ROW. Mapped by NAME
+    # in config because a bare integer in YAML is unreviewable.
+    _SPLIT_MODES = {"none": 0, "layer": 1, "row": 2}
+
     _FLASH_ATTN = {"auto": -1, "off": 0, "on": 1}
 
     def _make_draft(self) -> Any:
@@ -531,10 +535,24 @@ class LlamaCppBackend(BaseBackend):
         """Create the primary Llama instance that owns the model weights."""
         Llama = self._get_llama_class()
 
+        # DEVICE PLACEMENT. Passed only when the config asks for it, so a
+        # single-GPU host and every existing config keep llama.cpp's defaults
+        # byte for byte. `main_gpu` names the device; `split_mode` must ALSO be
+        # "none" or LAYER split still spreads the model over every visible card
+        # and the pin does nothing.
+        placement: dict = {}
+        _main_gpu = getattr(self.config.model, "main_gpu", None)
+        if _main_gpu is not None:
+            placement["main_gpu"] = int(_main_gpu)
+        _split = getattr(self.config.model, "split_mode", None)
+        if _split is not None:
+            placement["split_mode"] = self._SPLIT_MODES[str(_split).lower()]
+
         return Llama(
             model_path=str(self.config.model.path),
             n_ctx=self.config.model.n_ctx,
             n_gpu_layers=self.config.model.n_gpu_layers,
+            **placement,
             # flash_attn (bool) was a silent no-op; flash_attn_type is the real param
             # (-1 AUTO / 0 OFF / 1 ON). Default "auto" == the prior effective behavior.
             flash_attn_type=self._FLASH_ATTN.get(
