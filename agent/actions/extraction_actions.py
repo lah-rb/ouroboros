@@ -12,6 +12,9 @@ Record fields owned by this stage. They are written to the sidecar
 databank/extraction.jsonl (last-wins) and overlaid onto the scraper's
 papers.jsonl by read_databank, so this stage never writes that file:
   extraction_status: "" | "needs_reextract" | "extracted" | "extract_failed"
+                     | "extract_unverified"  (OCR ran, no text layer to
+                       check it against — preserved for spot check, never
+                       auto-promoted; see tools/extract_triage.py)
   md_path, figure_count, extraction_method, extraction_quality{...}
 """
 
@@ -34,6 +37,11 @@ EXTRACT_TIMEOUT_S = 1800
 # (corpus-weighted, truth-recall direction); broken extractions score
 # near zero. Thresholds sit below the faithful band to avoid false
 # flags while still catching real failures.
+# Statuses this stage will not revisit. extract_unverified belongs here:
+# another OCR pass over a scan with no text layer yields the same
+# unverifiable result, so re-queuing it burns GPU forever.
+_TERMINAL_EXTRACTION = ("extracted", "extract_failed", "extract_unverified")
+
 MIN_NUMERIC_RATE = 0.85
 MIN_SPAN_RATE = 0.75
 
@@ -81,7 +89,10 @@ def _extraction_pending(record: dict) -> bool:
     return (
         record.get("access_status") == "oa_pdf"
         and bool(record.get("pdf_path"))
-        and record.get("extraction_status") not in ("extracted", "extract_failed")
+        # extract_unverified is TERMINAL for this stage. Re-running OCR on a
+        # paper with no text layer produces the same unverifiable output and
+        # the same refusal — it needs a human, not another pass.
+        and record.get("extraction_status") not in _TERMINAL_EXTRACTION
     )
 
 
@@ -115,7 +126,7 @@ async def action_derive_extraction_goals(step_input: StepInput) -> StepOutput:
     already_done = sum(
         1
         for r in databank.values()
-        if r.get("extraction_status") in ("extracted", "extract_failed")
+        if r.get("extraction_status") in _TERMINAL_EXTRACTION
     )
     if not eligible and not already_done:
         return StepOutput(
@@ -363,7 +374,30 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
                     "pages": rep.get("pages", 0),
                     "seconds": rep.get("seconds", 0),
                 }
-            if prior_retry:
+            # A PAPER WITH NO TEXT LAYER IS WHAT OCR IS FOR. Verification
+            # compares our markdown against the PDF's own text layer; when
+            # there is no layer there is nothing to compare, so the paper
+            # scores a vacuous 1.00 and gets refused. But that is exactly the
+            # scanned-document case OCR exists to handle, and refusing it
+            # throws away the extraction that worked.
+            #
+            # Measured on the spectra corpus: 81 failures held 64 usable
+            # markdowns totalling 5.0M characters and 1,353 extracted
+            # figures, none of which any downstream stage could see —
+            # _fig_pending gates on extraction_status == "extracted".
+            #
+            # So unverifiable gets its OWN terminal state rather than sharing
+            # one with "the model got it wrong". It is still NOT promoted
+            # automatically: unverifiable means unproven, and quietly
+            # admitting it would put unvetted text in the corpus. It is
+            # preserved, distinguishable, and queued for the spot check that
+            # tools/extract_triage.py exists to serve.
+            unverifiable = bool(rep) and rep.get("verified_pages", 0) <= 0
+            if unverifiable:
+                rec["extraction_status"] = "extract_unverified"
+                rec["failure_reason"] = f"extraction: {reason}"
+                failed += 1
+            elif prior_retry:
                 rec["extraction_status"] = "extract_failed"
                 rec["failure_reason"] = f"extraction: {reason}"
                 failed += 1
