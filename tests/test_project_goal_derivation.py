@@ -132,3 +132,90 @@ async def test_every_derived_goal_is_recorded_however_many_come_back():
     functional = [g.description for g in mission.goals if g.type == "functional"]
     for desc in descriptions:
         assert desc in functional, f"derived goal dropped: {desc!r}"
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Content briefs survive the module/data-shape dedup
+# ══════════════════════════════════════════════════════════════════════
+#
+# THE BUG THIS PINS (gpt-oss tier arm, 2026-08-15). An architecture may
+# declare the same path in BOTH `modules` and `data_shapes` — gpt-oss did,
+# for `game/data/world_data.yaml`. The dedup skipped the data-shape record
+# entirely, so pass 1b never briefed the file, and because
+# `render_data_files` reads briefs out of GOAL DESCRIPTIONS, the structural
+# walk received no creative requirement at all. It wrote a 2-room stub
+# against an objective asking for eight interconnected rooms; the sweep then
+# spent two hours making command mechanics pass against that stub and the
+# blind judge found five items literally named "Placeholder S/W/O/R/D".
+# Dedup must bound GOALS, never briefs.
+
+
+class _BriefEffects(MockEffects):
+    """Answers the content-brief pass with a real brief, functional goals
+    with an empty list (pass 2 is not under test here)."""
+
+    def __init__(self, *a, **kw) -> None:
+        super().__init__(*a, **kw)
+        self.briefed_paths: list[str] = []
+
+    async def run_inference(self, prompt, config_overrides=None):
+        if "CONTENT BRIEF" in prompt:
+            self.briefed_paths.append(prompt)
+            return await super().run_inference(prompt, config_overrides)
+        return await super().run_inference(prompt, config_overrides)
+
+
+def _mission_with_data_shape(also_a_module: bool) -> MissionState:
+    """The world file as a data_shape, optionally ALSO declared a module."""
+    from agent.persistence.models import DataShapeContract
+
+    modules = [ModuleSpec(file="game/engine.py", responsibility="engine")]
+    if also_a_module:
+        modules.append(
+            ModuleSpec(file="game/data/world_data.yaml", responsibility="world data")
+        )
+    return MissionState(
+        objective="Build a game with at least eight interconnected rooms.",
+        status="active",
+        config=MissionConfig(working_directory="/tmp/x"),
+        architecture=ArchitectureState(
+            run_command="python -m game.main",
+            creation_order=["game/engine.py", "game/data/world_data.yaml"],
+            modules=modules,
+            data_shapes=[
+                DataShapeContract(
+                    file="game/data/world_data.yaml",
+                    consumed_by="game/world.py",
+                    structure="rooms: list of {id, name}",
+                )
+            ],
+        ),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("also_a_module", [False, True])
+async def test_data_file_is_briefed_even_when_also_declared_a_module(also_a_module):
+    """The brief pass must SEE the file in both architectures."""
+    mission = _mission_with_data_shape(also_a_module)
+    fx = _BriefEffects()
+    await action_derive_project_goals(_si(mission, fx))
+
+    assert fx.briefed_paths, (
+        "no content-brief inference fired — the data file was dropped from "
+        "data_file_goals (dedup swallowed the brief, not just the goal)"
+    )
+    assert "game/data/world_data.yaml" in fx.briefed_paths[0]
+
+
+@pytest.mark.asyncio
+async def test_dedup_still_yields_exactly_one_goal_for_the_shared_path():
+    """Fixing the brief must not reintroduce the duplicate goal."""
+    mission = _mission_with_data_shape(also_a_module=True)
+    await action_derive_project_goals(_si(mission, _BriefEffects()))
+
+    structural = [g for g in mission.goals if g.type == "structural"]
+    owning = [
+        g for g in structural if "game/data/world_data.yaml" in g.associated_files
+    ]
+    assert len(owning) == 1, f"expected one goal for the world file, got {len(owning)}"

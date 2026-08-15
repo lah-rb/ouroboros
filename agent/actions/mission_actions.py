@@ -1106,9 +1106,20 @@ async def action_derive_project_goals(step_input: StepInput) -> StepOutput:
         if not file_path:
             continue
 
-        # Skip if this file already has a module goal (1a deduplication)
-        if file_path in covered_files:
-            continue
+        # DEDUPLICATION IS ABOUT GOALS, NOT BRIEFS. This used to `continue`
+        # when a module goal already covered the path — which silently cost
+        # the file its CONTENT BRIEF, because 1b below only briefs files in
+        # this list and `render_data_files` reads briefs out of goal
+        # DESCRIPTIONS. An architecture that declares its world file in BOTH
+        # `modules` and `data_shapes` (gpt-oss, 2026-08-15:
+        # `game/data/world_data.yaml` in both) therefore built that file with
+        # no creative requirement at all: it shipped a 2-room stub against an
+        # objective asking for eight, and nothing downstream could see the
+        # brief was missing. Carry the record either way; the goal-creation
+        # loop enriches the existing goal instead of adding a second one.
+        existing_goal = next(
+            (g for g in goals if file_path in (g.associated_files or [])), None
+        )
         covered_files.add(file_path)
 
         data_file_goals.append(
@@ -1116,6 +1127,7 @@ async def action_derive_project_goals(step_input: StepInput) -> StepOutput:
                 "file_path": file_path,
                 "consumed_by": consumed_by,
                 "structure": structure,
+                "existing_goal": existing_goal,
             }
         )
 
@@ -1191,6 +1203,15 @@ async def action_derive_project_goals(step_input: StepInput) -> StepOutput:
             description = (
                 f"Create data file {d['file_path']} (consumed by {d['consumed_by']})"
             )
+
+        # Already covered by a module goal: keep ONE goal for the file (the
+        # dedup this branch has always enforced) but give it the brief, which
+        # is what `render_data_files` and the structural walk actually read.
+        existing_goal = d.get("existing_goal")
+        if existing_goal is not None:
+            if content_brief:
+                existing_goal.description = description
+            continue
 
         goal = GoalRecord(
             description=description,
