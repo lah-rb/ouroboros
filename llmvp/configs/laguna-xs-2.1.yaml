@@ -93,6 +93,12 @@ model:
   kv_unified: true
   session_full_replay: true
   resident_seq_cache: true
+  # DELIBERATELY FALSE — do not "fix" in a conformance sweep. poolside's
+  # card says the OPPOSITE of most makers: keep reasoning_content in
+  # history; the model "reasons less thoroughly on later turns if earlier
+  # thinking blocks are stripped" (huggingface.co/poolside/Laguna-S-2.1,
+  # read 2026-08-15). Raw resident CoT is CONFORMANT for this family.
+  resident_strip_reasoning: false
   # ADDED 2026-07-30: the stateless flow cache (M9 seq-ops band). Measured
   # on glm at realistic head sizes: HIT saves 3.51s/call = 49% of prefill
   # (corrected pilot, 11/11 hits). The 2026-06 ban hit the M8 save_state

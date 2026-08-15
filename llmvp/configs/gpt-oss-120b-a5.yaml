@@ -81,6 +81,11 @@ model:
   # falls back to session_full_replay if ever false. Validated: A/B ~2x faster session
   # turns (14.2s->7.4s mean); terminal-bench 3/8 (37.5%) -> 5/8 (62.5%), tying Terminus.
   resident_seq_cache: true
+  # Set per reference.yaml step 3c (fleet conformance audit 2026-08-15):
+  # harmony's own docs say prior CoT is DROPPED after a final-channel
+  # message — the convention this strip was BUILT for, yet this config ran
+  # resident sessions with raw CoT kept. Conformant now.
+  resident_strip_reasoning: true
   # Per-request reasoning HEAD-SWAP: pin low/high system heads (medium=SEQ_STATIC)
   # and fork the requested level onto the live seq at turn 0. Lets deep_search
   # condense run at LOW reasoning without a restart. Gated on resident + harmony.

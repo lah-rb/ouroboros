@@ -129,6 +129,12 @@ model:
   flow_kv_cache: false
   session_full_replay: true
   resident_seq_cache: true
+  # DELIBERATELY FALSE — do not "fix" in a conformance sweep. poolside's
+  # card says the OPPOSITE of most makers: keep reasoning_content in
+  # history; the model "reasons less thoroughly on later turns if earlier
+  # thinking blocks are stripped" (huggingface.co/poolside/Laguna-S-2.1,
+  # read 2026-08-15). Raw resident CoT is CONFORMANT for this family.
+  resident_strip_reasoning: false
   context_refresh_drain_s: 300
 prompt:
   persona_file: ./knowledge/SOUL.md

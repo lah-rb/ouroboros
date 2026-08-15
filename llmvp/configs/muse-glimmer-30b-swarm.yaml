@@ -142,6 +142,10 @@ model:
   swa_full: true
   kv_unified: true
   resident_seq_cache: true
+  # Set per reference.yaml step 3c — same evidence as the parent config
+  # (the chat template renders reasoning only on request); the flag was
+  # missed here when muse-glimmer-30b.yaml got it (2026-08-15 audit).
+  resident_strip_reasoning: true
   context_refresh_drain_s: 300
 
 prompt:
