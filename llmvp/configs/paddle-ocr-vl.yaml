@@ -44,9 +44,20 @@
 # `User: <|IMAGE_START|><|IMAGE_PLACEHOLDER|><|IMAGE_END|>{text}\nAssistant:\n`.
 #
 # ── Budget ───────────────────────────────────────────────────────────
-# weights 498 MB (Q8_0) + projector 882 MB + KV. Tiny beside muse's 18.3 GB,
-# which is what makes holding both hot uncontroversial: the governor prices
-# this pair at ~27 GB against a ~105 GB budget.
+# weights 498 MB (Q8_0) + projector 882 MB + KV.
+#
+# THESE NUMBERS ARE PER DEVICE NOW, and on a discrete host that is the whole
+# story. Measured 2026-08-15 on the 3090/3060 rig:
+#
+#   CUDA0  23.56 GiB total — muse holds 21.22 GiB of text (weights 18.30 +
+#          projector 1.30 + n_ctx 32768 KV 1.62) and DECLARES a further
+#          6.50 GiB of lazy vision KV it cannot afford there.
+#   CUDA1  11.63 GiB total — empty, which is why this model is pinned to it.
+#
+# So CUDA0 has no room for an 882 MB projector, and mtmd offers no device
+# index — only use_gpu. vision_projector_gpu: false puts it in host RAM
+# instead, which is the difference between this model loading and the server
+# dying (it OOMed CUDA0 twice before the governor could see the charge).
 #
 # n_ctx is small ON PURPOSE — the text pool is never used, so paying KV for it
 # would be pure waste. vision_n_ctx is what OCR actually consumes, and 32768 is
@@ -75,10 +86,18 @@ model:
   n_ctx: 4096
   # Vision: the window OCR crops actually land in.
   vision_n_ctx: 32768
-  # Matches the subprocess path's --vl-parallel 4, its measured saturation
-  # point. 4 x 32768 x 18432 B/tok = 2.25 GB of KV, on top of 1.36 GB of
-  # weights + projector.
-  vision_pool_size: 4
+  # 2, not the subprocess path's 4. That 4 was its measured saturation point
+  # on the M1 and was carried here untested; 4 x 32768 KV is 2.25 GB and it
+  # was never admitted — the pool that OOMed the server was this one. Two
+  # concurrent crops is the width the batched bench actually supports:
+  # vision+vision serialized at S=0.093 (dev/batched_modality_mix.py), i.e.
+  # the second crop is ~free. Raise it once the governor can prove the KV
+  # fits on CUDA1 and a bench shows 4 still pays.
+  vision_pool_size: 2
+  # The projector cannot follow main_gpu — mtmd takes use_gpu, not a device —
+  # so on this host it would land on CUDA0 where muse already sits. Host RAM
+  # instead. Costs image-encode speed, not fidelity.
+  vision_projector_gpu: false
   vision_image_roots:
     - "~/corpora"
     - "~/ouroboros-runs"

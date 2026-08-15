@@ -821,9 +821,17 @@ class LlamaCppBackend(BaseBackend):
         # CHAT_FORMAT class attribute and REJECT the kwarg with a TypeError —
         # their __init__ is (force_reasoning, add_vision_id, **kwargs) over a
         # base of (mmproj_path, verbose, use_gpu, image_min/max_tokens).
+        # use_gpu IS THE ONLY PLACEMENT CONTROL THE HANDLER HAS. Its signature
+        # is (mmproj_path, verbose, use_gpu, image_min_tokens, image_max_tokens,
+        # ...) — no device index — so mtmd allocates on the DEFAULT device,
+        # which is device 0, whatever main_gpu says. On a multi-GPU host a
+        # model pinned to card 1 still puts its projector on card 0; false
+        # keeps it in host RAM instead, which is the escape hatch when card 0
+        # is full. resident_models.footprint_by_device charges it to match.
         handler_kwargs: dict = {
             "mmproj_path": str(mcfg.mmproj_path),
             "verbose": False,
+            "use_gpu": bool(getattr(mcfg, "vision_projector_gpu", True)),
         }
         if handler_cls.__name__ == "GenericMTMDChatHandler":
             handler_kwargs["chat_format"] = None
@@ -3705,14 +3713,25 @@ class LlamaCppBackend(BaseBackend):
                 log.warning("mmproj not readable for preflight (%s): %s", mmproj, exc)
             v_ctx = int(getattr(self.config.model, "vision_n_ctx", 8192) or 8192)
             text_ctx = int(getattr(self.config.model, "n_ctx", 0) or 0)
+            # TIMES THE POOL WIDTH. _build_vision_pool builds vision_pool_size
+            # private contexts, not one, and this counted a single context —
+            # so a config asking for 4 was preflighted at a quarter of its
+            # cost. Live: paddle at vision_pool_size 4 x vision_n_ctx 32768
+            # preflighted "1.49GB OK" and then OOMed the process while
+            # building the pool it had just approved.
+            v_width = max(
+                1, int(getattr(self.config.model, "vision_pool_size", 1) or 1)
+            )
             if kv_bytes and text_ctx:
-                vision_bytes += int(kv_bytes * (v_ctx / float(text_ctx)))
+                vision_bytes += int(kv_bytes * (v_ctx / float(text_ctx))) * v_width
 
         total_gb = (kv_bytes + weights_bytes + vision_bytes) / 1e9
         if vision_bytes:
             log.info(
-                "👁  Vision adds %.2fGB to the preflight (projector + %d-token ctx)",
+                "👁  Vision adds %.2fGB to the preflight "
+                "(projector + %d x %d-token ctx)",
                 vision_bytes / 1e9,
+                max(1, int(getattr(self.config.model, "vision_pool_size", 1) or 1)),
                 int(getattr(self.config.model, "vision_n_ctx", 8192) or 8192),
             )
 
