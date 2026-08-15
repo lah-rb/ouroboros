@@ -573,3 +573,116 @@ async def test_a_batch_with_no_reports_at_all_leaves_every_paper_pending():
     # investigation that cost 99 papers.
     assert "toolchain" in out.observations
     assert "FileNotFoundError" in out.observations
+
+
+@pytest.mark.asyncio
+async def test_a_server_fault_never_condemns_the_paper():
+    """A 500 from the VLM says nothing about the PDF.
+
+    Live: two papers reached TERMINAL extract_failed on
+    `Error code: 500 - the model produced output that does not match the
+    expected peg-native format`. One was re-run standalone with unchanged
+    flags and scored 0.983 numeric / 0.888 span, 10/10 pages verified — the
+    fault is a sampling artifact and a retry recovers it.
+    """
+    import os
+    from agent.actions import extraction_actions as ea
+
+    fx = _fx([_bank_line("a")])
+    tool = os.path.join(ea._repo_root(), ea._TOOL_PY)
+    fx._commands[tool] = CommandResult(
+        return_code=0,
+        stdout=_report("a", error="RuntimeError: Error code: 500 - server_error"),
+        stderr="",
+        command="x",
+    )
+    await action_extract_pdf_batch(_si(inputs=_batch_inputs(["a"]), effects=fx))
+    from agent.actions.scholarly_actions import read_databank
+
+    bank = await read_databank(fx)
+    assert not bank["a"]["extraction_status"]  # pending, not terminal
+    assert "toolchain fault" in bank["a"]["failure_reason"]
+
+
+@pytest.mark.asyncio
+async def test_a_server_fault_outranks_a_zero_verified_reading():
+    """Ordering, not just detection.
+
+    A 500 on page 1 leaves verified_pages at 0. The `unverifiable` branch
+    would read that as "a scan with no text layer" and file it as terminal
+    extract_unverified — the same lost paper by a different route. The fault
+    check has to come FIRST for that to be closed.
+    """
+    import os
+    from agent.actions import extraction_actions as ea
+
+    fx = _fx([_bank_line("a")])
+    tool = os.path.join(ea._repo_root(), ea._TOOL_PY)
+    rep = json.loads(_report("a", error="Error code: 500 - server_error"))
+    rep["verified_pages"] = 0
+    fx._commands[tool] = CommandResult(
+        return_code=0, stdout=json.dumps(rep), stderr="", command="x"
+    )
+    await action_extract_pdf_batch(_si(inputs=_batch_inputs(["a"]), effects=fx))
+    from agent.actions.scholarly_actions import read_databank
+
+    bank = await read_databank(fx)
+    assert bank["a"]["extraction_status"] != "extract_unverified"
+    assert not bank["a"]["extraction_status"]
+
+
+@pytest.mark.asyncio
+async def test_a_second_server_fault_still_does_not_condemn():
+    """No retry rung is consumed, so the paper cannot age into terminal."""
+    import os
+    from agent.actions import extraction_actions as ea
+
+    fx = _fx([_bank_line("a", status="needs_reextract")])
+    tool = os.path.join(ea._repo_root(), ea._TOOL_PY)
+    fx._commands[tool] = CommandResult(
+        return_code=0,
+        stdout=_report("a", error="Error code: 500 - server_error"),
+        stderr="",
+        command="x",
+    )
+    await action_extract_pdf_batch(_si(inputs=_batch_inputs(["a"]), effects=fx))
+    from agent.actions.scholarly_actions import read_databank
+
+    bank = await read_databank(fx)
+    assert bank["a"]["extraction_status"] != "extract_failed"
+
+
+def test_the_fault_markers_never_match_a_document_verdict():
+    """The narrowness of the marker list IS the safety property.
+
+    A phrase here wrongly makes a paper immortal in the worklist, so every
+    real document-quality string the corpus has produced must fall outside
+    it.
+    """
+    from agent.actions.extraction_actions import is_toolchain_fault
+
+    document_verdicts = [
+        "",
+        "below quality threshold (numeric=0.65, span=0.94)",
+        "degenerate decode — 3639 words of back-to-back repetition",
+        "truncated acquisition — the PDF holds 1 page(s) of an article",
+        "no verifiable text layer (1 page(s), 0 verified)",
+        # THE REAL STRING, not a paraphrase. A bare "timeout" marker matched
+        # the word inside this verdict's own explanation and made a 560-page
+        # book immortal in the worklist; the short paraphrase that used to sit
+        # here did not contain it and the fixture passed.
+        "oversize — 560 pages, referred for review before any OCR pass (a "
+        "dispatch shares one timeout, so a book takes its batch down with it)",
+    ]
+    for verdict in document_verdicts:
+        assert not is_toolchain_fault(verdict), verdict
+
+    faults = [
+        "RuntimeError: Exception from the 'vlm' worker: Error code: 500",
+        "ConnectionError: connection refused",
+        "Traceback (most recent call last):",
+        "OSError: [Errno 2]",
+        "HTTPSConnectionPool: Read timed out",
+    ]
+    for fault in faults:
+        assert is_toolchain_fault(fault), fault

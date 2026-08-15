@@ -86,6 +86,46 @@ MAX_REPEAT_WORDS = 200
 # extent by a page.
 _TRUNCATED_FRACTION = 0.5
 
+# TOOLCHAIN FAULTS, as they appear in a report's `error` string. These name
+# the machinery — an HTTP status from the VLM server, a Python exception that
+# escaped the worker, a dead connection — never the document. Matching on text
+# is crude, and deliberately narrow: a phrase here wrongly makes a paper
+# immortal in the worklist, so the list holds only strings that cannot describe
+# a PDF.
+#
+# Checked against every `error` string the corpus has recorded (81 lifetime
+# extraction failures): these match the 2 real server faults and none of the
+# document-quality ones.
+_TOOLCHAIN_FAULT_MARKERS = (
+    "error code:",  # `Error code: 500 - {...}` from the VLM server
+    "runtimeerror",
+    "connectionerror",
+    "connection refused",
+    "connection reset",
+    # "timed out", never the noun "timeout": the oversize verdict's own prose
+    # says "a dispatch shares one timeout, so a book takes its batch down with
+    # it", and a bare noun match made that 560-page book a permanent resident
+    # of the worklist. Caught by running this matcher over all 1,003 recorded
+    # failure strings, not by the unit fixtures — which used a short oversize
+    # string that happened not to contain the word.
+    "timed out",
+    "traceback",
+    "oserror",
+    "brokenpipeerror",
+)
+
+
+def is_toolchain_fault(error: str) -> bool:
+    """The machinery failed, not the paper.
+
+    A paper rejected on its content has been JUDGED and the verdict stands.
+    A paper whose extraction hit a 500 has not been judged at all, and the
+    difference decides whether it stays in the corpus's future.
+    """
+    low = (error or "").lower()
+    return any(marker in low for marker in _TOOLCHAIN_FAULT_MARKERS)
+
+
 CORPUS_GOAL_SIGNATURE = "corpus-pdf-extract"
 
 _TOOL_PY = "tools/pdf_extract/.venv/bin/python"
@@ -551,7 +591,48 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
             # preserved, distinguishable, and queued for the spot check that
             # tools/extract_triage.py exists to serve.
             unverifiable = bool(rep) and rep.get("verified_pages", 0) <= 0
-            if oversize:
+            toolchain_fault = bool(rep) and is_toolchain_fault(rep.get("error", ""))
+            if toolchain_fault:
+                # FIRST IN THE CHAIN, and that placement is the point. Every
+                # branch below classifies the DOCUMENT — too big, a fragment,
+                # no text layer, poor rates — and not one of those readings
+                # means anything when the machinery failed partway through.
+                #
+                # Concretely: a 500 on page 1 leaves verified_pages at 0, which
+                # the `unverifiable` branch would read as "a scan with no text
+                # layer" and file as terminal. Same lost paper as before,
+                # reached by a different route. Only ordering this first closes
+                # both.
+                #
+                # A server fault never consumes a retry rung and never reaches
+                # a terminal state: the record is cleared back to pending and
+                # the sweep picks it up again.
+                #
+                # This is the per-paper twin of the zero-report guard above.
+                # That one catches a batch whose process died; this catches a
+                # batch that survived and reported a transport failure for one
+                # paper — the tool did its job and told us the VLM refused,
+                # which says nothing about the PDF.
+                #
+                # Live: two papers reached terminal extract_failed on
+                # `Error code: 500 — the model produced output that does not
+                # match the expected peg-native format`. One was re-run
+                # standalone, unchanged flags, and scored 0.983 numeric /
+                # 0.888 span with 10/10 pages verified. The fault is a
+                # sampling artifact, so a retry genuinely recovers and
+                # condemning the paper simply loses it.
+                #
+                # An unbounded retry is the hazard this trades for. It is the
+                # right trade while these faults stay rare (2 in 219
+                # extractions): a paper that fails this way forever costs one
+                # dispatch per sweep and stays visible in the pending count,
+                # whereas a terminal state loses a good paper silently.
+                rec["failure_reason"] = (
+                    f"extraction (toolchain fault, will retry): {reason}"
+                )
+                rec["extraction_status"] = ""
+                retried += 1
+            elif oversize:
                 # NOT a quality verdict. The document is intact and probably
                 # valuable; it is simply too large to feed a shared dispatch
                 # budget, and that is a decision for a person.
