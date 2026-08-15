@@ -268,6 +268,16 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("staged", help="a staged arm dir (…/staged/armNN) or its alpha/")
     ap.add_argument("--out", required=True)
+    ap.add_argument(
+        "--arm-identifier",
+        action="append",
+        default=[],
+        help="config name of the model that produced this artifact. Its stems "
+        "are BLOCKING regardless of the denylist — same contract as stage.py. "
+        "Without it, this tool passed a packet whose README line 1 said "
+        "'Muse Glimmer 30b' (2026-08-15): the hand roster cannot know a model "
+        "nobody has tiered yet. Repeatable.",
+    )
     args = ap.parse_args()
 
     src = Path(args.staged).expanduser().resolve()
@@ -334,7 +344,11 @@ def main() -> int:
     import sys
 
     sys.path.insert(0, str(HERE))
-    from stage import scan  # noqa: E402
+    from stage import _extend_identifiers, scan  # noqa: E402
+
+    # The arm's own name outranks the denylist — same rule, same helper, same
+    # moment as stage.py: BEFORE any scanning.
+    _extend_identifiers(args.arm_identifier)
 
     print(f"packet -> {out}")
     print(
