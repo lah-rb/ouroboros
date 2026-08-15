@@ -165,14 +165,37 @@ to anything and there is nothing else to compare it to.
   most load-bearing rule in the rubric: artifacts here have repeatedly read
   better than they play, and one that read like the clear winner turned out to
   be unplayable past the first room.
-- Do not revise a pass-1 score after reading the source.
+- Do not revise a pass-1 finding after reading the source.
 
 ## What to return
 
-The full record from §7 of the rubric: per-dimension scores with the entry-point
-ledger, the ten-probe robustness battery, the requirement tally with unmet items
-listed by number, the modification-probe results, the furthest point you reached,
-your total, the star band, and your comments.
+**There is no total, no per-dimension score, and no star band.** The rubric says
+so in its own first paragraph, and §7 is TEN FORCED CHOICES BETWEEN TWO
+ARTIFACTS — it cannot be cast with one. Solo `/50` scoring and star bands are a
+retired v1 device; METHODS.md retired that path outright. Anything numeric you
+produced here would be invented, and invented numbers read as data later.
+
+So return the **§4 facts pass**, which is single-artifact by design:
+
+- premise line, in one sentence, with a quoted phrase
+- completability class, and the exact point play stops
+- conformance tally against CHECKLIST.md, unmet items listed by number
+- state integrity: does a save round-trip
+- attribution label per finding (model-innate | interaction | framework)
+
+plus the observations the facts pass rests on:
+
+- the entry-point ledger (every documented way to start it, and what happened)
+- the ten-probe robustness battery, naming the worst impact
+- the modification-probe results (§B9)
+- the furthest point you reached, and whether reading the source was required
+  to get there — say so explicitly if it was
+- each of the ten axes characterised in ABSOLUTE terms: the finding a flight
+  would turn on, not a vote
+- your comments: the distinguishing strength and the distinguishing weakness
+
+If the artifact cannot be judged as asked, say which instruction conflicts with
+which rubric section and stop — do not improvise a scale.
 """
 
 
@@ -259,7 +282,9 @@ def main() -> int:
             return False
         if (p / "main.py").exists() or (p / "pyproject.toml").exists():
             return True
-        return any(p.glob("*.py")) or any(p.glob("src/*.py")) or any(p.glob("*/main.py"))
+        return (
+            any(p.glob("*.py")) or any(p.glob("src/*.py")) or any(p.glob("*/main.py"))
+        )
 
     art = src if _is_artifact(src) else src / "alpha"
     if not _is_artifact(art):
