@@ -295,11 +295,15 @@ probe_verified_cache:
 # NEVER judged by me — blind subagent only, TIER_RUBRIC v2.1, verdicts to
 # llmvp/configs/archive/TIER_JUDGEMENTS.md.
 tier:
-  # MEASURED, not declared (2026-08-14). Two independent readings on the same
-  # arm: 17.8 cyc/h at 37 min and 18.8 cyc/h at 115 min — stable, and under the
-  # <20 contemplator threshold with the >45 grinder band far out of reach. The
-  # token shape agrees: ~1,454 generated tokens per call with a single call at
-  # 7,899, which is few expensive turns rather than many cheap ones.
-  # `grinder` here was a pre-measurement guess.
-  league: contemplator  # LOAD-BEARING — agent/tier/runner.py:config_league
+  # GRINDER, and the rate reading does not overturn it. Measured 2026-08-14:
+  # 17.8 cyc/h at 37 min, 18.8 at 115 min — under the <20 line — and I briefly
+  # moved this to `contemplator` on that basis. That was the wrong quantity.
+  #
+  # The league decides which treatment ADVANTAGES the model, not which bin its
+  # rate falls in. A contemplator gets CONTEMPLATOR_CYCLES=30 because its cycles
+  # are few and expensive, so 30 is generous; a grinder keeps the wall parked at
+  # the next resumable point. This arm spent 36 CYCLES INSIDE 115 MINUTES — a
+  # 30-cycle cap would have cut it off before the wall it actually reached, so
+  # the "correction" took budget away.
+  league: grinder  # LOAD-BEARING — agent/tier/runner.py:config_league
   status: expected  # history: llmvp/configs/archive/TIER_JUDGEMENTS.md
