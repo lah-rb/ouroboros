@@ -1007,8 +1007,44 @@ class LlamaCppBackend(BaseBackend):
                     else "default"
                 )
             llm_inst._persona = persona
-            static_tokens = get_static_tokens(persona)
+            # Resolve against THIS backend's config, not the global active
+            # one: a secondary model (e.g. paddle OCR beside muse) must
+            # never be warmed with the active model's static head — that
+            # fed muse's BOS 200000 into paddle's 103,424-token vocab and
+            # flagged its context on every boot (2026-08-15). A secondary
+            # whose family cannot build a head (no format spec — OCR-only
+            # models) warms clean: empty is the correct head for it.
+            try:
+                static_tokens = get_static_tokens(persona, config=self.config)
+            except Exception as head_exc:  # noqa: BLE001
+                log.warning(
+                    "⚠️ No static head for this config [%s] (%s) — warming "
+                    "with a clean state",
+                    persona,
+                    head_exc,
+                )
+                static_tokens = []
             n_tokens = len(static_tokens)
+
+            # Eval-site vocab cross-check: the model itself is the ground
+            # truth. A mismatched head decodes into llama.cpp's fatal
+            # out-of-vocab error and flags the context; catch it here and
+            # degrade to a clean no-static warm-up instead.
+            try:
+                model_n_vocab = int(llm_inst.n_vocab())
+            except Exception:  # noqa: BLE001
+                model_n_vocab = 0
+            if static_tokens and model_n_vocab and max(static_tokens) >= model_n_vocab:
+                log.error(
+                    "❌ Static head [%s] holds id %d >= model n_vocab %d — "
+                    "foreign-vocab bin; warming without a static prefix "
+                    "(rebuild it via preprocessing for this config)",
+                    persona,
+                    max(static_tokens),
+                    model_n_vocab,
+                )
+                static_tokens = []
+                n_tokens = 0
 
             started = time.perf_counter()
 
@@ -1184,7 +1220,7 @@ class LlamaCppBackend(BaseBackend):
 
         heads: Dict[str, PersonaHead] = {}
         for persona, head_seq in seq_map.persona_seqs.items():
-            tokens = list(get_static_tokens(persona))
+            tokens = list(get_static_tokens(persona, config=self.config))
             started = time.perf_counter()
             ctx.memory_seq_rm(SEQ_WORKING, 0, -1)
             primary.reset()

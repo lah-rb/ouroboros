@@ -88,18 +88,24 @@ def reset_tokenizer_cache() -> None:
         _tokenizer_cache.clear()
 
 
-def get_cached_tokenizer() -> Any:
+def get_cached_tokenizer(config: Optional[Any] = None) -> Any:
     """
-    Get the ACTIVE model's cached tokenizer instance.
+    Get a cached tokenizer for ``config`` (the ACTIVE model when None).
 
     Creates the tokenizer on first call per model path and reuses it.
-    Automatically selects the appropriate tokenizer based on backend type.
+    The backend-delegating wrapper is only valid for the ACTIVE model —
+    ``get_backend()`` resolves to the active backend, so handing the wrapper
+    to any other config would tokenize with the wrong model's vocab (the
+    2026-08-15 paddle warm-up defect: muse's BOS 200000 fed into paddle's
+    103,424-token vocab). Non-active configs get a real vocab_only tokenizer
+    keyed by their own model path.
 
     Returns:
         Tokenizer instance (llama_cpp.Llama or transformers.AutoTokenizer)
     """
-    config = get_config()
-    key = str(config.model.path)
+    active = get_config()
+    cfg = config if config is not None else active
+    key = str(cfg.model.path)
 
     cached = _tokenizer_cache.get(key)
     if cached is not None:
@@ -114,15 +120,16 @@ def get_cached_tokenizer() -> Any:
         # Import here to avoid circular imports
         from inference.backends.factory import get_backend
 
-        backend = get_backend()
+        is_active = key == str(active.model.path)
+        backend = get_backend() if is_active else None
 
-        # Use backend's tokenizer method if available
+        # Use backend's tokenizer method if available (active model only)
         if backend is not None and hasattr(backend, "tokenize"):
             tokenizer = _BackendTokenizerWrapper()
-        elif _is_mlc_model(config.model.path):
-            tokenizer = _create_mlc_tokenizer(config)
+        elif _is_mlc_model(cfg.model.path):
+            tokenizer = _create_mlc_tokenizer(cfg)
         else:
-            tokenizer = _create_llama_tokenizer(config)
+            tokenizer = _create_llama_tokenizer(cfg)
 
         _tokenizer_cache[key] = tokenizer
         return tokenizer
@@ -159,10 +166,18 @@ class _BackendTokenizerWrapper:
         text = self.backend.detokenize(ids)
         return text.encode("utf-8") if isinstance(text, str) else text
 
+    def n_vocab(self) -> int:
+        """Vocab size of the backend's primary model (0 if unavailable)."""
+        inst = getattr(self.backend, "_primary_instance", None)
+        try:
+            return int(inst.n_vocab()) if inst is not None else 0
+        except Exception:
+            return 0
 
-def create_tokenizer() -> Any:
+
+def create_tokenizer(config: Optional[Any] = None) -> Any:
     """
-    Create a tokenizer instance.
+    Create a tokenizer instance for ``config`` (ACTIVE model when None).
 
     Thin alias for get_cached_tokenizer() — the live entry point for
     lifecycle/preprocessing callers (not deprecated; it always returns the
@@ -171,7 +186,7 @@ def create_tokenizer() -> Any:
     Returns:
         Tokenizer instance
     """
-    return get_cached_tokenizer()
+    return get_cached_tokenizer(config)
 
 
 def tokenize_text(
