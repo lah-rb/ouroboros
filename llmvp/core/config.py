@@ -8,6 +8,7 @@ and global access patterns.
 """
 
 import logging
+import os
 from pathlib import Path
 from typing import Dict, List, Literal, Optional
 
@@ -1238,6 +1239,35 @@ def expand_cache_strategy(raw: dict) -> list[str]:
     return applied
 
 
+def _redirect_model_paths(raw_cfg: dict, log) -> None:
+    """Re-root absent model paths onto $LLMVP_MODELS_ROOT, by basename.
+
+    Only fires for a path that does NOT exist as written, so a correct config
+    is never second-guessed. Silent when the variable is unset.
+    """
+    root = os.environ.get("LLMVP_MODELS_ROOT", "").strip()
+    if not root:
+        return
+    base = Path(root).expanduser()
+    for section, key in (("model", "path"), ("vision", "mmproj_path")):
+        block = raw_cfg.get(section)
+        if not isinstance(block, dict) or not block.get(key):
+            continue
+        stated = Path(str(block[key])).expanduser()
+        if stated.is_file():
+            continue
+        candidate = base / stated.name
+        if candidate.is_file():
+            log.warning(
+                "📍 %s.%s %s is absent here — using %s (LLMVP_MODELS_ROOT)",
+                section,
+                key,
+                stated,
+                candidate,
+            )
+            block[key] = str(candidate)
+
+
 def load_config(path: Optional[Path] = None) -> Config:
     """
     Load configuration from YAML file.
@@ -1275,6 +1305,20 @@ def load_config(path: Optional[Path] = None) -> Config:
                 base_name,
                 ", ".join(overridden) or "(none)",
             )
+
+        # MODEL PATHS ARE PER-MACHINE, and the configs are shared. When a
+        # second machine joined this branch it repointed the paths it uses to
+        # its own filesystem and pushed them, so the Mac then booted an arm
+        # into `/home/lah-rb/models/...` and the server died at
+        # `Model path does not exist`. Two machines cannot both be right in one
+        # tracked absolute path.
+        #
+        # LLMVP_MODELS_ROOT redirects by BASENAME when the configured path is
+        # absent locally. It never overrides a path that resolves — a machine
+        # whose config is correct is untouched — so this is a fallback, not a
+        # policy, and configs stay the single statement of WHICH weights a
+        # model uses.
+        _redirect_model_paths(raw_cfg, log)
 
         # Resolve the strategy shorthand BEFORE construction, so every
         # validator below sees one consistent config and none of them has to
