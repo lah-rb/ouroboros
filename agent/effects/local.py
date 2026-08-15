@@ -119,6 +119,10 @@ class LocalEffects:
         # httpx.MockTransport without monkeypatching.
         self._http_client = None
         self._http_transport = http_transport
+        # Per-path append locks: append_file serializes concurrent appenders
+        # to the same file so interleaved coroutines (overlap lanes, future
+        # parallel flow branches) can never tear or drop lines.
+        self._append_locks: dict[str, asyncio.Lock] = {}
         # Trace buffer — flushed to JSONL at cycle boundaries
         self._trace_buffer: list[TraceEvent] = []
         self._health_sample_calls = 0
@@ -333,6 +337,51 @@ class LocalEffects:
             return WriteResult(success=False, path=path, error=str(e))
         except Exception as e:
             self._log_entry("write_file", f"path={path!r}", f"error: {e}", start)
+            return WriteResult(success=False, path=path, error=str(e))
+
+    async def append_file(self, path: str, content: str) -> WriteResult:
+        """Append content to a file — true O_APPEND, serialized per path.
+
+        Replaces the read-whole-file-then-write_file idiom, whose
+        read-modify-write window dropped concurrent appenders' lines (the
+        databank JSONLs were only safe because booking happened to be
+        serial). The lock closes the asyncio interleave; append mode makes
+        the write itself atomic for this process's single-writer model. If
+        the existing file doesn't end in a newline, one is inserted so a
+        line-oriented record can never concatenate onto a partial last line.
+        """
+        start = time.monotonic()
+        try:
+            resolved = self._resolve_path(path)
+            lock = self._append_locks.setdefault(resolved, asyncio.Lock())
+            async with lock:
+                os.makedirs(os.path.dirname(resolved), exist_ok=True)
+                needs_newline = False
+                try:
+                    with open(resolved, "rb") as f:
+                        f.seek(-1, os.SEEK_END)
+                        needs_newline = f.read(1) != b"\n"
+                except (OSError, ValueError):
+                    # Missing or empty file — nothing to heal.
+                    pass
+                payload = ("\n" if needs_newline else "") + content
+                with open(resolved, "a", encoding="utf-8") as f:
+                    f.write(payload)
+
+            bytes_written = len(payload.encode("utf-8"))
+            self._log_entry(
+                "append_file",
+                f"path={path!r}, {bytes_written} bytes",
+                "success",
+                start,
+            )
+            return WriteResult(success=True, path=path, bytes_written=bytes_written)
+
+        except PathTraversalError as e:
+            self._log_entry("append_file", f"path={path!r}", f"BLOCKED: {e}", start)
+            return WriteResult(success=False, path=path, error=str(e))
+        except Exception as e:
+            self._log_entry("append_file", f"path={path!r}", f"error: {e}", start)
             return WriteResult(success=False, path=path, error=str(e))
 
     # Directories to skip during recursive walks — virtual environments,

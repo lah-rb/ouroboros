@@ -641,17 +641,28 @@ async def _append_jsonl(effects: Any, path: str, records: list[dict]) -> None:
         return
     from agent.persistence.models import _now_iso
 
-    fc = await effects.read_file(path)
-    existing = fc.content if getattr(fc, "exists", False) else ""
-    if existing and not existing.endswith("\n"):
-        existing += "\n"
     lines = []
     for rec in records:
         rec = dict(rec)
         rec.setdefault("paper_key", paper_key(rec))
         rec["updated_at"] = _now_iso()
         lines.append(json.dumps(rec, ensure_ascii=False))
-    await effects.write_file(path, existing + "\n".join(lines) + "\n")
+    payload = "\n".join(lines) + "\n"
+
+    appender = getattr(effects, "append_file", None)
+    if appender is not None:
+        # True append (O_APPEND + per-path lock): concurrent bookers can
+        # never drop each other's records. The old read-whole-file-then-
+        # write_file idiom had a read-modify-write window that was safe only
+        # while every booking happened to be serial.
+        await appender(path, payload)
+        return
+    # Duck-typed test doubles without append_file: legacy read-modify-write.
+    fc = await effects.read_file(path)
+    existing = fc.content if getattr(fc, "exists", False) else ""
+    if existing and not existing.endswith("\n"):
+        existing += "\n"
+    await effects.write_file(path, existing + payload)
 
 
 # ── API normalization ─────────────────────────────────────────────────

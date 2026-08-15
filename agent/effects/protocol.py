@@ -285,6 +285,26 @@ class Effects(Protocol):
         """
         ...
 
+    async def append_file(self, path: str, content: str) -> WriteResult:
+        """Append content to a file atomically with respect to concurrent
+        appenders in THIS process.
+
+        Unlike read-then-write_file, concurrent append_file calls lose
+        nothing: the implementation serializes appends per path and opens in
+        append mode. If the existing file does not end with a newline, one is
+        inserted first so a JSONL record can never concatenate onto a partial
+        last line. Creates the file (and parent directories) if absent.
+
+        Args:
+            path: Path relative to the working directory.
+            content: The content to append (caller includes trailing newline
+                for line-oriented formats).
+
+        Returns:
+            WriteResult with success status.
+        """
+        ...
+
     async def list_directory(self, path: str, recursive: bool = False) -> DirListing:
         """List files and directories.
 

@@ -157,6 +157,20 @@ class MockEffects:
         )
         return result
 
+    async def append_file(self, path: str, content: str) -> WriteResult:
+        """Append to the mock filesystem (newline-healing like LocalEffects)."""
+        existing = self._files.get(path, "")
+        if existing and not existing.endswith("\n"):
+            existing += "\n"
+        self._files[path] = existing + content
+        result = WriteResult(
+            success=True, path=path, bytes_written=len(content.encode("utf-8"))
+        )
+        self._record(
+            "append_file", {"path": path, "content_length": len(content)}, result
+        )
+        return result
+
     async def list_directory(
         self, path: str = ".", recursive: bool = False
     ) -> DirListing:
