@@ -152,11 +152,46 @@ class PersistenceManager:
             # Schema is unstable during development — no version gating.
             # Pydantic defaults handle missing fields gracefully.
             state = MissionState.model_validate(data)
+            self._rebind_working_directory(state)
             if key is not None:
                 self._mission_cache = (key, state)
             return state
         except Exception as e:
             raise PersistenceError(f"Failed to load mission: {e}") from e
+
+    def _rebind_working_directory(self, state: MissionState) -> None:
+        """Point config.working_directory at where the mission ACTUALLY lives.
+
+        The stored path is a memory of the machine that wrote it; this
+        manager's own directory is the one the file was just read from, so
+        the latter is authoritative and the former is at best a duplicate.
+
+        A corpus carried between machines makes them disagree. Nothing
+        crashes when they do: effects resolve their own paths and every
+        read/write through this class keeps working, so the mission runs,
+        acquires, plans and reports fine. The damage is confined to the
+        actions that build an ABSOLUTE path out of the stored string and
+        hand it to a subprocess — they address a directory that does not
+        exist on this machine.
+
+        Live cost of learning that: a spectra mission moved from macOS to
+        Linux kept `/Users/lah-rb/corpora/...`, and the OCR lane dispatched
+        99 papers' worth of extraction at paths with no files behind them.
+        Every one crashed, emitted no report line, and was booked
+        `extract_failed` — a data-loss event dressed as 99 quality failures.
+        The stale path was invisible in every status view.
+        """
+        cfg = getattr(state, "config", None)
+        stored = getattr(cfg, "working_directory", "") if cfg else ""
+        if not stored or os.path.realpath(stored) == self._working_dir:
+            return
+        logger.warning(
+            "Mission working_directory %r does not match the directory it was "
+            "loaded from; rebinding to %r",
+            stored,
+            self._working_dir,
+        )
+        cfg.working_directory = self._working_dir
 
     def save_mission(self, state: MissionState) -> bool:
         """Save mission state to .agent/mission.json atomically.

@@ -370,6 +370,50 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
         if isinstance(r, dict) and r.get("paper_key"):
             reports[r["paper_key"]] = r
 
+    # A BATCH THAT REPORTED NOTHING INDICTS THE TOOLCHAIN, NOT THE PAPERS.
+    # extract_batch prints one JSON line per paper even when that paper
+    # fails — an unreadable PDF still gets a report carrying `error`. So
+    # ZERO lines across a whole batch means the process died before it
+    # could judge anything: a bad interpreter, a missing model, an import
+    # error, a path with no files behind it. None of that is evidence
+    # about the papers, and booking it against them destroys their
+    # eligibility for the run that finally works.
+    #
+    # This is the containment for the /Users-vs-/home port bug: 99 papers
+    # were marked extract_failed by a toolchain that never opened one of
+    # them. Two dispatches of the same batch burn the retry rung and reach
+    # a TERMINAL state, so the loss was silent and permanent. Leaving the
+    # records untouched means the sweep re-dispatches — noisy, and noise
+    # is the correct failure mode when the tool itself is broken.
+    if resolved_keys and not reports:
+        detail = (
+            "timed out"
+            if result.timed_out
+            else (
+                f"exit {result.return_code}"
+                if result.return_code
+                else "exited cleanly with no output"
+            )
+        )
+        tail = (result.stderr or "").strip().splitlines()[-3:]
+        summary = (
+            f"Extraction toolchain produced no report for any of "
+            f"{len(resolved_keys)} paper(s) ({detail}) — the batch is "
+            f"unjudged and stays pending"
+        )
+        return StepOutput(
+            result={"status": "failed"},
+            observations=summary + (f"; stderr: {' | '.join(tail)}" if tail else ""),
+            context_updates={
+                "directive_report": {
+                    "flow": "extract_pdfs",
+                    "status": "failed",
+                    "summary": summary,
+                    "headline": "extraction toolchain failed — no reports",
+                }
+            },
+        )
+
     updates: list[dict] = []
     extracted = retried = failed = 0
     for k in resolved_keys:

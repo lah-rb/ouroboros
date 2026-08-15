@@ -535,3 +535,41 @@ async def test_oversize_is_terminal_for_the_sweep():
             "extraction_status": "extract_oversize",
         }
     )
+
+
+@pytest.mark.asyncio
+async def test_a_batch_with_no_reports_at_all_leaves_every_paper_pending():
+    """A dead toolchain must not be recorded as a verdict on the papers.
+
+    The tool prints one line per paper even when that paper fails, so zero
+    lines for a whole batch means the process died before judging anything.
+    Live: a mission carried between machines kept the other machine's
+    working_directory, so every dispatch addressed PDFs that did not exist
+    here; two passes of the same batch walked 99 papers through
+    needs_reextract to the TERMINAL extract_failed, and none of them had
+    been opened.
+    """
+    import os
+    from agent.actions import extraction_actions as ea
+
+    fx = _fx([_bank_line("a"), _bank_line("b")])
+    tool = os.path.join(ea._repo_root(), ea._TOOL_PY)
+    fx._commands[tool] = CommandResult(
+        return_code=1,
+        stdout="",
+        stderr="Traceback ...\nFileNotFoundError: no such file",
+        command="x",
+    )
+    out = await action_extract_pdf_batch(
+        _si(inputs=_batch_inputs(["a", "b"]), effects=fx)
+    )
+    from agent.actions.scholarly_actions import read_databank
+
+    bank = await read_databank(fx)
+    assert not bank["a"].get("extraction_status")
+    assert not bank["b"].get("extraction_status")
+    assert out.result["status"] == "failed"
+    # The reason has to name the toolchain, or the next reader repeats the
+    # investigation that cost 99 papers.
+    assert "toolchain" in out.observations
+    assert "FileNotFoundError" in out.observations
