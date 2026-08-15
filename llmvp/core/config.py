@@ -969,16 +969,37 @@ def resolve_config_path(name: str, root: Optional[Path] = None) -> Optional[Path
     return hits[0].resolve()
 
 
+# WHICH MODEL IS SERVED IS PER-MACHINE STATE, not a property of the codebase.
+# The server rewrites the pointer on every swap and the tier runner rewrites it
+# per arm, so tracking it made every machine fight every other one — it blocked
+# three rebases in an afternoon once a second machine started pushing. It is
+# gitignored; this template is what a fresh clone gets, and a local edit to the
+# pointer is invisible to git by design.
+POINTER_TEMPLATE = BASE_DIR / "active_config.txt.example"
+
+
 def _read_pointer_file() -> Optional[Path]:
-    """Read the active configuration pointer file."""
-    if not POINTER_FILE.is_file():
-        return None
+    """Read the active configuration pointer, falling back to the template.
 
-    name = POINTER_FILE.read_text(encoding="utf-8").strip()
-    if not name:
-        return None
-
-    return resolve_config_path(name)
+    A fresh clone has no pointer (it is gitignored), and raising there would
+    mean the server cannot start until someone reads an error message. The
+    template ships a working default instead; a machine that wants another
+    model writes the real pointer and git never sees it.
+    """
+    for candidate in (POINTER_FILE, POINTER_TEMPLATE):
+        if not candidate.is_file():
+            continue
+        name = candidate.read_text(encoding="utf-8").strip()
+        if not name:
+            continue
+        if candidate is POINTER_TEMPLATE:
+            logging.getLogger(__name__).warning(
+                "No active_config.txt — falling back to the shipped default %r. "
+                "Write llmvp/active_config.txt to choose another model.",
+                name,
+            )
+        return resolve_config_path(name)
+    return None
 
 
 def _default_config_path() -> Path:
@@ -990,8 +1011,10 @@ def _default_config_path() -> Path:
 
     raise FileNotFoundError(
         "\n🚨 No configuration file could be located.\n"
-        "Please create an active_config.txt file in the project root\n"
-        "that points to a configuration file in the ./configs/ directory."
+        "Write llmvp/active_config.txt naming a file in ./configs/ "
+        "(it is gitignored — the value is per-machine).\n"
+        "llmvp/active_config.txt.example ships a working default and is "
+        "used automatically when the pointer is absent."
     )
 
 

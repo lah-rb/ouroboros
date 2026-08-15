@@ -58,3 +58,9 @@ llmvp/data/*.tokens.bin
 # fixture — if that lineage should survive a fresh clone, copy the specimen
 # under a tests fixture path rather than re-tracking this directory.
 llmvp/logs/
+
+# Runtime state, not configuration. The server writes it on every swap and
+# the tier runner rewrites it per arm, so a tracked copy conflicts on every
+# rebase — and with two machines pushing one branch, it conflicted three times
+# in an afternoon. The committed default lives in llmvp/configs/.
+llmvp/active_config.txt
