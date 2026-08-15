@@ -295,5 +295,11 @@ probe_verified_cache:
 # NEVER judged by me — blind subagent only, TIER_RUBRIC v2.1, verdicts to
 # llmvp/configs/archive/TIER_JUDGEMENTS.md.
 tier:
-  league: grinder  # LOAD-BEARING — agent/tier/runner.py:config_league
+  # MEASURED, not declared (2026-08-14). Two independent readings on the same
+  # arm: 17.8 cyc/h at 37 min and 18.8 cyc/h at 115 min — stable, and under the
+  # <20 contemplator threshold with the >45 grinder band far out of reach. The
+  # token shape agrees: ~1,454 generated tokens per call with a single call at
+  # 7,899, which is few expensive turns rather than many cheap ones.
+  # `grinder` here was a pre-measurement guess.
+  league: contemplator  # LOAD-BEARING — agent/tier/runner.py:config_league
   status: expected  # history: llmvp/configs/archive/TIER_JUDGEMENTS.md
