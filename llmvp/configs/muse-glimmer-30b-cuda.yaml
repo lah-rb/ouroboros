@@ -1,0 +1,44 @@
+# muse on the 3090/3060 rig — the CUDA-machine view of muse-glimmer-30b.
+#
+# WHY A SEPARATE FILE. Two machines share this repo and a probe LEDGER IS A
+# MEASUREMENT OF ONE MACHINE: the base config carries probe_verified_n_ctx
+# 131072 from the M1 (run_id cells_20260811-221252, 116 GB unified), which on
+# a 24 GB card accounts to ~25.6 GiB and cannot exist — yet the KV preflight
+# reads it as "measured to load and decode on this machine". Probing the base
+# here would clobber the M1's ledger with a CUDA ceiling: the same
+# cross-machine bug in the other direction (see manager._rebind_working_
+# directory for the working_directory instance of this class). Per-machine
+# facts live in a per-machine file, selected by the untracked
+# active_config.txt.
+#
+# BATCHED, 4 SEATS IN THE EXISTING CELL. Measured on this rig 2026-08-15
+# (260 inference calls, scraper flow): median total context 5,382 tokens,
+# p95 6,762, 1 of 260 over 8k. In batched mode n_ctx is the SHARED cell, so
+# 4 seats inside the same 32768 the pool config already allocates cost ZERO
+# additional KV — the single-seat window was 6x oversized for this flow.
+# The curator flow reads whole markdowns and will need its own measurement
+# before it gets seats.
+extends: muse-glimmer-30b
+
+model:
+  # Path and n_ctx are stated here even though inheritance would supply them:
+  # --probe-context reads the RAW child file (no inheritance resolution) and
+  # needs both, and this machine's real path beats the base's /Users/… +
+  # LLMVP_MODELS_ROOT basename redirect anyway.
+  path: /home/lah-rb/models/muse-glimmer-30B-kquant-dynamic.gguf
+  # In batched mode this is the SHARED cell across seats: 4 x ~8k. Measured
+  # scraper-flow context (260 calls): median 5,382, p95 6,762, 1/260 over 8k.
+  n_ctx: 32768
+  probe_verified_weights_bytes: 19653957984
+  probe_verified_n_ctx: 91136
+  # The base declares vision_n_ctx 131072 — an M1 sizing (7 GB of lazy KV
+  # against 123 GB) that on this card is a landmine: never built, costing
+  # nothing, until one stray vision request tries to allocate 6.5 GiB into
+  # ~3 GiB of free VRAM and kills the primary. Paddle owns page OCR here;
+  # muse vision remains available for figure work at a window that fits.
+  # 16384 = 0.81 GiB, inside today's slack, ~10x a dense figure answer.
+  vision_n_ctx: 16384
+
+resources:
+  decode_mode: batched
+  max_concurrent_requests: 4
