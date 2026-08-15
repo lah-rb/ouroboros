@@ -26,6 +26,24 @@ DRY_ROUNDS_TO_STOP = 2
 CORPUS_GOAL_SIGNATURE = "corpus-catalog"
 
 
+async def _set_goal_status(effects, mission, goal) -> None:
+    """Persist one goal's (already in-memory-mutated) status.
+
+    Mission-ops pilot: prefers effects.mission_apply with a GoalStatusOp —
+    a field-granular, merge-safe write — and falls back to whole-document
+    save_mission for effects doubles without the surface. Status sets are
+    idempotent, so mirroring on the in-memory object AND applying the op is
+    safe (counters would not be — see the loop park site)."""
+    apply = getattr(effects, "mission_apply", None)
+    if apply is not None:
+        from agent.persistence.models import GoalStatusOp
+
+        applied = await apply([GoalStatusOp(goal_id=goal.id, status=goal.status)])
+        if applied is not None:
+            return
+    await effects.save_mission(mission)
+
+
 def _aspect_slug(name: str) -> str:
     return "".join(c if c.isalnum() else "-" for c in name.strip().lower()).strip("-")
 
@@ -374,8 +392,11 @@ async def action_catalog_sweep_next(step_input: StepInput) -> StepOutput:
         http_state = await effects.read_state(_HTTP_STATE_KEY) or {}
         used = int(http_state.get("total_requests") or 0)
         if used >= budget:
+            # Mission-ops pilot: an idempotent status set — mirrored on the
+            # cycle's shared in-memory object AND persisted as an op (safe to
+            # double-apply, unlike counters).
             goal.status = "complete"
-            await effects.save_mission(mission)
+            await _set_goal_status(effects, mission, goal)
             return StepOutput(
                 result={"sweep_complete": True, "budget_exhausted": True},
                 observations=(
@@ -410,7 +431,7 @@ async def action_catalog_sweep_next(step_input: StepInput) -> StepOutput:
     if not batch:
         goal.status = "complete"
         if effects:
-            await effects.save_mission(mission)
+            await _set_goal_status(effects, mission, goal)
         return StepOutput(
             result={"sweep_complete": True},
             observations="Catalog sweep: worklist empty — corpus goal complete",
@@ -528,6 +549,10 @@ async def action_harvest_research_findings(step_input: StepInput) -> StepOutput:
     if retag_records:
         await append_records(effects, retag_records)
     if effects:
+        # NOT migrated to mission ops: a reopen is status + reports=[] — a
+        # nested multi-field change, i.e., an owner-shaped write. Ops cover
+        # single-field shapes only (see models.MissionOp); forcing this one
+        # would leave stale round budgets in the crash window.
         await effects.save_mission(mission)
 
     return StepOutput(

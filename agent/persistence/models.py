@@ -1338,6 +1338,86 @@ class MissionState(BaseModel):
 # ── Events ────────────────────────────────────────────────────────────
 
 
+# ── Mission ops (CRDT-typed mutations) ────────────────────────────────
+#
+# The op-based alternative to whole-document save_mission: each op names a
+# merge type the mission doc (persistence/mission_doc.py) applies natively —
+# appends commute, counter increments sum, field sets are last-writer-wins
+# at FIELD granularity. Sites migrate from load-mutate-save to
+# effects.mission_apply([...]) opportunistically; unmigrated sites keep
+# save_mission, which the doc treats as a single-owner replace.
+
+
+class NoteAppendOp(BaseModel):
+    op: Literal["note_append"] = "note_append"
+    entry: dict[str, Any]
+
+
+class DispatchAppendOp(BaseModel):
+    op: Literal["dispatch_append"] = "dispatch_append"
+    entry: dict[str, Any]
+
+
+class LedgerAppendOp(BaseModel):
+    op: Literal["ledger_append"] = "ledger_append"
+    entry: dict[str, Any]
+
+
+class WarningAppendOp(BaseModel):
+    op: Literal["warning_append"] = "warning_append"
+    entry: dict[str, Any]
+
+
+class CounterIncOp(BaseModel):
+    op: Literal["counter_inc"] = "counter_inc"
+    field: str
+    n: int = 1
+
+
+class GoalStatusOp(BaseModel):
+    """LWW, not monotone — goals get reopened (see GoalRecord docstring),
+    so 'furthest stage wins' would be wrong. Concurrent same-goal writes
+    resolve deterministically; avoiding them is an ownership concern."""
+
+    op: Literal["goal_status"] = "goal_status"
+    goal_id: str
+    status: str
+
+
+class MissionStatusOp(BaseModel):
+    op: Literal["mission_status"] = "mission_status"
+    status: str
+
+
+class FieldSetOp(BaseModel):
+    op: Literal["field_set"] = "field_set"
+    key: str
+    value: Any = None
+
+
+class PlanReplaceOp(BaseModel):
+    """Single-owner replacement of a plan section (research_plan /
+    architecture / task_definition). Concurrent plan edits are owner
+    errors, not merges."""
+
+    op: Literal["plan_replace"] = "plan_replace"
+    section: str
+    value: Any = None
+
+
+MissionOp = (
+    NoteAppendOp
+    | DispatchAppendOp
+    | LedgerAppendOp
+    | WarningAppendOp
+    | CounterIncOp
+    | GoalStatusOp
+    | MissionStatusOp
+    | FieldSetOp
+    | PlanReplaceOp
+)
+
+
 class Event(BaseModel):
     """An event in the mission event queue (.agent/events.json)."""
 

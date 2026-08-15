@@ -1750,6 +1750,19 @@ class LocalEffects:
         ledger_add_ms(self._ledger, "persistence", (time.monotonic() - start) * 1000)
         return success
 
+    async def mission_apply(self, ops: list):
+        start = time.monotonic()
+        pm = self._get_persistence()
+        state = pm.apply_ops(list(ops))
+        self._log_entry(
+            "mission_apply",
+            f"{len(ops)} op(s): {','.join(o.op for o in ops)[:80]}",
+            "ok" if state is not None else "no mission",
+            start,
+        )
+        ledger_add_ms(self._ledger, "persistence", (time.monotonic() - start) * 1000)
+        return state
+
     async def read_events(self) -> list:
         start = time.monotonic()
         pm = self._get_persistence()

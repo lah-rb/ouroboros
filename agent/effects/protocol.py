@@ -542,6 +542,18 @@ class Effects(Protocol):
         """
         ...
 
+    async def mission_apply(self, ops: list) -> Any:
+        """Apply typed MissionOps (persistence.models.MissionOp) — the
+        op-based alternative to whole-document save_mission. Appends
+        commute, counter increments sum, field sets are last-writer-wins
+        at field granularity; the mission doc journal records them with
+        CRDT merge semantics for future multi-process/multi-machine sync.
+
+        Returns:
+            The resulting MissionState (None if no mission exists).
+        """
+        ...
+
     async def push_note(
         self,
         content: str,

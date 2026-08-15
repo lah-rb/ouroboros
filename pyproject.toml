@@ -9,6 +9,10 @@ dependencies = [
     "httpx>=0.28.1",
     "jinja2>=3.1.6",
     "json-repair>=0.*",
+    # Mission-state CRDT engine (persistence/mission_doc.py, the only
+    # importer). Pinned to the verified line: 1.13.x passed the convergence
+    # rehearsal (counter sum / log union / LWW determinism).
+    "loro>=1.13.2,<2",
     "jsonpath-ng>=1.6",
     "markdown-it-py>=3.0.0",
     "mcp>=1.0.0",

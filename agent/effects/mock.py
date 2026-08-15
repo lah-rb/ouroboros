@@ -655,6 +655,17 @@ class MockEffects:
         self._record("save_mission", {"id": getattr(state, "id", "?")}, True)
         return True
 
+    async def mission_apply(self, ops: list) -> Any:
+        """Interpret MissionOps on the in-memory mission — shares the
+        engine-down interpreter with the real manager for parity."""
+        from agent.persistence.manager import PersistenceManager
+
+        mission = self._state.get("mission")
+        if mission is not None:
+            PersistenceManager._apply_ops_direct(mission, list(ops))
+        self._record("mission_apply", {"ops": [o.op for o in ops]}, mission)
+        return mission
+
     async def read_events(self) -> list:
         result = self._state.get("events", [])
         self._record("read_events", {}, result)
