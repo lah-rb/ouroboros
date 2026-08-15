@@ -1139,9 +1139,16 @@ class TierRun:
             f"=== tier batch · {len(self.arms)} arms · {self.wall} each "
             f"· budget {self.budget_h}h ==="
         )
+        # THE PHASE CEILING IS PROVENANCE. An arm stopped at `structural` did
+        # not attempt the phases that exercise what it built, so its artifact is
+        # not comparable with one run to `quality` — and the batch log recorded
+        # mission and rubric but not this, leaving archived arms unanswerable on
+        # it after the fact. Live: a structural-only arm produced a tree whose
+        # every defect was "authored but never exercised", which is exactly the
+        # class the later phases exist to catch.
         self.log(
             f"    mission={self.mission} rubric={_rubric_version()} "
-            f"base={self.base}"
+            f"top_phase={self.top_phase} base={self.base}"
         )
         t0 = time.time()
 
