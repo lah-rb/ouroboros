@@ -125,6 +125,30 @@ MODEL_IDENTIFIERS = [
 IDENTIFIERS = MODEL_IDENTIFIERS + FRAMEWORK_IDENTIFIERS
 
 
+def arm_identifier_stems(config_name: str) -> list[str]:
+    """Identifying stems from the arm's OWN config name.
+
+    THE DENYLIST CANNOT COVER THE ARM THAT MATTERS MOST. MODEL_IDENTIFIERS is
+    maintained by hand, so a model nobody has tiered yet is absent from it —
+    and a new model is precisely the one with no prior, where a contaminated
+    judgement costs the most. Live: an arm shipped `# Muse Glimmer 30b` as the
+    first line of its README and this scanner passed it "no model names —
+    judgeable", because neither `muse` nor `glimmer` was on the list.
+
+    The runner knows which model produced the artifact. Feeding that name in
+    makes the scan self-sufficient: whatever the roster says, an arm can never
+    pass while carrying its own name.
+
+    Stems are alphabetic and >= 4 chars so a size or revision suffix ("30b",
+    "a5", "v4") cannot flood every artifact with false hits.
+    """
+    stems = {config_name.strip().lower()}
+    for token in re.split(r"[^a-zA-Z]+", config_name):
+        if len(token) >= 4:
+            stems.add(token.lower())
+    return sorted(s for s in stems if s)
+
+
 def stage_one(src: Path, dest: Path) -> None:
     """Copy an artifact and strip it AT EVERY DEPTH.
 
@@ -148,6 +172,19 @@ def stage_one(src: Path, dest: Path) -> None:
 
 
 _MODEL_PAT = re.compile("|".join(re.escape(t) for t in MODEL_IDENTIFIERS), re.I)
+
+
+def _extend_identifiers(arm_names: list) -> None:
+    """Fold the arms' own names into the blocking set for this run."""
+    global _MODEL_PAT, IDENTIFIERS
+    extra: list[str] = []
+    for name in arm_names:
+        extra.extend(arm_identifier_stems(name))
+    if not extra:
+        return
+    MODEL_IDENTIFIERS.extend(e for e in extra if e not in MODEL_IDENTIFIERS)
+    IDENTIFIERS[:] = MODEL_IDENTIFIERS + FRAMEWORK_IDENTIFIERS
+    _MODEL_PAT = re.compile("|".join(re.escape(t) for t in MODEL_IDENTIFIERS), re.I)
 
 
 def _is_blocking(text: str, m: re.Match) -> bool:
@@ -212,7 +249,17 @@ def main() -> None:
     ap.add_argument("--judges", type=int, default=3)
     ap.add_argument("--out", default="/tmp/blind_panel")
     ap.add_argument("--seed", type=int, default=None, help="omit for a real coin flip")
+    ap.add_argument(
+        "--arm-identifier",
+        action="append",
+        default=[],
+        help="config name of the model that produced an artifact. Its stems "
+        "are treated as BLOCKING regardless of the denylist — the roster "
+        "cannot know a model nobody has tiered yet. Repeatable.",
+    )
     args = ap.parse_args()
+    # Before any scanning: the arms' own names outrank the denylist.
+    _extend_identifiers(args.arm_identifier)
 
     runs = [Path(r).expanduser().resolve() for r in args.runs]
     for r in runs:

@@ -660,6 +660,13 @@ class TierRun:
                     str(ROOT / "dev/blind_panel/stage.py"),
                     "--judges",
                     "1",
+                    # THE ARM CANNOT PASS CARRYING ITS OWN NAME. stage.py's
+                    # denylist is maintained by hand and cannot contain a model
+                    # nobody has tiered yet — live, an arm shipped
+                    # "# Muse Glimmer 30b" as its README title and the scan
+                    # called it judgeable. We know the config here; say so.
+                    "--arm-identifier",
+                    config,
                     "--out",
                     str(dest),
                     str(work),

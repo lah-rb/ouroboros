@@ -174,3 +174,40 @@ internally reasonable. Both 2026-07-25 artifacts failed that way
 (`shadow_lord`/`crystal_shard` vs `shadow_lich`/`crystal_of_dawn`; `Boss`
 lacking the `attack` attribute the engine probed for). Expect it, and note that
 the transfer-shape/typecheck gates exist to target exactly this class.
+
+## The denylist cannot cover the arm that matters most (2026-08-14)
+
+`stage.py` decided blinding from `MODEL_IDENTIFIERS`, a hand-maintained list of
+the resident fleet. A model nobody has tiered yet is by definition absent from
+it — and a new model is exactly the one with no prior, where a contaminated
+judgement costs the most.
+
+Found on muse-glimmer-30b's first arm. The artifact's own `README.md` opened
+
+    # Muse Glimmer 30b - Text Adventure
+
+and `pyproject.toml` set `name = "muse-glimmer-30b"`. The scan reported
+**"identifier scan: no model names — judgeable"** and the runner staged it with
+`(no model names; framework byline only)`. Any judge reading line 1 of the
+README would have known the arm.
+
+The leak was not a staging failure. THE MODEL NAMED THE PROJECT AFTER ITSELF —
+nothing in the pipeline put that string there, so no amount of scrubbing
+discipline would have anticipated it. Only the denylist could have caught it,
+and the denylist is precisely what cannot know a new name.
+
+**Fix:** `stage.py --arm-identifier <config>`, passed by
+`agent/tier/runner.py` from the arm it is staging. Stems are alphabetic and
+>= 4 chars (so "30b"/"a5"/"v4" cannot flood every artifact), and they are
+BLOCKING regardless of the roster. An arm can no longer pass carrying its own
+name.
+
+A sweep of every archived judge bundle found one other hit, benign:
+`tier_20260731-050209/arm02` had a helper script echoing its own
+`/private/tmp/tier/laguna-xs-2.1/` path. `laguna` was on the denylist, so that
+one was already caught at the time.
+
+**When an arm self-names, record it and normalize.** The naming is model
+output and worth keeping as an observation, but it cannot travel inside the
+bundle. Normalize the offending strings, note what they were in the run record,
+and re-scan before judging.
