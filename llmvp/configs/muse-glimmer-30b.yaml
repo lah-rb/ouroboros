@@ -190,6 +190,16 @@ model:
   swa_full: true
   kv_unified: true
   resident_seq_cache: true
+  # Set per reference.yaml step 3c: the chat template's assistant-history
+  # branch renders reasoning only when the caller passes reasoning_content
+  # back — thinking-free history is this family's canonical multi-turn
+  # shape, so a resident session keeping raw `to=self` spans live is out
+  # of distribution. Measured 2026-08-15 (tier session walk): ~34% of
+  # session KV was CoT, and the FILE-marker echo drift tracked visibility
+  # of its own prior raw turns. VERIFY ON NEXT BOOT before a session run:
+  # reasoning_span's replayed turn must match the template's
+  # `<|start|>assistant to=user<|message|>…<|eot|>` rendering exactly.
+  resident_strip_reasoning: true
   context_refresh_drain_s: 300
   # VISION. muse was the most faithful figure transcriber in the 2026-08-11
   # bake-off (145/192). The projector is 1.40GB and binds the MODEL, not a

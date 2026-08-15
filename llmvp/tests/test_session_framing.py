@@ -100,6 +100,12 @@ class _FakeTok:
         "<think>\n": [88, 10],
         "<channel|>": [101],
         "<|channel|>": [200005],
+        "<|eom|>": [200007],
+        "<|eot|>": [200008],
+        # muse's channel marker is PLAIN TEXT, several tokens — its last id
+        # (`=` → 61) is deliberately one that appears in generated code,
+        # because that ambiguity is why the muse gate must use <|eom|>.
+        " to=": [220, 998, 61],
     }
 
     def tokenize(self, b, add_bos=False, special=False):
@@ -141,6 +147,26 @@ def test_reasoning_span_harmony():
     )
     # only the final channel (no analysis) → nothing to strip
     assert reasoning_span("harmony", True, [200005, 700], 100, tk) is None
+
+
+def test_reasoning_span_muse_glimmer():
+    """Channel family with a DISTINCT reasoning closer: the gate is <|eom|>
+    presence, NOT the channel-token count — muse's ` to=` is plain text whose
+    last id (`=`) occurs all over generated code, so counting it would strip
+    turns that never reasoned. Was a silent no-op until the schema-derived
+    branch (2026-08-15): `resident_strip_reasoning: true` did nothing."""
+    from core.session_manager import reasoning_span
+
+    tk = _FakeTok()
+    # ` to=self<|message|>…<|eom|>…` — reasoning closed, strippable.
+    gen = [220, 998, 61, 10, 11, 200007, 220, 998, 61, 700, 200008]
+    assert reasoning_span("muse-glimmer", True, gen, 100, tk) == (
+        100,
+        " to=user<|message|>",
+    )
+    # A code-only turn full of `=` ids but no <|eom|> → nothing to strip.
+    # (The harmony count-gate would have fired here: 61 appears twice.)
+    assert reasoning_span("muse-glimmer", True, [61, 700, 61, 200008], 100, tk) is None
 
 
 @pytest.mark.parametrize("family", FAMILIES)

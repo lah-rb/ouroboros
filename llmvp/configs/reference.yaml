@@ -96,6 +96,31 @@
 #   • Empty output at temperature 0 that is also empty at the card's sampling
 #     profile is not a sampling problem. Check once, then move on.
 #
+# ── 3c. READ THE MULTI-TURN THINKING CONVENTION, THEN SET THE STRIP ──
+# Families disagree on whether prior turns' reasoning belongs in the
+# context: some are trained to see it, most expect it GONE. A resident
+# session keeps every raw `thinking` span live in KV, so a model whose
+# canonical history is thinking-free spends its whole session slightly
+# out of distribution — and format discipline is what slips first
+# (muse-glimmer 2026-08-15: the FILE-marker echo drift persisted exactly
+# while its own prior raw turns were in view, and snapped back to
+# canonical the moment a window drop evicted them).
+#
+# The model card rarely says. The CHAT TEMPLATE always does — read the
+# assistant-history branch of tokenizer.chat_template from the GGUF
+# headers (step 1 already has them open):
+#   • reasoning rendered only when the caller passes it back
+#     (`message.get('reasoning_content')`, no last-turn gate) → stripped
+#     history is the canonical shape → resident_strip_reasoning: true
+#     (muse-glimmer is this shape);
+#   • reasoning rendered last-turn-only (harmony/gpt-oss) → same verdict;
+#   • reasoning rendered unconditionally for all turns → the model
+#     expects its thoughts kept → leave the strip OFF.
+# Then verify the strip's replay on a REAL completion before trusting it:
+# reasoning_span's replayed turn must match the template's own content-
+# turn rendering byte-for-byte — the strip is format-yaml-derived and
+# inherits every caveat of step 3b.
+#
 # ── 4. CHOOSE THE STRATEGY, THEN STATE swa_full ──────────────────────
 #   cache_strategy: replay | resident | batched      (see the shortcut below)
 # Default to `resident` — it is the optimum for any model that supports it.
@@ -432,7 +457,10 @@ model:
   # [O] Type: bool — strip prior-turn CoT from resident sessions in-place
   # (truncate-and-replay the clean answer): harmony-compliant multi-turn
   # form + large context savings on deep thinking sessions. Validated on
-  # gpt-oss/harmony; validate chatml before enabling there. Default: false
+  # gpt-oss/harmony; validate chatml before enabling there. Set from the
+  # family's own multi-turn convention — step 3c above — not from taste:
+  # a template whose history branch renders reasoning only on request
+  # expects it stripped. Default: false
   resident_strip_reasoning: false
   # [O] Type: bool — turn-0 fork of [global static + flow head] for
   # sessions passing flow_key + static_prefix (reclaims cross-session

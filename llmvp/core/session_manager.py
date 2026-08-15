@@ -40,6 +40,14 @@ log = logging.getLogger("llm-mvp")
 # reserving all of it would fire windowing every turn and gut the session memory.
 # The backend caps the ACTUAL generation to the remaining context regardless, so
 # this is just the minimum free headroom we keep before dropping the oldest turns.
+#
+# The reserve is additionally capped at n_ctx // 4 at the decision site: a flat
+# 16384 against a 32k context is HALF the window, and it evicts on speculation.
+# Measured (muse-glimmer structural session, 2026-08-15): windowing fired at
+# pos 18.9k of 32.8k — 13.8k genuinely free, largest real generation in the
+# session 3.5k — and the drop evicted the earlier files of a session walk, so
+# every later file generated blind ("0 sibling(s) binding"). At n_ctx ≥ 64k
+# the quarter-cap is ≥ 16384 and nothing changes.
 _WINDOW_GEN_RESERVE = 16384
 
 
@@ -92,27 +100,44 @@ def reasoning_span(
         t0 = gen_start_pos - open_len
         return (t0, "") if t0 >= 0 else None
 
-    if family == "harmony":
-        # Markers sourced from the harmony schema (single declaration —
-        # see formats/harmony.yaml + inference/final_channel_stop.py).
-        _s = _get_format_renderer("harmony").s
-        _chan_tok = _s.thinking.channel_token
-        chan_id = sid(_chan_tok)
-        if chan_id is None or sum(1 for t in gen_tokens if t == chan_id) < 2:
-            return None  # no analysis/commentary channel → nothing to strip
-        # Keep the gen-prompt "<|start|>assistant"; drop ALL generated channels
-        # (analysis/commentary/final), then replay the canonical final channel.
-        return (
-            gen_start_pos,
-            f"{_chan_tok}{_s.thinking.content_channel}{_s.tokens.msg_content}",
-        )
-
     if family == "gemma":
         if sid("<channel|>") not in gen_tokens:
             return None
         # Keep "<start_of_turn>model\n"; drop the generated preamble + answer,
         # then replay the clean answer.
         return (gen_start_pos, "")
+
+    # Channel-style families — reasoning is a separate assistant message on a
+    # reasoning channel/recipient (harmony's <|channel|>analysis, muse's
+    # ` to=self`). Everything is derived from the format schema so a new
+    # channel family costs no edits here: this branch was `family ==
+    # "harmony"` until 2026-08-15, when muse-glimmer's strip turned out to be
+    # a silent no-op — the same hand-maintained-vocabulary trap the
+    # featurizer hit at onboarding (reference.yaml step 3c).
+    _s = _get_format_renderer(family).s
+    if getattr(getattr(_s, "thinking", None), "style", "") == "channel":
+        _chan_tok = _s.thinking.channel_token
+        _think_close = getattr(_s.tokens, "thinking_close", "") or ""
+        if _think_close and _think_close != _s.tokens.msg_close:
+            # A DISTINCT reasoning closer (muse: <|eom|> vs <|eot|>) is a
+            # real special token and its presence IS the "this turn
+            # reasoned" signal. The channel-count gate below is unusable
+            # here: a plain-text recipient prefix like ` to=` ends in an id
+            # (`=`) that generated code contains everywhere.
+            if sid(_think_close) not in gen_tokens:
+                return None
+        else:
+            # Shared closer (harmony's <|end|>): a reasoning turn reopens
+            # the channel token at least twice (analysis + final).
+            chan_id = sid(_chan_tok)
+            if chan_id is None or sum(1 for t in gen_tokens if t == chan_id) < 2:
+                return None  # no reasoning channel → nothing to strip
+        # Keep the gen-prompt "<|start|>assistant"; drop ALL generated
+        # channels, then replay the canonical content channel.
+        return (
+            gen_start_pos,
+            f"{_chan_tok}{_s.thinking.content_channel}{_s.tokens.msg_content}",
+        )
 
     return None
 
@@ -717,8 +742,9 @@ class SessionManager:
                 # Reserve only a BOUNDED generation headroom (not the full
                 # max_tokens — a thinking-turn's max_tokens is often ~n_ctx, which
                 # would window every turn). The backend caps real generation to the
-                # remaining context anyway; this just keeps a slice free.
-                gen_reserve = min(int(max_tokens or 0), _WINDOW_GEN_RESERVE)
+                # remaining context anyway; this just keeps a slice free. Never
+                # more than a quarter of the context: see _WINDOW_GEN_RESERVE.
+                gen_reserve = min(int(max_tokens or 0), _WINDOW_GEN_RESERVE, n_ctx // 4)
                 if n_ctx and pre_turn_pos + len(turn_tokens) + gen_reserve >= n_ctx:
                     if session.snapshot_key or session.snapshot_forked:
                         # Windowing position-shifts (memory_seq_add) KV cells
