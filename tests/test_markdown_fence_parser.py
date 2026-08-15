@@ -307,3 +307,70 @@ class TestUnfencedFileMarkers:
         assert [p for p, _ in blocks] == names
         for path, body in blocks:
             compile(body, path, "exec")  # every recovered file must be valid
+
+
+class TestEmptyBlockNeverShadowsMeaningful:
+    """The muse session-walk regression (2026-08-14/15): 7 of 9 "missing"
+    files were real, marker-bearing code discarded because an EMPTY block
+    claimed the path first. Two real shapes triggered it — an exemplar
+    echo (a fence whose entire body is the marker line, copied from the
+    instruction's own example) and a doubled marker line inside one fence.
+    Dedup must mean "first MEANINGFUL block wins", as its comment always
+    claimed. Shapes reduced from the raw turns in interactions.jsonl."""
+
+    def test_exemplar_echo_fence_upgraded_by_real_block(self):
+        """muse 2026-08-15, turns 1-5: ```sh fence holding only the marker,
+        then the real ```python block for the same path."""
+        text = (
+            "```sh\n# === FILE: models.py ===\n```\n"
+            "```python\n# === FILE: models.py ===\n"
+            "from dataclasses import dataclass\n\n\n"
+            "@dataclass\nclass Room:\n    id: str\n```\n"
+        )
+        blocks = parse_file_blocks(text)
+        assert blocks and blocks[0][0] == "models.py"
+        assert "class Room" in blocks[0][1]
+
+    def test_doubled_marker_line_upgraded(self):
+        """muse 2026-08-14, turns 7-8: the marker line emitted twice in a
+        row inside one fence — the first segment is empty and must not
+        shadow the second."""
+        text = (
+            "```python\n"
+            "# === FILE: engine.py ===\n"
+            "# === FILE: engine.py ===\n"
+            "from models import Player\n\n\nclass GameEngine:\n    pass\n```\n"
+        )
+        blocks = parse_file_blocks(text)
+        assert [p for p, _ in blocks] == ["engine.py"]
+        assert "class GameEngine" in blocks[0][1]
+
+    def test_first_meaningful_still_wins(self):
+        """The upgrade must not weaken the original protection: a real
+        block followed by a prompt echo keeps the FIRST content."""
+        text = (
+            "```python\n# === FILE: main.py ===\ndef real_impl(): pass\n```\n"
+            "```python\n# === FILE: main.py ===\ndef echoed(): pass\n```\n"
+        )
+        blocks = parse_file_blocks(text)
+        assert len(blocks) == 1 and "real_impl" in blocks[0][1]
+        assert "echoed" not in blocks[0][1]
+
+    def test_intentionally_empty_file_stays_empty(self):
+        """The __init__.py affordance survives: a marker-only declaration
+        with no later meaningful block is still an empty file."""
+        text = "```python\n# === FILE: pkg/__init__.py ===\n```\n"
+        assert parse_file_blocks(text) == [("pkg/__init__.py", "")]
+
+    def test_marker_above_fence_recovered_via_fallback(self):
+        """muse 2026-08-14, turns 5-6: the marker ABOVE the fence leaves
+        the fence unmarked — a single-file site's fallback_path must
+        recover it instead of dropping the turn."""
+        text = (
+            "# === FILE: dialogue.py ===\n"
+            "```python\nclass DialogueEngine:\n    pass\n```\n"
+        )
+        assert parse_file_blocks(text) == []  # bare parse: still nothing
+        blocks = parse_file_blocks(text, fallback_path="dialogue.py")
+        assert blocks and blocks[0][0] == "dialogue.py"
+        assert "DialogueEngine" in blocks[0][1]

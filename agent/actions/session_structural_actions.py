@@ -1073,7 +1073,17 @@ async def action_write_session_file(step_input: StepInput) -> StepOutput:
             observations="session write: no target file or effects",
         )
 
-    blocks = parse_file_blocks(raw)
+    # fallback_path makes this a single-file site, which it is by contract —
+    # the walk owns the path, not the model. Without it, a fence missing its
+    # FILE marker (muse put the marker ABOVE the fence, 2026-08-14) parses to
+    # [] and the file is silently lost; the len(blocks)==1 rescue below can
+    # never fire on an empty list, so its own comment described a dead branch.
+    # FENCED turns only: parse_file_blocks' final fallback also wraps BARE
+    # text as the file, and a fence-less turn here is prose (a refusal, an
+    # apology), not code — that must keep failing cleanly so the serial path
+    # rebuilds the file instead of shipping "sorry, no." as ledger.py.
+    fenced = "```" in raw or "~~~" in raw
+    blocks = parse_file_blocks(raw, fallback_path=current if fenced else "")
     body = ""
     extra: list[str] = []
     for path, content in blocks:

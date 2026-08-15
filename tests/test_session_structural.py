@@ -345,6 +345,38 @@ async def test_a_turn_with_no_usable_block_fails_cleanly():
     assert out.result["write_success"] is False
 
 
+@pytest.mark.asyncio
+async def test_marker_above_fence_recovers_via_fallback():
+    """muse 2026-08-14 turns 5-6: the FILE marker ABOVE the fence leaves the
+    fence unmarked. The walk owns the path, so a fenced turn recovers under
+    current_file instead of silently losing the file to the serial path —
+    while the fence-less prose turn above keeps failing cleanly."""
+    fx = MockEffects()
+    resp = "# === FILE: ledger.py ===\n```python\nX = 1\n```\n"
+    out = await action_write_session_file(
+        _si(fx, current_file="ledger.py", inference_response=resp)
+    )
+    assert out.result["write_success"] is True
+    assert "X = 1" in fx._files["ledger.py"]
+
+
+@pytest.mark.asyncio
+async def test_exemplar_echo_fence_does_not_lose_the_turn():
+    """muse 2026-08-15 turns 1-5: a marker-only echo fence precedes the real
+    block for the same path. The empty declaration must not shadow the
+    content (7 of 9 session-walk losses were this shape)."""
+    fx = MockEffects()
+    resp = (
+        "```sh\n# === FILE: ledger.py ===\n```\n"
+        "```python\n# === FILE: ledger.py ===\nX = 1\n```\n"
+    )
+    out = await action_write_session_file(
+        _si(fx, current_file="ledger.py", inference_response=resp)
+    )
+    assert out.result["write_success"] is True
+    assert "X = 1" in fx._files["ledger.py"]
+
+
 # ══════════════════════════════════════════════════════════════════════
 # The checkpoint + the repair bound
 # ══════════════════════════════════════════════════════════════════════

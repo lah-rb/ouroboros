@@ -294,9 +294,18 @@ def parse_file_blocks(text: str, fallback_path: str = "") -> list[tuple[str, str
     path. Blocks without a marker fall back to `fallback_path` (useful
     for single-file sites where the path comes from the flow input).
 
-    Deduplicates by path: first meaningful block wins. This prevents
+    Deduplicates by path: first MEANINGFUL block wins. This prevents
     LLM-generated duplicate FILE markers (e.g., an echo of prompt
-    instructions) from overwriting valid content.
+    instructions) from overwriting valid content — but an EMPTY block
+    never shadows a later meaningful one for the same path. That shadow
+    cost the 2026-08-14/15 muse session walks 7 of their 9 "missing"
+    files: muse echoed the instruction's exemplar (a fence whose whole
+    body is the marker line) or doubled the marker line, the empty
+    declaration claimed the path, and the real content was skipped as a
+    duplicate — at DEBUG level, invisible twice. `_upgrade_block` below
+    is the repair: empty-then-meaningful upgrades in place; the
+    intentionally-empty-file affordance (__init__.py) survives because a
+    path nothing upgrades stays an empty file.
 
     The marker pattern tolerates comment styles `#`, `//`, `--`, or
     none at all — the FILE marker works regardless of which language
@@ -306,6 +315,28 @@ def parse_file_blocks(text: str, fallback_path: str = "") -> list[tuple[str, str
     """
     blocks: list[tuple[str, str]] = []
     seen_paths: set[str] = set()
+
+    def _upgrade_block(path: str, content: str) -> bool:
+        """Replace a retained EMPTY block with meaningful content for
+        the same path. Returns True if an upgrade happened; the caller
+        skips (logging the duplicate) when it did not."""
+        if not content or not _is_meaningful_content(content):
+            return False
+        for i, (p, c) in enumerate(blocks):
+            if p == path:
+                if c:
+                    return False  # first meaningful block genuinely wins
+                blocks[i] = (path, content)
+                logger.warning(
+                    "Empty FILE block for %r upgraded by a later meaningful "
+                    "block (%d chars) — an exemplar echo or doubled marker "
+                    "claimed the path first",
+                    path,
+                    len(content),
+                )
+                return True
+        return False
+
     # Line indices to RESUME parsing from after a §20 markdown re-stitch — the
     # truncation re-pairs every fence after the md file, so blocks following
     # it were mis-parsed on this pass and are recovered by a re-parse below.
@@ -351,7 +382,9 @@ def parse_file_blocks(text: str, fallback_path: str = "") -> list[tuple[str, str
             candidates = _segment_lines(lines, first_nonblank_idx)
             for cand_path, cand_content in candidates:
                 if not cand_path or cand_path in seen_paths:
-                    if cand_path in seen_paths:
+                    if cand_path in seen_paths and not _upgrade_block(
+                        cand_path, cand_content
+                    ):
                         logger.debug(
                             "Skipping duplicate FILE block for %r (first kept)",
                             cand_path,
@@ -400,10 +433,11 @@ def parse_file_blocks(text: str, fallback_path: str = "") -> list[tuple[str, str
         if not file_path:
             continue
         if file_path in seen_paths:
-            logger.debug(
-                "Skipping duplicate FILE block for %r (first block kept)",
-                file_path,
-            )
+            if not _upgrade_block(file_path, content):
+                logger.debug(
+                    "Skipping duplicate FILE block for %r (first block kept)",
+                    file_path,
+                )
             continue
 
         if content or _is_meaningful_content(body):
@@ -430,6 +464,8 @@ def parse_file_blocks(text: str, fallback_path: str = "") -> list[tuple[str, str
                     )
                     blocks.append((sub_path, sub_content))
                     seen_paths.add(sub_path)
+                else:
+                    _upgrade_block(sub_path, sub_content)
 
     # UNFENCED MULTI-FILE RECOVERY (2026-08-03). A model can honour the FILE
     # marker protocol and omit the fences: DeepSeek-V4's first batch emitted
