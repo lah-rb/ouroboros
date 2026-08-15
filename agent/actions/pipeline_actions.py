@@ -1449,6 +1449,69 @@ def _undeclared_imports(
     return sorted(missing)
 
 
+# Import name -> distribution name where the two differ. Only the cases that
+# actually recur; everything else falls back to the import name, which is right
+# far more often than not. A wrong guess is corrected by the install step
+# failing with the name in its message.
+_IMPORT_TO_DISTRIBUTION = {
+    "yaml": "PyYAML",
+    "PIL": "Pillow",
+    "cv2": "opencv-python",
+    "sklearn": "scikit-learn",
+    "bs4": "beautifulsoup4",
+    "dateutil": "python-dateutil",
+    "serial": "pyserial",
+    "docx": "python-docx",
+    "fitz": "PyMuPDF",
+    "OpenSSL": "pyOpenSSL",
+    "attr": "attrs",
+    "jwt": "PyJWT",
+}
+
+
+async def _declare_dependencies(effects, paths: list, missing: list) -> list:
+    """Add ``missing`` to a pyproject.toml [project] dependencies list.
+
+    Returns the distribution names written, or [] when there is nothing this
+    can safely edit — no pyproject, no [project] table, or a dependencies key
+    already present (which means the manifest has an opinion and this must not
+    overwrite it).
+    """
+    target = next((p for p in paths if os.path.basename(p) == "pyproject.toml"), None)
+    if not target or effects is None:
+        return []
+    try:
+        fc = await effects.read_file(target)
+        text = getattr(fc, "content", "") or ""
+    except Exception:  # noqa: BLE001
+        return []
+    if not text.strip() or "[project]" not in text:
+        return []
+    # An existing dependencies key is a STATEMENT. Appending to it needs a TOML
+    # parse this action deliberately does not do, and silently rewriting a
+    # populated list is how a correct manifest gets clobbered.
+    for line in text.splitlines():
+        if line.strip().startswith("dependencies"):
+            return []
+    dists = [_IMPORT_TO_DISTRIBUTION.get(m, m) for m in missing]
+    body = "".join(f'    "{d}",\n' for d in dists)
+    block = f"dependencies = [\n{body}]\n"
+    out, inserted = [], False
+    for line in text.splitlines(keepends=True):
+        out.append(line)
+        if not inserted and line.strip() == "[project]":
+            out.append(block)
+            inserted = True
+    if not inserted:
+        return []
+    try:
+        await effects.write_file(target, "".join(out))
+    except Exception:  # noqa: BLE001 — a failed repair stays advisory
+        return []
+    logger.warning("📦 declared %s in %s", ", ".join(dists), target)
+    return dists
+
+
 async def action_check_declared_dependencies(step_input: StepInput) -> StepOutput:
     """Advisory: report imports the dependency manifest does not account for.
 
@@ -1510,14 +1573,42 @@ async def action_check_declared_dependencies(step_input: StepInput) -> StepOutpu
             context_updates={"undeclared_dependencies": []},
         )
 
+    # DECLARE IT, do not merely mention it. This was advisory because
+    # import-name -> distribution-name is genuinely ambiguous, and that
+    # reasoning was sound about the MAPPING and wrong about the COST. Measured
+    # 2026-08-14: an arm imported `yaml` with no dependencies block, this check
+    # fired correctly, the note said exactly what was wrong — and nothing read
+    # it. `undeclared_dependencies` had no consumer anywhere in agent/ or
+    # flows/, and the install step downstream derives its command FROM the
+    # manifest, so it faithfully installed nothing. The model then diagnosed
+    # the true root cause twice ("Declare PyYAML as a project dependency in
+    # pyproject.toml"), was unheard, and degraded into moving the import
+    # between files for nine cycles until the 2h wall.
+    #
+    # The ambiguity is real but its failure mode is BENIGN and LOUD: a wrong
+    # distribution name fails at `uv pip install`, in the step immediately
+    # after this one, with the name in the error. Silence fails quietly and
+    # forever. So: write the declaration, prefer the known alias, and let the
+    # installer be the judge.
+    written = await _declare_dependencies(effects, paths, missing)
+
     summary = (
-        "dependency claim unverified: the code imports "
+        ("dependency claim REPAIRED: declared " + ", ".join(written) + " — ")
+        if written
+        else "dependency claim unverified: "
+    ) + (
+        "the code imports "
         + ", ".join(missing)
-        + " but the dependency manifest does not mention "
+        + " but the dependency manifest did not mention "
         + ("it" if len(missing) == 1 else "them")
-        + ". Either add the distribution(s) or confirm the import is provided "
-        "another way — 'it is in the standard library' is checkable and these "
-        "are not in it."
+        + (
+            ". The declaration was added; the install step will report a wrong "
+            "distribution name by failing on it."
+            if written
+            else ". Either add the distribution(s) or confirm the import is "
+            "provided another way — 'it is in the standard library' is "
+            "checkable and these are not in it."
+        )
     )
     logger.warning("📦 %s", summary)
     mission = step_input.context.get("mission")

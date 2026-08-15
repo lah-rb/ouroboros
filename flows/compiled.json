@@ -10653,7 +10653,7 @@
       },
       "check_declared_deps": {
         "action": "check_declared_dependencies",
-        "description": "Cross-check the dependency manifest against real imports (advisory)",
+        "description": "Declare imports the dependency manifest is missing",
         "context": {
           "required": [],
           "optional": [

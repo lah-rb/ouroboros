@@ -222,13 +222,23 @@ project_ops: #FlowDefinition & {
 		// `yaml` is not in sys.stdlib_module_names, which is a fact, so this
 		// costs no inference call.
 		//
-		// ADVISORY on purpose, and the unconditional resolver here is NOT the
-		// write_files bug above: import-name to distribution-name is genuinely
-		// ambiguous, so a mismatch is reported to the next diagnostician rather
-		// than used to fail a phase.
+		// IT REPAIRS, it no longer merely reports (2026-08-14). The advisory
+		// stance was reasoned from import-name -> distribution-name ambiguity,
+		// which is real — and the wrong trade. Measured: an arm imported `yaml`
+		// with no dependencies block, this check fired and said exactly that,
+		// and NOTHING read it. `undeclared_dependencies` had no consumer, and
+		// `collect_installs` below derives its command FROM the manifest, so it
+		// installed nothing. The model diagnosed the true cause twice ("Declare
+		// PyYAML as a project dependency in pyproject.toml"), was unheard, and
+		// spent nine diagnose/fix cycles moving the import between files until
+		// the 2h wall.
+		//
+		// The ambiguity survives as a FAILURE MODE CHOICE: a wrong distribution
+		// name now fails at `uv pip install` two steps below, loudly, with the
+		// name in the error. Silence failed quietly and forever.
 		check_declared_deps: #StepDefinition & {
 			action:      "check_declared_dependencies"
-			description: "Cross-check the dependency manifest against real imports (advisory)"
+			description: "Declare imports the dependency manifest is missing"
 			context: optional: ["project_manifest", "mission"]
 			resolver: {
 				type: "rule"
