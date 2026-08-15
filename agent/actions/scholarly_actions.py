@@ -55,7 +55,12 @@ EXTRACTION_PATH = "databank/extraction.jsonl"
 PDF_DIR = "pdfs"
 RELEVANCE_TIERS = ("exact", "close", "adjacent")
 MAX_REFERENCE_DOIS = 200
-CATALOG_BATCH_SIZE = 5
+# Papers per catalog dispatch. Raised 5 -> 8 with the acquire tag lane
+# (2026-08-15): tagging streams in sub-batches on open seats instead of one
+# monolithic post-acquire turn, so the dispatch size is an acquisition
+# fan-out knob now, not a tag-quality one. The research gate's grounding
+# check monitors tag quality independently.
+CATALOG_BATCH_SIZE = int(os.environ.get("OUROBOROS_CATALOG_BATCH", "8"))
 
 # Publisher hosts MEASURED to refuse a polite crawler: Cloudflare 403, unmoved
 # by the browser User-Agent we already send or by following redirects. Used to
@@ -1930,29 +1935,28 @@ async def action_fetch_references(step_input: StepInput) -> StepOutput:
     )
 
 
-async def action_apply_paper_tags(step_input: StepInput) -> StepOutput:
-    """Parse the batch tag JSON; validate; persist cataloged records.
+def validate_and_stamp_tags(
+    batch: list, inference_text: str, valid_aspects: set
+) -> tuple[int, int]:
+    """Parse a tag response and stamp valid tags onto the batch IN MEMORY.
 
     Tag JSON: {paper_key: [{aspect, relevance, justification}]}.
-    Aspect names validate against mission.research_plan; relevance
-    against the exact/close/adjacent enum (invalid entries dropped,
-    counted). Papers with parsed tags become "cataloged"; papers the
-    model skipped stay at their current status and re-enter a later
-    batch. Builds the acquire_catalog directive_report.
+    Aspect names validate against ``valid_aspects``; relevance against
+    the exact/close/adjacent enum (invalid entries dropped, counted).
+    Papers with parsed tags become "cataloged"; papers the response
+    skipped keep their current status untouched — already-cataloged
+    records (e.g., stamped by the acquire tag lane) are therefore never
+    clobbered by a later response that omits them.
 
-    Context: catalog_batch, inference_response, mission
-    Result: cataloged, tag_parse_failed, dropped_tags
-    Publishes: directive_report
+    No I/O: booking stays with the caller (the serial post-hoc booking
+    invariant — this function is shared by the apply_tags step and the
+    acquire step's concurrent tag lane).
+
+    Returns (cataloged, dropped_tags).
     """
     from agent.llm_json import parse_llm_json
 
-    effects = step_input.effects
-    batch = list(step_input.context.get("catalog_batch") or [])
-    mission = step_input.context.get("mission")
-    plan = getattr(mission, "research_plan", None) if mission else None
-    valid_aspects = {a.name for a in (plan.aspects if plan else [])}
-
-    parsed = parse_llm_json(str(step_input.context.get("inference_response", "")))
+    parsed = parse_llm_json(str(inference_text or ""))
     tag_map = parsed if isinstance(parsed, dict) else {}
 
     cataloged = dropped = 0
@@ -1983,6 +1987,39 @@ async def action_apply_paper_tags(step_input: StepInput) -> StepOutput:
         rec["tags"] = tags
         rec["status"] = "cataloged"
         cataloged += 1
+    return cataloged, dropped
+
+
+def mission_valid_aspects(mission) -> set:
+    """Aspect-name whitelist from a mission's research plan (empty = any)."""
+    plan = getattr(mission, "research_plan", None) if mission else None
+    return {a.name for a in (plan.aspects if plan else [])}
+
+
+async def action_apply_paper_tags(step_input: StepInput) -> StepOutput:
+    """Validate the batch tag JSON via validate_and_stamp_tags; persist.
+
+    Papers already stamped "cataloged" (the acquire tag lane) pass
+    through unchanged and are booked here — this action remains the
+    single databank booking point for the batch. Builds the
+    acquire_catalog directive_report.
+
+    Context: catalog_batch, inference_response, mission
+    Result: cataloged, tag_parse_failed, dropped_tags
+    Publishes: directive_report
+    """
+    effects = step_input.effects
+    batch = list(step_input.context.get("catalog_batch") or [])
+    mission = step_input.context.get("mission")
+    valid_aspects = mission_valid_aspects(mission)
+
+    _, dropped = validate_and_stamp_tags(
+        batch, str(step_input.context.get("inference_response", "")), valid_aspects
+    )
+    # Counted from batch state, not summed from the stamp call: records the
+    # acquire tag lane already cataloged aren't in this response, and a
+    # record both stamped must not count twice.
+    cataloged = sum(1 for r in batch if r.get("status") == "cataloged")
 
     await append_records(effects, batch)
 

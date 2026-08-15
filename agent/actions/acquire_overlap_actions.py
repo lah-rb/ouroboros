@@ -188,18 +188,136 @@ async def _ocr_lane(step_input: StepInput, max_pdfs: int) -> dict:
     return {"attempted": len(keys), "result": dict(out.result or {})}
 
 
-async def action_acquire_batch(step_input: StepInput) -> StepOutput:
-    """Acquire the batch concurrently while OCR drains earlier PDFs.
+# ── tag lane ──────────────────────────────────────────────────────────
+#
+# READY AT T=0. A record's tag inputs are title + abstract, both present in
+# the databank record before acquisition starts (discovery stored them), so
+# the tag lane fans out over the WHOLE batch the moment the step begins and
+# muse seats work through the entire HTTP window instead of idling until the
+# single post-acquire turn. The batched engine admits the concurrent turns as
+# separate seats (measured text+text serialization 0.047).
+#
+# INFER CONCURRENTLY, STAMP SERIALLY. The lane returns (sub_batch, response)
+# pairs and mutates NOTHING: download and navigation write
+# rec["status"]="acquired", so a concurrent "cataloged" stamp would be
+# clobbered depending on which coroutine finished last. Stamping happens in
+# the action's serial booking section, after navigation and enrichment have
+# settled the records — same invariant as every other lane
+# (contract_swarm_actions.py:2036-2038).
 
-    Context: catalog_batch; Inputs: working_directory
-    Result: downloaded, failed, ocr; Publishes: catalog_batch
+# Sub-batch size for one tag turn. Smaller = finer streaming granularity and
+# tighter per-paper attention; larger = fewer turns. The research gate's
+# grounding check is the quality monitor for this knob.
+_TAG_SUBBATCH = 2
+# Concurrent tag turns. 3 of the 4 batched seats — the OCR lane's vision
+# work rides paddle, not a muse seat, but leaving one seat clear keeps the
+# engine responsive if anything else (health probes, a stray session) needs
+# a slot mid-dispatch.
+_TAG_CONCURRENCY = 3
+
+
+def _tag_lane_params() -> tuple[int, int]:
+    """(sub_batch_size, concurrency), env-overridable; 0 disables the lane."""
+
+    def _env_int(name: str, default: int) -> int:
+        raw = os.environ.get(name, "").strip()
+        if not raw:
+            return default
+        try:
+            return max(0, int(raw))
+        except ValueError:
+            logger.warning("%s=%r not an integer", name, raw)
+            return default
+
+    return (
+        _env_int("OUROBOROS_SCRAPER_TAG_SUBBATCH", _TAG_SUBBATCH),
+        _env_int("OUROBOROS_SCRAPER_TAG_SEATS", _TAG_CONCURRENCY),
+    )
+
+
+def _render_tag_prompt(mission: object, sub_batch: list) -> str:
+    """Render scraper/tag_paper exactly as the tag_papers step does — same
+    template, same formatters — for a sub-batch."""
+    from agent.formatters import format_aspect_definitions, format_catalog_batch
+    from agent.runtime import _get_prompt_renderer
+
+    plan = getattr(mission, "research_plan", None) if mission else None
+    namespaces = {
+        "input": {},
+        "context": {
+            "aspects_block": format_aspect_definitions({"source": plan}, {}),
+            "papers_block": format_catalog_batch({"source": sub_batch}, {}),
+        },
+        "meta": {"flow_name": "acquire_catalog", "step_id": "acquire.tag_lane"},
+    }
+    static_prefix, dynamic = _get_prompt_renderer().render_with_cache_split(
+        "scraper/tag_paper", namespaces
+    )
+    return static_prefix + dynamic
+
+
+async def _tag_lane(step_input: StepInput, batch: list) -> list:
+    """Run concurrent tag turns over the batch; return (sub_batch, text) pairs.
+
+    Never raises and never mutates records: a failed turn simply yields no
+    pair, its records stay untagged, and the flow's fallback tag_papers turn
+    covers them. Empty-response and inference-error turns are logged.
+    """
+    sub_size, seats = _tag_lane_params()
+    effects = step_input.effects
+    mission = step_input.context.get("mission")
+    if sub_size <= 0 or seats <= 0:
+        return []
+    if effects is None or not hasattr(effects, "run_inference"):
+        return []
+    if mission is None or not getattr(mission, "research_plan", None):
+        # No plan means no aspect whitelist — tags would validate against
+        # nothing. Leave the batch for the fallback turn's step context.
+        return []
+
+    sub_batches = [batch[i : i + sub_size] for i in range(0, len(batch), sub_size)]
+    sem = asyncio.Semaphore(seats)
+
+    async def one(sub: list):
+        async with sem:
+            try:
+                prompt = _render_tag_prompt(mission, sub)
+                result = await effects.run_inference(prompt, {"temperature": "t*0.3"})
+            except Exception as exc:  # noqa: BLE001 — lane boundary
+                logger.warning("tag lane turn failed (%d paper(s)): %s", len(sub), exc)
+                return None
+            err = getattr(result, "error", None)
+            text = getattr(result, "text", "") or ""
+            if err or not text:
+                logger.warning(
+                    "tag lane turn empty (%d paper(s)): %s", len(sub), err or "no text"
+                )
+                return None
+            return (sub, str(text))
+
+    pairs = await asyncio.gather(*(one(s) for s in sub_batches))
+    return [p for p in pairs if p is not None]
+
+
+async def action_acquire_batch(step_input: StepInput) -> StepOutput:
+    """Acquire the batch concurrently while OCR drains earlier PDFs and the
+    tag lane streams tag turns onto open muse seats.
+
+    Context: catalog_batch, mission; Inputs: working_directory
+    Result: downloaded, failed, ocr, tags, untagged; Publishes: catalog_batch
     """
     from agent.actions.scholarly_actions import _pacer
 
     batch = list(step_input.context.get("catalog_batch") or [])
     if not batch:
         return StepOutput(
-            result={"downloaded": 0, "failed": 0, "ocr": {"attempted": 0}},
+            result={
+                "downloaded": 0,
+                "failed": 0,
+                "ocr": {"attempted": 0},
+                "tags": {"turns": 0, "cataloged": 0, "dropped": 0},
+                "untagged": 0,
+            },
             observations="Empty acquisition batch",
             context_updates={"catalog_batch": batch},
         )
@@ -215,11 +333,15 @@ async def action_acquire_batch(step_input: StepInput) -> StepOutput:
         async with ocr_sem:
             return await _ocr_lane(step_input, _overlap_pdfs())
 
-    # THE OVERLAP. HTTP and the paddle subprocess run together; the pacer keeps
-    # each host honest independently of how wide this fans out.
-    records, ocr = await asyncio.gather(
+    # THE OVERLAP. Three lanes matched to what is ready: HTTP acquisition
+    # (per record), paddle OCR (earlier PDFs), and tag turns on open muse
+    # seats (title+abstract are ready at t=0). The pacer keeps each host
+    # honest independently of how wide this fans out; the tag lane returns
+    # responses only — stamping is serial, below.
+    records, ocr, tag_pairs = await asyncio.gather(
         asyncio.gather(*(guarded(r) for r in batch)),
         guarded_ocr(),
+        _tag_lane(step_input, batch),
     )
 
     # ── serial booking from here ──────────────────────────────────────
@@ -264,6 +386,29 @@ async def action_acquire_batch(step_input: StepInput) -> StepOutput:
     except Exception as exc:  # noqa: BLE001 — enrichment must not sink a batch
         logger.warning("page-extent enrichment failed: %s", exc)
 
+    # TAG STAMPING, serial and last: navigation/download write
+    # rec["status"]="acquired", so stamping "cataloged" any earlier would be
+    # clobbered by whichever repair finished after it. Stamps are applied to
+    # the SETTLED records (matched by paper_key — a repair pass replacing
+    # dict instances must not orphan a stamp), using the same validator the
+    # apply_tags step uses.
+    tags_summary = {"turns": len(tag_pairs), "cataloged": 0, "dropped": 0}
+    untagged = len(records)
+    if tag_pairs:
+        from agent.actions.scholarly_actions import (
+            mission_valid_aspects,
+            validate_and_stamp_tags,
+        )
+
+        by_key = {r.get("paper_key"): r for r in records if r.get("paper_key")}
+        valid_aspects = mission_valid_aspects(step_input.context.get("mission"))
+        for sub, text in tag_pairs:
+            settled = [by_key.get(r.get("paper_key"), r) for r in sub]
+            cataloged, dropped = validate_and_stamp_tags(settled, text, valid_aspects)
+            tags_summary["cataloged"] += cataloged
+            tags_summary["dropped"] += dropped
+    untagged = sum(1 for r in records if r.get("status") != "cataloged")
+
     downloaded = sum(1 for r in records if r.get("pdf_path"))
     failed = len(records) - downloaded
     pacer_stats = _pacer().stats()
@@ -285,6 +430,12 @@ async def action_acquire_batch(step_input: StepInput) -> StepOutput:
     extent_note = ""
     if extent.get("looked_up"):
         extent_note = f"; page extent {extent.get('enriched', 0)}/{extent['looked_up']}"
+    tag_note = ""
+    if tags_summary["turns"]:
+        tag_note = (
+            f"; tagged {tags_summary['cataloged']}/{len(records)} in "
+            f"{tags_summary['turns']} concurrent turn(s)"
+        )
     return StepOutput(
         result={
             "downloaded": downloaded,
@@ -292,11 +443,13 @@ async def action_acquire_batch(step_input: StepInput) -> StepOutput:
             "ocr": ocr,
             "nav": nav,
             "page_extent": extent,
+            "tags": tags_summary,
+            "untagged": untagged,
             "http": {"requests": requests, "throttled": throttled},
         },
         observations=(
             f"Acquired {downloaded}/{len(records)} concurrently"
-            f"{ocr_note}{nav_note}{extent_note} — {requests} requests, "
+            f"{ocr_note}{nav_note}{extent_note}{tag_note} — {requests} requests, "
             f"{throttled} throttled"
         ),
         context_updates={"catalog_batch": list(records)},

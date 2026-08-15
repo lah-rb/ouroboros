@@ -228,15 +228,19 @@ async def test_corpus_target_zero_leaves_planner_targets_alone():
 
 @pytest.mark.asyncio
 async def test_catalog_sweep_prioritizes_retag_and_caps_batch():
+    from agent.actions.scholarly_actions import CATALOG_BATCH_SIZE
+
     m = _mission([AspectSpec(name="gb")])
     await action_derive_research_goals(_si(m))
-    records = [{"paper_key": f"c{i}", "status": "candidate"} for i in range(6)] + [
-        {"paper_key": "r1", "status": "needs_retag"}
-    ]
+    # One more candidate than the cap, so the cap is what bounds the batch.
+    records = [
+        {"paper_key": f"c{i}", "status": "candidate"}
+        for i in range(CATALOG_BATCH_SIZE + 1)
+    ] + [{"paper_key": "r1", "status": "needs_retag"}]
     fx = MockEffects(files=_bank(records))
     out = await action_catalog_sweep_next(_si(m, effects=fx))
     keys = out.context_updates["dispatch_config"]["paper_keys"]
-    assert len(keys) == 5
+    assert len(keys) == CATALOG_BATCH_SIZE
     assert keys[0] == "r1"  # retag first
 
 

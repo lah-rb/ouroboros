@@ -707,8 +707,18 @@ def format_aspect_definitions(params: dict, namespaces: dict) -> str:
 
 
 def format_catalog_batch(params: dict, namespaces: dict) -> str:
-    """Render the catalog batch's papers (key, title, abstract) for tagging."""
+    """Render the catalog batch's papers (key, title, abstract) for tagging.
+
+    ``only_untagged: true`` filters to records not yet cataloged — the
+    fallback tag turn after the acquire tag lane re-prompts leftovers only.
+    """
     batch = params.get("source") or []
+    if params.get("only_untagged"):
+        batch = [
+            r
+            for r in batch
+            if not (isinstance(r, dict) and r.get("status") == "cataloged")
+        ]
     if not batch:
         return ""
     blocks = []

@@ -61,22 +61,26 @@ acquire_catalog: #FlowDefinition & {
 			publishes: ["catalog_batch"]
 		}
 
-		// ONE STEP, TWO LANES. resolve -> download -> fetch_refs used to be
+		// ONE STEP, THREE LANES. resolve -> download -> fetch_refs used to be
 		// three serial steps walking the batch one record at a time, each call
-		// paying its own politeness interval. They are now fanned out per
-		// record inside a single action, gathered with an OCR lane that drains
-		// PDFs which landed in EARLIER dispatches — so paddle works while this
-		// batch waits on the APIs. The three actions still exist and are still
-		// registered; only the driving changed. See
-		// agent/actions/acquire_overlap_actions.py.
+		// paying its own politeness interval. They are fanned out per record
+		// inside a single action, gathered with an OCR lane that drains PDFs
+		// from EARLIER dispatches AND a tag lane that streams tag turns onto
+		// open batched seats while the HTTP waits happen — title+abstract are
+		// ready before acquisition starts, so muse works the whole window.
+		// The underlying actions still exist and are still registered; only
+		// the driving changed. See agent/actions/acquire_overlap_actions.py.
 		acquire: #StepDefinition & {
 			action:      "acquire_batch"
-			description: "Resolve+download+reference the batch concurrently; OCR earlier PDFs in parallel"
-			context: required: ["catalog_batch"]
+			description: "Resolve+download+reference concurrently; OCR + tag turns on open seats in parallel"
+			context: required: ["catalog_batch", "mission"]
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "true", transition: "tag_papers"},
+					// The fallback tag turn runs only for leftovers the lane
+					// missed (inference error, unparseable JSON, no plan).
+					{condition: "result.untagged > 0", transition: "tag_papers"},
+					{condition: "true", transition: "apply_tags"},
 				]
 			}
 			publishes: ["catalog_batch"]
@@ -96,8 +100,10 @@ acquire_catalog: #FlowDefinition & {
 			pre_compute: [
 				{formatter: "format_aspect_definitions", output_key: "aspects_block"
 					params: {source: {$ref: "context.mission.research_plan"}}},
+				// only_untagged: the acquire tag lane usually cataloged most
+				// of the batch already — this turn re-prompts ONLY leftovers.
 				{formatter: "format_catalog_batch", output_key: "papers_block"
-					params: {source: {$ref: "context.catalog_batch"}}},
+					params: {source: {$ref: "context.catalog_batch"}, only_untagged: true}},
 			]
 			config: temperature: "t*0.3"
 			resolver: {
