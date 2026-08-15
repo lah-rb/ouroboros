@@ -140,7 +140,21 @@ async def _ocr_lane(step_input: StepInput, max_pdfs: int) -> dict:
     if max_pdfs <= 0:
         return {"attempted": 0, "reason": "disabled"}
     effects = step_input.effects
+    # FALL BACK TO THE MISSION. This read `inputs["working_directory"]` alone,
+    # and the acquire step is dispatched with params {} — so on a flow that
+    # does not thread that input through, the OCR lane declined every dispatch
+    # and the whole overlap silently did nothing. Live: 421 successful
+    # acquire_catalog reports, 97 papers pending extraction with PDFs on disk,
+    # and the second GPU at 0% for an hour and a half.
+    #
+    # The mission always knows its own working directory, so ask it when the
+    # input is absent rather than giving up.
     working_dir = str(step_input.inputs.get("working_directory") or "")
+    if not working_dir:
+        mission = step_input.context.get("mission")
+        working_dir = str(
+            getattr(getattr(mission, "config", None), "working_directory", "") or ""
+        )
     if not effects or not working_dir:
         return {"attempted": 0, "reason": "no working_directory"}
 
@@ -256,9 +270,15 @@ async def action_acquire_batch(step_input: StepInput) -> StepOutput:
     throttled = sum(h.get("throttled", 0) for h in pacer_stats.values())
     requests = sum(h.get("requests", 0) for h in pacer_stats.values())
 
+    # A LANE THAT DECLINES MUST SAY SO. Previously only a lane that RAN was
+    # reported, so "disabled", "no working_directory" and "nothing pending"
+    # were indistinguishable from a healthy overlap in every log and report —
+    # which is why an hour and a half of zero OCR looked normal.
     ocr_note = ""
     if ocr.get("attempted"):
         ocr_note = f"; OCR {ocr['attempted']} pdf(s) in parallel"
+    elif ocr.get("reason"):
+        ocr_note = f"; OCR lane idle ({ocr['reason']})"
     nav_note = ""
     if nav.get("attempted"):
         nav_note = f"; nav recovered {nav.get('navigated', 0)}/{nav['attempted']}"
