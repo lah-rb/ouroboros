@@ -125,12 +125,29 @@ generation:
   # OCR answers are page/region transcriptions — bounded, and a runaway on a
   # dense figure costs the whole batch's wall time.
   max_tokens_default: 4096
-  temperature_default: 0.1
+  # THESE DEFAULTS ARE ALMOST NEVER CONSULTED, and knowing why is the whole
+  # story of the "degenerate decode" class. paddlex pins `temperature: 0` in
+  # every request it sends a llama-cpp-server backend (predictor.py:503), and
+  # an explicit request value outranks any server default — so OCR decode was
+  # GREEDY everywhere, on both machines, through both serving paths, whatever
+  # this block said. Greedy orbits on loop-prone pages: microc.2018.01.004
+  # repeated "both" 3,003 times BYTE-IDENTICALLY on the M1 and on the CUDA
+  # rig. (llama-server read that page clean at the same greedy settings only
+  # because its template-built prompt differs from the mtmd handler's —
+  # luck, not robustness.)
+  #
+  # The effective control is therefore the CLIENT: extract_batch passes
+  # --vl-temperature 0.8 / --vl-top-p 0.95 per predict() call — the lab's own
+  # documented stochastic alternative to its greedy default. Validated
+  # 2026-08-15: microc rep 3003 -> 20 with numeric/span 0.985/0.988, two
+  # known-good papers within noise of their greedy rates. This default
+  # matches, for any caller that sends nothing.
+  temperature_default: 0.8
   top_p: 0.95
-  top_k: 0
-  min_p: 0.00
+  top_k: 40
+  min_p: 0.05
   presence_penalty: 0.0
-  repeat_penalty: 1.05
+  repeat_penalty: 1.0
   streaming_default: false
 
 knowledge:

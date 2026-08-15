@@ -766,7 +766,15 @@ def _collect_figures(src_dir: str, dest_dir: str) -> tuple[int, int, dict]:
 # ── Per-paper extraction ──────────────────────────────────────────────
 
 
-def extract_paper(pipe, pdf_path: str, key: str, databank_dir: str, dpi: int) -> dict:
+def extract_paper(
+    pipe,
+    pdf_path: str,
+    key: str,
+    databank_dir: str,
+    dpi: int,
+    temperature: float = 0.8,
+    top_p: float = 0.95,
+) -> dict:
     t0 = time.time()
     report = {
         "paper_key": key,
@@ -818,7 +826,10 @@ def extract_paper(pipe, pdf_path: str, key: str, databank_dir: str, dpi: int) ->
 
                 parts = []
                 out_dir = os.path.join(tmp, f"out{i}")
-                for res in pipe.predict(png):
+                # Explicit, every call: the client otherwise pins temperature
+                # to 0 (greedy) for llama-cpp-server backends, and greedy
+                # loops deterministically on some pages. See --vl-temperature.
+                for res in pipe.predict(png, temperature=temperature, top_p=top_p):
                     md = getattr(res, "markdown", None)
                     if isinstance(md, dict):
                         parts.append(md.get("markdown_texts") or "")
@@ -911,6 +922,30 @@ def main() -> int:
         help="llamacpp server slots; paddle fires region crops concurrently. "
         "Measured to saturate at 4 (2026-08-12)",
     )
+    # SAMPLING IS PINNED BY THE CLIENT, NOT THE SERVER, so this is the ONLY
+    # effective control: paddlex sends an explicit `temperature: 0` to every
+    # llama-cpp-server backend when none is given (predictor.py:503), which
+    # overrides any server-side generation default. Greedy is the lab default
+    # for PaddleOCR-VL and it ORBITS on loop-prone pages — one paper repeated
+    # the word "both" 3,003 times, byte-identically, on two machines and two
+    # serving paths. The lab's own docs offer `--do-sample true
+    # --temperature 0.8` as the stochastic alternative; these defaults are
+    # that. NOTE the historical corpus (through 2026-08-15) was extracted at
+    # the client-pinned 0 — every quality figure predating these flags is a
+    # greedy figure.
+    ap.add_argument(
+        "--vl-temperature",
+        type=float,
+        default=0.8,
+        help="VL sampling temperature passed per predict() (0 = greedy, "
+        "which deterministically loops on some pages)",
+    )
+    ap.add_argument(
+        "--vl-top-p",
+        type=float,
+        default=0.95,
+        help="VL nucleus sampling threshold passed per predict()",
+    )
     args = ap.parse_args()
 
     # Resolve weights together, so a half-specified pair cannot silently mix
@@ -979,7 +1014,15 @@ def main() -> int:
             ),
         )
         for pdf, key in zip(args.pdfs, keys):
-            report = extract_paper(pipe, pdf, key, args.databank_dir, args.dpi)
+            report = extract_paper(
+                pipe,
+                pdf,
+                key,
+                args.databank_dir,
+                args.dpi,
+                temperature=args.vl_temperature,
+                top_p=args.vl_top_p,
+            )
             print(json.dumps(report, ensure_ascii=False), flush=True)
     finally:
         # Guard the whole TEARDOWN, not the return. A `return` inside finally
