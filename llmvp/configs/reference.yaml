@@ -121,6 +121,18 @@
 # turn rendering byte-for-byte — the strip is format-yaml-derived and
 # inherits every caveat of step 3b.
 #
+# THE FLAG IS INERT IN TWO CONFIGURATIONS — check before setting it, or you
+# ship a no-op and believe otherwise (fleet audit 2026-08-15):
+#   • `decode_mode: "batched"` — strip_reasoning_replay returns False for
+#     batched seats (pool-only, deferred in batched v1), logging at DEBUG.
+#   • `resident_seq_cache` unset/false — there is no live resident session
+#     to strip; full-replay history is rebuilt from token_history instead.
+# Fleet state after that audit: pool+resident+thinking configs (gpt-oss-120b-a5,
+# muse-glimmer-30b[-swarm], hy3, olmo-think, mistral-medium) carry the flag per
+# their makers; laguna carries an explicit `false` because poolside documents
+# the OPPOSITE convention; qwen/gemma/step37/deepseek configs are non-resident,
+# so their family convention is moot until that changes.
+#
 # ── 4. CHOOSE THE STRATEGY, THEN STATE swa_full ──────────────────────
 #   cache_strategy: replay | resident | batched      (see the shortcut below)
 # Default to `resident` — it is the optimum for any model that supports it.

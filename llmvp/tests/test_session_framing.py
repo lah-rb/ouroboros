@@ -149,6 +149,21 @@ def test_reasoning_span_harmony():
     assert reasoning_span("harmony", True, [200005, 700], 100, tk) is None
 
 
+def test_reasoning_span_qwen_inline_tags():
+    """Schema-derived inline_tags: qwen was NOT in the old hardcoded family
+    list (chatml/gemma only), so `resident_strip_reasoning` would have been a
+    silent no-op for it — and for glm4/olmo/hunyuan3/laguna/deepseek4. qwen
+    prefills `<think>\n`, so t0 backs over the opener exactly as chatml's
+    hardcoded branch did."""
+    from core.session_manager import reasoning_span
+
+    tk = _FakeTok()
+    gen = [500, 501, 99, 700, 701]  # </think>(99) present, no self-emitted opener
+    assert reasoning_span("qwen", True, gen, 100, tk) == (98, "")
+    assert reasoning_span("qwen", False, gen, 100, tk) is None
+    assert reasoning_span("qwen", True, [500, 501], 100, tk) is None  # no close
+
+
 def test_reasoning_span_muse_glimmer():
     """Channel family with a DISTINCT reasoning closer: the gate is <|eom|>
     presence, NOT the channel-token count — muse's ` to=` is plain text whose

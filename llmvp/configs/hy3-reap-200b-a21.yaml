@@ -136,6 +136,13 @@ model:
   # rises 6.2->9.7s/turn at flat token deltas — dense attention-depth tax;
   # token-flat is not time-flat on this architecture.
   resident_seq_cache: true
+  # Set per reference.yaml step 3c (conformance audit 2026-08-15). Hy3's
+  # chat_template renders prior reasoning ONLY under `is_training`, or at
+  # inference when `preserved_thinking` is set or the message sits after the
+  # last user turn (the live tool chain) — so prior-turn CoT is DROPPED from
+  # normal history. Real (not inert) since reasoning_span became schema-derived
+  # for inline_tags families.
+  resident_strip_reasoning: true
   # ADDED 2026-07-30: the stateless flow cache (M9 seq-ops band). Measured
   # on glm at realistic head sizes: HIT saves 3.51s/call = 49% of prefill
   # (corrected pilot, 11/11 hits). The 2026-06 ban hit the M8 save_state

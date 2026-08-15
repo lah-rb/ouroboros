@@ -3537,3 +3537,96 @@ what_this_says_about_structural_mode: >
   The remaining gap is therefore NOT a generation-strategy gap, and looking
   for it in batch-vs-session again would be looking in the wrong place.
 ```
+
+---
+
+# EPOCH v2.1-era · MUSE GUARDIAN FLIGHT — 2026-08-15
+
+One contender, flown against the SAME Guardian anchor as the 08-05 batch
+(`guardian-gptoss-20260803/alpha`), one freshly-spawned blind judge
+(claude-opus-5), `FLIGHT_PROMPT.md` verbatim. **Different day and brief epoch
+than the 08-05 batch — this row does not join that table** (LADDER.md:
+"Historical comparisons are never" valid across epochs); the anchor being
+identical still makes the flight a valid §8 placement for this arm.
+
+| contender | side | Delivery | Character | conf. | own game | flag |
+|---|---|---|---|---|---|---|
+| **muse-glimmer-30b** (session+resume) | A | **4–0** | **5–1** | 44/47 NEAR-FULL | **WON** | — |
+
+The judge won the candidate's game blind, from a clean boot, no source access
+— and independently rediscovered the anchor's known shape: no win path in the
+tree, the `boss_key` weapon-slot seam (the campaign's predicted class,
+verbatim), and the death-save brick. Candidate's sole lost axis: B8 craft
+(the anchor's help table and argument-less errors remain the best surface in
+the campaign).
+
+Arm provenance: 18-min structural SESSION walk (7/7, full sibling binding,
+zero window drops — first run under the 08-15 tooling: fence shadow fix,
+session fallback_path, resident_strip_reasoning, n_ctx/4 reserve) + operator-
+ordered 1h45m quality resume leg, paused at 24/42. Record:
+`dev/blind_panel/records/flight_20260815_guardian_vs_arm02.md`. Sibling
+flight the same day: `flight_20260815_session_vs_batch.md` (session arm beat
+its own batch arm, Delivery 4–0; batch arm re-confirmed unwinnable by 1 HP by
+a fourth independent judge).
+
+## FRONTIER addendum — muse-glimmer-30b, 2026-08-15 (out-of-band, ladder unmoved)
+
+Same anchor ("The Ashen Keep"), same §5 family-bias caveat. Contender =
+`tier_20260815-115356/staged/arm02` (session base + quality resume — the arm
+that took the Guardian 4–0/5–1 the same day).
+
+| contender | Delivery | Character | axes taken off Sonnet 5 |
+|---|---|---|---|
+| muse-glimmer-30b (session) | 0–4 | 1–5 | **B5 ambition** (+ B9 self-flagged close) |
+
+Sixth frontier flight, sixth loss — the scorecard holds. Two things the
+flight adds:
+
+* **muse's game was WON by its third consecutive blind judge** — and this one
+  found the floor under the win: a 10-command naked speedrun (no weapon, no
+  armour, no fight but the boss), because B's monsters don't block corridors.
+  What the Guardian could not surface, the Frontier did, again: the gap
+  between "winnable" and "paced".
+* **B5 ambition went to muse on the merits of its DATA DESIGN** — the
+  YAML-driven world, choice-menu dialogue graph, generic `weakness_item_id` —
+  and B9 was "the closest axis": muse's mod probe (one YAML file, zero code)
+  was strictly cleaner than the frontier's own. The judge's B9 caveat is the
+  day's B9 finding restated: three declared-generic fields are decorative and
+  real extensions land in engine.py. The 89b3b44 nudge targets exactly this;
+  its first rerun already moved `behavior` from id-chain to field.
+
+Record: `dev/blind_panel/records/flight_20260815_frontier_vs_arm02.md`.
+
+## GUARDIAN addendum 2 — gpt-oss session arm, 2026-08-15
+
+Same-model flight (candidate AND anchor are gpt-oss-120b-a5), isolating
+session strategy + 08-15 tooling at 120B, mirroring the muse pair.
+
+| contender | side | Delivery | Character | conf. | own game | flag |
+|---|---|---|---|---|---|---|
+| gpt-oss-120b-a5 (session) | B | **2–2 TIE** | **0–6** | 30/47 SIG-DEV | NO-TERMINAL-STATES | — |
+
+**The anchor won, and the flight falsified the day's cleanest-looking
+number.** The candidate parked at 28/32 charters — but its design-derived
+goal set carried NO world-content charters, its walk wrote a 690-char
+world stub (2 rooms; five items literally named Placeholder S/W/O/R/D —
+the letters of 'sword'), and its sweep then made command mechanics green
+against that stub for two hours, including authoring a test that canonised
+the runaway victory banner. The candidate took A2 (its save round-trips;
+the anchor resurrects its dead) and A3 (no tracebacks) — "the more
+defensively-coded shell"; the anchor took everything that measures what an
+artifact IS.
+
+**Durable rules this flight buys:**
+1. **Goal % is design-relative. Never compare it across arms** — muse's
+   24/42 beat this same anchor 4–0/5–1; gpt-oss's 28/32 lost 2–2/0–6.
+   Flights are the only cross-arm measure.
+2. The session strategy's walk mechanics transferred to 120B (10/10, 0
+   failed gates) but the ARTIFACT did not — gpt-oss's lean turns wrote a
+   stub data file at the temp-floored final turn, and nothing downstream
+   could see it was hollow. Candidate levers, in order: the design gate's
+   coverage check extended to CONTENT charters (world extent has no owner
+   the way verbs now do); the data file walking EARLIER in creation_order
+   (it was last, at max session depth + temp floor both runs).
+
+Record: `dev/blind_panel/records/flight_20260815_guardian_vs_gptoss_session.md`.

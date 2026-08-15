@@ -64,6 +64,11 @@ model:
   seed: -1
   verbose: false
   resident_seq_cache: true
+  # Set per reference.yaml step 3c (conformance audit 2026-08-15). Olmo's
+  # chat_template has NO reasoning/reasoning_content handling at all — an
+  # assistant history turn is its content and nothing else — so a
+  # reasoning-free history is the only shape the model was trained on.
+  resident_strip_reasoning: true
   kv_unified: true
   swa_full: true
   session_full_replay: true

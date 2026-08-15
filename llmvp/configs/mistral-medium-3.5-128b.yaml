@@ -74,6 +74,11 @@ model:
   # sweep) but every later turn is ~1.1s — the dense prefill-bound profile
   # (boss run: 82% of wall was prefill) is exactly what resident relieves.
   resident_seq_cache: true
+  # Set per reference.yaml step 3c (conformance audit 2026-08-15). Mistral's
+  # chat_template converts reasoning to a leading thinking chunk ONLY when the
+  # caller passes `reasoning_content`/`reasoning` back on the message, so
+  # thinking-free history is the default shape (same contract as muse).
+  resident_strip_reasoning: true
   # ADDED 2026-07-30: the stateless flow cache (M9 seq-ops band). Measured
   # on glm at realistic head sizes: HIT saves 3.51s/call = 49% of prefill
   # (corrected pilot, 11/11 hits). The 2026-06 ban hit the M8 save_state

@@ -98,6 +98,12 @@ model:
   flow_kv_cache: true
   session_full_replay: true
   resident_seq_cache: true
+  # resident_strip_reasoning stays UNSET here on purpose: harmony's docs do
+  # say drop prior CoT, but this config is `decode_mode: "batched"` and
+  # `LlamaCppBackend.strip_reasoning_replay` returns False for batched seats
+  # (pool-only; deferred in batched v1) — logging only at DEBUG. Setting the
+  # flag would be a silent no-op. The conformant sibling is the pool config
+  # gpt-oss-120b-a5.yaml, which has it. Revisit if batched gains the strip.
   context_refresh_drain_s: 300
   reasoning_head_swap: true
 

@@ -83,29 +83,45 @@ def reasoning_span(
         ids = tokenize_text(tokenizer, s, special=True)
         return ids[-1] if ids else None
 
-    if family == "chatml":
+    _s = _get_format_renderer(family).s
+    _t = getattr(_s, "thinking", None)
+
+    # INLINE-TAGS families — reasoning is delimited in-band by open/close
+    # tags. Everything below is DERIVED from the format schema, which already
+    # declares the one fact t0 depends on: whether this family's generation
+    # prompt prefills the opener (`open_tag_prefill_when_enabled` — laguna
+    # yes, gemma no) and whether a newline follows it (`open_tag_newline`).
+    #
+    # This branch was `family == "chatml"` plus `family == "gemma"` until
+    # 2026-08-15, and both reduce to it exactly: chatml prefills `<think>\n`
+    # so t0 backs over the opener; gemma prefills nothing so t0 IS the
+    # generation start. Hardcoding the family list meant qwen/glm4/olmo/
+    # hunyuan3/laguna/deepseek4 fell through to `return None` — their strip
+    # flag would have been a silent no-op, the same hand-maintained-
+    # vocabulary trap the featurizer hit at onboarding (reference.yaml 3c).
+    if getattr(_t, "style", "") == "inline_tags":
         if not thinking_enabled:
             return None
-        if sid("</think>") not in gen_tokens:
-            return None  # no </think> (no thinking or truncated) → skip
-        if sid("<think>") in gen_tokens:
+        close_tag = getattr(_t, "close_tag", "") or ""
+        open_tag = getattr(_t, "open_tag", "") or ""
+        if not close_tag or sid(close_tag) not in gen_tokens:
+            return None  # no close tag (no thinking, or truncated) → skip
+        if open_tag and sid(open_tag) in gen_tokens:
             # The model SELF-emitted the opener — the gen-prompt did not
             # prefill it (a per-turn gate-closed level; gate_levels
             # families). Subtracting open_len would cut role framing out
             # of the KV; skip the strip for this rare turn instead.
             return None
-        # Drop the injected "<think>\n" (last tokens of the gen-prompt) + all
-        # generated; keep "<|im_start|>assistant\n". Replay = the clean answer.
-        open_len = len(tokenize_text(tokenizer, "<think>\n", special=True))
+        if not (open_tag and getattr(_t, "open_tag_prefill_when_enabled", True)):
+            # Family never prefills (gemma): the role framing ends at the
+            # generation start, so drop exactly the generated span.
+            return (gen_start_pos, "")
+        # Drop the injected opener (last tokens of the gen-prompt) + all
+        # generated; keep the role framing. Replay = the clean answer.
+        opener = open_tag + ("\n" if getattr(_t, "open_tag_newline", True) else "")
+        open_len = len(tokenize_text(tokenizer, opener, special=True))
         t0 = gen_start_pos - open_len
         return (t0, "") if t0 >= 0 else None
-
-    if family == "gemma":
-        if sid("<channel|>") not in gen_tokens:
-            return None
-        # Keep "<start_of_turn>model\n"; drop the generated preamble + answer,
-        # then replay the clean answer.
-        return (gen_start_pos, "")
 
     # Channel-style families — reasoning is a separate assistant message on a
     # reasoning channel/recipient (harmony's <|channel|>analysis, muse's
@@ -114,8 +130,7 @@ def reasoning_span(
     # "harmony"` until 2026-08-15, when muse-glimmer's strip turned out to be
     # a silent no-op — the same hand-maintained-vocabulary trap the
     # featurizer hit at onboarding (reference.yaml step 3c).
-    _s = _get_format_renderer(family).s
-    if getattr(getattr(_s, "thinking", None), "style", "") == "channel":
+    if getattr(_t, "style", "") == "channel":
         _chan_tok = _s.thinking.channel_token
         _think_close = getattr(_s.tokens, "thinking_close", "") or ""
         if _think_close and _think_close != _s.tokens.msg_close:
