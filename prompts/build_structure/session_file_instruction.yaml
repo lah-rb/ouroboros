@@ -14,6 +14,11 @@ content: |
   - Use the ids the data files actually contain. If an earlier file defines
     `north_wd`, that is the id. Do not coin `north_weekday` because it reads
     better.
+  - Literal binding is for NAMES, not for STRUCTURE. When a contract or an
+    earlier file declares a generic field — a `kind` every record carries,
+    a `handler_id` any entry could set — consume the FIELD, not today's
+    roster of ids. A dispatch that names each id one by one turns shared
+    data into private code, and the next data entry gets nothing.
   - Where the declared contract and an already-written file disagree: the
     WRITTEN file wins for names and ids (it exists; the contract was written
     before anything did), and the CONTRACT wins for signatures (a caller you

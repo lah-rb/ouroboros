@@ -6,6 +6,16 @@
 # reasoning — and judges whether the blueprint is unrunnable / self-contradictory
 # BY CONSTRUCTION before a single file is written.
 #
+# AGENDA COVERAGE (added 2026-08-15). The objective's own list of user-facing
+# interactions must land in some module's contract, or the structural phase —
+# batch OR session — improvises the command surface from nothing. Measured on
+# two blind-judged muse arms: neither design carried the objective's verb list
+# into any contract; each engine shipped almost exactly its one-line
+# `responsibility` string (one arm "status rendering" and no working win, the
+# other "win/lose handling" and no status), and `help`/`flee` fell out of both.
+# The operator chose an INFERENCE check here, not a deterministic verb-grep,
+# precisely so it can weigh the whole mission agenda in context.
+#
 # Pre-computed context: blueprint_summary, mission_objective, tooling_convention,
 #                       drift_facts_rendered, prior_rejection
 
@@ -34,6 +44,13 @@ sections:
     - Do the modules' `imports_from` edges resolve against the declared file paths
       under the declared import scheme?
     - Is `working_directory` consistent with where `run_command` is invoked?
+    - Does the blueprint COVER the objective's user-facing surface? Collect the
+      interactions the objective itself names — commands the user must be able
+      to type, screens they must see, round-trips they must perform — and check
+      each has an OWNER: a module whose `defines` or `responsibility` accounts
+      for it. A named interaction with no owner ships missing, because the file
+      author writes to the contract in front of them, not to the objective's
+      full list.
 
     Return a JSON object inside a fenced code block. Rules:
     - `"coherent": false` ONLY when you can name a SPECIFIC, concrete conflict
@@ -53,6 +70,17 @@ sections:
     ```json
     {"coherent": false, "reason": "run_command `python -m regex_engine.cli` needs `regex_engine` importable from the project root, but the modules live under `src/regex_engine/` and the project runs from source with no install", "criteria": ["move the modules from src/regex_engine/ to a top-level regex_engine/ package so `python -m regex_engine.cli` resolves when run from the project root", "or change run_command to set PYTHONPATH=src before `python -m regex_engine.cli`"]}
     ```
+
+    ✅ CORRECT — a coverage gap, quoting the objective and naming the owner:
+    ```json
+    {"coherent": false, "reason": "the objective requires 'search notes by tag' and 'export notes to JSON', but no module's defines or responsibility accounts for search or export — cli.py says only 'parse raw input into structured commands'", "criteria": ["add search and export to cli.py's defines and name them in app.py's responsibility", "or add a commands.py module owning the user-facing command table"]}
+    ```
+
+    For a coverage failure the same bar applies: QUOTE the objective phrase
+    naming the interaction and state that no module accounts for it. Do not
+    invent interactions the objective does not name, and do not block on
+    interactions a contract plausibly covers under a general phrase it
+    actually contains.
 
     ✅ CORRECT — coherent, FLAT layout, nothing to change:
     ```json
