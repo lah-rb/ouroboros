@@ -417,6 +417,15 @@ model:
   # when device 0 is full. It costs image-encode speed, not fidelity.
   # Irrelevant on unified memory, where there is one device. Default: true
   vision_projector_gpu: true
+  # [O] Type: str|null — ggml backend NAME to put the projector on ("CUDA1",
+  # "Metal"), overriding the default-device behaviour above. clip.cpp reads
+  # MTMD_BACKEND_DEVICE via getenv at every mtmd_init_from_file and resolves
+  # it with ggml_backend_init_by_name; the backend exports the variable around
+  # handler construction, so this is per-MODEL projector placement. A name
+  # this host does not have falls back to the default GPU device (clip warns),
+  # and the governor charges device 0 to match. Ignored when
+  # vision_projector_gpu is false. Default: null
+  vision_projector_device: null
   # [O] Type: int — reject an image larger than this rather than letting mtmd
   # OOM. Default: 33554432 (32MB)
   vision_max_image_bytes: 33554432

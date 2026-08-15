@@ -55,9 +55,11 @@
 #   CUDA1  11.63 GiB total — empty, which is why this model is pinned to it.
 #
 # So CUDA0 has no room for an 882 MB projector, and mtmd offers no device
-# index — only use_gpu. vision_projector_gpu: false puts it in host RAM
-# instead, which is the difference between this model loading and the server
-# dying (it OOMed CUDA0 twice before the governor could see the charge).
+# index — only use_gpu, plus the MTMD_BACKEND_DEVICE getenv that clip.cpp
+# resolves by backend name. vision_projector_device: "CUDA1" uses that to put
+# the projector beside the weights on the 3060 — the difference between this
+# model loading and the server dying (it OOMed CUDA0 twice before the
+# governor could see the charge, and the CPU fallback cost 2.3x wall).
 #
 # n_ctx is small ON PURPOSE — the text pool is never used, so paying KV for it
 # would be pure waste. vision_n_ctx is what OCR actually consumes, and 32768 is
@@ -95,9 +97,13 @@ model:
   # fits on CUDA1 and a bench shows 4 still pays.
   vision_pool_size: 2
   # The projector cannot follow main_gpu — mtmd takes use_gpu, not a device —
-  # so on this host it would land on CUDA0 where muse already sits. Host RAM
-  # instead. Costs image-encode speed, not fidelity.
-  vision_projector_gpu: false
+  # so left alone it lands on CUDA0 where muse already sits (that OOM killed
+  # the server twice). clip.cpp's MTMD_BACKEND_DEVICE escape hatch names a
+  # backend directly, so the projector joins the weights on the 3060. The CPU
+  # fallback was measured first and costs 2.3x wall (121.1 s vs 52.1 s on a
+  # 10-page paper) — placement, not offload, is the fix.
+  vision_projector_gpu: true
+  vision_projector_device: "CUDA1"
   vision_image_roots:
     - "~/corpora"
     - "~/ouroboros-runs"

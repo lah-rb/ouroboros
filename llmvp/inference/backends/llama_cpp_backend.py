@@ -821,13 +821,15 @@ class LlamaCppBackend(BaseBackend):
         # CHAT_FORMAT class attribute and REJECT the kwarg with a TypeError —
         # their __init__ is (force_reasoning, add_vision_id, **kwargs) over a
         # base of (mmproj_path, verbose, use_gpu, image_min/max_tokens).
-        # use_gpu IS THE ONLY PLACEMENT CONTROL THE HANDLER HAS. Its signature
-        # is (mmproj_path, verbose, use_gpu, image_min_tokens, image_max_tokens,
-        # ...) — no device index — so mtmd allocates on the DEFAULT device,
-        # which is device 0, whatever main_gpu says. On a multi-GPU host a
-        # model pinned to card 1 still puts its projector on card 0; false
-        # keeps it in host RAM instead, which is the escape hatch when card 0
-        # is full. resident_models.footprint_by_device charges it to match.
+        # PLACEMENT. The handler's signature carries only use_gpu — a bool, no
+        # device index — so by default mtmd allocates on device 0 whatever
+        # main_gpu says. But clip.cpp consults MTMD_BACKEND_DEVICE via getenv
+        # at every mtmd_init_from_file and resolves it with
+        # ggml_backend_init_by_name, so exporting it around construction is
+        # per-model projector placement: paddle's projector can sit on CUDA1
+        # beside its weights while muse keeps the default. use_gpu false keeps
+        # the projector in host RAM. resident_models.footprint_by_device
+        # charges whichever device this selects.
         handler_kwargs: dict = {
             "mmproj_path": str(mcfg.mmproj_path),
             "verbose": False,
@@ -835,7 +837,35 @@ class LlamaCppBackend(BaseBackend):
         }
         if handler_cls.__name__ == "GenericMTMDChatHandler":
             handler_kwargs["chat_format"] = None
-        inst.chat_handler = handler_cls(**handler_kwargs)
+        proj_dev = getattr(mcfg, "vision_projector_device", None)
+        if proj_dev and handler_kwargs["use_gpu"]:
+            prior = os.environ.get("MTMD_BACKEND_DEVICE")
+            os.environ["MTMD_BACKEND_DEVICE"] = str(proj_dev)
+            try:
+                inst.chat_handler = handler_cls(**handler_kwargs)
+                # EAGER, AND INSIDE THE ENV SCOPE, because construction does
+                # not touch mtmd at all: _init_mtmd_context runs on the FIRST
+                # VISION REQUEST (it needs the Llama object), long after a
+                # construction-scoped env var is restored. The first version
+                # of this scoped only the constructor, and the projector
+                # landed on device 0 anyway — caught by per-process nvidia-smi
+                # attribution (+1.3 GB on CUDA0), not by any error. The init
+                # is guarded (`if self.mtmd_ctx is not None: return`), so the
+                # request-path call becomes a no-op. Eager also matches the
+                # governor, which charges the projector at admission rather
+                # than at first use.
+                init = getattr(inst.chat_handler, "_init_mtmd_context", None)
+                if callable(init):
+                    init(inst)
+            finally:
+                # Restore, never leak: the env var is process-wide and the
+                # NEXT model's projector must not inherit this one's device.
+                if prior is None:
+                    os.environ.pop("MTMD_BACKEND_DEVICE", None)
+                else:
+                    os.environ["MTMD_BACKEND_DEVICE"] = prior
+        else:
+            inst.chat_handler = handler_cls(**handler_kwargs)
         log.info(
             "👁  Vision instance ready — handler=%s n_ctx=%d mmproj=%s",
             handler_cls.__name__,

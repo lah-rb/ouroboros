@@ -34,6 +34,7 @@ def _cfg(name: str, *, n_ctx: int = 8192, path: str = "/nonexistent.gguf"):
         main_gpu=None,
         split_mode="none",
         vision_projector_gpu=True,
+        vision_projector_device=None,
     )
     generation = types.SimpleNamespace(max_tokens_default=512, temperature_default=0.7)
     return types.SimpleNamespace(model=model, generation=generation)
@@ -653,3 +654,46 @@ def test_a_legacy_entry_without_a_breakdown_is_charged_to_device_zero():
         name="old", backend=None, config=None, footprint_bytes=7_000
     )
     assert rm.resident_bytes_by_device() == {0: 7_000}
+
+
+def test_a_named_projector_device_is_charged_where_it_lands(monkeypatch):
+    """vision_projector_device: "CUDA1" redirects the projector via
+    MTMD_BACKEND_DEVICE, so the governor must charge CUDA1 — charging the
+    default device 0 would refuse loads that fit and admit ones that don't."""
+    _two_devices(monkeypatch, gb_a=24, gb_b=12)
+    cfg = _cfg("paddle", n_ctx=100)
+    cfg.model.mmproj_path = "/proj.gguf"
+    cfg.model.main_gpu = 1
+    cfg.model.vision_projector_device = "CUDA1"
+    cfg.model.vision_n_ctx = 100
+    cfg.model.vision_pool_size = 1
+
+    monkeypatch.setitem(
+        sys.modules,
+        "inference.backends.llama_cpp_backend",
+        types.SimpleNamespace(
+            LlamaCppBackend=types.SimpleNamespace(
+                weights_bytes_total=staticmethod(lambda p: 500)
+            )
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "core.context_probe",
+        types.SimpleNamespace(kv_bytes_per_token=lambda p, m: 1),
+    )
+    monkeypatch.setattr(rm.os.path, "getsize", lambda p: 840)
+
+    by_dev = rm.footprint_by_device(cfg)
+    assert 0 not in by_dev, "everything belongs on the pinned card"
+    assert by_dev[1] == 500 + 100 + 100 + 840
+
+
+def test_an_unknown_projector_device_name_falls_back_to_device_zero(monkeypatch):
+    """clip.cpp answers an unresolvable name by using the default GPU backend,
+    so the charge must follow it there rather than trusting the config."""
+    _two_devices(monkeypatch, gb_a=24, gb_b=12)
+    cfg = _cfg("paddle", n_ctx=0)
+    cfg.model.mmproj_path = "/proj.gguf"
+    cfg.model.vision_projector_device = "ROCm7"  # not on this host
+    assert rm.projector_device(cfg) == 0

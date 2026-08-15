@@ -395,6 +395,14 @@ class ModelConfig(BaseModel):
     # Set false to keep the projector in host RAM instead, which is the escape
     # hatch when device 0 is full: it costs image-encode speed, not fidelity.
     vision_projector_gpu: bool = True
+    # ggml backend NAME ("CUDA1", "Metal") to put the projector on, overriding
+    # the default-device behaviour above. This exists because clip.cpp reads
+    # MTMD_BACKEND_DEVICE via getenv at every mtmd_init_from_file — the one
+    # placement control the C API offers — and the backend exports it around
+    # handler construction, giving per-MODEL projector placement from config.
+    # None = mtmd's default (first GPU device). Ignored when
+    # vision_projector_gpu is false.
+    vision_projector_device: Optional[str] = None
     # Reject an image larger than this rather than letting mtmd OOM. 32MB.
     vision_max_image_bytes: int = 33_554_432
     # Directories a vision request may read image PATHS from. Empty = paths are

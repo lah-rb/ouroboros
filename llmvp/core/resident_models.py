@@ -250,12 +250,14 @@ def footprint_by_device(config: Any) -> dict:
     ``_create_vision_instance`` builds its context from the primary's model
     (placed correctly), but the mtmd handler that owns the projector takes
     only ``use_gpu`` — a bool, with no device index anywhere in its signature
-    — so mtmd allocates on the default device, which is device 0. Charging
-    the projector to the model's device therefore under-counts device 0 by
-    exactly the amount that will fail to allocate there. Live: paddle pinned
-    to CUDA1 was admitted against a budget that never saw its 840.90 MiB
-    projector, which then tried to land on CUDA0 beside muse and killed the
-    server with cudaMalloc OOM.
+    — so by default mtmd allocates on device 0. Charging the projector to the
+    model's device therefore under-counts device 0 by exactly the amount that
+    will fail to allocate there. Live: paddle pinned to CUDA1 was admitted
+    against a budget that never saw its 840.90 MiB projector, which then
+    tried to land on CUDA0 beside muse and killed the server with cudaMalloc
+    OOM. ``vision_projector_device`` redirects the projector by ggml backend
+    name (clip.cpp honours MTMD_BACKEND_DEVICE), and projector_device()
+    resolves where it will really go.
 
     On a single-GPU host every term keys to 0 and this is the old arithmetic.
     """
@@ -283,12 +285,10 @@ def footprint_by_device(config: Any) -> dict:
     if mmproj:
         # Counted SEPARATELY on purpose: weights_bytes_total deliberately
         # excludes a sibling mmproj-*.gguf, and probe_verified_weights_bytes
-        # was measured without it too. Charged to device 0 — see above.
+        # was measured without it too. Charged to the device the projector
+        # will actually land on — see projector_device and the note above.
         try:
-            charge(
-                0 if projector_on_gpu(config) else _CPU_DEVICE,
-                os.path.getsize(str(mmproj)),
-            )
+            charge(projector_device(config), os.path.getsize(str(mmproj)))
         except OSError:
             log.warning("resident: mmproj %s unreadable — not counted", mmproj)
 
@@ -328,6 +328,31 @@ def projector_on_gpu(config: Any) -> bool:
     """Whether the mtmd projector is offloaded (config ``vision_projector_gpu``)."""
     val = getattr(config.model, "vision_projector_gpu", None)
     return True if val is None else bool(val)
+
+
+def projector_device(config: Any) -> int:
+    """The device index the projector will actually land on.
+
+    ``vision_projector_device`` names a ggml backend ("CUDA1"); the backend
+    exports it as MTMD_BACKEND_DEVICE around handler construction, so when it
+    is set AND resolvable the projector goes there. Unset — or naming a device
+    this host does not have, which clip.cpp answers by falling back to the
+    default GPU backend — means device 0.
+    """
+    if not projector_on_gpu(config):
+        return _CPU_DEVICE
+    name = getattr(config.model, "vision_projector_device", None)
+    if name:
+        for dev in gpu_devices():
+            if dev["name"] == str(name):
+                return dev["index"]
+        log.warning(
+            "resident: vision_projector_device %r not among this host's GPUs — "
+            "mtmd will fall back to the default device, so it is charged to "
+            "device 0",
+            name,
+        )
+    return 0
 
 
 def estimate_footprint_bytes(config: Any) -> int:
