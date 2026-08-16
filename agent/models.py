@@ -282,6 +282,16 @@ class TurnDefinition(BaseModel):
         return data
 
 
+class BranchSpec(BaseModel):
+    """One child flow of a parallel step: which flow, and how its inputs
+    resolve from the parent's namespaces (same $ref semantics as a
+    sub-flow step's input_map)."""
+
+    model_config = ConfigDict(extra="forbid")
+    flow: str
+    input_map: dict[str, Any] | None = None
+
+
 class StepDefinition(BaseModel):
     model_config = ConfigDict(extra="forbid")
     action: str
@@ -301,11 +311,22 @@ class StepDefinition(BaseModel):
     tail_call: dict[str, Any] | None = None
     flow: str | None = None
     input_map: dict[str, Any] | None = None
+    # action == "parallel": child flows run concurrently under a bounded
+    # gather; children get ChildEffects (whole-doc mission writes raise,
+    # push_note rewrites to a mission op, traces stamp the branch).
+    branches: list[BranchSpec] | None = None
+    max_parallel: int = 3
 
     @model_validator(mode="after")
     def terminal_requires_status(self) -> "StepDefinition":
         if self.terminal and not self.status:
             raise ValueError("Terminal steps must declare a 'status' value.")
+        return self
+
+    @model_validator(mode="after")
+    def parallel_requires_branches(self) -> "StepDefinition":
+        if self.action == "parallel" and not self.branches:
+            raise ValueError("action 'parallel' requires a non-empty 'branches'.")
         return self
 
 

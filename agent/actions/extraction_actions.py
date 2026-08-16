@@ -217,6 +217,93 @@ def _extraction_pending(record: dict) -> bool:
     )
 
 
+# ── OCR claims ────────────────────────────────────────────────────────
+#
+# Nothing marks a paper as in-flight: extraction_status is written AFTER
+# the fact, so two concurrent selectors (the acquire overlap lane and the
+# parallel ocr_drain branch) would OCR the same PDFs twice. The claim set
+# closes that window. Plain set ops suffice — every selector runs on the
+# one asyncio loop with no awaits between check and claim. IN-PROCESS
+# ONLY: a second agent process would need a flock'd claim file (the events
+# queue is the precedent); until then, one mission = one process stands.
+_OCR_CLAIMS: set[str] = set()
+
+
+def select_ocr_batch(databank: dict, max_pdfs: int) -> list[str]:
+    """Pick up to max_pdfs unclaimed pending keys (needs_reextract first —
+    a bounded retry should not queue behind the whole backlog) and CLAIM
+    them. Callers must release_ocr_keys() in a finally."""
+    pending = [
+        (k, r)
+        for k, r in databank.items()
+        if _extraction_pending(r) and r.get("pdf_path") and k not in _OCR_CLAIMS
+    ]
+    pending.sort(key=lambda kr: kr[1].get("extraction_status") != "needs_reextract")
+    keys = [k for k, _ in pending[:max_pdfs]]
+    _OCR_CLAIMS.update(keys)
+    return keys
+
+
+def release_ocr_keys(keys: list[str]) -> None:
+    _OCR_CLAIMS.difference_update(keys)
+
+
+async def action_ocr_drain_batch(step_input: StepInput) -> StepOutput:
+    """Drain a bounded slice of the OCR backlog — the ocr_drain flow's one
+    work step, built to run as a PARALLEL BRANCH beside discovery.
+
+    Mission-clean by construction: selection reads the databank, extraction
+    (action_extract_pdf_batch) appends extraction.jsonl — no mission writes,
+    so it satisfies the branch ownership contract without exceptions.
+
+    Inputs: working_directory; env OUROBOROS_OCR_DRAIN_PDFS bounds the
+    slice (default 4 ≈ one discovery dispatch of paddle work at ~65 s/paper;
+    0 disables). Result: attempted, extracted, reason.
+    """
+    from agent.actions.scholarly_actions import read_databank
+
+    effects = step_input.effects
+    raw = os.environ.get("OUROBOROS_OCR_DRAIN_PDFS", "").strip()
+    try:
+        max_pdfs = int(raw) if raw else 4
+    except ValueError:
+        max_pdfs = 4
+    if max_pdfs <= 0:
+        return StepOutput(
+            result={"attempted": 0, "reason": "disabled"},
+            observations="OCR drain disabled",
+        )
+    if effects is None:
+        return StepOutput(
+            result={"attempted": 0, "reason": "no effects"},
+            observations="OCR drain: no effects",
+        )
+
+    databank = await read_databank(effects)
+    keys = select_ocr_batch(databank, max_pdfs)
+    if not keys:
+        summary = {"attempted": 0, "reason": "nothing unclaimed pending"}
+        return StepOutput(
+            result=summary,
+            observations="OCR drain: nothing unclaimed pending",
+            context_updates={"ocr_summary": summary},
+        )
+    try:
+        sub = step_input.model_copy(
+            update={"inputs": {**dict(step_input.inputs or {}), "paper_keys": keys}}
+        )
+        out = await action_extract_pdf_batch(sub)
+        result = dict(out.result or {})
+    finally:
+        release_ocr_keys(keys)
+    summary = {"attempted": len(keys), **result}
+    return StepOutput(
+        result=summary,
+        observations=f"OCR drain: {len(keys)} pdf(s) — {out.observations}",
+        context_updates={"ocr_summary": summary},
+    )
+
+
 async def action_derive_extraction_goals(step_input: StepInput) -> StepOutput:
     """Bootstrap the single corpus-level pdf_extract goal (idempotent).
 

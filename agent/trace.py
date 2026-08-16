@@ -118,6 +118,9 @@ class TraceEvent:
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
     mission_id: str = ""
+    # Parallel-branch attribution: "" outside a parallel step; the branch
+    # flow's name inside one (stamped by effects/child.ChildEffects).
+    branch: str = ""
     cycle: int = 0
     flow: str = ""
 

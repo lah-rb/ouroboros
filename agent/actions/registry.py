@@ -458,6 +458,9 @@ def build_action_registry() -> ActionRegistry:
     registry.register("check_profile_oracle", action_check_profile_oracle)
     registry.register("pdf_extract_sweep_next", action_pdf_extract_sweep_next)
     registry.register("extract_pdf_batch", action_extract_pdf_batch)
+    from agent.actions.extraction_actions import action_ocr_drain_batch
+
+    registry.register("ocr_drain_batch", action_ocr_drain_batch)
     registry.register("check_extraction_complete", action_check_extraction_complete)
     registry.register("reopen_extraction_goal", action_reopen_extraction_goal)
     registry.register("derive_curation_goals", action_derive_curation_goals)

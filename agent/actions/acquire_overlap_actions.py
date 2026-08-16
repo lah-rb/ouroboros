@@ -132,8 +132,9 @@ async def _ocr_lane(step_input: StepInput, max_pdfs: int) -> dict:
     failed OCR must not fail an acquisition batch.
     """
     from agent.actions.extraction_actions import (
-        _extraction_pending,
         action_extract_pdf_batch,
+        release_ocr_keys,
+        select_ocr_batch,
     )
     from agent.actions.scholarly_actions import read_databank
 
@@ -159,17 +160,12 @@ async def _ocr_lane(step_input: StepInput, max_pdfs: int) -> dict:
         return {"attempted": 0, "reason": "no working_directory"}
 
     databank = await read_databank(effects)
-    # needs_reextract first — a bounded retry should not queue behind the
-    # whole backlog (mirrors action_pdf_extract_sweep_next's ordering).
-    pending = [
-        (k, r)
-        for k, r in databank.items()
-        if _extraction_pending(r) and r.get("pdf_path")
-    ]
-    pending.sort(key=lambda kr: kr[1].get("extraction_status") != "needs_reextract")
-    keys = [k for k, _ in pending[:max_pdfs]]
+    # Claimed selection (shared with the ocr_drain parallel branch):
+    # needs_reextract first, unclaimed only — two concurrent drains must
+    # never OCR the same PDF twice.
+    keys = select_ocr_batch(databank, max_pdfs)
     if not keys:
-        return {"attempted": 0, "reason": "nothing pending"}
+        return {"attempted": 0, "reason": "nothing unclaimed pending"}
 
     sub = step_input.model_copy(
         update={
@@ -185,6 +181,8 @@ async def _ocr_lane(step_input: StepInput, max_pdfs: int) -> dict:
     except Exception as exc:  # noqa: BLE001 — lane boundary
         logger.warning("ocr lane failed: %s", exc)
         return {"attempted": len(keys), "error": str(exc)[:200]}
+    finally:
+        release_ocr_keys(keys)
     return {"attempted": len(keys), "result": dict(out.result or {})}
 
 

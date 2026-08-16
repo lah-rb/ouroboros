@@ -23737,6 +23737,139 @@
       }
     },
     "steps": {
+      "run_round": {
+        "action": "parallel",
+        "description": "Discovery round + OCR backlog drain, concurrently",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "return_success"
+            }
+          ]
+        },
+        "publishes": [
+          "directive_report"
+        ],
+        "effects": [],
+        "terminal": false,
+        "branches": [
+          {
+            "flow": "discover_work",
+            "input_map": {
+              "aspect_name": {
+                "$ref": "input.aspect_name"
+              },
+              "aspect_description": {
+                "$ref": "input.aspect_description",
+                "default": ""
+              },
+              "seed_queries": {
+                "$ref": "input.seed_queries",
+                "default": []
+              },
+              "coverage_target": {
+                "$ref": "input.coverage_target",
+                "default": 10
+              },
+              "have_count": {
+                "$ref": "input.have_count",
+                "default": 0
+              },
+              "corpus_languages": {
+                "$ref": "input.corpus_languages",
+                "default": []
+              },
+              "flow_directive": {
+                "$ref": "input.flow_directive",
+                "default": ""
+              }
+            }
+          },
+          {
+            "flow": "ocr_drain",
+            "input_map": {
+              "working_directory": {
+                "$ref": "input.working_directory"
+              }
+            }
+          }
+        ],
+        "max_parallel": 2
+      },
+      "return_success": {
+        "action": "noop",
+        "description": "Return the discovery report to research_control",
+        "context": {
+          "required": [],
+          "optional": [
+            "directive_report"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "research_control",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "last_goal_id": {
+              "$ref": "input.goal_id"
+            },
+            "last_status": "success"
+          }
+        }
+      }
+    },
+    "entry": "run_round",
+    "overflow": {
+      "strategy": "split",
+      "fallback": "reorganize"
+    }
+  },
+  "discover_work": {
+    "flow": "discover_work",
+    "version": 1,
+    "description": "Scholarly discovery round (work half): refine queries for one\naspect, search S2 + OpenAlex, merge candidates into the workspace\ndatabank (DOI-keyed dedup), and end with the directive report in\ncontext for the discover wrapper to publish.",
+    "context_tier": "session_task",
+    "returns": {
+      "directive_report": {
+        "type": "dict",
+        "from": "context.directive_report",
+        "optional": true
+      }
+    },
+    "projections": {},
+    "input": {
+      "required": [
+        "aspect_name"
+      ],
+      "optional": [
+        "aspect_description",
+        "seed_queries",
+        "coverage_target",
+        "have_count",
+        "corpus_languages",
+        "flow_directive"
+      ]
+    },
+    "defaults": {
+      "config": {
+        "temperature": "t*0.5"
+      }
+    },
+    "steps": {
       "refine_queries": {
         "action": "inference",
         "description": "Refine scholarly queries for the aspect",
@@ -23897,7 +24030,7 @@
           "rules": [
             {
               "condition": "true",
-              "transition": "return_success"
+              "transition": "done"
             }
           ]
         },
@@ -23907,9 +24040,9 @@
         "effects": [],
         "terminal": false
       },
-      "return_success": {
+      "done": {
         "action": "noop",
-        "description": "Return the discovery report to research_control",
+        "description": "Work complete \u2014 report is in context for the wrapper",
         "context": {
           "required": [],
           "optional": [
@@ -23920,22 +24053,81 @@
         "config": {},
         "publishes": [],
         "effects": [],
-        "terminal": false,
-        "tail_call": {
-          "flow": "research_control",
-          "input_map": {
-            "mission_id": {
-              "$ref": "input.mission_id"
-            },
-            "last_goal_id": {
-              "$ref": "input.goal_id"
-            },
-            "last_status": "success"
-          }
-        }
+        "terminal": true,
+        "status": "success"
       }
     },
     "entry": "refine_queries",
+    "overflow": {
+      "strategy": "split",
+      "fallback": "reorganize"
+    }
+  },
+  "ocr_drain": {
+    "flow": "ocr_drain",
+    "version": 1,
+    "description": "Drain a bounded, claimed slice of the OCR backlog through the\nresident paddle model. Runs as a parallel branch beside other\nwork; mission-clean; returns an attempt summary.",
+    "context_tier": "session_task",
+    "returns": {
+      "ocr_summary": {
+        "type": "dict",
+        "from": "context.ocr_summary",
+        "optional": true
+      }
+    },
+    "projections": {},
+    "input": {
+      "required": [
+        "working_directory"
+      ],
+      "optional": []
+    },
+    "defaults": {
+      "config": {}
+    },
+    "steps": {
+      "drain": {
+        "action": "ocr_drain_batch",
+        "description": "Claim + OCR a bounded slice of the pending backlog",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "done"
+            }
+          ]
+        },
+        "publishes": [
+          "ocr_summary"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "done": {
+        "action": "noop",
+        "description": "Drain complete",
+        "context": {
+          "required": [],
+          "optional": [
+            "ocr_summary"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": true,
+        "status": "success"
+      }
+    },
+    "entry": "drain",
     "overflow": {
       "strategy": "split",
       "fallback": "reorganize"

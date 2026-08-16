@@ -285,6 +285,17 @@ import "list"
 	flow?:      string
 	input_map?: {[string]: _}
 
+	// Parallel child flows (action == "parallel"): each branch runs as a
+	// concurrent sub-flow under a bounded gather. Children are stateless
+	// (session keys stripped) and run behind ChildEffects: whole-document
+	// mission writes RAISE, push_note rewrites to a mission op, traces
+	// carry the branch name. Merging results is the parent's job.
+	branches?: [...{
+		flow:       string
+		input_map?: {[string]: _}
+	}]
+	max_parallel?: int & >0
+
 	// ── Cross-field constraints ──────────────────────────────────
 
 	// Terminal steps must declare a status
@@ -304,6 +315,11 @@ import "list"
 	// Flow steps must name their target flow
 	if action == "flow" {
 		flow: string
+	}
+
+	// Parallel steps must declare their branches
+	if action == "parallel" {
+		branches: [...{flow: string, input_map?: {[string]: _}}] & [_, ...]
 	}
 
 	// Non-terminal steps need a resolver unless:

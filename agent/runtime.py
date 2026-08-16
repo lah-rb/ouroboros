@@ -383,6 +383,19 @@ async def execute_flow(
                         _trace_mission_id=_trace_mission_id,
                         _trace_cycle=_trace_cycle,
                     )
+                elif step_def.action == "parallel":
+                    step_output = await _execute_parallel_action(
+                        step_def=step_def,
+                        step_name=step_name,
+                        flow_def=flow_def,
+                        accumulator=execution.accumulator,
+                        inputs=inputs,
+                        action_registry=action_registry,
+                        effects=effects,
+                        flow_registry=flow_registry,
+                        _trace_mission_id=_trace_mission_id,
+                        _trace_cycle=_trace_cycle,
+                    )
                 else:
                     try:
                         action_fn = action_registry.get(step_def.action)
@@ -855,6 +868,147 @@ async def _execute_subflow_action(
         result={"status": sub_result.status, **sub_result.result},
         observations=f"Sub-flow {target_flow_name}: {sub_result.status} "
         f"({len(sub_result.steps_executed)} steps)",
+        context_updates=context_updates,
+    )
+
+
+async def _execute_parallel_action(
+    step_def: StepDefinition,
+    step_name: str,
+    flow_def: FlowDefinition,
+    accumulator: dict[str, Any],
+    inputs: dict[str, Any],
+    action_registry: ActionRegistry,
+    effects: Any,
+    flow_registry: dict[str, FlowDefinition] | None,
+    _trace_mission_id: str = "",
+    _trace_cycle: int = 0,
+) -> StepOutput:
+    """Execute a parallel step (action='parallel'): every branch is a child
+    flow run concurrently under a bounded gather.
+
+    The ownership contract (mission-state study, 2026-08-15): children are
+    share-nothing and stateless — ambient session keys are stripped, and
+    each child runs behind ChildEffects, where whole-document mission
+    writes (save_mission/push_event/clear_events) RAISE, push_note is
+    rewritten as a merge-safe mission op, and trace events carry the
+    branch name. A failed branch fills its result slot with
+    {status: "failed", error} and never sinks siblings. Merging branch
+    results is the PARENT flow's job in later steps — the runtime only
+    namespaces each branch's published context as '<flow>_result'.
+    """
+    import asyncio
+
+    from agent.effects.child import ChildEffects
+
+    if flow_registry is None:
+        raise FlowRuntimeError(
+            f"Step {step_name!r}: action='parallel' requires a flow_registry."
+        )
+    branches = list(step_def.branches or [])
+    for b in branches:
+        if b.flow not in flow_registry:
+            raise FlowRuntimeError(
+                f"Step {step_name!r}: parallel branch flow {b.flow!r} not in "
+                f"registry. Available: {sorted(flow_registry)}"
+            )
+
+    namespaces = {
+        "input": inputs,
+        "context": accumulator,
+        "meta": {"flow_name": flow_def.flow, "step_id": step_name},
+    }
+    _can_trace = trace_enabled(effects)
+
+    async def one(branch) -> dict[str, Any]:
+        sub_inputs = (
+            resolve_input_map(branch.input_map, namespaces) if branch.input_map else {}
+        )
+        # Children are stateless: session plumbing must not leak in.
+        for ambient in _AMBIENT_CONTEXT_KEYS:
+            sub_inputs.pop(ambient, None)
+        child_fx = ChildEffects(effects, branch=branch.flow)
+        if _can_trace:
+            await effects.emit_trace(
+                FlowInvoke(
+                    mission_id=_trace_mission_id,
+                    cycle=_trace_cycle,
+                    flow=flow_def.flow,
+                    step=step_name,
+                    child_flow=branch.flow,
+                    child_inputs=list(sub_inputs.keys()),
+                )
+            )
+        started = time.monotonic()
+        try:
+            sub_result = await execute_flow(
+                flow_def=flow_registry[branch.flow],
+                inputs=sub_inputs,
+                action_registry=action_registry,
+                effects=child_fx,
+                flow_registry=flow_registry,
+                max_steps=200,
+            )
+            status, result, context = (
+                sub_result.status,
+                dict(sub_result.result or {}),
+                dict(sub_result.context or {}),
+            )
+        except Exception as e:  # branch boundary — never sinks siblings
+            logger.warning("parallel branch %s failed: %s", branch.flow, e)
+            status, result, context = "failed", {"error": str(e)[:300]}, {}
+        if _can_trace:
+            await effects.emit_trace(
+                FlowReturn(
+                    mission_id=_trace_mission_id,
+                    cycle=_trace_cycle,
+                    flow=flow_def.flow,
+                    child_flow=branch.flow,
+                    return_status=status,
+                    child_duration_ms=(time.monotonic() - started) * 1000,
+                )
+            )
+        return {
+            "flow": branch.flow,
+            "status": status,
+            "result": result,
+            "context": context,
+        }
+
+    sem = asyncio.Semaphore(max(1, int(step_def.max_parallel or 1)))
+
+    async def guarded(branch):
+        async with sem:
+            return await one(branch)
+
+    slots = await asyncio.gather(*(guarded(b) for b in branches))
+
+    failed = sum(1 for s in slots if s["status"] != "success")
+    # Namespace each branch's published surface for the parent: later steps
+    # (and 'publishes') reach them as '<flow>_result'.
+    context_updates: dict[str, Any] = {
+        f"{s['flow']}_result": {**s["result"], "_status": s["status"]} for s in slots
+    }
+    for key in step_def.publishes:
+        if key in context_updates:
+            continue
+        # A published key found in exactly one branch's terminal context
+        # passes through under its own name (the single-owner convenience).
+        owners = [s for s in slots if key in s["context"]]
+        if len(owners) == 1:
+            context_updates[key] = owners[0]["context"][key]
+
+    return StepOutput(
+        result={
+            "branches": [
+                {k: s[k] for k in ("flow", "status", "result")} for s in slots
+            ],
+            "failed": failed,
+        },
+        observations=(
+            f"Parallel [{', '.join(s['flow'] for s in slots)}]: "
+            f"{len(slots) - failed}/{len(slots)} succeeded"
+        ),
         context_updates=context_updates,
     )
 
