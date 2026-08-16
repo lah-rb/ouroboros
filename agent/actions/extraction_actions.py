@@ -696,9 +696,38 @@ async def action_ocr_drain_batch(step_input: StepInput) -> StepOutput:
     finally:
         release_ocr_keys(keys)
     summary = {"attempted": len(keys), **result}
+    obs = f"OCR drain: {len(keys)} pdf(s) — {out.observations}"
+    # UNDER-FILLED ROUND RIDES A BOOK SEGMENT TOO. The strict
+    # empty-queue-only gate starved the book lane: acquisition keeps the
+    # regular queue at 1-2, so drain rounds always found SOMETHING and the
+    # oversize pile never advanced (measured: 0 books started across a day
+    # of queue≈0 samples). A partial batch has budget to spare; spend it.
+    if len(keys) < max_pdfs:
+        working_dir = str(
+            step_input.inputs.get("working_directory")
+            or getattr(
+                getattr(step_input.context.get("mission"), "config", None),
+                "working_directory",
+                "",
+            )
+            or ""
+        )
+        if working_dir:
+            book = await _book_segment_round(step_input, working_dir)
+            summary["book"] = book
+            if book.get("book"):
+                obs += (
+                    f"; book segment {book.get('book')} "
+                    f"{book.get('segment') or ''}"
+                    + (
+                        f" ASSEMBLED {book.get('status')}"
+                        if book.get("assembled")
+                        else ""
+                    )
+                )
     return StepOutput(
         result=summary,
-        observations=f"OCR drain: {len(keys)} pdf(s) — {out.observations}",
+        observations=obs,
         context_updates={"ocr_summary": summary},
     )
 
