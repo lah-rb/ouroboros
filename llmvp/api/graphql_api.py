@@ -1069,6 +1069,12 @@ class Mutation:
             max_tokens=request.max_tokens,
             temperature=request.temperature,
             grammar=request.grammar,
+            # Was silently DROPPED here while its two siblings forwarded it —
+            # the raw path got this exact fix 2026-07-26 with the same
+            # comment shape, and the `completion` QUERY always forwarded. The
+            # mutation was the odd one out; both 2026-08-16 head-swap probes
+            # ran through it and measured the default head at every "level".
+            reasoning=request.reasoning,
         )
         return CompletionResponse(
             text=outcome.text,

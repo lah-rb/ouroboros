@@ -2122,6 +2122,14 @@ class LlamaCppBackend(BaseBackend):
             return True
         seqs = getattr(inst, "_reasoning_seqs", None) or {}
         if level not in seqs:
+            # WARNING, not silence: an unpinned level on THIS instance means the
+            # pin didn't survive (or never reached) this pool slot — the fully
+            # silent former return here cost a probe cycle (2026-08-16).
+            log.warning(
+                "reasoning head-swap %s: level not pinned on instance (has %s)",
+                level,
+                sorted(seqs) or "none",
+            )
             return False
         seq = seqs[level]
         toks = inst._reasoning_head_tokens.get(level) or []
@@ -2281,8 +2289,14 @@ class LlamaCppBackend(BaseBackend):
         if not level or level == self._reasoning_default_level:
             return prompt_tokens
         if not (self._reasoning_head_swap and getattr(self, "_resident_active", False)):
-            log.debug(
-                "completion reasoning=%s ignored (swap off or non-resident)", level
+            # WARNING, not debug: a requested level silently not applying is the
+            # exact no-op class that hid the muse dial for two probes
+            # (2026-08-16) — say WHICH gate refused.
+            log.warning(
+                "completion reasoning=%s ignored (head_swap=%s resident_active=%s)",
+                level,
+                self._reasoning_head_swap,
+                getattr(self, "_resident_active", False),
             )
             return prompt_tokens
         source = self._reasoning_head_source(inst, level)
