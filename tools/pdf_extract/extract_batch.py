@@ -728,8 +728,14 @@ def _entropy(img: Image.Image) -> float:
     return -sum((c / total) * math.log2(c / total) for c in hist if c)
 
 
-def _collect_figures(src_dir: str, dest_dir: str) -> tuple[int, int, dict]:
+def _collect_figures(
+    src_dir: str, dest_dir: str, start: int = 0
+) -> tuple[int, int, dict]:
     """Dedup + filter figure crops from src into dest as fig_NN.png.
+
+    ``start`` offsets the numbering (book-segment mode appends to a dir that
+    already holds earlier segments' figures; full runs keep 0 so a retry
+    overwrites rather than duplicates).
 
     Returns (kept, dropped, rename_map src_basename -> dest_relpath).
     """
@@ -788,7 +794,7 @@ def _collect_figures(src_dir: str, dest_dir: str) -> tuple[int, int, dict]:
                 )
                 continue
             os.makedirs(dest_dir, exist_ok=True)
-            name = f"fig_{kept:02d}.png"
+            name = f"fig_{start + kept:02d}.png"
             img.save(os.path.join(dest_dir, name))
             seen.append((h, name, img.copy()))
             renames[os.path.basename(path)] = name
@@ -812,12 +818,21 @@ def extract_paper(
     dpi: int,
     temperature: float = 0.8,
     top_p: float = 0.95,
+    page_range: tuple | None = None,
 ) -> dict:
+    """``page_range=(a, b)`` extracts pages [a, b) only — the BOOK SEGMENT
+    mode. An explicit range is operator intent, so the oversize referral is
+    bypassed; the markdown lands in a part file (markdown/<key>.part_AAAA.md)
+    for the drain to assemble once every segment is done, and figure
+    numbering continues from what is already on disk so segments never
+    clobber earlier crops."""
     t0 = time.time()
     report = {
         "paper_key": key,
         "md_path": "",
         "pages": 0,
+        "total_pages": 0,
+        "page_range": list(page_range) if page_range else None,
         "verified_pages": 0,
         "unverified_pages": 0,
         "numeric_match_rate": 0.0,
@@ -838,7 +853,14 @@ def extract_paper(
 
     try:
         doc = fitz.open(pdf_path)
-        report["pages"] = len(doc)
+        report["total_pages"] = len(doc)
+        if page_range:
+            lo = max(0, int(page_range[0]))
+            hi = min(len(doc), int(page_range[1]))
+            page_indices = list(range(lo, hi))
+        else:
+            page_indices = list(range(len(doc)))
+        report["pages"] = len(page_indices)
         # OVERSIZE: MEASURED, NOT ATTEMPTED. A dispatch shares one timeout
         # across its whole batch, so a book does not merely fail — it burns
         # the budget its companions needed and takes them down with it. One
@@ -848,7 +870,7 @@ def extract_paper(
         # well below a book, so this refuses volumes without touching long
         # review articles. Not a failure — a referral: these are substantial
         # documents that deserve a decision before any GPU is spent on them.
-        if len(doc) > _MAX_EXTRACT_PAGES:
+        if page_range is None and len(doc) > _MAX_EXTRACT_PAGES:
             report["oversize"] = True
             report["error"] = ""
             report["seconds"] = round(time.time() - t0, 1)
@@ -858,7 +880,8 @@ def extract_paper(
         num_hit = num_total = span_hit = span_total = 0
 
         with tempfile.TemporaryDirectory(prefix="pdfx_") as tmp:
-            for i, page in enumerate(doc):
+            for i in page_indices:
+                page = doc[i]
                 png = os.path.join(tmp, f"p{i}.png")
                 page.get_pixmap(dpi=dpi).save(png)
                 truth = _prose_text(page)
@@ -896,7 +919,12 @@ def extract_paper(
                 else:
                     report["unverified_pages"] += 1
 
-            kept, droppedn, renames = _collect_figures(tmp, fig_dir)
+            fig_start = (
+                sum(1 for f in os.listdir(fig_dir) if f.startswith("fig_"))
+                if page_range and os.path.isdir(fig_dir)
+                else 0
+            )
+            kept, droppedn, renames = _collect_figures(tmp, fig_dir, start=fig_start)
             report["figures_kept"] = kept
             report["figures_dropped"] = droppedn
 
@@ -921,7 +949,8 @@ def extract_paper(
             "*[figure removed by extraction filter]*",
             joined,
         )
-        md_path = os.path.join(md_dir, f"{key}.md")
+        md_name = f"{key}.part_{page_range[0]:04d}.md" if page_range else f"{key}.md"
+        md_path = os.path.join(md_dir, md_name)
         with open(md_path, "w") as f:
             f.write(joined)
         report["md_path"] = os.path.relpath(md_path, databank_dir)
@@ -950,6 +979,11 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--pdfs", nargs="+", required=True)
     ap.add_argument("--keys", nargs="*", default=None)
+    ap.add_argument(
+        "--page-range",
+        default=None,
+        help="A:B — extract pages [A, B) only (book-segment mode; single key)",
+    )
     ap.add_argument("--databank-dir", required=True)
     ap.add_argument(
         "--model",
@@ -1070,6 +1104,10 @@ def main() -> int:
             ),
         )
         for pdf, key in zip(args.pdfs, keys):
+            pr = None
+            if args.page_range:
+                a, _, b = args.page_range.partition(":")
+                pr = (int(a), int(b))
             report = extract_paper(
                 pipe,
                 pdf,
@@ -1078,6 +1116,7 @@ def main() -> int:
                 args.dpi,
                 temperature=args.vl_temperature,
                 top_p=args.vl_top_p,
+                page_range=pr,
             )
             print(json.dumps(report, ensure_ascii=False), flush=True)
     finally:

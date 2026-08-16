@@ -321,6 +321,241 @@ def release_ocr_keys(keys: list[str]) -> None:
     _OCR_CLAIMS.difference_update(keys)
 
 
+# ── book segments (the oversize interleave) ───────────────────────────
+#
+# The oversize referral exists because a book monopolizes a shared dispatch
+# timeout — NOT because paddle cannot read it: OCR is page-by-page, so a
+# 560-page volume stresses the model exactly as much as a 5-page paper.
+# The interleave therefore splits TEMPORALLY: with the regular queue empty,
+# each drain round extracts one ~OUROBOROS_BOOK_PAGES segment (default 40,
+# ~4 min; 0 disables) via the tool's --page-range mode, records progress on
+# the record (book_progress, extraction-owned), and on the final segment
+# assembles the part markdowns and applies the standard verdict.
+
+
+def _book_pages() -> int:
+    raw = os.environ.get("OUROBOROS_BOOK_PAGES", "").strip()
+    try:
+        return max(0, int(raw)) if raw else 40
+    except ValueError:
+        return 40
+
+
+def select_book(databank: dict) -> str | None:
+    """One unclaimed oversize book with a PDF on disk (deterministic order)."""
+    for key in sorted(databank):
+        r = databank[key]
+        if (
+            r.get("extraction_status") == "extract_oversize"
+            and r.get("pdf_path")
+            and key not in _OCR_CLAIMS
+        ):
+            return key
+    return None
+
+
+def aggregate_book_parts(parts: list[dict]) -> dict:
+    """Weighted aggregate of per-segment report metrics (weights: verified
+    pages; a part with none contributes only its unverified count)."""
+    vp = sum(int(p.get("verified_pages") or 0) for p in parts)
+    up = sum(int(p.get("unverified_pages") or 0) for p in parts)
+
+    def wavg(field):
+        if not vp:
+            return 0.0
+        return (
+            sum(
+                float(p.get(field) or 0.0) * int(p.get("verified_pages") or 0)
+                for p in parts
+            )
+            / vp
+        )
+
+    return {
+        "verified_pages": vp,
+        "unverified_pages": up,
+        "numeric_match_rate": round(wavg("numeric_match_rate"), 4),
+        "span_pass_rate": round(wavg("span_pass_rate"), 4),
+        "max_repeat_words": max(
+            (int(p.get("max_repeat_words") or 0) for p in parts), default=0
+        ),
+        "pages": vp + up,
+    }
+
+
+async def _book_segment_round(step_input: StepInput, working_dir: str) -> dict:
+    """Extract ONE segment of one claimed book; assemble + book on the
+    final segment. Returns a summary dict; never raises."""
+    from agent.actions.scholarly_actions import (
+        append_extraction_records,
+        read_databank,
+    )
+
+    effects = step_input.effects
+    seg = _book_pages()
+    if seg <= 0:
+        return {"book": "", "reason": "disabled"}
+    databank = await read_databank(effects)
+    key = select_book(databank)
+    if key is None:
+        return {"book": "", "reason": "no unclaimed book"}
+    rec = dict(databank[key])
+    _OCR_CLAIMS.add(key)
+    try:
+        progress = dict(rec.get("book_progress") or {"next_page": 0, "parts": []})
+        start = int(progress.get("next_page") or 0)
+        root = _repo_root()
+        pdf = rec["pdf_path"]
+        if not os.path.isabs(pdf):
+            pdf = os.path.join(working_dir, pdf)
+        cmd = [
+            os.path.join(root, _TOOL_PY),
+            os.path.join(root, _TOOL_SCRIPT),
+            "--pdfs",
+            pdf,
+            "--keys",
+            key,
+            "--databank-dir",
+            os.path.join(working_dir, "databank"),
+            "--vl-backend",
+            _VL_BACKEND,
+            "--page-range",
+            f"{start}:{start + seg}",
+        ]
+        result = await effects.run_command(cmd, timeout=seg * 12 + 300)
+        rep = None
+        for line in (result.stdout or "").splitlines():
+            try:
+                r = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(r, dict) and r.get("paper_key") == key:
+                rep = r
+        if rep is None or rep.get("error"):
+            # Transport-shaped: leave progress untouched; the next round
+            # retries the same segment (mirrors the toolchain-fault rule).
+            return {
+                "book": key,
+                "segment": [start, start + seg],
+                "reason": (rep or {}).get("error") or "no report from tool",
+            }
+
+        total = int(rep.get("total_pages") or 0)
+        part = {
+            "range": rep.get("page_range") or [start, start + seg],
+            "md_path": rep.get("md_path") or "",
+            "verified_pages": rep.get("verified_pages", 0),
+            "unverified_pages": rep.get("unverified_pages", 0),
+            "numeric_match_rate": rep.get("numeric_match_rate", 0),
+            "span_pass_rate": rep.get("span_pass_rate", 0),
+            "max_repeat_words": rep.get("max_repeat_words", 0),
+            "figures_kept": rep.get("figures_kept", 0),
+        }
+        progress["parts"] = list(progress.get("parts") or []) + [part]
+        progress["next_page"] = min(start + seg, total)
+        progress["total_pages"] = total
+        rec["book_progress"] = progress
+
+        if progress["next_page"] < total:
+            await append_extraction_records(effects, [rec])
+            return {
+                "book": key,
+                "segment": [start, start + seg],
+                "done_pages": progress["next_page"],
+                "total_pages": total,
+            }
+
+        # FINAL SEGMENT — assemble parts and apply the standard verdict.
+        md_dir = os.path.join(working_dir, "databank", "markdown")
+        texts = []
+        for p in sorted(
+            progress["parts"], key=lambda q: int((q.get("range") or [0])[0])
+        ):
+            pp = os.path.join(working_dir, "databank", p.get("md_path") or "")
+            if os.path.isfile(pp):
+                texts.append(open(pp, encoding="utf-8", errors="replace").read())
+        assembled = "\n\n---\n\n".join(texts)
+        out_md = os.path.join(md_dir, f"{key}.md")
+        with open(out_md, "w", encoding="utf-8") as f:
+            f.write(assembled)
+        agg = aggregate_book_parts(progress["parts"])
+        profile = markdown_script_profile(assembled)
+        figures = 0
+        figdir = os.path.join(working_dir, "databank", "figures", key)
+        if os.path.isdir(figdir):
+            figures = sum(1 for f in os.listdir(figdir) if f.startswith("fig_"))
+
+        ok = (
+            agg["verified_pages"] > 0
+            and agg["numeric_match_rate"] >= MIN_NUMERIC_RATE
+            and agg["span_pass_rate"] >= MIN_SPAN_RATE
+            and agg["max_repeat_words"] <= MAX_REPEAT_WORDS
+        )
+        lingual = (
+            not ok
+            and agg["verified_pages"] > 0
+            and agg["max_repeat_words"] <= MAX_REPEAT_WORDS
+            and agg["numeric_match_rate"] >= MIN_NUMERIC_RATE
+            and profile["nonlatin"] >= LINGUAL_NONLATIN_MIN
+        )
+        rec["md_path"] = os.path.join("databank", "markdown", f"{key}.md")
+        rec["figure_count"] = figures
+        rec["extraction_method"] = EXTRACTION_METHOD + "+book-segments"
+        rec["extraction_quality"] = {
+            **{
+                k: agg[k]
+                for k in (
+                    "numeric_match_rate",
+                    "span_pass_rate",
+                    "max_repeat_words",
+                    "verified_pages",
+                    "unverified_pages",
+                    "pages",
+                )
+            }
+        }
+        rec["script_profile"] = profile
+        if ok:
+            rec["extraction_status"] = "extracted"
+            rec["failure_reason"] = ""
+        elif agg["verified_pages"] <= 0:
+            rec["extraction_status"] = "extract_unverified"
+            rec["failure_reason"] = (
+                "extraction (book): no verifiable text layer across "
+                f"{agg['pages']} pages — rates vacuous, queued for triage"
+            )
+        elif lingual:
+            rec["extraction_status"] = "extract_lingual"
+            rec["failure_reason"] = (
+                "extraction (book): lingual — numerics verified "
+                f"({agg['numeric_match_rate']:.2f}) on a "
+                f"{int(100 * profile['nonlatin'])}% non-Latin volume; "
+                "queued for translation"
+            )
+        else:
+            rec["extraction_status"] = "extract_failed"
+            rec["failure_reason"] = (
+                "extraction (book): below quality threshold "
+                f"(numeric={agg['numeric_match_rate']:.2f}, "
+                f"span={agg['span_pass_rate']:.2f})"
+            )
+        rec["book_progress"] = None
+        await append_extraction_records(effects, [rec])
+        for p in progress["parts"]:
+            pp = os.path.join(working_dir, "databank", p.get("md_path") or "")
+            if pp.endswith(".md") and ".part_" in pp and os.path.isfile(pp):
+                os.unlink(pp)
+        return {
+            "book": key,
+            "assembled": True,
+            "status": rec["extraction_status"],
+            "pages": agg["pages"],
+            "figures": figures,
+        }
+    finally:
+        release_ocr_keys([key])
+
+
 async def action_ocr_drain_batch(step_input: StepInput) -> StepOutput:
     """Drain a bounded slice of the OCR backlog — the ocr_drain flow's one
     work step, built to run as a PARALLEL BRANCH beside discovery.
@@ -355,6 +590,32 @@ async def action_ocr_drain_batch(step_input: StepInput) -> StepOutput:
     databank = await read_databank(effects)
     keys = select_ocr_batch(databank, max_pdfs)
     if not keys:
+        # Regular queue empty — spend the round on one BOOK SEGMENT instead
+        # (the oversize interleave; see _book_segment_round).
+        working_dir = str(
+            step_input.inputs.get("working_directory")
+            or getattr(
+                getattr(step_input.context.get("mission"), "config", None),
+                "working_directory",
+                "",
+            )
+            or ""
+        )
+        if working_dir:
+            book = await _book_segment_round(step_input, working_dir)
+            summary = {"attempted": 0, "book": book}
+            note = (
+                f"book segment: {book.get('book','')} "
+                f"{book.get('segment') or ''} "
+                f"{'ASSEMBLED ' + str(book.get('status')) if book.get('assembled') else ''}"
+                if book.get("book")
+                else f"idle ({book.get('reason')})"
+            )
+            return StepOutput(
+                result=summary,
+                observations=f"OCR drain: {note}",
+                context_updates={"ocr_summary": summary},
+            )
         summary = {"attempted": 0, "reason": "nothing unclaimed pending"}
         return StepOutput(
             result=summary,

@@ -650,6 +650,7 @@ EXTRACTION_OWNED_FIELDS = frozenset(
         "translated",
         "translation_quality",
         "translate_attempts",
+        "book_progress",
     }
 )
 
