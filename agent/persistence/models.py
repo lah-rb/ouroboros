@@ -311,6 +311,14 @@ class GoalRecord(BaseModel):
     associated_files: list[str] = Field(default_factory=list)
     reports: list[DirectiveReport] = Field(default_factory=list)
     failed_attempts: list["FailedAttempt"] = Field(default_factory=list)
+    # Cumulative ledger of symbols traced across this goal's diagnosis rounds
+    # (union, refreshed at every conclude). Measured on the 10h muse arm
+    # (2026-08-16): 71% of ALL investigate turns were REPEAT rounds, and on
+    # the worst charter 69% of repeat-round traces re-traced symbols already
+    # traced earlier — each fresh diagnosis session rebuilt the same mental
+    # map blind. The seed renders this so round N+1 starts from the ledger.
+    # Cleared with failed_attempts when the goal completes (archive.py).
+    diagnosis_traced: list[str] = Field(default_factory=list)
     interaction_mode: Literal["deterministic", "exploratory"] | None = None
     # Provenance: "design" (planned at build time) vs "quality_gate" (harvested
     # from a gate finding). finding_signature is the normalized finding text —

@@ -3163,6 +3163,9 @@ async def _sweep_after_file_ops(
                                 "reason": a.reason,
                                 "diagnosis_summary": a.diagnosis_summary,
                                 "pre_headline": getattr(a, "pre_headline", ""),
+                                "prior_traced": list(
+                                    getattr(goal, "diagnosis_traced", []) or []
+                                ),
                             }
                             for a in goal.failed_attempts
                         ],
@@ -3240,6 +3243,10 @@ async def _sweep_after_file_ops(
                 "reason": a.reason,
                 "diagnosis_summary": a.diagnosis_summary,
                 "pre_headline": getattr(a, "pre_headline", ""),
+                # The goal-level cross-round trace ledger rides every attempt
+                # dict (same value) — the seed renderer reads it off the last
+                # one. Rides existing plumbing: no new flow input needed.
+                "prior_traced": list(getattr(goal, "diagnosis_traced", []) or []),
             }
             for a in goal.failed_attempts
         ]
@@ -3791,6 +3798,10 @@ async def _sweep_interact_failure(
                 "reason": a.reason,
                 "diagnosis_summary": a.diagnosis_summary,
                 "pre_headline": getattr(a, "pre_headline", ""),
+                # The goal-level cross-round trace ledger rides every attempt
+                # dict (same value) — the seed renderer reads it off the last
+                # one. Rides existing plumbing: no new flow input needed.
+                "prior_traced": list(getattr(goal, "diagnosis_traced", []) or []),
             }
             for a in goal.failed_attempts
         ]

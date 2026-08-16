@@ -476,6 +476,32 @@ async def action_start_diagnosis_session(step_input: StepInput) -> StepOutput:
         if after:
             parts.append(f"Current state: {after}")
 
+        # ── Evidence ledger (cross-round) ──────────────────────────
+        # The union of symbols traced by EVERY prior diagnosis round on
+        # this goal (goal.diagnosis_traced, carried on each attempt dict
+        # as `prior_traced`). Measured before this existed (10h muse arm,
+        # 2026-08-16): 71% of all investigate turns were repeat rounds,
+        # and 69% of the worst charter's repeat traces re-traced symbols
+        # an earlier round had already pulled — each fresh session
+        # rebuilt the same mental map blind. Guidance is deliberately
+        # directional, not a ban: the fix CHANGED some of these files,
+        # and re-tracing what changed is exactly right.
+        _ledger = []
+        for att in reversed(recent):
+            if isinstance(att, dict) and att.get("prior_traced"):
+                _ledger = [str(s) for s in att["prior_traced"] if s]
+                break
+        if _ledger:
+            parts.append("")
+            parts.append("Symbols already traced in earlier rounds:")
+            parts.append("  " + ", ".join(_ledger))
+            parts.append(
+                "Start from this ledger rather than rebuilding it: re-trace a "
+                "listed symbol only if a prior fix touched its file or the "
+                "current evidence implicates it specifically. Spend your "
+                "traces on what earlier rounds have NOT seen."
+            )
+
         # Target-repeat guard. 902 round: the prior "Note: X has been patched
         # multiple times… Consider a different target" framing was soft advice
         # that the model routinely read past. See `repeat_target_warning` for
@@ -960,12 +986,26 @@ async def action_conclude_diagnosis(
                 (g for g in getattr(mission, "goals", []) or [] if g.id == goal_id),
                 None,
             )
+            _ledger = (
+                sorted(
+                    set(getattr(goal, "diagnosis_traced", []) or [])
+                    | set(traced_symbols)
+                )
+                if goal is not None
+                else []
+            )
             if goal is not None and (
                 getattr(goal, "expected_error", "") != expected_error
                 or getattr(goal, "test_guidance", "") != test_guidance
+                or list(getattr(goal, "diagnosis_traced", []) or []) != _ledger
             ):
                 goal.expected_error = expected_error
                 goal.test_guidance = test_guidance
+                # The cross-round trace ledger — union, never replace: round
+                # N+1's seed shows everything ANY prior round traced, which is
+                # what stops it re-tracing the same five symbols (71% of the
+                # 10h arm's investigate volume was repeat rounds doing that).
+                goal.diagnosis_traced = _ledger
                 await effects.save_mission(mission)
         except Exception:
             pass  # non-critical — evaluator falls back to blanket error scan

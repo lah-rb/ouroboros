@@ -190,3 +190,68 @@ async def test_start_diagnosis_session_preserves_existing_injections():
     assert queued[0] == "upstream notice"
     # Our seed is the second item
     assert "test" in queued[1]
+
+
+# ── Cross-round evidence ledger ──────────────────────────────────────
+#
+# 71% of the 10h muse arm's investigate turns were REPEAT diagnosis rounds,
+# and 69% of the worst charter's repeat traces re-traced symbols an earlier
+# round had already pulled (equip: 7 rounds, the same combat/game symbols
+# over and over). The ledger (goal.diagnosis_traced → `prior_traced` on
+# each failed-attempt dict) makes round N+1 start from what rounds 1..N saw.
+
+
+@pytest.mark.asyncio
+async def test_seed_renders_the_cross_round_trace_ledger():
+    effects = MockEffects()
+    output = await action_start_diagnosis_session(
+        _build_step_input(
+            effects,
+            goal_description="User can equip weapon",
+            error_headline="equip fails",
+            failed_attempts_context=[
+                {
+                    "target_file": "game.py",
+                    "target_symbol": "Game._handle_equip",
+                    "flow": "file_ops",
+                    "reason": "fix did not hold",
+                    "diagnosis_summary": "equip handler drops the slot",
+                    "pre_headline": "equip fails",
+                    "prior_traced": [
+                        "combat.py:CombatEngine",
+                        "game.py:Game._handle_equip",
+                    ],
+                }
+            ],
+        )
+    )
+    queued = output.context_updates.get("session_injections", [])
+    seed_text = "".join(str(q) for q in queued)
+    assert "Symbols already traced in earlier rounds" in seed_text
+    assert "combat.py:CombatEngine" in seed_text
+    assert "Spend your traces on what earlier rounds have NOT seen" in seed_text
+
+
+@pytest.mark.asyncio
+async def test_seed_omits_ledger_section_when_no_prior_traces():
+    effects = MockEffects()
+    output = await action_start_diagnosis_session(
+        _build_step_input(
+            effects,
+            goal_description="User can equip weapon",
+            error_headline="equip fails",
+            failed_attempts_context=[
+                {
+                    "target_file": "game.py",
+                    "target_symbol": "",
+                    "flow": "file_ops",
+                    "reason": "fix did not hold",
+                    "diagnosis_summary": "",
+                    "pre_headline": "",
+                }
+            ],
+        )
+    )
+    queued = output.context_updates.get("session_injections", [])
+    seed_text = "".join(str(q) for q in queued)
+    assert "Symbols already traced" not in seed_text
