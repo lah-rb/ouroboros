@@ -135,3 +135,51 @@ async def test_drain_delegates_and_releases_claims(monkeypatch):
         assert not _FIGTEXT_CLAIMS  # released after the round
     finally:
         _FIGTEXT_CLAIMS.clear()
+
+
+# ── databank field-ownership enforcement ──────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_writers_enforce_field_ownership():
+    """A merged record passed to either writer must not cross the file
+    boundary: extraction fields stay out of papers.jsonl and scraper
+    fields out of extraction.jsonl. The 2026-08-16 shadowing incident:
+    merged records appended to the sidecar froze stale scraper fields
+    that then masked every later papers-side booking (figtext_done
+    vanished on read; the drain re-described one paper forever)."""
+    import json
+
+    from agent.actions.scholarly_actions import (
+        append_extraction_records,
+        append_records,
+        read_databank,
+    )
+
+    merged = {
+        "paper_key": "p1",
+        "title": "T",
+        "status": "cataloged",
+        "figtext_status": "figtext_done",
+        "extraction_status": "extracted",
+        "md_path": "markdown/p1.md",
+        "extraction_quality": {"numeric_match_rate": 0.9},
+    }
+    fx = MockEffects()
+    await append_records(fx, [dict(merged)])
+    await append_extraction_records(fx, [dict(merged)])
+
+    papers = json.loads(fx._files["databank/papers.jsonl"].strip())
+    ext = json.loads(fx._files["databank/extraction.jsonl"].strip())
+    assert "extraction_status" not in papers and "md_path" not in papers
+    assert papers["figtext_status"] == "figtext_done"
+    assert "title" not in ext and "figtext_status" not in ext and "status" not in ext
+    assert ext["extraction_status"] == "extracted"
+
+    # The shadowing regression: a papers-side booking AFTER a sidecar
+    # append (of a merged record) must remain visible in the merged view.
+    booked = dict(merged)
+    booked["figtext_status"] = "figtext_done"
+    await append_records(fx, [booked])
+    bank = await read_databank(fx)
+    assert bank["p1"]["figtext_status"] == "figtext_done"

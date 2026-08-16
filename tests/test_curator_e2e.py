@@ -20,12 +20,23 @@ _MD_GOOD = "# Good\n\nYield strength was 759 MPa at 77 K; elongation 71%.\n"
 _MD_BAD = "# Bad\n\nGarbled ex%%traction with no usable tables.\n"
 
 
+# Seeding honors the databank's field-ownership contract (enforced at the
+# writers since the 2026-08-16 shadowing incident): scraper fields live in
+# papers.jsonl, extraction-owned fields in the extraction.jsonl sidecar.
+# A merged-shape seed in papers.jsonl breaks on the first booking, whose
+# writer strips extraction fields from the scraper file.
 def _rec(key):
     return {
         "paper_key": key,
         "title": f"Paper {key}",
         "doi": f"10.1/{key}",
         "license": "cc-by",
+    }
+
+
+def _ext_rec(key):
+    return {
+        "paper_key": key,
         "extraction_status": "extracted",
         "figure_count": 0,  # fig sweep completes immediately (no sidecar)
         "md_path": f"databank/markdown/{key}.md",
@@ -46,6 +57,10 @@ def test_curator_end_to_end_mock():
             "databank/papers.jsonl": json.dumps(_rec("bad"))
             + "\n"
             + json.dumps(_rec("good"))
+            + "\n",
+            "databank/extraction.jsonl": json.dumps(_ext_rec("bad"))
+            + "\n"
+            + json.dumps(_ext_rec("good"))
             + "\n",
             "databank/markdown/bad.md": _MD_BAD,
             "databank/markdown/good.md": _MD_GOOD,

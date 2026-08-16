@@ -802,13 +802,17 @@ async def action_fig_review_batch(step_input):
             rec["figtext_status"] = "figtext_done"
             rec["figtext_path"] = f"{FIGTEXT_DIR}/{k}.json"
             done += 1
-        elif rep is None or is_toolchain_fault(err):
+        elif rep is not None and is_toolchain_fault(err):
             # TRANSPORT, NOT VERDICT — the same rule the extraction ladder
-            # learned from the vlm-500 incident. A dead endpoint or a tool
-            # that never reported says nothing about the paper's figures;
-            # booking figtext_failed here burned 34 papers terminally
+            # learned from the vlm-500 incident: a reported HTTP 5xx /
+            # connection failure says nothing about the paper's figures,
+            # and booking figtext_failed on it burned 34 papers terminally
             # during the 2026-08-16 server outage. Leave the record
-            # untouched so a later sweep retries it.
+            # untouched so a later sweep retries it. Deliberately NARROW:
+            # a tool that produced NO report (missing venv, misconfigured
+            # command) still books figtext_failed below — the curate pass
+            # proceeds md-only rather than the sweep spinning forever on a
+            # permanently absent tool (the curator e2e pins this).
             skipped += 1
             continue
         else:

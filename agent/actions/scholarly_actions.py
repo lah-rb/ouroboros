@@ -622,18 +622,75 @@ async def read_databank(effects: Any) -> dict[str, dict]:
     return records
 
 
+# The extraction sidecar's field ownership, ENFORCED AT THE WRITERS.
+#
+# read_databank overlays extraction.jsonl over papers.jsonl per key
+# ({**base, **ext}), and within each file the LAST record replaces the
+# previous one wholesale. Both writers used to accept whatever dict a
+# caller passed — and callers naturally pass records that came from
+# read_databank's MERGED view, silently freezing the other stage's fields
+# into the wrong file. Live cost (2026-08-16): rebook scripts and the
+# translation booking wrote full merged records into extraction.jsonl,
+# whose stale scraper-side copies then SHADOWED every later papers.jsonl
+# booking for ~40 papers — figtext_done bookings vanished on read and the
+# figtext drain re-described the same paper forever. Filtering here makes
+# the contract structural: no caller can cross the ownership line again.
+EXTRACTION_OWNED_FIELDS = frozenset(
+    {
+        "paper_key",
+        "updated_at",
+        "extraction_status",
+        "failure_reason",
+        "md_path",
+        "md_en_path",
+        "figure_count",
+        "extraction_method",
+        "extraction_quality",
+        "script_profile",
+        "translated",
+        "translation_quality",
+        "translate_attempts",
+    }
+)
+
+
 async def append_extraction_records(effects: Any, records: list[dict]) -> None:
     """Append extractor-owned fields to the sidecar, never to papers.jsonl.
 
     Keeps the extractor off the scraper's file so the two can run at the
     same time without losing each other's appends (see read_databank).
+    Records are FILTERED to EXTRACTION_OWNED_FIELDS: a merged record from
+    read_databank can be passed safely without freezing scraper-side
+    fields into the sidecar, where they would shadow the scraper's file.
     """
-    await _append_jsonl(effects, EXTRACTION_PATH, records)
+    filtered = [
+        {k: v for k, v in rec.items() if k in EXTRACTION_OWNED_FIELDS}
+        for rec in records
+    ]
+    await _append_jsonl(effects, EXTRACTION_PATH, filtered)
 
 
 async def append_records(effects: Any, records: list[dict]) -> None:
-    """Append records as JSONL lines (last-wins semantics on read)."""
-    await _append_jsonl(effects, DATABANK_PATH, records)
+    """Append scraper records as JSONL lines (last-wins on read).
+
+    Extraction-owned fields are DROPPED (except the shared key/timestamp):
+    they live in the sidecar, which overlays this file — carrying stale
+    copies here is at best noise and at worst a future shadowing bug in
+    the other direction."""
+    # failure_reason is the one genuinely shared field: acquisition books
+    # download failures to THIS file, extraction books its own to the
+    # sidecar (whose overlay wins when both are set — pre-existing
+    # semantics, preserved).
+    filtered = [
+        {
+            k: v
+            for k, v in rec.items()
+            if k not in EXTRACTION_OWNED_FIELDS
+            or k in ("paper_key", "updated_at", "failure_reason")
+        }
+        for rec in records
+    ]
+    await _append_jsonl(effects, DATABANK_PATH, filtered)
 
 
 async def _append_jsonl(effects: Any, path: str, records: list[dict]) -> None:
