@@ -466,6 +466,9 @@ def build_action_registry() -> ActionRegistry:
     registry.register("derive_curation_goals", action_derive_curation_goals)
     registry.register("fig_review_sweep_next", action_fig_review_sweep_next)
     registry.register("fig_review_batch", action_fig_review_batch)
+    from agent.actions.curation_actions import action_figtext_drain_batch
+
+    registry.register("figtext_drain_batch", action_figtext_drain_batch)
     registry.register("curate_sweep_next", action_curate_sweep_next)
     registry.register("curate_ingest_review", action_curate_ingest_review)
     registry.register("curate_pack_data", action_curate_pack_data)

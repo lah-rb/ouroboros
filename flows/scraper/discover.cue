@@ -32,15 +32,17 @@ discover: #FlowDefinition & {
 
 	steps: {
 
-		// ONE STEP, TWO BRANCHES. discover_work does the round; ocr_drain
-		// claims + extracts a bounded backlog slice on paddle concurrently.
-		// A failed drain never sinks the round (branch isolation), and the
-		// single-owner publish passes discover_work's directive_report
-		// through under its own name.
+		// ONE STEP, THREE BRANCHES. discover_work does the round (network-
+		// bound); ocr_drain claims + extracts a backlog slice on paddle;
+		// figtext_drain describes undescribed figures on muse's vision
+		// contexts — three different resources, one window. A failed drain
+		// never sinks the round (branch isolation), and the single-owner
+		// publish passes discover_work's directive_report through under
+		// its own name.
 		run_round: #StepDefinition & {
 			action:      "parallel"
-			description: "Discovery round + OCR backlog drain, concurrently"
-			max_parallel: 2
+			description: "Discovery round + OCR drain + figtext drain, concurrently"
+			max_parallel: 3
 			branches: [
 				{
 					flow: "discover_work"
@@ -56,6 +58,12 @@ discover: #FlowDefinition & {
 				},
 				{
 					flow: "ocr_drain"
+					input_map: {
+						working_directory: {$ref: "input.working_directory"}
+					}
+				},
+				{
+					flow: "figtext_drain"
 					input_map: {
 						working_directory: {$ref: "input.working_directory"}
 					}

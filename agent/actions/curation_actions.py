@@ -45,6 +45,7 @@ from agent.paths import repo_root as _repo_root
 
 import difflib
 import json
+import os
 import logging
 import re
 
@@ -566,6 +567,115 @@ def _fig_batch(databank: dict) -> list[str]:
         batch.append(key)
         figures += n
     return batch
+
+
+# ── figtext drain (parallel-branch consumer) ──────────────────────────
+#
+# Same claim discipline as the OCR drain (extraction_actions._OCR_CLAIMS):
+# figtext_status is only booked AFTER the tool runs, so a drain branch and
+# a curator fig_review dispatch selecting concurrently would read the same
+# figures twice. In-process set; the multi-process claim is the same
+# follow-on flock story. At the endpoint's measured ~37 s/figure the drain
+# budget is FIGURES (default 6 ≈ ~4 min — one discovery round), and unlike
+# _fig_batch a paper OVER the budget is SKIPPED here, not dispatched alone:
+# an 86-minute figure-heavy paper belongs to a dedicated curator dispatch,
+# never to a branch riding a discovery round.
+_FIGTEXT_CLAIMS: set[str] = set()
+
+
+def _figtext_drain_budget() -> int:
+    raw = os.environ.get("OUROBOROS_FIGTEXT_FIGS", "").strip()
+    try:
+        return max(0, int(raw)) if raw else 6
+    except ValueError:
+        return 6
+
+
+def select_figtext_batch(databank: dict, max_figures: int) -> list[str]:
+    """Claimed, figure-budgeted paper selection for the drain."""
+    batch: list[str] = []
+    figures = 0
+    for key in sorted(k for k, r in databank.items() if _fig_pending(r)):
+        if key in _FIGTEXT_CLAIMS:
+            continue
+        n = int((databank.get(key) or {}).get("figure_count") or 0)
+        if n > max_figures:
+            continue  # dedicated-dispatch material, never drain material
+        if figures + n > max_figures:
+            break
+        batch.append(key)
+        figures += n
+    _FIGTEXT_CLAIMS.update(batch)
+    return batch
+
+
+def release_figtext_keys(keys: list[str]) -> None:
+    _FIGTEXT_CLAIMS.difference_update(keys)
+
+
+async def action_figtext_drain_batch(step_input):
+    """Describe a bounded, claimed slice of undescribed figures — the
+    figtext_drain flow's one work step, built to ride as a parallel branch.
+
+    Delegates to action_fig_review_batch (the bake-off-validated
+    /v1/vision pipeline); muse vision runs on its own vision contexts, so
+    this consumes NO batched text seats (measured vision+text
+    serialization 0.068). Preflights the tool venv: a missing interpreter
+    DECLINES the round instead of booking figtext_failed on papers the
+    tool never saw.
+
+    Inputs: working_directory. Result: attempted_papers, figures, done,
+    failed, reason.
+    """
+    from agent.actions.scholarly_actions import read_databank
+    from agent.models import StepOutput
+
+    effects = step_input.effects
+    budget = _figtext_drain_budget()
+
+    def _decline(reason: str) -> StepOutput:
+        summary = {"attempted_papers": 0, "figures": 0, "reason": reason}
+        return StepOutput(
+            result=summary,
+            observations=f"figtext drain idle ({reason})",
+            context_updates={"figtext_summary": summary},
+        )
+
+    if budget <= 0:
+        return _decline("disabled")
+    if effects is None:
+        return _decline("no effects")
+    tool_py = os.path.join(_repo_root(), _FIG_TOOL_PY)
+    if not os.path.isfile(tool_py):
+        return _decline("fig_review venv missing")
+
+    databank = await read_databank(effects)
+    keys = select_figtext_batch(databank, budget)
+    if not keys:
+        return _decline("nothing unclaimed pending")
+    figures = sum(int((databank.get(k) or {}).get("figure_count") or 0) for k in keys)
+    try:
+        sub = step_input.model_copy(
+            update={"inputs": {**dict(step_input.inputs or {}), "paper_keys": keys}}
+        )
+        out = await action_fig_review_batch(sub)
+        result = dict(out.result or {})
+    finally:
+        release_figtext_keys(keys)
+    summary = {
+        "attempted_papers": len(keys),
+        "figures": figures,
+        "done": result.get("done", 0),
+        "failed": result.get("failed", 0),
+    }
+    return StepOutput(
+        result=summary,
+        observations=(
+            f"figtext drain: {figures} figure(s) across {len(keys)} paper(s) — "
+            f"{summary['done']} done, {summary['failed']} failed"
+        ),
+        context_updates={"figtext_summary": summary},
+    )
 
 
 async def action_fig_review_sweep_next(step_input):

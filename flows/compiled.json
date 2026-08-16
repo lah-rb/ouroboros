@@ -23739,7 +23739,7 @@
     "steps": {
       "run_round": {
         "action": "parallel",
-        "description": "Discovery round + OCR backlog drain, concurrently",
+        "description": "Discovery round + OCR drain + figtext drain, concurrently",
         "context": {
           "required": [],
           "optional": []
@@ -23800,9 +23800,17 @@
                 "$ref": "input.working_directory"
               }
             }
+          },
+          {
+            "flow": "figtext_drain",
+            "input_map": {
+              "working_directory": {
+                "$ref": "input.working_directory"
+              }
+            }
           }
         ],
-        "max_parallel": 2
+        "max_parallel": 3
       },
       "return_success": {
         "action": "noop",
@@ -24058,6 +24066,76 @@
       }
     },
     "entry": "refine_queries",
+    "overflow": {
+      "strategy": "split",
+      "fallback": "reorganize"
+    }
+  },
+  "figtext_drain": {
+    "flow": "figtext_drain",
+    "version": 1,
+    "description": "Describe a bounded, claimed slice of undescribed figures through\nthe fig_review pipeline on muse's vision contexts. Runs as a\nparallel branch beside other work; mission-clean; returns an\nattempt summary.",
+    "context_tier": "session_task",
+    "returns": {
+      "figtext_summary": {
+        "type": "dict",
+        "from": "context.figtext_summary",
+        "optional": true
+      }
+    },
+    "projections": {},
+    "input": {
+      "required": [
+        "working_directory"
+      ],
+      "optional": []
+    },
+    "defaults": {
+      "config": {}
+    },
+    "steps": {
+      "drain": {
+        "action": "figtext_drain_batch",
+        "description": "Claim + describe a bounded slice of undescribed figures",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "done"
+            }
+          ]
+        },
+        "publishes": [
+          "figtext_summary"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "done": {
+        "action": "noop",
+        "description": "Drain complete",
+        "context": {
+          "required": [],
+          "optional": [
+            "figtext_summary"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": true,
+        "status": "success"
+      }
+    },
+    "entry": "drain",
     "overflow": {
       "strategy": "split",
       "fallback": "reorganize"
