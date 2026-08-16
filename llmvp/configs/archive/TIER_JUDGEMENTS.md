@@ -3630,3 +3630,44 @@ artifact IS.
    (it was last, at max session depth + temp floor both runs).
 
 Record: `dev/blind_panel/records/flight_20260815_guardian_vs_gptoss_session.md`.
+
+## GUARDIAN addendum 3 — gpt-oss session arm WITH the content-brief fix, 2026-08-15
+
+Same anchor, same model both sides, candidate on A. The controlled pair for
+addendum 2: identical config and mission, one framework fix apart (03ffa69,
+the goal-dedup content-brief suppression) plus the reasoning strip live.
+
+| arm | Delivery | Character | conf. | overall | flag |
+|---|---|---|---|---|---|
+| session, stub world (28/32 charters) | 2–2 | **0–6** | 30/47 | anchor | not close |
+| session, **fixed** (20/30 charters) | **1–3** | **3–3** | 41/47 | anchor | **SELF-FLAG: CLOSE** |
+
+**The fix moved exactly what it was built to move, and cost exactly what was
+predicted.** Character went 0–6 → 3–3: the candidate took **B6 imagination**
+("weather, smell and a route up a mountain … mist, pine smoke, a cracked
+altar" vs the anchor's "entirely standard-issue dungeon"), **B9 workability**
+and **B10 documentation**. Conformance rose 30 → 41/47. The world is 8 rooms
+against the anchor's 6 — the anchor now fails item 38, which the stub arm
+could never have exposed.
+
+**Delivery went backwards, 2–2 → 1–3.** The stub arm won A2/A3 as "the more
+defensively-coded shell"; the fixed arm has a real world whose combat is
+atomic and printless and whose advertised `flee` is undispatched — the back
+half the 2h wall cut off (all five combat charters, save/load, both endgame
+screens untested). It still took **A2 state integrity** outright: it has a
+real `new`/`load`/`quit` reset and dead monsters stay dead, against the
+anchor's resurrect-on-load and its `-1 HP` dead-save brick.
+
+**Both artifacts remain UNWINNABLE with no win path anywhere in either tree
+(item 31), and each ships exactly one item authored into the registry and
+into no room** — the candidate's is its ONLY armour, so a fully-correct
+armour mechanic can never be exercised. That places the next lever: extend
+the design gate's coverage check from verbs (89b3b44) to CONTENT — every
+authored entity needs a placement owner, and the win path needs one too.
+
+Throughput note: 118 cyc / 59 cyc/h against the stub arm's 195 / 97.5.
+Unseparated causes — the strip's per-turn replay prefill vs simply more
+context per interact turn against a real world. `LLMVP_THINK_STRIP=0` is the
+clean A/B if it matters.
+
+Record: `dev/blind_panel/records/flight_20260815_guardian_vs_gptoss_fixed.md`.
