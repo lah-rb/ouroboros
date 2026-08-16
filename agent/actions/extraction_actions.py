@@ -159,6 +159,10 @@ _TRUNCATED_FRACTION = 0.5
 # document-quality ones.
 _TOOLCHAIN_FAULT_MARKERS = (
     "error code:",  # `Error code: 500 - {...}` from the VLM server
+    # urllib's spelling of a server-side failure (`HTTPError: HTTP Error
+    # 500`). 5xx only: the server broke, which says nothing about the
+    # document. A 4xx names the request and stays a real verdict.
+    "http error 5",
     "runtimeerror",
     "connectionerror",
     "connection refused",

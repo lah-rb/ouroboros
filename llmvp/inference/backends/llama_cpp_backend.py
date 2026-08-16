@@ -773,8 +773,6 @@ class LlamaCppBackend(BaseBackend):
         built with ``copy.copy(primary)``, which does not reset ``chat_handler``
         — it would be aliased into every slot with a single-owner ``close()``.
         """
-        import copy
-
         from llama_cpp import internals
 
         from inference.vision_handlers import load_handler_class
@@ -782,7 +780,17 @@ class LlamaCppBackend(BaseBackend):
         mcfg = self.config.model
         n_ctx = int(getattr(mcfg, "vision_n_ctx", 8192) or 8192)
 
-        inst = copy.copy(primary)
+        # SHALLOW CLONE, explicitly — NOT copy.copy. On builds where Llama
+        # defines __setstate__, copy.copy routes through the pickle reduce
+        # protocol and RELOADS THE MODEL FROM DISK before we ever overwrite
+        # the context: a second 19.6 GB weight upload that failed instantly
+        # on the 24 GB card (muse vision 500s, 2026-08-16) and silently
+        # doubled paddle's footprint per vision context. Unified-memory
+        # mmap made the same reload invisible on the M1. Everything this
+        # instance must own is overwritten right below; everything else —
+        # the model above all — is deliberately shared.
+        inst = object.__new__(type(primary))
+        inst.__dict__.update(primary.__dict__)
         inst._stack = contextlib.ExitStack()
 
         # Own params: our own window AND a single sequence.

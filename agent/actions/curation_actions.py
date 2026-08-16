@@ -790,26 +790,38 @@ async def action_fig_review_batch(step_input):
         if isinstance(r, dict) and r.get("paper_key"):
             reports[r["paper_key"]] = r
 
+    from agent.actions.extraction_actions import is_toolchain_fault
+
     databank = await read_databank(effects)
-    updates, done, failed = [], 0, 0
+    updates, done, failed, skipped = [], 0, 0, 0
     for k in keys:
         rec = dict(databank.get(k) or {"paper_key": k})
         rep = reports.get(k)
+        err = (rep or {}).get("error") or "no report from tool"
         if rep is not None and not rep.get("error"):
             rec["figtext_status"] = "figtext_done"
             rec["figtext_path"] = f"{FIGTEXT_DIR}/{k}.json"
             done += 1
+        elif rep is None or is_toolchain_fault(err):
+            # TRANSPORT, NOT VERDICT — the same rule the extraction ladder
+            # learned from the vlm-500 incident. A dead endpoint or a tool
+            # that never reported says nothing about the paper's figures;
+            # booking figtext_failed here burned 34 papers terminally
+            # during the 2026-08-16 server outage. Leave the record
+            # untouched so a later sweep retries it.
+            skipped += 1
+            continue
         else:
             rec["figtext_status"] = "figtext_failed"
-            rec["failure_reason"] = (
-                f"fig_review: {(rep or {}).get('error') or 'no report from tool'}"
-            )
+            rec["failure_reason"] = f"fig_review: {err}"
             failed += 1
         updates.append(rec)
     await append_records(effects, updates)
 
     status = "success" if done else "failed"
-    summary = f"Fig review: {done} done, {failed} failed of {len(keys)}"
+    summary = f"Fig review: {done} done, {failed} failed of {len(keys)}" + (
+        f", {skipped} deferred (toolchain fault)" if skipped else ""
+    )
     return StepOutput(
         result={"status": status, "done": done, "failed": failed},
         observations=summary,

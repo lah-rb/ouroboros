@@ -337,7 +337,10 @@ def review_paper(
         figs = sorted(
             f
             for f in (os.listdir(fig_dir) if os.path.isdir(fig_dir) else [])
-            if f.endswith(".png")
+            # "._*" = macOS AppleDouble resource forks (USB/cross-machine
+            # stowaways): not images, and feeding one to the vision endpoint
+            # is a guaranteed 500. Skip them wherever they appear.
+            if f.endswith(".png") and not f.startswith("._")
         )
         entries = []
         served = os.path.basename(model.rstrip("/")) if model else "unknown"
