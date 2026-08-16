@@ -905,6 +905,22 @@ def extract_paper(
         # Rewrite image refs the pipeline emitted to our relative layout.
         for old, new in renames.items():
             joined = joined.replace(old, f"../figures/{key}/{new}")
+        # The pipeline emits refs as imgs/<basename>; the basename rewrite
+        # above left a stale "imgs/" prefix, and "imgs/../figures/…"
+        # collapses to markdown/figures/… — one directory too shallow. Live:
+        # every figure link in the corpus resolved to a nonexistent path
+        # (invisible to the substring-anchored consumers, broken for any
+        # path-resolving reader — caught in the 2026-08-16 triage review).
+        joined = joined.replace("imgs/../figures/", "../figures/")
+        # Refs to figures _collect_figures DROPPED (dedup/junk filter) have
+        # no rename entry and would dangle at a file that exists nowhere.
+        # Replace the tag with an inert marker so the drop is visible in
+        # the document instead of masquerading as a broken image.
+        joined = re.sub(
+            r'<img\s[^>]*src="imgs/[^"]+"[^>]*/?>',
+            "*[figure removed by extraction filter]*",
+            joined,
+        )
         md_path = os.path.join(md_dir, f"{key}.md")
         with open(md_path, "w") as f:
             f.write(joined)
