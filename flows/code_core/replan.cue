@@ -184,6 +184,8 @@ replan: #FlowDefinition & {
 				]
 				input_keys: []
 			}
+			// MEDIUM: minimal-fix decomposition (directive twin stays high) — dev/REASONING_DEPTH_POLICY_2026-08-16.md
+			config: reasoning: "medium"
 			config: temperature: "t*0.2"
 			resolver: {
 				type: "rule"

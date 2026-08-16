@@ -56,6 +56,8 @@ plan_research: #FlowDefinition & {
 				{formatter: "format_mission_meta", output_key: "mission_objective"
 					params: {mission: {$ref: "context.mission"}, field: "objective"}},
 			]
+			// MEDIUM: decompose the abstract into research aspects — dev/REASONING_DEPTH_POLICY_2026-08-16.md
+			config: reasoning: "medium"
 			config: temperature: "t*0.4"
 			resolver: {
 				type: "rule"

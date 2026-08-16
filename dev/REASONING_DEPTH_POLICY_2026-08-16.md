@@ -88,6 +88,25 @@ unpinned above is its natural first tenant once evidence or an A/B
 supports it. (Probe #1 showed muse's medium head is measurably distinct:
 136 mean tokens vs 120 low / 159 high.)
 
+## Final tier map (same day, second pass — medium + xhigh live)
+
+With the dial verified end-to-end and the xhigh clamp in place
+(families without xhigh serve high), the fleet now expresses all four
+tiers — census: **5 xhigh / 22 high / 9 medium / 12 low / 15 unpinned**.
+
+* **xhigh (5)** — singular, low-frequency, highest-consequence turns per
+  the sandwich finding (ceiling at plan/verify ends, never the loop
+  body; uniform-xhigh loses to timeouts): design_initial,
+  design_gate_critique, generate_rewrite, do_consult,
+  reconcile_integration. Each fires ~1-2x per mission.
+* **medium (9)** — the planning/charter cluster, medium's first tenant
+  per the operator's never-medium correction: interact plan_interaction
+  + _explore, plan_ux_charter, plan_provision, plan_setup, design_plan,
+  decompose_repair, design_reconcile, reground_output_format.
+* The 15 still unpinned are the schema-emission six (awaiting the
+  reason-then-format refactor), investigate (interleave shape), and the
+  judgment menus — unchanged rationale.
+
 ## The A/B owed
 
 These pins change tier-arm behavior on head-swap families (gpt-oss, muse).

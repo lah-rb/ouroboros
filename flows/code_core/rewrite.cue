@@ -224,7 +224,10 @@ rewrite: #FlowDefinition & {
 				}
 				// HIGH: whole-file regeneration under the anti-gut guard — the step
 				// that can drop siblings' contracts wholesale if it reasons shallowly.
-				config: reasoning:   "high"
+				// XHIGH (2026-08-16): singular, low-frequency, highest-consequence turn —
+				// the research sandwich puts the ceiling at plan/verify ends, never in
+				// the loop body; families without xhigh serve HIGH via the server clamp.
+				config: reasoning: "xhigh"
 				config: temperature: "t*0.4"
 				retries: 3
 			}

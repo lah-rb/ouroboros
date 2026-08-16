@@ -159,7 +159,10 @@ design_and_plan: #FlowDefinition & {
 		design_initial: #StepDefinition & _design_step & {
 			description: "Design project architecture from scratch"
 			// critical planning step: deliberate (per-request completion head-swap)
-			config: reasoning: "high"
+			// XHIGH (2026-08-16): singular, low-frequency, highest-consequence turn —
+			// the research sandwich puts the ceiling at plan/verify ends, never in
+			// the loop body; families without xhigh serve HIGH via the server clamp.
+			config: reasoning: "xhigh"
 			pre_compute: _design_base_precompute
 			resolver: {
 				type: "rule"
@@ -197,6 +200,8 @@ design_and_plan: #FlowDefinition & {
 				{formatter: "format_existing_architecture", output_key: "existing_architecture"
 					params: {source: {$ref: "context.mission.architecture"}}},
 			]])
+			// MEDIUM: reconcile architecture with a drifted codebase — dev/REASONING_DEPTH_POLICY_2026-08-16.md
+			config: reasoning: "medium"
 			resolver: {
 				type: "rule"
 				rules: [
@@ -302,7 +307,10 @@ design_and_plan: #FlowDefinition & {
 			// (2026-08-15) agenda coverage; its first coverage firing caught a
 			// blueprint missing the defeat-screen owner. A shallow read passes
 			// blueprints a deep one would return.
-			config: reasoning:   "high"
+			// XHIGH (2026-08-16): singular, low-frequency, highest-consequence turn —
+			// the research sandwich puts the ceiling at plan/verify ends, never in
+			// the loop body; families without xhigh serve HIGH via the server clamp.
+			config: reasoning: "xhigh"
 			config: temperature: "t*0.1"
 			resolver: {
 				type: "rule"

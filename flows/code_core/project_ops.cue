@@ -149,6 +149,8 @@ project_ops: #FlowDefinition & {
 			description: "Determine what setup actions are needed"
 			context: optional: ["project_manifest", "repo_map_formatted"]
 			turn: #Turn & {
+				// MEDIUM: project setup planning — dev/REASONING_DEPTH_POLICY_2026-08-16.md
+				config: reasoning: "medium"
 				response_shape: "code"
 				sections: [
 					{type: "role", template:        "personas/project_ops_setup"},

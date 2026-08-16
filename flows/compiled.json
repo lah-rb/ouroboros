@@ -3050,7 +3050,7 @@
         },
         "config": {
           "temperature": "t*0.2",
-          "reasoning": "high"
+          "reasoning": "xhigh"
         },
         "pre_compute": [
           {
@@ -3152,7 +3152,8 @@
           }
         ],
         "config": {
-          "temperature": "t*0.2"
+          "temperature": "t*0.2",
+          "reasoning": "medium"
         },
         "resolver": {
           "type": "rule",
@@ -3340,7 +3341,7 @@
         ],
         "config": {
           "temperature": "t*0.1",
-          "reasoning": "high"
+          "reasoning": "xhigh"
         },
         "resolver": {
           "type": "rule",
@@ -4795,7 +4796,7 @@
           "temperature": 0.4,
           "max_tokens": 1024,
           "model": "boss-sonnet",
-          "reasoning": "high"
+          "reasoning": "xhigh"
         },
         "resolver": {
           "type": "rule",
@@ -7078,6 +7079,11 @@
         },
         "params": {},
         "turn": {
+          "config": {
+            "temperature": "t*0.4",
+            "reasoning": "medium"
+          },
+          "response": {},
           "response_shape": "prose",
           "sections": [
             {
@@ -7112,13 +7118,9 @@
               "required": false
             }
           ],
-          "response": {},
           "transitions": {
             "default": "run_session",
             "no_answer": "failed"
-          },
-          "config": {
-            "temperature": "t*0.4"
           },
           "retries": 3
         },
@@ -7161,6 +7163,11 @@
         },
         "params": {},
         "turn": {
+          "config": {
+            "temperature": "t*0.4",
+            "reasoning": "medium"
+          },
+          "response": {},
           "response_shape": "prose",
           "sections": [
             {
@@ -7195,13 +7202,9 @@
               "required": false
             }
           ],
-          "response": {},
           "transitions": {
             "default": "run_session",
             "no_answer": "failed"
-          },
-          "config": {
-            "temperature": "t*0.4"
           },
           "retries": 3
         },
@@ -10552,6 +10555,13 @@
         },
         "params": {},
         "turn": {
+          "config": {
+            "temperature": "t*0.4",
+            "reasoning": "medium"
+          },
+          "response": {
+            "language": ""
+          },
           "response_shape": "code",
           "sections": [
             {
@@ -10596,15 +10606,9 @@
               "required": false
             }
           ],
-          "response": {
-            "language": ""
-          },
           "transitions": {
             "default": "write_files",
             "no_answer": "build_report_failure"
-          },
-          "config": {
-            "temperature": "t*0.4"
           },
           "retries": 3
         },
@@ -11658,7 +11662,8 @@
           }
         ],
         "config": {
-          "temperature": "t*0.5"
+          "temperature": "t*0.5",
+          "reasoning": "medium"
         },
         "resolver": {
           "type": "rule",
@@ -12675,7 +12680,8 @@
           "input_keys": []
         },
         "config": {
-          "temperature": "t*0.2"
+          "temperature": "t*0.2",
+          "reasoning": "medium"
         },
         "resolver": {
           "type": "rule",
@@ -13429,7 +13435,7 @@
           },
           "config": {
             "temperature": "t*0.4",
-            "reasoning": "high"
+            "reasoning": "xhigh"
           },
           "retries": 3
         },
@@ -16152,7 +16158,7 @@
           "config": {
             "temperature": "t*0.2",
             "max_tokens": 16384,
-            "reasoning": "high",
+            "reasoning": "xhigh",
             "model": ""
           },
           "response": {
@@ -22439,7 +22445,8 @@
           }
         ],
         "config": {
-          "temperature": "t*0.2"
+          "temperature": "t*0.2",
+          "reasoning": "medium"
         },
         "resolver": {
           "type": "rule",
@@ -22900,7 +22907,8 @@
           }
         ],
         "config": {
-          "temperature": "t*0.1"
+          "temperature": "t*0.1",
+          "reasoning": "medium"
         },
         "resolver": {
           "type": "rule",
@@ -24049,7 +24057,8 @@
           }
         ],
         "config": {
-          "temperature": "t*0.4"
+          "temperature": "t*0.4",
+          "reasoning": "medium"
         },
         "resolver": {
           "type": "rule",

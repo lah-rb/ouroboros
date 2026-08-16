@@ -291,7 +291,10 @@ build_structure_integrated: #FlowDefinition & {
 			}
 			turn: #Turn & {
 				// HIGH: the cross-file seam reconciler — the decisive defect class — dev/REASONING_DEPTH_POLICY_2026-08-16.md
-				config: reasoning: "high"
+				// XHIGH (2026-08-16): singular, low-frequency, highest-consequence turn —
+				// the research sandwich puts the ceiling at plan/verify ends, never in
+				// the loop body; families without xhigh serve HIGH via the server clamp.
+				config: reasoning: "xhigh"
 				response_shape: "code"
 				response: language: ""
 				sections: [

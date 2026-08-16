@@ -171,6 +171,8 @@ interact: #FlowDefinition & {
 			description: "Craft a test charter for the run_session sub-flow"
 			context: optional: ["project_manifest", "repo_map_formatted"]
 			turn: #Turn & {
+				// MEDIUM: charter authoring — the literature's planning tier — dev/REASONING_DEPTH_POLICY_2026-08-16.md
+				config: reasoning: "medium"
 				response_shape: "prose"
 				sections: [
 					{type: "role", template:          "personas/charter_author"},
@@ -215,6 +217,8 @@ interact: #FlowDefinition & {
 			description: "Craft an explore-and-build charter for a not-yet-built capability"
 			context: optional: ["project_manifest", "repo_map_formatted"]
 			turn: #Turn & {
+				// MEDIUM: explore-and-build charter authoring — dev/REASONING_DEPTH_POLICY_2026-08-16.md
+				config: reasoning: "medium"
 				response_shape: "prose"
 				sections: [
 					{type: "role", template:          "personas/charter_author"},

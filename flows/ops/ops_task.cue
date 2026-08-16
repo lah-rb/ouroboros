@@ -144,6 +144,8 @@ ops_task: #FlowDefinition & {
 				{formatter: "format_feedback_block", output_key: "feedback_block"
 					params: {source: {$ref: "context.mission.task_definition"}}},
 			]
+			// MEDIUM: environment/setup planning — dev/REASONING_DEPTH_POLICY_2026-08-16.md
+			config: reasoning: "medium"
 			config: temperature: "t*0.2"
 			resolver: {
 				type: "rule"
@@ -355,6 +357,8 @@ ops_task: #FlowDefinition & {
 				{formatter: "format_session_tail", output_key: "session_tail"
 					params: {source: {$ref: "context.terminal_output"}, max_chars: 3000}},
 			]
+			// MEDIUM: re-derive the output contract from the scanned world — dev/REASONING_DEPTH_POLICY_2026-08-16.md
+			config: reasoning: "medium"
 			config: temperature: "t*0.1"
 			resolver: {
 				type: "rule"

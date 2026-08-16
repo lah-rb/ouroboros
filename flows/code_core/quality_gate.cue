@@ -388,6 +388,8 @@ quality_gate: #FlowDefinition & {
 				output_key: "project_listing"
 				params: {source: {$ref: "context.project_manifest"}}
 			}]
+			// MEDIUM: exploratory UX charter authoring — dev/REASONING_DEPTH_POLICY_2026-08-16.md
+			config: reasoning: "medium"
 			config: temperature: "t*0.5"
 			resolver: {
 				type: "rule"

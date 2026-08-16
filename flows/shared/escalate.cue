@@ -313,7 +313,10 @@ escalate: #FlowDefinition & {
 				input_keys: ["failure_evidence", "expected_outcome"]
 			}
 			// HIGH: stuck-goal boss consult — hard by construction — dev/REASONING_DEPTH_POLICY_2026-08-16.md
-			config: reasoning: "high"
+			// XHIGH (2026-08-16): singular, low-frequency, highest-consequence turn —
+			// the research sandwich puts the ceiling at plan/verify ends, never in
+			// the loop body; families without xhigh serve HIGH via the server clamp.
+			config: reasoning: "xhigh"
 			config: {
 				model:       "boss-sonnet"
 				temperature: 0.4
