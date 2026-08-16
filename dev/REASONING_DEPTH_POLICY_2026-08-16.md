@@ -41,6 +41,32 @@ sources, reconciled the same day:*
     base at high; the literature's creative-low call is vendor-guidance
     only and contested — revisit if world prose degrades).
 
+## Probe corrections (same day, ed4dcbd): the dial verified for real
+
+Both original probes ran through the createCompletion MUTATION, which
+silently dropped `reasoning` (its two siblings forwarded it; the raw path
+had the identical bug fixed 2026-07-26). Probe #1's "monotonic movement"
+is WITHDRAWN — it was sampling noise on the default head. Production step
+pins ride the `completion` QUERY and were never affected.
+
+Re-probed through the production path with swaps log-confirmed (12/12
+medium+high):
+
+| shape | low | medium | high | spread |
+|---|---|---|---|---|
+| math | 1,893 | 2,132 | 2,817 | +49% |
+| algo | 937 | 1,355 | 1,396 | +49% |
+| plan | 2,043 | 1,867 | 2,984 | +46% |
+
+(mean generated tokens, n=2, temp 1.0, 8K budget; plan thought-fraction
+reaches 95-97% at high). A consistent, visible dial on top of muse's
+constitutional ~76-89% thought floor. **xhigh is REFUSED everywhere on
+muse today** — its head is 1,766 tokens vs 1,765, and both the stateless
+install and the mid-session splice require equal head lengths. Relaxing
+the stateless case is tractable (the construction rebuilds prompt as
+head+tail) and filed as follow-up; until then xhigh silently... no —
+LOUDLY (the refusals now WARN) falls back to the default head.
+
 ## Operator correction (same day): medium was never banned
 
 The gpt-oss "None routes LOW, never medium (operator rule)" note was an
