@@ -38,9 +38,15 @@ model:
   # adaptive/router serving; None routes LOW (operator rule)
   thinking_available: true
   thinking: "per_request"
-  # low (2026-08-03): the per_request resting level — None routes LOW, never
-  # medium (operator rule). Also the backend's default-head level: medium and
-  # high get pinned reasoning heads; the resting head is the cheap one.
+  # low (2026-08-03): the per_request resting level. HISTORY CORRECTED
+  # 2026-08-16 (operator): the old "None routes LOW, never medium (operator
+  # rule)" note overstated a semantic mix-up — "None" meant NO LEVEL WAS
+  # REQUESTED, not a requested no-think, and medium was never banned in the
+  # framework. Low stays THIS MODEL'S resting default because gpt-oss
+  # measures well there; that is an empirical per-model fit, not fleet
+  # policy, and does not translate to other families. Also the backend's
+  # default-head level: medium and high get pinned reasoning heads; the
+  # resting head is the cheap one.
   thinking_mode: low
   # gpt-oss-120b uses sliding-window attention (128-tok window on alternating
   # layers). swa_full keeps the FULL KV for those layers so the ~1809-tok static

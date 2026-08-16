@@ -56,7 +56,11 @@ Resolution order (first hit wins):
    task-held-out data (macro-F1 .622; route-low precision .976 at 38% coverage
    at the default threshold; see dev/archive/docs/ADAPTIVE_REASONING_DECISION_LAYER.md).
    ``P(medium) >= OURO_ROUTER_THR`` (default 0.4) -> medium, else low.
-4. Otherwise None -> the server's default level (medium) applies.
+4. Otherwise None -> no level is attached and the server's RESTING head
+   applies (config.model.thinking_mode — an empirical per-model fit, e.g.
+   low on gpt-oss and muse today). None means "nothing requested", not
+   "no-think"; medium is a first-class level (operator clarification
+   2026-08-16 — the earlier never-medium note was a misunderstanding).
 
 Everything is INERT unless ``OURO_ADAPTIVE_REASONING=1``: no artifact load, no
 behavior change (the dormant-flag pattern). A missing/broken artifact disables

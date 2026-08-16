@@ -41,6 +41,17 @@ sources, reconciled the same day:*
     base at high; the literature's creative-low call is vendor-guidance
     only and contested — revisit if world prose degrades).
 
+## Operator correction (same day): medium was never banned
+
+The gpt-oss "None routes LOW, never medium (operator rule)" note was an
+overstatement born of a semantic mix-up: "None" described *no level
+requested*, not a requested no-think. Low-at-rest is a gpt-oss empirical
+fit, NOT fleet policy, and does not automatically translate to other
+families. Medium is a first-class tier — the planning/charter cluster left
+unpinned above is its natural first tenant once evidence or an A/B
+supports it. (Probe #1 showed muse's medium head is measurably distinct:
+136 mean tokens vs 120 low / 159 high.)
+
 ## The A/B owed
 
 These pins change tier-arm behavior on head-swap families (gpt-oss, muse).
