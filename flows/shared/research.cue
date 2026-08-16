@@ -60,6 +60,8 @@ research: #FlowDefinition & {
 					default:   "extract_queries"
 					no_answer: "search"
 				}
+				// LOW: emits search-query strings — breadth beats deliberation here.
+				config: reasoning:   "low"
 				config: temperature: "t*0.6"
 				retries: 3
 			}

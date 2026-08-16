@@ -61,6 +61,8 @@ set_env: #FlowDefinition & {
 					default:   "persist_env"
 					no_answer: "failed"
 				}
+				// LOW: reports which tools exist on PATH — pure observation.
+				config: reasoning:   "low"
 				config: temperature: "t*0.0"
 				retries: 3
 			}

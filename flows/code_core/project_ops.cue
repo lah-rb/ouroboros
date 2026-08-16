@@ -104,6 +104,8 @@ project_ops: #FlowDefinition & {
 					default:   "persist_artifacts"
 					no_answer: "plan_setup"
 				}
+				// LOW: lists transient files as JSON — pure enumeration.
+				config: reasoning:   "low"
 				config: temperature: "t*0.0"
 				retries: 3
 			}

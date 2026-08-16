@@ -10480,7 +10480,8 @@
             "no_answer": "plan_setup"
           },
           "config": {
-            "temperature": "t*0.0"
+            "temperature": "t*0.0",
+            "reasoning": "low"
           },
           "retries": 3
         },
@@ -12841,7 +12842,8 @@
             "no_answer": "search"
           },
           "config": {
-            "temperature": "t*0.6"
+            "temperature": "t*0.6",
+            "reasoning": "low"
           },
           "retries": 3
         },
@@ -13282,7 +13284,8 @@
           },
           "config": {
             "temperature": "t*0.3",
-            "max_tokens": 4096
+            "max_tokens": 4096,
+            "reasoning": "low"
           },
           "retries": 2
         },
@@ -13875,7 +13878,8 @@
             }
           },
           "config": {
-            "temperature": "t*0.6"
+            "temperature": "t*0.6",
+            "reasoning": "low"
           },
           "retries": 3
         },
@@ -14165,7 +14169,8 @@
             "no_answer": "failed"
           },
           "config": {
-            "temperature": "t*0.0"
+            "temperature": "t*0.0",
+            "reasoning": "low"
           },
           "retries": 3
         },

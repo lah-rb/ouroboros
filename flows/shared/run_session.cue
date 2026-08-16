@@ -138,6 +138,11 @@ run_session: #FlowDefinition & {
 					default:   "execute_interaction"
 					no_answer: "close_session"
 				}
+				// LOW: a menu pick — measured on the 10h muse arm at 874 calls, 80%
+				// of its 104K generated tokens spent thinking about which of three
+				// options to press. Mechanical turns pay for CoT they don't use;
+				// policy reversed 2026-08-16 (explicit low on mechanical steps).
+				config: reasoning:   "low"
 				config: temperature: "t*0.6"
 				retries: 3
 			}

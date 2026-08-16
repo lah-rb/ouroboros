@@ -161,6 +161,9 @@ rewrite: #FlowDefinition & {
 					default:   "generate_rewrite"
 					no_answer: "generate_rewrite"
 				}
+				// LOW: a context-selection menu — 99% thought share on the 10h arm
+				// for picks whose payload is one symbol reference.
+				config: reasoning:   "low"
 				config: {temperature: "t*0.3", max_tokens: 4096}
 				retries: 2
 			}

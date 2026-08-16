@@ -26,9 +26,11 @@
 │    FASTER at low, not smarter when adaptive. Nothing in the record          │
 │    separates those hypotheses.                                              │
 │                                                                            │
-│ Blast radius differs by format: only chatml declares `gate_levels`, so      │
-│ routed-low means "shallower" on harmony/gemma but "NO reasoning at all" on  │
-│ step-3.7 — where a blind 3-judge panel priced it at 31.7/50 vs 24.7/50.     │
+│ Blast-radius note CORRECTED 2026-08-16 (operator): step-3.7's thinking is   │
+│ ALWAYS-ON with a low/med/high depth dial — routed-low means "shallower"     │
+│ there too, same as harmony/gemma, not "no reasoning at all" as previously   │
+│ claimed here. Explicit low on mechanical steps is therefore safe fleet-wide │
+│ and is now house policy (menu picks, enumerations, query planning).         │
 │                                                                            │
 │ IF YOU ENABLE THIS: log the activation rate. An inert router and a          │
 │ decisive one produce identical logs today, which is why 2 above went        │
@@ -72,7 +74,10 @@ logger = logging.getLogger(__name__)
 # -local and best-effort — it answers "is this router alive?", not accounting.
 _decisions: dict[str, int] = {"low": 0, "medium": 0}
 
-VALID_LEVELS = ("low", "medium", "high")
+# xhigh added 2026-08-16 — increasingly common in the local space (muse's
+# card documents it; its head-swap port maps it). Families without an
+# xhigh mapping degrade to no-swap server-side (heads.get -> None).
+VALID_LEVELS = ("low", "medium", "high", "xhigh")
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ARTIFACT = "models/reasoning_router_v1.joblib"
 
