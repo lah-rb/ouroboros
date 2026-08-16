@@ -35,6 +35,16 @@ content: |
     contradicts itself: these are findings, not background. The gate
     only ever sees what you write down.
 
+  - When `goal_met` is false, the summary MUST state the unmet
+    expectation as a CONTRAST — what the objective required the session
+    to demonstrate, and what was observed in its place: "expected the
+    displayed values to change after the update command; observed
+    output identical to the pre-update state". Never report only that
+    the session "was marked failed" or "did not pass": a verdict
+    without its reason sends the next step hunting through code for a
+    defect it cannot name. This line is the single most load-bearing
+    sentence you write — the diagnosis seed carries it verbatim.
+
   If the session ended with an error or a crash that's itself a
   finding about the product, report it honestly — goal_met: false
   with the error described — rather than forcing a generous pass.
