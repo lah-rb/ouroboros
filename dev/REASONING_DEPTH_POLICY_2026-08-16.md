@@ -67,6 +67,16 @@ the stateless case is tractable (the construction rebuilds prompt as
 head+tail) and filed as follow-up; until then xhigh silently... no —
 LOUDLY (the refusals now WARN) falls back to the default head.
 
+**RESOLVED same day (713379b, the gemma precedent):** two trailing
+spaces on the low/medium/high level texts add exactly one token each
+(a single space merges into the period token), the rebaked static grew
+to 1,766, and all four heads now pin EQUAL — verified live: `pinned 3
+reasoning heads {medium: 1766, high: 1766, xhigh: 1766}` and the first
+`reasoning head-swap -> xhigh` lines ever logged. Swap-confirmed xhigh
+expression on the plan shape: low mean 2,131 -> xhigh mean 3,008 gen
+tokens (+41%, 92-94% thought), n=2. Equal lengths also unlock the
+mid-session xhigh SPLICE.
+
 ## Operator correction (same day): medium was never banned
 
 The gpt-oss "None routes LOW, never medium (operator rule)" note was an
