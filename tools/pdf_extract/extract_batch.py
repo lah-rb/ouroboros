@@ -592,6 +592,13 @@ _SCRIPT_RANGES = (
     # Han + kana + CJK punctuation/fullwidth, matching _CJK_RE's spirit.
     ("cjk", ((0x3000, 0x30FF), (0x3400, 0x4DBF), (0x4E00, 0x9FFF), (0xFF00, 0xFFEF))),
     ("hangul", ((0xAC00, 0xD7AF), (0x1100, 0x11FF))),
+    (
+        "arabic",
+        ((0x0600, 0x06FF), (0x0750, 0x077F), (0xFB50, 0xFDFF), (0xFE70, 0xFEFF)),
+    ),
+    ("hebrew", ((0x0590, 0x05FF),)),
+    ("thai", ((0x0E00, 0x0E7F),)),
+    ("devanagari", ((0x0900, 0x097F),)),
 )
 
 
@@ -615,6 +622,54 @@ def _script_profile(text: str) -> dict:
     out = {k: round(v / total, 3) for k, v in counts.items()}
     out["nonlatin"] = round(1.0 - counts["latin"] / total, 3)
     return out
+
+
+# Collapse threshold mirrors extraction_actions.MAX_REPEAT_WORDS (the
+# verdict's degen limit): runs the verdict would condemn get collapsed to
+# one unit + an explicit marker instead, because the degen census
+# (2026-08-16) showed faithful documents condemned wholesale for one
+# looping region. Mirrored in agent/actions/extraction_actions.py
+# (separate venvs — keep in sync).
+_DEGEN_COLLAPSE_LIMIT = 200
+
+
+def _collapse_degenerate_runs(
+    text: str, limit: int = _DEGEN_COLLAPSE_LIMIT, max_period: int = _REPEAT_MAX_PERIOD
+) -> tuple:
+    toks = list(re.finditer(r"\S+", text))
+    if len(toks) < limit:
+        return text, 0
+    words = [t.group() for t in toks]
+    spans = []
+    for period in range(1, max_period + 1):
+        run = 0
+        for i in range(period, len(words) + 1):
+            if i < len(words) and words[i] == words[i - period]:
+                run += 1
+            else:
+                if run + period > limit:
+                    spans.append((i - run, i, period))
+                run = 0
+    if not spans:
+        return text, 0
+    spans.sort()
+    merged = [list(spans[0])]
+    for a, b, pp in spans[1:]:
+        if a <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b, pp])
+    collapsed = 0
+    out = text
+    for a, b, pp in reversed(merged):
+        unit = " ".join(words[a : a + pp])
+        marker = (
+            f"*[degenerate OCR run collapsed: {b - a} repeated words of "
+            f"{unit[:40]!r} — content at this location was not read]*"
+        )
+        out = out[: toks[a].start()] + marker + out[toks[b - 1].end() :]
+        collapsed += b - a
+    return out, collapsed
 
 
 def _max_repeat_words(md: str, max_period: int = _REPEAT_MAX_PERIOD) -> int:
@@ -960,6 +1015,12 @@ def extract_paper(
         # Measured on the joined document: a loop can straddle a page boundary,
         # and the rates above cannot see one at all.
         report["max_repeat_words"] = _max_repeat_words(joined)
+        if report["max_repeat_words"] > _DEGEN_COLLAPSE_LIMIT:
+            joined, ncol = _collapse_degenerate_runs(joined)
+            report["degen_collapsed_words"] = ncol
+            report["max_repeat_words"] = _max_repeat_words(joined)
+            with open(md_path, "w") as f:
+                f.write(joined)
         # RECORDED, NOT GATED. The signal is real (3 for 3 on the audit
         # sample, no false positives) but only one paper carried enough of
         # them to justify a cut, and fitting a threshold to one example is how

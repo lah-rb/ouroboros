@@ -360,3 +360,39 @@ async def test_book_segment_round_progress_and_assembly(monkeypatch, tmp_path):
         assert final["book_progress"] is None
     finally:
         _OCR_CLAIMS.clear()
+
+
+# ── degenerate-run collapse ───────────────────────────────────────────
+
+
+def test_collapse_preserves_structure_and_marks():
+    from agent.actions.extraction_actions import collapse_degenerate_runs
+
+    loop = " 褈糝別" * 300
+    md = "# Heading\n\nGood prose with 532 nm.\n\nStart" + loop + " end.\n\n| a | b |"
+    fixed, n = collapse_degenerate_runs(md)
+    assert n >= 299
+    assert "degenerate OCR run collapsed" in fixed
+    assert "# Heading" in fixed and "| a | b |" in fixed  # structure intact
+    assert fixed.count("褈糝別") <= 2  # unit survives once (+ marker quote)
+    # Clean text is untouched.
+    clean = "word " * 150 + "\n\nmore text"
+    same, zero = collapse_degenerate_runs(clean)
+    assert zero == 0 and same == clean
+
+
+def test_collapse_multiword_period():
+    from agent.actions.extraction_actions import collapse_degenerate_runs
+
+    md = "intro " + "alpha beta gamma " * 120 + "outro"
+    fixed, n = collapse_degenerate_runs(md)
+    assert n > 200 and "intro" in fixed and "outro" in fixed
+
+
+def test_script_profile_covers_arabic_hebrew():
+    from agent.actions.extraction_actions import markdown_script_profile
+
+    fa = markdown_script_profile("طیف‌سنجی نمونه‌ها در ۵۳۲ نانومتر")
+    assert fa["nonlatin"] > 0.9 and fa["arabic"] > 0.9
+    he = markdown_script_profile("ספקטרוסקופיה של דגימות")
+    assert he["hebrew"] > 0.9

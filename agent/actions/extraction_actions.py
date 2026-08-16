@@ -116,6 +116,13 @@ def markdown_script_profile(text: str) -> dict:
             ),
         ),
         ("hangul", ((0xAC00, 0xD7AF), (0x1100, 0x11FF))),
+        (
+            "arabic",
+            ((0x0600, 0x06FF), (0x0750, 0x077F), (0xFB50, 0xFDFF), (0xFE70, 0xFEFF)),
+        ),
+        ("hebrew", ((0x0590, 0x05FF),)),
+        ("thai", ((0x0E00, 0x0E7F),)),
+        ("devanagari", ((0x0900, 0x097F),)),
     )
     counts = {name: 0 for name, _ in ranges}
     total = 0
@@ -131,6 +138,64 @@ def markdown_script_profile(text: str) -> dict:
     out = {k: round(v / total, 3) for k, v in counts.items()}
     out["nonlatin"] = round(1.0 - counts["latin"] / total, 3)
     return out
+
+
+def collapse_degenerate_runs(
+    text: str, limit: int = 200, max_period: int = 24
+) -> tuple[str, int]:
+    """Collapse back-to-back periodic word repeats longer than ``limit``
+    into one unit plus an explicit marker. Returns (text, words_collapsed).
+
+    A decode loop is a localized artifact: the census of every degenerate
+    extract_failed paper (2026-08-16) showed faithful documents — numeric
+    0.93–0.94, span 0.70–0.79, both PASSING — condemned wholesale for one
+    looping region (a Korean paper looping 300× on stray hanzi; a Spanish
+    thesis with 3,813 junk words across 186 otherwise-clean pages). The
+    loop marks where the model read NOTHING — the marker says so instead
+    of the junk pretending to be content. Mirrored in
+    tools/pdf_extract/extract_batch.py (separate venvs — keep in sync).
+    """
+    import re as _re
+
+    toks = list(_re.finditer(r"\S+", text))
+    if len(toks) < limit:
+        return text, 0
+    words = [t.group() for t in toks]
+    # Find runs (junk_start_tok, end_tok, period).
+    spans: list[tuple[int, int, int]] = []
+    for period in range(1, max_period + 1):
+        run = 0
+        for i in range(period, len(words) + 1):
+            if i < len(words) and words[i] == words[i - period]:
+                run += 1
+            else:
+                if run + period > limit:
+                    # Keep the first unit; junk = the repeats after it.
+                    spans.append((i - run, i, period))
+                run = 0
+    if not spans:
+        return text, 0
+    # Merge overlaps (different periods can flag the same region); splice
+    # the ORIGINAL string by character positions, from the end, so the
+    # document's newlines/tables/headings outside the junk stay intact.
+    spans.sort()
+    merged = [list(spans[0])]
+    for s, e, p in spans[1:]:
+        if s <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], e)
+        else:
+            merged.append([s, e, p])
+    collapsed = 0
+    out = text
+    for s, e, p in reversed(merged):
+        unit = " ".join(words[s : s + p])
+        marker = (
+            f"*[degenerate OCR run collapsed: {e - s} repeated words of "
+            f"{unit[:40]!r} — content at this location was not read]*"
+        )
+        out = out[: toks[s].start()] + marker + out[toks[e - 1].end() :]
+        collapsed += e - s
+    return out, collapsed
 
 
 # DEGENERATE DECODE. The rates are RECALL — "does this number appear anywhere
