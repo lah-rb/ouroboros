@@ -57,10 +57,22 @@ thinking:
 # which is what Ouroboros runs. Levels are the model's own vocabulary, so
 # the canonical router names map straight through except `low`.
 reasoning:
+  # EQUAL-LENGTH PADDING (2026-08-16, the gemma precedent): the head-swap
+  # requires every level's head to tokenize to the SAME length as the
+  # default static head, and "xhigh" is 2 tokens where low/medium/high are
+  # 1 — measured: "Reasoning strength: low." = 6 tokens, "...xhigh." = 7.
+  # All six xhigh requests in the verified probe were REFUSED on that
+  # mismatch (head 1766 vs static 1765). TWO trailing spaces add exactly
+  # one token (a single space merges into the period token — measured with
+  # this GGUF's own tokenizer, dev session 2026-08-16); one space does
+  # nothing. With the pad, all four levels render 7-token lines and every
+  # head — including the DEFAULT bake, which must be regenerated
+  # (delete data/*.tokens.bin; the builder auto-rebuilds on boot) — lands
+  # equal, which also unlocks the mid-session xhigh SPLICE.
   levels:
-    low: "low"
-    medium: "medium"
-    high: "high"
+    low: "low  "
+    medium: "medium  "
+    high: "high  "
     # xhigh: on the card (recommended with high for agentic work), mapped
     # 2026-08-16 when the head-swap port made per-request levels REAL for
     # this family — until then an unmapped level had nothing to ride on.

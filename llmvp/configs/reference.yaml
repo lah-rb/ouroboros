@@ -127,6 +127,41 @@
 #     batched seats (pool-only, deferred in batched v1), logging at DEBUG.
 #   • `resident_seq_cache` unset/false — there is no live resident session
 #     to strip; full-replay history is rebuilt from token_history instead.
+#
+# ── 3d. WIRE THE REASONING DIAL, THEN PROVE IT SWAPS ─────────────────
+# Thinking dials are the fleet's most-repeated silent-no-op site — muse ran
+# every tier arm on its low bake while probes "measured" levels that never
+# applied (2026-08-16). Five steps, none optional:
+#
+#   1. MAP EVERY LEVEL THE CARD DOCUMENTS in the format yaml's
+#      reasoning.levels — including the top one. xhigh was once deliberately
+#      skipped as unused; when per-request levels became real it had nothing
+#      to ride on. An unmapped level degrades to no-swap, not to an error.
+#   2. EQUALIZE HEAD LENGTHS with the model's OWN tokenizer. Every level's
+#      rendered head must tokenize to exactly the default bake's length or
+#      the swap refuses (install AND mid-session splice). Measure the
+#      reasoning line per level; pad gemma-style — on muse TWO trailing
+#      spaces add exactly one token while a single space merges into the
+#      period token. Then REGENERATE THE BAKE (delete data/*.tokens.bin;
+#      the builder rebuilds on boot — it watches persona/knowledge/config
+#      mtimes, NOT the format yaml, so it will not notice your edit).
+#   3. Set `reasoning_head_swap: true` on resident configs whose dial lives
+#      in the cached system head (harmony inline, or any family with a
+#      levels map). The default level reuses SEQ_STATIC; only the others
+#      pin heads.
+#   4. VERIFY THE BOOT LOG, against the RIGHT config: `active_config.txt`
+#      names the model a probe talks to, and a verification round was once
+#      burned probing gpt-oss while believing it was muse. Expect
+#      "🧠 pinned N reasoning heads" with EVERY length equal to the static.
+#   5. NEVER TRUST A LEVEL WITHOUT ITS SWAP LINE. A levelled request must
+#      produce "🧠 reasoning head-swap → <level>" in the server log; its
+#      absence means a refusal (now WARNs) or an API drop — createCompletion
+#      silently discarded `reasoning` until ed4dcbd while its two sibling
+#      resolvers forwarded it, and two probe rounds measured the default
+#      head at every "level". Probe with the dev/muse_headswap_probe2.py
+#      shape: hard prompts, budget the deliberation cannot hit, the card's
+#      own sampling — and read the spread off swap-confirmed rows only.
+#
 # Fleet state after that audit: pool+resident+thinking configs (gpt-oss-120b-a5,
 # muse-glimmer-30b[-swarm], hy3, olmo-think, mistral-medium) carry the flag per
 # their makers; laguna carries an explicit `false` because poolside documents
