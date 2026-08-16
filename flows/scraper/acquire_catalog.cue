@@ -1,11 +1,15 @@
-// acquire_catalog.cue — Acquire + Catalog One Batch (v1)
+// acquire_catalog.cue — Acquire + Catalog One Batch (v2: parallel wrapper)
 //
-// For a batch of ≤5 candidate papers: resolve open-access status,
-// download oa_pdf papers (closed/unresolved papers proceed — they
-// catalog from metadata + abstract; "closed" is an access state, never
-// a failure), fetch reference DOIs, and tag every paper against the
-// plan's aspects with the exact/close/adjacent relevance scale.
-// v1 deliberately stops at acquisition — nothing parses PDF contents.
+// The batch's work lives in catalog_work.cue (moved verbatim when the
+// catalog window gained drains); this wrapper runs it BESIDE
+// figtext_drain (muse vision contexts) and translate_drain (muse text
+// seats) — with the OCR backlog cleared, those resources idle between
+// download batches, and the catalog phase is where the mission lives for
+// long stretches. ocr_drain is deliberately NOT mounted here: the acquire
+// action already runs its own in-action OCR lane against the same claim
+// set, and paddle serializes anyway. research_control's tail_call
+// interface is unchanged; the wrapper owns the return — parallel branches
+// cannot tail-call.
 
 package ouroboros
 
@@ -32,98 +36,36 @@ acquire_catalog: #FlowDefinition & {
 
 	steps: {
 
-		load_mission: #StepDefinition & _templates.load_mission & {
-			description: "Load mission (research plan aspects for tagging)"
-			resolver: {
-				type: "rule"
-				rules: [
-					{condition: "true", transition: "load_batch"},
-				]
-			}
-			publishes: ["mission", "events"]
-		}
-
-		load_batch: #StepDefinition & {
-			action:      "catalog_batch_next"
-			description: "Load the dispatched paper records from the databank"
-			// paper_keys arrives as a flow input (seeded into context);
-			// declaring it keeps the action's context fallback visible
-			// to the linter.
-			context: optional: ["paper_keys"]
-			params: paper_keys: {$ref: "input.paper_keys"}
-			resolver: {
-				type: "rule"
-				rules: [
-					{condition: "result.batch_size > 0", transition: "acquire"},
-					{condition: "true", transition: "return_success"},
-				]
-			}
-			publishes: ["catalog_batch"]
-		}
-
-		// ONE STEP, THREE LANES. resolve -> download -> fetch_refs used to be
-		// three serial steps walking the batch one record at a time, each call
-		// paying its own politeness interval. They are fanned out per record
-		// inside a single action, gathered with an OCR lane that drains PDFs
-		// from EARLIER dispatches AND a tag lane that streams tag turns onto
-		// open batched seats while the HTTP waits happen — title+abstract are
-		// ready before acquisition starts, so muse works the whole window.
-		// The underlying actions still exist and are still registered; only
-		// the driving changed. See agent/actions/acquire_overlap_actions.py.
-		acquire: #StepDefinition & {
-			action:      "acquire_batch"
-			description: "Resolve+download+reference concurrently; OCR + tag turns on open seats in parallel"
-			context: required: ["catalog_batch", "mission"]
-			resolver: {
-				type: "rule"
-				rules: [
-					// The fallback tag turn runs only for leftovers the lane
-					// missed (inference error, unparseable JSON, no plan).
-					{condition: "result.untagged > 0", transition: "tag_papers"},
-					{condition: "true", transition: "apply_tags"},
-				]
-			}
-			publishes: ["catalog_batch"]
-		}
-
-		tag_papers: #StepDefinition & {
-			action:      "inference"
-			description: "Tag the batch against the plan's aspects (one turn)"
-			context: {
-				required: ["mission", "catalog_batch"]
-			}
-			prompt_template: {
-				template: "scraper/tag_paper"
-				context_keys: ["aspects_block", "papers_block"]
-				input_keys: []
-			}
-			pre_compute: [
-				{formatter: "format_aspect_definitions", output_key: "aspects_block"
-					params: {source: {$ref: "context.mission.research_plan"}}},
-				// only_untagged: the acquire tag lane usually cataloged most
-				// of the batch already — this turn re-prompts ONLY leftovers.
-				{formatter: "format_catalog_batch", output_key: "papers_block"
-					params: {source: {$ref: "context.catalog_batch"}, only_untagged: true}},
+		// ONE STEP, THREE BRANCHES. catalog_work does the batch; the drains
+		// use capacity the batch leaves idle. A failed drain never sinks the
+		// batch (branch isolation); the single-owner publish passes
+		// catalog_work's directive_report through under its own name.
+		run_batch: #StepDefinition & {
+			action:      "parallel"
+			description: "Catalog batch + figtext/translate drains, concurrently"
+			max_parallel: 3
+			branches: [
+				{
+					flow: "catalog_work"
+					input_map: {
+						paper_keys:        {$ref: "input.paper_keys"}
+						working_directory: {$ref: "input.working_directory"}
+						flow_directive:    {$ref: "input.flow_directive", default: ""}
+					}
+				},
+				{
+					flow: "figtext_drain"
+					input_map: {
+						working_directory: {$ref: "input.working_directory"}
+					}
+				},
+				{
+					flow: "translate_drain"
+					input_map: {
+						working_directory: {$ref: "input.working_directory"}
+					}
+				},
 			]
-			config: temperature: "t*0.3"
-			resolver: {
-				type: "rule"
-				rules: [
-					// apply_tags tolerates a missing/garbled response: untagged
-					// papers stay in the worklist for a later batch.
-					{condition: "true", transition: "apply_tags"},
-				]
-			}
-			publishes: ["inference_response"]
-		}
-
-		apply_tags: #StepDefinition & {
-			action:      "apply_paper_tags"
-			description: "Validate tags, persist cataloged records, build the report"
-			context: {
-				required: ["catalog_batch", "mission"]
-				optional: ["inference_response"]
-			}
 			resolver: {
 				type: "rule"
 				rules: [
@@ -149,5 +91,5 @@ acquire_catalog: #FlowDefinition & {
 		}
 	}
 
-	entry: "load_mission"
+	entry: "run_batch"
 }

@@ -23492,6 +23492,126 @@
       }
     },
     "steps": {
+      "run_batch": {
+        "action": "parallel",
+        "description": "Catalog batch + figtext/translate drains, concurrently",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "return_success"
+            }
+          ]
+        },
+        "publishes": [
+          "directive_report"
+        ],
+        "effects": [],
+        "terminal": false,
+        "branches": [
+          {
+            "flow": "catalog_work",
+            "input_map": {
+              "paper_keys": {
+                "$ref": "input.paper_keys"
+              },
+              "working_directory": {
+                "$ref": "input.working_directory"
+              },
+              "flow_directive": {
+                "$ref": "input.flow_directive",
+                "default": ""
+              }
+            }
+          },
+          {
+            "flow": "figtext_drain",
+            "input_map": {
+              "working_directory": {
+                "$ref": "input.working_directory"
+              }
+            }
+          },
+          {
+            "flow": "translate_drain",
+            "input_map": {
+              "working_directory": {
+                "$ref": "input.working_directory"
+              }
+            }
+          }
+        ],
+        "max_parallel": 3
+      },
+      "return_success": {
+        "action": "noop",
+        "description": "Return the catalog report to research_control",
+        "context": {
+          "required": [],
+          "optional": [
+            "directive_report"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "research_control",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "last_goal_id": {
+              "$ref": "input.goal_id"
+            },
+            "last_status": "success"
+          }
+        }
+      }
+    },
+    "entry": "run_batch",
+    "overflow": {
+      "strategy": "split",
+      "fallback": "reorganize"
+    }
+  },
+  "catalog_work": {
+    "flow": "catalog_work",
+    "version": 1,
+    "description": "Acquire and catalog one batch (work half): OA resolution, PDF\ndownload, reference fetch, aspect tagging \u2014 ending with the\ndirective report in context for the acquire_catalog wrapper.",
+    "context_tier": "session_task",
+    "returns": {
+      "directive_report": {
+        "type": "dict",
+        "from": "context.directive_report",
+        "optional": true
+      }
+    },
+    "projections": {},
+    "input": {
+      "required": [
+        "paper_keys",
+        "working_directory"
+      ],
+      "optional": [
+        "flow_directive"
+      ]
+    },
+    "defaults": {
+      "config": {
+        "temperature": "t*0.3"
+      }
+    },
+    "steps": {
       "load_mission": {
         "action": "load_mission_state",
         "description": "Load mission (research plan aspects for tagging)",
@@ -23541,7 +23661,7 @@
             },
             {
               "condition": "true",
-              "transition": "return_success"
+              "transition": "done"
             }
           ]
         },
@@ -23659,7 +23779,7 @@
           "rules": [
             {
               "condition": "true",
-              "transition": "return_success"
+              "transition": "done"
             }
           ]
         },
@@ -23669,9 +23789,9 @@
         "effects": [],
         "terminal": false
       },
-      "return_success": {
+      "done": {
         "action": "noop",
-        "description": "Return the catalog report to research_control",
+        "description": "Batch complete \u2014 report is in context for the wrapper",
         "context": {
           "required": [],
           "optional": [
@@ -23682,19 +23802,8 @@
         "config": {},
         "publishes": [],
         "effects": [],
-        "terminal": false,
-        "tail_call": {
-          "flow": "research_control",
-          "input_map": {
-            "mission_id": {
-              "$ref": "input.mission_id"
-            },
-            "last_goal_id": {
-              "$ref": "input.goal_id"
-            },
-            "last_status": "success"
-          }
-        }
+        "terminal": true,
+        "status": "success"
       }
     },
     "entry": "load_mission",
