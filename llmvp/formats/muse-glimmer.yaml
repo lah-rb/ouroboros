@@ -61,6 +61,10 @@ reasoning:
     low: "low"
     medium: "medium"
     high: "high"
+    # xhigh: on the card (recommended with high for agentic work), mapped
+    # 2026-08-16 when the head-swap port made per-request levels REAL for
+    # this family — until then an unmapped level had nothing to ride on.
+    xhigh: "xhigh"
 
 system_block:
   identity: "You are a helpful AI assistant."

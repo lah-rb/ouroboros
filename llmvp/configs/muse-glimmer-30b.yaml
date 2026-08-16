@@ -105,7 +105,10 @@
 # today through llama-cpp-python's mtmd path outside LLMVP, where it was
 # the most faithful figure transcriber in the 2026-08-11 bake-off.
 #
-# ── Reasoning: the PREFILL dial works, the PER-REQUEST dial does not ─
+# ── Reasoning: the PREFILL dial works; per-request NOW WORKS TOO ────
+# (2026-08-16: reasoning_head_swap enabled below — the no-op finding that
+# follows described this config BEFORE the port and stays as the evidence
+# for why the head must swap rather than the request override moving.)
 # The card exposes low/medium/high/xhigh via a `Reasoning strength:` system
 # line and recommends high/xhigh for agentic work.
 #
@@ -200,6 +203,16 @@ model:
   # reasoning_span's replayed turn must match the template's
   # `<|start|>assistant to=user<|message|>…<|eot|>` rendering exactly.
   resident_strip_reasoning: true
+  # Per-request reasoning HEAD-SWAP (ported 2026-08-16). This family is the
+  # textbook fit: its dial is a `Reasoning strength:` line in the cached
+  # system head — the exact slot harmony swaps — and the backend gate was
+  # already family-general (any family with a reasoning.levels map). Levels
+  # low/medium/high/xhigh pin heads (default low reuses SEQ_STATIC); the
+  # 2026-08-11 "per-request is a silent no-op" measurement above predates
+  # this flag and is WHY it exists. VERIFY ON NEXT BOOT: expect a pinned
+  # head per non-default level in the boot log, and an A/B on one arm
+  # before trusting quality claims at raised levels.
+  reasoning_head_swap: true
   context_refresh_drain_s: 300
   # VISION. muse was the most faithful figure transcriber in the 2026-08-11
   # bake-off (145/192). The projector is 1.40GB and binds the MODEL, not a

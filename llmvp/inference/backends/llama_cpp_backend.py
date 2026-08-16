@@ -339,11 +339,18 @@ class LlamaCppBackend(BaseBackend):
         # Per-request reasoning HEAD-SWAP (config.model.reasoning_head_swap). Pin a
         # system head per reasoning level on a band ABOVE the snapshot band; a
         # session turn carrying reasoning=<level> forks that head onto the live seq
-        # at turn 0. gpt-oss/harmony only (reasoning steer lives in the cached
-        # system slot). The default level (thinking_mode) reuses SEQ_STATIC, so only
+        # at turn 0. Family-general since 2026-08-16: harmony qualifies via its
+        # inline steer, any other family by declaring a reasoning.levels map
+        # (muse-glimmer was the first port — its Reasoning-strength line lives
+        # in the cached system head, the same slot harmony swaps). The default level (thinking_mode) reuses SEQ_STATIC, so only
         # the OTHER levels get a pinned head. Per-instance presence (_reasoning_seqs).
         _model_cfg = getattr(config, "model", None)
-        self._reasoning_levels = ["low", "medium", "high"]
+        # Canonical level order. The per-family subset is derived from the
+        # format's reasoning.levels map below — a family that declares xhigh
+        # (muse-glimmer, per its card) gets an xhigh head; harmony (no map,
+        # inline steer) keeps the trio. An unmapped requested level degrades
+        # to no-swap via _reasoning_heads.get() -> None.
+        self._reasoning_levels = ["low", "medium", "high", "xhigh"]
         self._reasoning_default_level = getattr(_model_cfg, "thinking_mode", None)
         # Distinct pinned heads are keyed by RENDERED TEXT, not level name: a
         # BIMODAL family collapses two canonical levels onto one text (Gemma-4:
@@ -357,6 +364,14 @@ class LlamaCppBackend(BaseBackend):
             _level_map = dict(_get_renderer(_fam).s.reasoning.levels or {})
         except Exception:  # noqa: BLE001 — a missing/invalid spec just means no map
             _level_map = {}
+        if _level_map:
+            self._reasoning_levels = [
+                lv for lv in self._reasoning_levels if lv in _level_map
+            ] or ["low", "medium", "high"]
+        else:
+            # No map (harmony's inline steer): xhigh is not a trained value
+            # there — keep the trio.
+            self._reasoning_levels = ["low", "medium", "high"]
         _default_text = _level_map.get(
             self._reasoning_default_level, self._reasoning_default_level
         )
