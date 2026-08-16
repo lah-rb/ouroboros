@@ -137,5 +137,11 @@ async def test_the_two_live_confirmed_hashes_still_hold():
     )
     assert (
         hashlib.md5(load_prompt_text("personas/operator").encode()).hexdigest()[:10]
-        == "11a52d54a8"
+        # Was 11a52d54a8 until 2026-08-16, when the standing session conduct
+        # (PTY vs shell, the worked example, PERSISTENCE, COMPLETENESS) moved
+        # OUT of the per-turn plan_interaction_rules and INTO this persona, so
+        # it is prefilled once per pinned head instead of re-sent on all 874
+        # turns of a long arm. The hash moving is the device working: any KV
+        # head built from the old bytes must not be reused.
+        == "3ca9956304"
     )

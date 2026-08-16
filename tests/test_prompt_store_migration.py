@@ -92,12 +92,21 @@ MIGRATED = [
         "9583884a24",
     ),
     ("escalate/conclude", "escalation_actions", "CONCLUDE_PROMPT", 521, "878ba1a0f6"),
+    # Re-frozen 2026-08-16: PREFILL POSITION. The standing session conduct
+    # (PTY vs shell, the worked example, PERSISTENCE, COMPLETENESS) moved here
+    # from run_in_terminal/plan_interaction_rules. That template is re-sent on
+    # every session turn and lands at the TAIL of the appended turn, where a
+    # prefix cache can never reach it — 538 invariant tokens × 874 turns on one
+    # 10h arm, ~33 min of pure prefill, while that same flow already showed a
+    # 100% cache hit rate on its head. Here it rides the pinned static_prefix
+    # and is prefilled once per flow_key. Text MOVED, not reworded; the pinned
+    # KV must follow it.
     (
         "personas/operator",
         "interactive_actions",
         "OPERATOR_PERSONA",
-        1511,
-        "11a52d54a8",
+        3167,
+        "3ca9956304",
     ),
     # Re-frozen 2026-08-07: gained the project-fiction guard (never query
     # invented nouns; generalize to the pattern — the Persona 3 safari).
