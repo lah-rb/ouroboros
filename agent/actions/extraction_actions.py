@@ -448,16 +448,22 @@ def aggregate_book_parts(parts: list[dict]) -> dict:
     }
 
 
-async def _book_segment_round(step_input: StepInput, working_dir: str) -> dict:
+async def _book_segment_round(
+    step_input: StepInput, working_dir: str, seg_override: int | None = None
+) -> dict:
     """Extract ONE segment of one claimed book; assemble + book on the
-    final segment. Returns a summary dict; never raises."""
+    final segment. Returns a summary dict; never raises. ``seg_override``
+    shrinks the slice when the round also ran a regular batch — paddle is
+    shared, and a full 40-page segment under contention overran its
+    timeout every time (measured: zero in-run segments across 1.5 h while
+    a direct uncontended run finished 40 pages cleanly)."""
     from agent.actions.scholarly_actions import (
         append_extraction_records,
         read_databank,
     )
 
     effects = step_input.effects
-    seg = _book_pages()
+    seg = seg_override if seg_override else _book_pages()
     if seg <= 0:
         return {"book": "", "reason": "disabled"}
     databank = await read_databank(effects)
@@ -668,6 +674,7 @@ async def action_ocr_drain_batch(step_input: StepInput) -> StepOutput:
         )
         if working_dir:
             book = await _book_segment_round(step_input, working_dir)
+            logger.info("📚 book lane: %s", book)
             summary = {"attempted": 0, "book": book}
             note = (
                 f"book segment: {book.get('book','')} "
@@ -713,8 +720,12 @@ async def action_ocr_drain_batch(step_input: StepInput) -> StepOutput:
             or ""
         )
         if working_dir:
-            book = await _book_segment_round(step_input, working_dir)
+            # Shared round: paddle is mid-batch, so take a quarter slice.
+            book = await _book_segment_round(
+                step_input, working_dir, seg_override=max(10, _book_pages() // 4)
+            )
             summary["book"] = book
+            logger.info("📚 book lane: %s", book)
             if book.get("book"):
                 obs += (
                     f"; book segment {book.get('book')} "
