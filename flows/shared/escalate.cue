@@ -312,6 +312,8 @@ escalate: #FlowDefinition & {
 				context_keys: ["escalation_choice_arg"]
 				input_keys: ["failure_evidence", "expected_outcome"]
 			}
+			// HIGH: stuck-goal boss consult — hard by construction — dev/REASONING_DEPTH_POLICY_2026-08-16.md
+			config: reasoning: "high"
 			config: {
 				model:       "boss-sonnet"
 				temperature: 0.4

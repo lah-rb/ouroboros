@@ -186,6 +186,8 @@ build_structure_contracted: #FlowDefinition & {
 				optional: ["contract_set"]
 			}
 			turn: #Turn & {
+				// HIGH: code-gen: the one-shot that decides seam quality — dev/REASONING_DEPTH_POLICY_2026-08-16.md
+				config: reasoning: "high"
 				response_shape: "code"
 				response: language: ""
 				sections: [

@@ -41,6 +41,8 @@ discover: #FlowDefinition & {
 					"coverage_target", "have_count", "corpus_languages",
 				]
 			}
+			// LOW: query strings; breadth beats deliberation — dev/REASONING_DEPTH_POLICY_2026-08-16.md
+			config: reasoning: "low"
 			config: temperature: "t*0.5"
 			resolver: {
 				type: "rule"

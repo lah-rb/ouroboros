@@ -128,6 +128,8 @@ ingest_workspace: #FlowDefinition & {
 				{formatter: "format_project_listing", output_key: "project_file_list"
 					params: {source: {$ref: "context.project_manifest"}}},
 			]
+			// LOW: structured extraction from an existing tree — dev/REASONING_DEPTH_POLICY_2026-08-16.md
+			config: reasoning: "low"
 			config: temperature: "t*0.2"
 			resolver: {
 				type: "rule"

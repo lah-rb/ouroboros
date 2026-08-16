@@ -245,6 +245,8 @@ quality_gate: #FlowDefinition & {
 				context_keys: ["dep_check_imports", "dep_check_manifest"]
 				input_keys: []
 			}
+			// LOW: mechanical import-vs-declared scan — dev/REASONING_DEPTH_POLICY_2026-08-16.md
+			config: reasoning: "low"
 			config: temperature: "t*0.0"
 			resolver: {
 				type: "rule"
@@ -503,6 +505,8 @@ quality_gate: #FlowDefinition & {
 					params: {source: {$ref: "input.quality_overview"}}
 				},
 			]
+			// LOW: compression of collected results — dev/REASONING_DEPTH_POLICY_2026-08-16.md
+			config: reasoning: "low"
 			config: temperature: "t*0.1"
 			resolver: {
 				type: "rule"
@@ -631,6 +635,8 @@ quality_gate: #FlowDefinition & {
 				]
 				input_keys: []
 			}
+			// HIGH: verdict: probe-transcript confirmation gates a claimed defect — dev/REASONING_DEPTH_POLICY_2026-08-16.md
+			config: reasoning: "high"
 			config: temperature: "t*0.2"
 			resolver: {
 				type: "rule"

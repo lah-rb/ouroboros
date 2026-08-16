@@ -79,6 +79,8 @@ create: #FlowDefinition & {
 					default:   "write_files"
 					no_answer: "failed"
 				}
+				// HIGH: code-gen (serial create + test authoring; shared base) — dev/REASONING_DEPTH_POLICY_2026-08-16.md
+				config: reasoning: "high"
 				config: temperature: "t*0.4"
 				retries: 3
 			}

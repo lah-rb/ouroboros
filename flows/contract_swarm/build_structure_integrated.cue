@@ -191,6 +191,8 @@ build_structure_integrated: #FlowDefinition & {
 				required: ["contract_set"]
 			}
 			turn: #Turn & {
+				// HIGH: critique: fresh-context cohesion review of the contract set — dev/REASONING_DEPTH_POLICY_2026-08-16.md
+				config: reasoning: "high"
 				response_shape: "json_document"
 				response: schema_id: "contract_review"
 				sections: [
@@ -288,6 +290,8 @@ build_structure_integrated: #FlowDefinition & {
 				required: ["contract_set", "mission", "files_changed"]
 			}
 			turn: #Turn & {
+				// HIGH: the cross-file seam reconciler — the decisive defect class — dev/REASONING_DEPTH_POLICY_2026-08-16.md
+				config: reasoning: "high"
 				response_shape: "code"
 				response: language: ""
 				sections: [

@@ -92,6 +92,14 @@
         },
         "params": {},
         "turn": {
+          "config": {
+            "temperature": "t*0.4",
+            "reasoning": "high"
+          },
+          "response": {
+            "language": "python",
+            "scope": "symbol"
+          },
           "response_shape": "code",
           "sections": [
             {
@@ -114,16 +122,9 @@
               "required": false
             }
           ],
-          "response": {
-            "language": "python",
-            "scope": "symbol"
-          },
           "transitions": {
             "default": "insert_and_write",
             "no_answer": "failed"
-          },
-          "config": {
-            "temperature": "t*0.4"
           },
           "retries": 3
         },
@@ -311,10 +312,14 @@
         },
         "params": {},
         "turn": {
-          "response_shape": "code",
+          "config": {
+            "temperature": "t*0.4",
+            "reasoning": "high"
+          },
           "response": {
             "language": ""
           },
+          "response_shape": "code",
           "sections": [
             {
               "type": "role",
@@ -346,9 +351,6 @@
           "transitions": {
             "default": "slice_and_write",
             "no_answer": "slice_and_write"
-          },
-          "config": {
-            "temperature": "t*0.4"
           },
           "retries": 2
         },
@@ -785,10 +787,14 @@
         },
         "params": {},
         "turn": {
-          "response_shape": "code",
+          "config": {
+            "temperature": "t*0.4",
+            "reasoning": "high"
+          },
           "response": {
             "language": ""
           },
+          "response_shape": "code",
           "sections": [
             {
               "type": "role",
@@ -823,9 +829,6 @@
           "transitions": {
             "default": "write_file",
             "no_answer": "next_file"
-          },
-          "config": {
-            "temperature": "t*0.4"
           },
           "retries": 2
         },
@@ -929,10 +932,14 @@
         },
         "params": {},
         "turn": {
-          "response_shape": "code",
+          "config": {
+            "temperature": "t*0.3",
+            "reasoning": "high"
+          },
           "response": {
             "language": ""
           },
+          "response_shape": "code",
           "sections": [
             {
               "type": "role",
@@ -967,9 +974,6 @@
           "transitions": {
             "default": "write_file",
             "no_answer": "next_file"
-          },
-          "config": {
-            "temperature": "t*0.3"
           },
           "retries": 1
         },
@@ -1216,22 +1220,10 @@
         },
         "params": {},
         "turn": {
-          "response_shape": "menu_compound",
-          "sections": [
-            {
-              "type": "instruction",
-              "template": "classify/explore_instruction",
-              "required": false
-            },
-            {
-              "type": "options",
-              "required": false
-            },
-            {
-              "type": "envelope",
-              "required": false
-            }
-          ],
+          "config": {
+            "temperature": "t*0.3",
+            "reasoning": "low"
+          },
           "response": {
             "options": {
               "run_command": {
@@ -1260,6 +1252,22 @@
             },
             "publish_selection": "router_choice"
           },
+          "response_shape": "menu_compound",
+          "sections": [
+            {
+              "type": "instruction",
+              "template": "classify/explore_instruction",
+              "required": false
+            },
+            {
+              "type": "options",
+              "required": false
+            },
+            {
+              "type": "envelope",
+              "required": false
+            }
+          ],
           "transitions": {
             "default": "conclude_route",
             "no_answer": "conclude_route",
@@ -1268,9 +1276,6 @@
               "read_file": "do_read",
               "conclude": "conclude_route"
             }
-          },
-          "config": {
-            "temperature": "t*0.3"
           },
           "retries": 3
         },
@@ -1644,7 +1649,8 @@
             "no_answer": "failed"
           },
           "config": {
-            "temperature": "t*0.4"
+            "temperature": "t*0.4",
+            "reasoning": "high"
           },
           "retries": 3
         },
@@ -1743,7 +1749,8 @@
             "no_answer": "failed"
           },
           "config": {
-            "temperature": "t*0.4"
+            "temperature": "t*0.4",
+            "reasoning": "high"
           },
           "retries": 3
         },
@@ -4787,7 +4794,8 @@
         "config": {
           "temperature": 0.4,
           "max_tokens": 1024,
-          "model": "boss-sonnet"
+          "model": "boss-sonnet",
+          "reasoning": "high"
         },
         "resolver": {
           "type": "rule",
@@ -6603,7 +6611,8 @@
           }
         ],
         "config": {
-          "temperature": "t*0.2"
+          "temperature": "t*0.2",
+          "reasoning": "low"
         },
         "resolver": {
           "type": "rule",
@@ -7369,6 +7378,13 @@
         },
         "params": {},
         "turn": {
+          "config": {
+            "temperature": "t*0.4",
+            "reasoning": "high"
+          },
+          "response": {
+            "schema_id": "evaluation"
+          },
           "response_shape": "json_document",
           "sections": [
             {
@@ -7400,15 +7416,9 @@
               "required": false
             }
           ],
-          "response": {
-            "schema_id": "evaluation"
-          },
           "transitions": {
             "default": "parse_evaluation",
             "no_answer": "flush_transient_failure"
-          },
-          "config": {
-            "temperature": "t*0.4"
           },
           "retries": 3
         },
@@ -9637,6 +9647,14 @@
         },
         "params": {},
         "turn": {
+          "config": {
+            "temperature": "t*0.4",
+            "reasoning": "high"
+          },
+          "response": {
+            "language": "python",
+            "scope": "symbol"
+          },
           "response_shape": "code",
           "sections": [
             {
@@ -9670,16 +9688,9 @@
               "required": false
             }
           ],
-          "response": {
-            "language": "python",
-            "scope": "symbol"
-          },
           "transitions": {
             "default": "write_file",
             "no_answer": "write_file"
-          },
-          "config": {
-            "temperature": "t*0.4"
           },
           "retries": 3
         },
@@ -11459,7 +11470,8 @@
           "input_keys": []
         },
         "config": {
-          "temperature": "t*0.0"
+          "temperature": "t*0.0",
+          "reasoning": "low"
         },
         "resolver": {
           "type": "rule",
@@ -11853,7 +11865,8 @@
           }
         ],
         "config": {
-          "temperature": "t*0.1"
+          "temperature": "t*0.1",
+          "reasoning": "low"
         },
         "resolver": {
           "type": "rule",
@@ -12037,7 +12050,8 @@
           "input_keys": []
         },
         "config": {
-          "temperature": "t*0.2"
+          "temperature": "t*0.2",
+          "reasoning": "high"
         },
         "resolver": {
           "type": "rule",
@@ -12935,6 +12949,11 @@
         },
         "params": {},
         "turn": {
+          "config": {
+            "temperature": "t*0.6",
+            "reasoning": "low"
+          },
+          "response": {},
           "response_shape": "prose",
           "sections": [
             {
@@ -12976,13 +12995,9 @@
               "required": false
             }
           ],
-          "response": {},
           "transitions": {
             "default": "done",
             "no_answer": "no_results"
-          },
-          "config": {
-            "temperature": "t*0.6"
           },
           "retries": 3
         },
@@ -14567,10 +14582,16 @@
         },
         "params": {},
         "turn": {
-          "response_shape": "json_document",
+          "config": {
+            "temperature": "t*0.3",
+            "max_tokens": 4096,
+            "reasoning": "high",
+            "model": ""
+          },
           "response": {
             "schema_id": "contract_review"
           },
+          "response_shape": "json_document",
           "sections": [
             {
               "type": "role",
@@ -14597,11 +14618,6 @@
           "transitions": {
             "default": "apply_review",
             "no_answer": "fan_out_workers"
-          },
-          "config": {
-            "temperature": "t*0.3",
-            "max_tokens": 4096,
-            "model": ""
           },
           "retries": 2
         },
@@ -15304,10 +15320,14 @@
         },
         "params": {},
         "turn": {
-          "response_shape": "code",
+          "config": {
+            "temperature": "t*0.4",
+            "reasoning": "high"
+          },
           "response": {
             "language": ""
           },
+          "response_shape": "code",
           "sections": [
             {
               "type": "role",
@@ -15346,9 +15366,6 @@
           "transitions": {
             "default": "slice_and_write",
             "no_answer": "slice_and_write"
-          },
-          "config": {
-            "temperature": "t*0.4"
           },
           "retries": 2
         },
@@ -15952,10 +15969,16 @@
         },
         "params": {},
         "turn": {
-          "response_shape": "json_document",
+          "config": {
+            "temperature": "t*0.3",
+            "max_tokens": 4096,
+            "reasoning": "high",
+            "model": ""
+          },
           "response": {
             "schema_id": "contract_review"
           },
+          "response_shape": "json_document",
           "sections": [
             {
               "type": "role",
@@ -15982,11 +16005,6 @@
           "transitions": {
             "default": "apply_review",
             "no_answer": "fan_out_workers"
-          },
-          "config": {
-            "temperature": "t*0.3",
-            "max_tokens": 4096,
-            "model": ""
           },
           "retries": 2
         },
@@ -16131,10 +16149,16 @@
         },
         "params": {},
         "turn": {
-          "response_shape": "code",
+          "config": {
+            "temperature": "t*0.2",
+            "max_tokens": 16384,
+            "reasoning": "high",
+            "model": ""
+          },
           "response": {
             "language": ""
           },
+          "response_shape": "code",
           "sections": [
             {
               "type": "role",
@@ -16180,11 +16204,6 @@
           "transitions": {
             "default": "slice_and_write",
             "no_answer": "lookup_env"
-          },
-          "config": {
-            "temperature": "t*0.2",
-            "max_tokens": 16384,
-            "model": ""
           },
           "retries": 2
         },
@@ -23626,7 +23645,8 @@
           }
         ],
         "config": {
-          "temperature": "t*0.3"
+          "temperature": "t*0.3",
+          "reasoning": "low"
         },
         "resolver": {
           "type": "rule",
@@ -23761,7 +23781,8 @@
           ]
         },
         "config": {
-          "temperature": "t*0.5"
+          "temperature": "t*0.5",
+          "reasoning": "low"
         },
         "resolver": {
           "type": "rule",
@@ -24812,7 +24833,8 @@
           "input_keys": []
         },
         "config": {
-          "temperature": "t*0.2"
+          "temperature": "t*0.2",
+          "reasoning": "high"
         },
         "resolver": {
           "type": "rule",

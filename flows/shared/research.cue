@@ -103,6 +103,8 @@ research: #FlowDefinition & {
 			description: "Distill search results into dense, actionable guidance"
 			context: required: ["raw_search_results"]
 			turn: #Turn & {
+				// LOW: compression — dev/REASONING_DEPTH_POLICY_2026-08-16.md
+				config: reasoning: "low"
 				response_shape: "prose"
 				sections: [
 					{type: "role", template:        "personas/research_synthesizer"},

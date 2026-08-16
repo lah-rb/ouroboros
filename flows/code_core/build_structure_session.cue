@@ -154,6 +154,8 @@ build_structure_session: #FlowDefinition & {
 				optional: ["binding_vocabulary"]
 			}
 			turn: #Turn & {
+				// HIGH: code-gen: one file bound to written siblings — dev/REASONING_DEPTH_POLICY_2026-08-16.md
+				config: reasoning: "high"
 				response_shape: "code"
 				response: language: ""
 				sections: [
@@ -248,6 +250,8 @@ build_structure_session: #FlowDefinition & {
 				optional: ["binding_vocabulary"]
 			}
 			turn: #Turn & {
+				// HIGH: code-gen: in-session repair against live violations — dev/REASONING_DEPTH_POLICY_2026-08-16.md
+				config: reasoning: "high"
 				response_shape: "code"
 				response: language: ""
 				sections: [

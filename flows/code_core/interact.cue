@@ -340,6 +340,8 @@ interact: #FlowDefinition & {
 				optional: ["terminal_output", "inference_session_id"]
 			}
 			turn: #Turn & {
+				// HIGH: verdict: in-session goal_met twin of evaluate_outcome — dev/REASONING_DEPTH_POLICY_2026-08-16.md
+				config: reasoning: "high"
 				response_shape: "json_document"
 				sections: [
 					{type: "role", template:        "personas/interact_evaluator"},

@@ -88,6 +88,8 @@ add_symbol: #FlowDefinition & {
 				"file_outline_block", "current_symbol",
 			]
 			turn: #Turn & {
+				// HIGH: code-gen: new symbol body — dev/REASONING_DEPTH_POLICY_2026-08-16.md
+				config: reasoning: "high"
 				response_shape: "code"
 				sections: [
 					{type: "role", template:       "personas/code_author"},

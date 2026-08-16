@@ -85,6 +85,8 @@ classify: #FlowDefinition & {
 				optional: ["router_turn"]
 			}
 			turn: #Turn & {
+				// LOW: workspace-scout menu pick — dev/REASONING_DEPTH_POLICY_2026-08-16.md
+				config: reasoning: "low"
 				response_shape: "menu_compound"
 				sections: [
 					{type: "instruction", template: "classify/explore_instruction"},

@@ -99,6 +99,8 @@ acquire_catalog: #FlowDefinition & {
 				{formatter: "format_catalog_batch", output_key: "papers_block"
 					params: {source: {$ref: "context.catalog_batch"}}},
 			]
+			// LOW: screening decisions — THE measured muse-overthink case — dev/REASONING_DEPTH_POLICY_2026-08-16.md
+			config: reasoning: "low"
 			config: temperature: "t*0.3"
 			resolver: {
 				type: "rule"

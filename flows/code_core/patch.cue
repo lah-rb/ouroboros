@@ -154,6 +154,8 @@ patch: #FlowDefinition & {
 				optional: ["rewrite_queue", "file_content", "file_content_updated", "file_path", "mode", "call_graph_block", "already_rewritten", "already_rewritten_block", "dropped_rewrites"]
 			}
 			turn: #Turn & {
+				// HIGH: code-gen: symbol-scoped rewrite — dev/REASONING_DEPTH_POLICY_2026-08-16.md
+				config: reasoning: "high"
 				response_shape: "code"
 				sections: [
 					{type: "role", template:       "personas/code_author"},
