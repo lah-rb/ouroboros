@@ -208,3 +208,26 @@ def test_replay_is_deferred_in_batched_mode():
     inst = make_instance(n_tokens=8)
     assert backend.strip_reasoning_replay(inst, 5, [61]) is False
     assert inst._ctx.ops == []
+
+
+# ── Level clamp: a requested ceiling degrades to the highest SERVED level ──
+#
+# A cue step pinned xhigh must serve HIGH on a family whose map stops at
+# high (gpt-oss/harmony trio) — not silently fall through to the default,
+# which is what an unpinned level did before 2026-08-16. The pure helper is
+# tested here; the three entry points (_completion_reasoning_head,
+# _install_reasoning_head, _splice_reasoning_head) all clamp through it.
+
+
+def test_clamp_walks_down_to_the_family_ceiling():
+    f = LlamaCppBackend._clamp_reasoning_level
+    assert f("xhigh", "low", ["medium", "high"]) == "high"  # gpt-oss shape
+    assert f("xhigh", "low", ["medium", "high", "xhigh"]) == "xhigh"  # muse
+    assert f("high", "low", ["medium"]) == "medium"
+    assert f("xhigh", "low", []) == "low"  # nothing pinned → default
+
+
+def test_clamp_leaves_default_and_unknown_levels_alone():
+    f = LlamaCppBackend._clamp_reasoning_level
+    assert f("medium", "medium", []) == "medium"
+    assert f("weird", "low", ["high"]) == "weird"  # not ours to interpret

@@ -2094,11 +2094,37 @@ class LlamaCppBackend(BaseBackend):
             # Restore seq 0 to the pristine static so acquire_instance's fork is sound.
             self._resident_restore_static(inst)
 
+    @staticmethod
+    def _clamp_reasoning_level(level: str, default: str, pinned) -> str:
+        """Resolve a requested level to one this family can actually serve.
+
+        Walks the canonical ladder DOWNWARD from the request to the first
+        level that is either the default (rides SEQ_STATIC / persona head)
+        or has a pinned head. A request for xhigh on a family whose map
+        stops at high therefore serves HIGH — not, as before, a silent
+        fall-through to the default: the caller asked for the ceiling, so
+        give the highest ceiling that exists (2026-08-16, operator).
+        """
+        ladder = ("xhigh", "high", "medium", "low")
+        if level not in ladder:
+            return level
+        pinned = set(pinned or ())
+        for lv in ladder[ladder.index(level) :]:
+            if lv == default or lv in pinned:
+                return lv
+        return default
+
     def _install_reasoning_head(self, inst: Any, level: str) -> bool:
         """Fork the pinned head for ``level`` onto the live seq — the reasoning
         HEAD-SWAP. Whole-seq replace (like _resident_restore_static), so it is sound
         only at request/turn START (nothing above the head yet); the session
         manager calls it at turn 0. Returns True if a head was installed."""
+        _served = self._clamp_reasoning_level(
+            level, self._reasoning_default_level, self._reasoning_pin_levels
+        )
+        if _served != level:
+            log.info("reasoning %s → %s (family ceiling)", level, _served)
+            level = _served
         if self._decode_mode == "batched":
             # Per-seq head install via the decode thread (control op). The
             # default level reuses the seat's persona head.
@@ -2206,6 +2232,12 @@ class LlamaCppBackend(BaseBackend):
         level word tokenizes identically), so the body positions stay aligned —
         verified per call; a mismatch refuses the splice (turn proceeds on the
         current level). Returns True if the splice happened."""
+        _served = self._clamp_reasoning_level(
+            level, self._reasoning_default_level, self._reasoning_pin_levels
+        )
+        if _served != level:
+            log.info("reasoning %s → %s (family ceiling)", level, _served)
+            level = _served
         if self._decode_mode == "batched":
             cur = (
                 getattr(inst, "_reasoning_current", None)
@@ -2286,6 +2318,15 @@ class LlamaCppBackend(BaseBackend):
         swap disabled, non-resident, flow-prefix caching in play (its pinned
         KV assumes the default head), or length mismatches.
         """
+        if level:
+            _served = self._clamp_reasoning_level(
+                level, self._reasoning_default_level, self._reasoning_pin_levels
+            )
+            if _served != level:
+                log.info(
+                    "completion reasoning %s → %s (family ceiling)", level, _served
+                )
+                level = _served
         if not level or level == self._reasoning_default_level:
             return prompt_tokens
         if not (self._reasoning_head_swap and getattr(self, "_resident_active", False)):
