@@ -458,6 +458,11 @@ interact: #FlowDefinition & {
 				// Bumped from t*0.2 — see Site #7 record: over-rigid charter
 				// adherence at low temp, need flexibility to weight "objective
 				// observed" above "not every planned step executed."
+				// HIGH: the goal_met verdict. A wrong pass books a false complete; a
+				// wrong fail burns a diagnose round (~19 min/charter, 10h muse arm).
+				// The judge-deliberation evidence (807 tok vs a 24-tok rubber stamp)
+				// is this step class.
+				config: reasoning:   "high"
 				config: temperature: "t*0.4"
 				retries: 3
 			}
@@ -572,6 +577,10 @@ interact: #FlowDefinition & {
 				{formatter: "format_session_tail", output_key: "session_tail"
 					params: {source: {$ref: "context.terminal_output"}, max_chars: 3000}},
 			]
+			// HIGH: writes the acceptance checks that gate goal_met — a badly
+			// derived check could permanently veto a correct pass (9819411);
+			// checks are derived once and consulted forever.
+			config: reasoning:   "high"
 			config: temperature: "t*0.1"
 			resolver: {
 				type: "rule"

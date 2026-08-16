@@ -3332,7 +3332,8 @@
           }
         ],
         "config": {
-          "temperature": "t*0.1"
+          "temperature": "t*0.1",
+          "reasoning": "high"
         },
         "resolver": {
           "type": "rule",
@@ -7505,7 +7506,8 @@
             "no_answer": "flush_transient_failure"
           },
           "config": {
-            "temperature": "t*0.4"
+            "temperature": "t*0.4",
+            "reasoning": "high"
           },
           "retries": 3
         },
@@ -7694,7 +7696,8 @@
           }
         ],
         "config": {
-          "temperature": "t*0.1"
+          "temperature": "t*0.1",
+          "reasoning": "high"
         },
         "resolver": {
           "type": "rule",
@@ -13407,7 +13410,8 @@
             "no_answer": "failed"
           },
           "config": {
-            "temperature": "t*0.4"
+            "temperature": "t*0.4",
+            "reasoning": "high"
           },
           "retries": 3
         },

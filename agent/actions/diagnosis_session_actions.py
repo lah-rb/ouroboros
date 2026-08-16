@@ -1013,8 +1013,14 @@ async def _conclude_diagnosis(
         # worsens repetition looping on some models (notably Qwen3-Next); t*
         # tracks each model's base so the conclude stays deterministic-ish
         # without bottoming out.
+        # reasoning "high": conclude produces the change_spec that drives the
+        # repair dispatch — the 10h muse arm's 4 junk-target events (empty
+        # target_file → LLM-menu recovery) were conclude outputs. Custom
+        # actions bypass the runtime's reasoning_router (it routes TURN steps
+        # only), so the level rides config_overrides here; head-swap families
+        # splice mid-session, others no-op silently.
         result = await effects.session_inference(
-            session_id, prompt, {"temperature": "t*0.7"}
+            session_id, prompt, {"temperature": "t*0.7", "reasoning": "high"}
         )
         diagnosis_text = result.text.strip() if result.text else ""
     except Exception as e:
@@ -1367,8 +1373,12 @@ async def action_systemic_scan(step_input: StepInput) -> StepOutput:
     try:
         # t* task-scaled (same rationale as conclude) — was a flat 0.3 overwrite;
         # this scan runs on the same large session and is equally loop-exposed.
+        # reasoning "high": the cross-file widening pass — seam bugs BETWEEN
+        # files are the campaign's decisive defect class, and this is the one
+        # turn that hunts them deliberately. Same router-bypass note as
+        # conclude above.
         result = await effects.session_inference(
-            session_id, scan_prompt, {"temperature": "t*0.5"}
+            session_id, scan_prompt, {"temperature": "t*0.5", "reasoning": "high"}
         )
         text = result.text.strip() if result.text else ""
     except Exception as e:  # noqa: BLE001 - never break the diagnosis on scan

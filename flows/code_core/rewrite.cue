@@ -219,6 +219,9 @@ rewrite: #FlowDefinition & {
 					default:   "write_file"
 					no_answer: "failed"
 				}
+				// HIGH: whole-file regeneration under the anti-gut guard — the step
+				// that can drop siblings' contracts wholesale if it reasons shallowly.
+				config: reasoning:   "high"
 				config: temperature: "t*0.4"
 				retries: 3
 			}

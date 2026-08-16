@@ -298,6 +298,11 @@ design_and_plan: #FlowDefinition & {
 				{formatter: "format_prior_rejection", output_key: "prior_rejection"
 					params: {source: {$ref: "context.mission.architecture"}}},
 			]
+			// HIGH: one turn gates the whole build — unrunnable-layout veto AND
+			// (2026-08-15) agenda coverage; its first coverage firing caught a
+			// blueprint missing the defeat-screen owner. A shallow read passes
+			// blueprints a deep one would return.
+			config: reasoning:   "high"
 			config: temperature: "t*0.1"
 			resolver: {
 				type: "rule"
