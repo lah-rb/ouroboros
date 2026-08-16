@@ -23739,7 +23739,7 @@
     "steps": {
       "run_round": {
         "action": "parallel",
-        "description": "Discovery round + OCR drain + figtext drain, concurrently",
+        "description": "Discovery round + OCR/figtext/translate drains, concurrently",
         "context": {
           "required": [],
           "optional": []
@@ -23808,9 +23808,17 @@
                 "$ref": "input.working_directory"
               }
             }
+          },
+          {
+            "flow": "translate_drain",
+            "input_map": {
+              "working_directory": {
+                "$ref": "input.working_directory"
+              }
+            }
           }
         ],
-        "max_parallel": 3
+        "max_parallel": 4
       },
       "return_success": {
         "action": "noop",
@@ -25198,6 +25206,76 @@
       }
     },
     "entry": "load_mission",
+    "overflow": {
+      "strategy": "split",
+      "fallback": "reorganize"
+    }
+  },
+  "translate_drain": {
+    "flow": "translate_drain",
+    "version": 1,
+    "description": "Translate one claimed extract_lingual paper to English on muse\ntext seats, verify with the deterministic gate, and book it back\nas extracted (md_en_path) or translate_failed with reasons.",
+    "context_tier": "session_task",
+    "returns": {
+      "translate_summary": {
+        "type": "dict",
+        "from": "context.translate_summary",
+        "optional": true
+      }
+    },
+    "projections": {},
+    "input": {
+      "required": [
+        "working_directory"
+      ],
+      "optional": []
+    },
+    "defaults": {
+      "config": {}
+    },
+    "steps": {
+      "drain": {
+        "action": "translate_drain_batch",
+        "description": "Claim + translate one lingual paper; gate; book",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "done"
+            }
+          ]
+        },
+        "publishes": [
+          "translate_summary"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "done": {
+        "action": "noop",
+        "description": "Drain complete",
+        "context": {
+          "required": [],
+          "optional": [
+            "translate_summary"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": true,
+        "status": "success"
+      }
+    },
+    "entry": "drain",
     "overflow": {
       "strategy": "split",
       "fallback": "reorganize"

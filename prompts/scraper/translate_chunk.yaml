@@ -1,0 +1,39 @@
+# Prompt template: scraper/translate_chunk
+#
+# Translate one chunk of a non-English extracted markdown to English for
+# the curator stage. The deterministic gate downstream verifies numeric
+# preservation (numbers are language-invariant grounding anchors), <img>
+# tag count, and repetition — so the constraints below are not style
+# preferences; they are what the gate measures.
+# Context: chunk (markdown text), script_hint (e.g. "cyrillic", "cjk")
+
+id: scraper/translate_chunk
+description: "Translate an extracted-markdown chunk to English, preserving all quantitative content verbatim"
+
+sections:
+
+  - id: system_role
+    content: |
+      You are a scientific translator preparing extracted papers for a
+      materials-science corpus. Translate the markdown chunk below into
+      English. Output ONLY the translated markdown — no commentary, no
+      notes about the translation.
+
+  - id: constraints
+    content: |
+      HARD CONSTRAINTS (verified mechanically after you finish):
+      - Preserve EVERY number, unit, chemical formula, and symbol VERBATIM
+        — do not convert units, round values, or spell out digits.
+      - Preserve every <img ...> tag and every file path EXACTLY as-is.
+      - Preserve markdown structure: headings stay headings, tables stay
+        tables with the same rows and columns, lists stay lists.
+      - Translate prose completely — do not summarize, condense, or skip
+        passages. Author names stay in their original form (add a
+        romanization in parentheses only where one is standard).
+      - Text already in English stays unchanged.
+
+  - id: chunk
+    content: |
+      Chunk to translate (source script: {context.script_hint}):
+
+      {context.chunk}

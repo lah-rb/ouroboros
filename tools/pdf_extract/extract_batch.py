@@ -579,6 +579,44 @@ def _prose_text(page) -> str:
     return "\n".join(parts)
 
 
+# Script census over the produced markdown. The span metric is an
+# English-prose instrument (CJK is stripped before sampling above), so the
+# VERDICT layer needs to know when a low span score means "non-Latin paper"
+# rather than "unfaithful extraction" — numerics are the language-invariant
+# anchor either way. Mirrored in agent/actions/extraction_actions.py
+# (separate venvs — keep in sync).
+_SCRIPT_RANGES = (
+    ("latin", ((0x0041, 0x024F),)),
+    ("cyrillic", ((0x0400, 0x04FF),)),
+    ("greek", ((0x0370, 0x03FF),)),
+    # Han + kana + CJK punctuation/fullwidth, matching _CJK_RE's spirit.
+    ("cjk", ((0x3000, 0x30FF), (0x3400, 0x4DBF), (0x4E00, 0x9FFF), (0xFF00, 0xFFEF))),
+    ("hangul", ((0xAC00, 0xD7AF), (0x1100, 0x11FF))),
+)
+
+
+def _script_profile(text: str) -> dict:
+    """Letter-class fractions of ``text`` (digits/punct/space excluded).
+
+    Returns {"latin": f, "cyrillic": f, ..., "nonlatin": f} rounded to 3
+    places; all zeros for text with no classified letters.
+    """
+    counts = {name: 0 for name, _ in _SCRIPT_RANGES}
+    total = 0
+    for ch in text:
+        cp = ord(ch)
+        for name, ranges in _SCRIPT_RANGES:
+            if any(lo <= cp <= hi for lo, hi in ranges):
+                counts[name] += 1
+                total += 1
+                break
+    if not total:
+        return {**{k: 0.0 for k in counts}, "nonlatin": 0.0}
+    out = {k: round(v / total, 3) for k, v in counts.items()}
+    out["nonlatin"] = round(1.0 - counts["latin"] / total, 3)
+    return out
+
+
 def _max_repeat_words(md: str, max_period: int = _REPEAT_MAX_PERIOD) -> int:
     """Words spanned by the longest back-to-back repeated block.
 
@@ -784,6 +822,7 @@ def extract_paper(
         "unverified_pages": 0,
         "numeric_match_rate": 0.0,
         "span_pass_rate": 0.0,
+        "script_profile": {},
         "max_repeat_words": 0,
         "oversize": False,
         "table_token_leak": 0,
@@ -872,6 +911,7 @@ def extract_paper(
         report["md_path"] = os.path.relpath(md_path, databank_dir)
         report["numeric_match_rate"] = num_hit / num_total if num_total else 1.0
         report["span_pass_rate"] = span_hit / span_total if span_total else 1.0
+        report["script_profile"] = _script_profile(joined)
         # Measured on the joined document: a loop can straddle a page boundary,
         # and the rates above cannot see one at all.
         report["max_repeat_words"] = _max_repeat_words(joined)

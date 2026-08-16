@@ -44,6 +44,14 @@ _TERMINAL_EXTRACTION = (
     "extracted",
     "extract_failed",
     "extract_unverified",
+    # A non-Latin paper whose numerics verified but whose span score is an
+    # artifact of measuring English prose that isn't there. OCR-terminal
+    # (another pass reads the same script and scores the same); pending for
+    # the TRANSLATION drain, which owns _translation_pending below. Excluded
+    # from the curator until translation books it back to "extracted".
+    "extract_lingual",
+    # Translation exhausted its retry — reasons recorded, human review.
+    "translate_failed",
     # A book, referred for a human decision rather than attempted. Terminal
     # here so the sweep stops offering it; it is a REVIEW QUEUE, not a
     # rejection — see the oversize branch below.
@@ -71,6 +79,59 @@ _TERMINAL_EXTRACTION = (
 # Full record: dev/EXTRACTION_GATE_CALIBRATION_2026-08-14.md
 MIN_NUMERIC_RATE = 0.75
 MIN_SPAN_RATE = 0.70
+# Verdict routing for non-Latin papers: when numerics verify but span fails
+# AND at least this fraction of the markdown's letters are non-Latin, the
+# span deficit is the instrument (an English-prose metric), not the
+# extraction — book extract_lingual for the translation drain instead of
+# burning the retry ladder. Census basis: the clearly-lingual failures ran
+# 0.35–0.99 non-Latin; the English high-numeric failures (real fidelity
+# issues) ran < 0.05.
+LINGUAL_NONLATIN_MIN = 0.15
+
+
+def script_nonlatin_frac(profile: dict) -> float:
+    """Non-Latin letter fraction from a report's script_profile ({} -> 0)."""
+    try:
+        return float((profile or {}).get("nonlatin") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def markdown_script_profile(text: str) -> dict:
+    """Letter-class fractions of markdown text. Mirrors
+    tools/pdf_extract/extract_batch.py::_script_profile (separate venvs —
+    keep in sync); used by the one-time rebook and any consumer without a
+    fresh tool report."""
+    ranges = (
+        ("latin", ((0x0041, 0x024F),)),
+        ("cyrillic", ((0x0400, 0x04FF),)),
+        ("greek", ((0x0370, 0x03FF),)),
+        (
+            "cjk",
+            (
+                (0x3000, 0x30FF),
+                (0x3400, 0x4DBF),
+                (0x4E00, 0x9FFF),
+                (0xFF00, 0xFFEF),
+            ),
+        ),
+        ("hangul", ((0xAC00, 0xD7AF), (0x1100, 0x11FF))),
+    )
+    counts = {name: 0 for name, _ in ranges}
+    total = 0
+    for ch in text:
+        cp = ord(ch)
+        for name, rs in ranges:
+            if any(lo <= cp <= hi for lo, hi in rs):
+                counts[name] += 1
+                total += 1
+                break
+    if not total:
+        return {**{k: 0.0 for k in counts}, "nonlatin": 0.0}
+    out = {k: round(v / total, 3) for k, v in counts.items()}
+    out["nonlatin"] = round(1.0 - counts["latin"] / total, 3)
+    return out
+
 
 # DEGENERATE DECODE. The rates are RECALL — "does this number appear anywhere
 # on the page" — so a decode that falls into a loop still scores clean while
@@ -203,6 +264,14 @@ def acquisition_is_truncated(record: dict, pdf_pages: int) -> bool:
     # publisher's own asset, and offprints re-paginate. Losing half or more
     # of an article is not that.
     return pdf_pages <= expected * _TRUNCATED_FRACTION
+
+
+def _translation_pending(record: dict) -> bool:
+    """A record the TRANSLATION drain owes work to: lingual verdict with a
+    markdown on disk to translate."""
+    return record.get("extraction_status") == "extract_lingual" and bool(
+        record.get("md_path")
+    )
 
 
 def _extraction_pending(record: dict) -> bool:
@@ -542,7 +611,7 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
         )
 
     updates: list[dict] = []
-    extracted = retried = failed = 0
+    extracted = retried = failed = lingual_count = 0
     for k in resolved_keys:
         rec = dict(databank.get(k) or {"paper_key": k})
         rep = reports.get(k)
@@ -598,6 +667,22 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
             # rates are hit/total with an empty total, so nothing checkable
             # means nothing missed. The rejection is right. The reason has to
             # say so.
+            # Lingual routing precondition: everything else about the
+            # extraction is CLEAN (verified pages, no loop, numerics anchor
+            # holds) and only the English-prose span metric failed on a
+            # substantially non-Latin document.
+            lingual = (
+                bool(rep)
+                and not rep.get("error")
+                and not oversize
+                and not truncated
+                and rep.get("verified_pages", 0) > 0
+                and rep.get("max_repeat_words", 0) <= MAX_REPEAT_WORDS
+                and rep.get("numeric_match_rate", 0) >= MIN_NUMERIC_RATE
+                and rep.get("span_pass_rate", 0) < MIN_SPAN_RATE
+                and script_nonlatin_frac(rep.get("script_profile"))
+                >= LINGUAL_NONLATIN_MIN
+            )
             if rep and rep.get("error"):
                 reason = rep["error"]
             elif oversize:
@@ -625,6 +710,14 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
                     f"{rep['max_repeat_words']} words of back-to-back repetition "
                     f"(limit {MAX_REPEAT_WORDS}); the rates are clean because a "
                     "loop keeps every number"
+                )
+            elif lingual:
+                reason = (
+                    "lingual — numerics verified "
+                    f"({rep.get('numeric_match_rate', 0):.2f}) but span is an "
+                    f"English-prose metric on a "
+                    f"{int(100 * script_nonlatin_frac(rep.get('script_profile')))}% "
+                    "non-Latin document; queued for translation"
                 )
             elif rep:
                 reason = (
@@ -738,6 +831,14 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
                 rec["extraction_status"] = "extract_unverified"
                 rec["failure_reason"] = f"extraction: {reason}"
                 failed += 1
+            elif lingual:
+                # No retry rung burned: another OCR pass reads the same
+                # script and scores the same. The markdown (already recorded
+                # above, with figures) is the translation drain's input.
+                rec["extraction_status"] = "extract_lingual"
+                rec["failure_reason"] = f"extraction: {reason}"
+                rec["script_profile"] = rep.get("script_profile") or {}
+                lingual_count += 1
             elif prior_retry:
                 rec["extraction_status"] = "extract_failed"
                 rec["failure_reason"] = f"extraction: {reason}"
@@ -759,6 +860,7 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
     summary = (
         f"Extracted {extracted}/{len(resolved_keys)} paper(s)"
         + (f", {retried} queued for retry" if retried else "")
+        + (f", {lingual_count} queued for translation" if lingual_count else "")
         + (f", {failed} failed terminally" if failed else "")
     )
     return StepOutput(

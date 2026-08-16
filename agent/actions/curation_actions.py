@@ -926,7 +926,12 @@ async def _render_prompt(template_id: str, context: dict) -> str:
 
 
 async def _build_doc_for(effects, paper_key: str) -> str:
-    fc = await effects.read_file(f"databank/markdown/{paper_key}.md")
+    # Prefer the gated English translation when the translation drain has
+    # produced one (translation preserves numbers and <img> paths verbatim,
+    # so figtext anchoring and the grounding gate work unchanged).
+    fc = await effects.read_file(f"databank/markdown/{paper_key}.en.md")
+    if not getattr(fc, "exists", False):
+        fc = await effects.read_file(f"databank/markdown/{paper_key}.md")
     md = fc.content if getattr(fc, "exists", False) else ""
     figtext = await _load_figtext(effects, paper_key)
     return build_curator_doc(md, figtext)
