@@ -65,28 +65,13 @@
 #      draft, batch-verify): a real engineering task with Metal-regression
 #      risk, NOT a config flag. LM Studio's ~50% acceptance is theirs.
 #
-# ── OWED PROBES (nothing below was measured on this machine) ─────────
-# Deliberately NOT copied from the 3.6 config: probe_verified_n_ctx,
-# probe_verified_weights_bytes, kv_bytes_per_token_measured. Those fields are
-# MEASUREMENTS bound to a specific weights file, and asserting an unrun probe
-# is the exact false-verification class this repo keeps paying for. n_ctx is
-# therefore set where the PESSIMISTIC header formula already clears the 100 GB
-# preflight budget on its own (below), so this config is honest as written.
-#   a) `--probe-context`: the header formula says 260 KiB/tok because it assumes
-#      every layer holds a full cache. With full_attention_interval 4 only 16 of
-#      64 layers do, so the true figure should be ~65536 B/tok — which is EXACTLY
-#      what 3.6 measured (4.00x overshoot, same head geometry). If the probe
-#      confirms it, kv_bytes_per_token_measured: 65536 unlocks n_ctx 262144.
-#      DERIVED, NOT MEASURED — do not promote it without the probe.
-#   b) Graph splits on this new arch, before trusting any throughput number: a
-#      stale binary cost 4.2x decode on DeepSeek-V4 (44 splits on 43 layers).
-#      Build in use is b10355, which does know qwen35/qwen35moe.
-#   c) EXTRACTION on a real completion. Rendering can be byte-perfect while
-#      extraction returns "" — capture the raw stream first (dev/muse_raw_probe.py
-#      pattern), do not trust first100 logging.
-#   d) That the dial MOVES: token counts per level, live, under the agent
-#      persona and a neutral one (persona conditions the dial).
-#   e) MTP acceptance through our backend, if (d) leaves budget.
+# ── PROBE a) CONTEXT CEILING — retired 2026-08-17 ────────────────────
+# ctx_probe_20260817-164957: rung 262144 PASSED (load + 3/3 decode,
+# peak wired 44.2 GB), probe_verified_* written by the probe itself, and
+# kv_bytes_per_token_measured=65536 promoted from derived to MEASURED —
+# the probe's own summary line reads "KV 64 KiB/tok measured". All five
+# onboarding probes are now closed: a (this), b/c/d (probe-results block
+# above), e (resolved static — no draft loop in the binding).
 app:
   host: "0.0.0.0"
   port: 8008
@@ -104,13 +89,15 @@ model:
   name: "qwen3.8-27b"
   family: "qwen38"  # NOT "qwen" — 3.8 added a depth dial 3.5/3.6 do not have
   path: /Users/lah-rb/.lmstudio/models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-Q6_K.gguf
-  # Trained ctx is 262144. Held at 131072 until probe (a) lands: on the
-  # pessimistic 260 KiB/tok header formula that accounts to 57.8 GB total
-  # (22.9 weights + 34.9 KV), comfortably inside the 100 GB preflight budget,
-  # so no probe_verified_* override is needed to boot. 262144 would account to
-  # 92.7 GB — it would squeak past the budget on paper while sitting far too
-  # close to the 116 GB wired limit to share the machine with anything.
+  # Full trained range, PROBE-VERIFIED (ctx_probe_20260817-164957): the
+  # 262144 rung loaded and decoded 3/3 with peak wired 44.2 GB. Measured KV
+  # is 65536 B/tok (64 KiB) — a 4.06x overshoot by the header formula, same
+  # as 3.6 measured: full_attention_interval 4 means only 16 of 64 layers
+  # hold a growing cache. At this ceiling: 22.9 GB weights + ~17.2 GB KV.
   n_ctx: 262144
+  kv_bytes_per_token_measured: 65536
+  probe_verified_weights_bytes: 22884408288
+  probe_verified_n_ctx: 262144
   n_gpu_layers: -1
   seed: -1
   verbose: false
