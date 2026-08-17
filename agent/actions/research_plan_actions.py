@@ -525,6 +525,16 @@ async def action_harvest_research_findings(step_input: StepInput) -> StepOutput:
                 # Reset the round budget — the gate has authorized more rounds.
                 goal.reports = []
                 reopened += 1
+            # COVERAGE IS MEASURED IN TAGGED PAPERS, and new candidates are
+            # untagged until CATALOGED — so a coverage reopen must also
+            # reopen the corpus catalog goal, or discovery pours candidates
+            # into a worklist no phase ever drains (the phase ladder only
+            # runs catalog while the extraction goal is incomplete) and the
+            # gate's coverage number can never move.
+            corpus = by_sig.get(CORPUS_GOAL_SIGNATURE)
+            if corpus is not None and corpus.status == "complete":
+                corpus.status = "incomplete"
+                reopened += 1
             if effects:
                 hint = (
                     "only adjacent-relevance hits — broaden toward the aspect's "

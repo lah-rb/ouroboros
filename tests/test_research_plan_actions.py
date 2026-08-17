@@ -326,3 +326,22 @@ async def test_reopened_goal_runs_a_round_before_recompleting():
     out2 = await action_discovery_sweep_next(_si(m, effects=fx))
     assert out2.result.get("needs_discover") is not True
     assert goal.status == "complete"
+
+
+@pytest.mark.asyncio
+async def test_coverage_reopen_also_reopens_corpus_catalog():
+    """Coverage is measured in TAGGED papers; new candidates are untagged
+    until cataloged. A coverage reopen that leaves the corpus goal complete
+    strands the candidates in a worklist no phase drains."""
+    m = _mission([AspectSpec(name="gb")])
+    await action_derive_research_goals(_si(m))
+    for g in m.goals:
+        g.status = "complete"
+    issue = {"class": "coverage", "aspect": "gb", "have": 3, "want": 10}
+    out = await action_harvest_research_findings(
+        _si(m, gate_results={"blocking_issues": [issue]})
+    )
+    disc = next(g for g in m.goals if g.type == "discovery")
+    corpus = next(g for g in m.goals if g.finding_signature == CORPUS_GOAL_SIGNATURE)
+    assert disc.status == "incomplete"
+    assert corpus.status == "incomplete"
