@@ -2027,11 +2027,19 @@ def validate_and_stamp_tags(
 
     parsed = parse_llm_json(str(inference_text or ""))
     tag_map = parsed if isinstance(parsed, dict) else {}
+    # DOT-TOLERANT LOOKUP. DOI-derived keys can end in a literal dot
+    # (doi_10.6092_..._2266.) and the model reliably emits them WITHOUT it
+    # — trailing periods read as punctuation. Live: one such paper was
+    # re-offered 140+ dispatches, skipped every time, and blocked the
+    # catalog phase from ever completing. Normalize both sides.
+    norm_map = {str(k).rstrip("."): v for k, v in tag_map.items()}
 
     cataloged = dropped = 0
     for rec in batch:
         key = rec.get("paper_key") or paper_key(rec)
         raw_tags = tag_map.get(key)
+        if raw_tags is None:
+            raw_tags = norm_map.get(str(key).rstrip("."))
         if not isinstance(raw_tags, list):
             continue
         tags = []
@@ -2085,6 +2093,23 @@ async def action_apply_paper_tags(step_input: StepInput) -> StepOutput:
     _, dropped = validate_and_stamp_tags(
         batch, str(step_input.context.get("inference_response", "")), valid_aspects
     )
+    # BOUNDED RE-OFFERS. "Skipped papers stay in the worklist" assumed
+    # transient skips; a record the model can never tag (or whose key never
+    # matches) would otherwise be re-dispatched forever. Three strikes →
+    # force-catalog with empty tags: it simply matches no aspect, which is
+    # an honest outcome, and the sweep can finally complete.
+    for rec in batch:
+        if rec.get("status") == "cataloged":
+            continue
+        attempts = int(rec.get("tag_attempts") or 0) + 1
+        rec["tag_attempts"] = attempts
+        if attempts >= 3:
+            rec["status"] = "cataloged"
+            rec["tags"] = []
+            rec["failure_reason"] = (
+                f"tagging: skipped by the model {attempts}x — force-cataloged "
+                "with no aspect tags"
+            )
     # Counted from batch state, not summed from the stamp call: records the
     # acquire tag lane already cataloged aren't in this response, and a
     # record both stamped must not count twice.

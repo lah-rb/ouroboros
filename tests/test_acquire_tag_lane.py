@@ -213,3 +213,55 @@ async def test_tag_lane_disabled_by_env(monkeypatch):
     monkeypatch.setenv("OUROBOROS_SCRAPER_TAG_SEATS", "0")
     fx = MockEffects()
     assert await _tag_lane(_si(fx, context={"mission": _mission()}), _batch(2)) == []
+
+
+def test_stamp_dot_tolerant_key_match():
+    """DOI-derived keys ending in a literal dot: the model emits them
+    without it (140+ wasted dispatches live). Both directions normalize."""
+    batch = [{"paper_key": "doi_10.6092_x_2266.", "status": "acquired", "tags": []}]
+    text = _tags_json(
+        {
+            "doi_10.6092_x_2266": [
+                {"aspect": "gb", "relevance": "exact", "justification": "j"}
+            ]
+        }
+    )
+    cataloged, _ = validate_and_stamp_tags(batch, text, {"gb"})
+    assert cataloged == 1
+    assert batch[0]["status"] == "cataloged"
+
+
+@pytest.mark.asyncio
+async def test_apply_tags_bounds_reoffers():
+    """A permanently-skipped record force-catalogs on the third strike."""
+    from agent.actions.scholarly_actions import action_apply_paper_tags
+    from agent.models import StepInput as SI
+
+    mission = MissionState(
+        objective="t",
+        config=MissionConfig(working_directory="/tmp/x"),
+        research_plan=ResearchPlanState(aspects=[AspectSpec(name="gb")]),
+    )
+    rec = {
+        "paper_key": "stubborn",
+        "status": "candidate",
+        "tags": [],
+        "tag_attempts": 2,
+    }
+    fx = MockEffects()
+    out = await action_apply_paper_tags(
+        SI(
+            context={
+                "catalog_batch": [rec],
+                "mission": mission,
+                "inference_response": "no json here",
+            },
+            params={},
+            meta=FlowMeta(flow_name="t", step_id="x"),
+            effects=fx,
+        )
+    )
+    assert rec["status"] == "cataloged"
+    assert rec["tags"] == []
+    assert rec["tag_attempts"] == 3
+    assert out.result["cataloged"] == 1
