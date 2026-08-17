@@ -1,0 +1,182 @@
+# ── Qwen 3.8 27B — takes the 3.6-27B slot (2026-08-17) ──────────────
+# Replaces llmvp/configs/archive/qwen3.6-27b.yaml, the greenfield Tier-1
+# UNANIMOUS winner (2026-07-24, two independent Opus judges, aggregate 48.0 vs
+# step37 43.0 vs gemma 30.5) and the only winnable qwen artifact ever produced.
+# That is the bar this checkpoint inherits, and the reason the league below is
+# unchanged: a like-for-like slot swap is only readable if the league is.
+#
+# WHAT IS ACTUALLY NEW (read from the GGUF headers + embedded template, all
+# verifiable without a boot — dev/gguf_geometry.py, dev/qwen38_chat_template.jinja):
+#
+#   arch=qwen35, 65 blocks (64 + 1 MTP), n_head 24, n_kv_head 4, head_dim 256,
+#   trained ctx 262144, rope_freq_base 1e7, vocab 248320, Q6_K 22.9 GB decimal.
+#
+#   1. A REAL DEPTH DIAL. 3.6 had binary think-on/off. 3.8 adds an independent
+#      three-level reasoning_effort (xhigh default / medium / low) rendered as
+#      a sentence atop the system message, and aliases high -> xhigh in its own
+#      template. medium emits NOTHING — it is the neutral baseline. low is
+#      SHALLOW, not off. This needs formats/qwen38.yaml; putting it in
+#      formats/qwen.yaml would corrupt 3.5/3.6 renders. Byte-parity across all
+#      four canonical levels is pinned by
+#      test_qwen38_rendering_matches_official_template.
+#
+#   2. MTP / nextn is PRESENT AND BOUND. qwen35.nextn_predict_layers=1, tensors
+#      at blk.64.nextn.*, and — unlike the EAGLE-3 and DeepSeek-DSpark dead
+#      ends — llama-cpp-python DOES export the primitives
+#      (llama_model_n_layer_nextn, llama_set_nextn_layer_offset,
+#      llama_get_embeddings_nextn / _set_). LM Studio reports ~50% acceptance
+#      (operator). NOT ENABLED HERE: the primitives existing is not the same as
+#      a working draft loop through our backend, and Metal speculative has been
+#      net-negative before. `speculative` stays false until measured on this
+#      machine. See the OWED PROBES block.
+#
+#   3. MULTIMODAL. Vision tower (qwen3_5_vision) + mmproj-F16.gguf ship beside
+#      the weights, image/video pad tokens are in the template. Serving it is
+#      the /v1/vision path's business, not this config's; recorded so nobody
+#      re-derives "text-only" from the config alone.
+#
+#   4. STILL GDN-HYBRID, so the loop posture carries over unchanged. layer_types
+#      is 3x linear_attention + 1x full_attention repeating
+#      (full_attention_interval 4), and the GGUF carries ssm.* keys. The
+#      paragraph-ORBIT risk is a family trait of this substrate — temp floors do
+#      not cure it, they only hold the line — and it also means this config
+#      cannot host the batched swarm substrate.
+#
+# ── OWED PROBES (nothing below was measured on this machine) ─────────
+# Deliberately NOT copied from the 3.6 config: probe_verified_n_ctx,
+# probe_verified_weights_bytes, kv_bytes_per_token_measured. Those fields are
+# MEASUREMENTS bound to a specific weights file, and asserting an unrun probe
+# is the exact false-verification class this repo keeps paying for. n_ctx is
+# therefore set where the PESSIMISTIC header formula already clears the 100 GB
+# preflight budget on its own (below), so this config is honest as written.
+#   a) `--probe-context`: the header formula says 260 KiB/tok because it assumes
+#      every layer holds a full cache. With full_attention_interval 4 only 16 of
+#      64 layers do, so the true figure should be ~65536 B/tok — which is EXACTLY
+#      what 3.6 measured (4.00x overshoot, same head geometry). If the probe
+#      confirms it, kv_bytes_per_token_measured: 65536 unlocks n_ctx 262144.
+#      DERIVED, NOT MEASURED — do not promote it without the probe.
+#   b) Graph splits on this new arch, before trusting any throughput number: a
+#      stale binary cost 4.2x decode on DeepSeek-V4 (44 splits on 43 layers).
+#      Build in use is b10355, which does know qwen35/qwen35moe.
+#   c) EXTRACTION on a real completion. Rendering can be byte-perfect while
+#      extraction returns "" — capture the raw stream first (dev/muse_raw_probe.py
+#      pattern), do not trust first100 logging.
+#   d) That the dial MOVES: token counts per level, live, under the agent
+#      persona and a neutral one (persona conditions the dial).
+#   e) MTP acceptance through our backend, if (d) leaves budget.
+app:
+  host: "0.0.0.0"
+  port: 8008
+  log_level: "info"
+  cors_origins: ["*"]
+  backend_timeout: 180
+
+graphql:
+  max_query_depth: 10
+  max_tokens: 262144
+  max_aliases: 50
+  introspection_enabled: true
+
+model:
+  name: "qwen3.8-27b"
+  family: "qwen38"  # NOT "qwen" — 3.8 added a depth dial 3.5/3.6 do not have
+  path: /Users/lah-rb/.lmstudio/models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-Q6_K.gguf
+  # Trained ctx is 262144. Held at 131072 until probe (a) lands: on the
+  # pessimistic 260 KiB/tok header formula that accounts to 57.8 GB total
+  # (22.9 weights + 34.9 KV), comfortably inside the 100 GB preflight budget,
+  # so no probe_verified_* override is needed to boot. 262144 would account to
+  # 92.7 GB — it would squeak past the budget on paper while sitting far too
+  # close to the 116 GB wired limit to share the machine with anything.
+  n_ctx: 131072
+  n_gpu_layers: -1
+  seed: -1
+  verbose: false
+  # ── THINKING LEVERS ────────────────────────────────────────────────
+  # Always-on thinking with a depth dial (the step-3.7 shape), NOT a
+  # think/no-think switch. The router supplies the level per step; `on` keeps
+  # the <think> opener prefilled on every turn and lets the effort sentence do
+  # the work. Unrouted calls fall to the neutral medium baseline.
+  thinking_available: true
+  thinking: "on"
+  # Native four-tier support: low / medium / high / xhigh, with high and xhigh
+  # collapsing onto the same sentence because the OFFICIAL template aliases
+  # them. No clamp ladder needed — this family answers every canonical name.
+  # Kept from the 3.6 slot so the swap reads like-for-like. NOTE this makes
+  # resident_strip_reasoning inert either way (no resident session to strip).
+  session_full_replay: true
+  # ── STEP 3c: THE MULTI-TURN THINKING CONVENTION FLIPPED IN 3.8 ─────
+  # Read from the assistant-history branch, which is the only place that ever
+  # says. The default INVERTED between checkpoints:
+  #   3.6: (preserve_thinking is defined and preserve_thinking is true)
+  #        or (loop.index0 > ns.last_query_index)   -> last-turn-only
+  #   3.8:  preserve_thinking is undefined or ... is true or ...
+  #                                                 -> ALL turns, by default
+  # So 3.8 is trained to SEE its own prior reasoning: the canonical history
+  # keeps it, and stripping would put a resident session out of distribution —
+  # the inverse of the muse-glimmer verdict. If this config is ever moved onto
+  # resident_seq_cache, `resident_strip_reasoning` must stay FALSE.
+  # (It renders '<think>\n\n</think>\n\n' for a turn with no reasoning, i.e.
+  # the same empty-block shape as the thinking-off prefill — consistent.)
+  resident_strip_reasoning: false
+  # MTP present and bound, but unmeasured through our backend. See OWED PROBES.
+  speculative: false
+
+prompt:
+  persona_file: "./knowledge/SOUL.md"
+
+generation:
+  max_tokens_default: 131072
+  # GDN-hybrid loop posture, carried over from 3.6 unchanged: same substrate,
+  # same paragraph-orbit exposure. The floors bound the damage; they do not
+  # cure it.
+  temperature_default: 0.7
+  temperature_floor: 0.7
+  session_temp_floor: 0.7
+  top_p: 0.95
+  top_k: 20
+  min_p: 0.00
+  presence_penalty: 0.0
+  repeat_penalty: 1.0
+  penalty_last_n: 2048
+  # DRY stays REMOVED (2026-07-22 isolation test): it converted the catchable
+  # coherent orbit into an uncatchable noise-slot structural loop that blinds
+  # the distinct-ratio guard.
+  degen_retry_enabled: true
+  degen_retry_temperature: 1.0
+  degen_retry_presence_penalty: 1.5
+  streaming_default: true
+
+knowledge:
+  tokens_bin: "./data/qwen3.8-27b.tokens.bin"
+  token_limit: 32768
+
+resources:
+  cpu_threads: 15
+  max_concurrent_requests: 1
+  jit_concurrency_limit: null
+
+tools:
+  enabled: false
+  max_iterations: 3
+
+logging:
+  enabled: true
+  directory: "./logs"
+
+# ── TIER EXPECTATION (doc-only; see DOC_ONLY_KEYS in core/config.py) ─
+# PRE-REGISTERED under TIER_RUBRIC v2.1 §6: written before the run, never shown
+# to a judge, never revised afterwards. Its job is not to be right — it is to
+# make a SURPRISE legible.
+#
+# EXPECTATION: matches or modestly beats the 3.6-27B artifact. The dial is the
+# reason to expect a gain rather than a wash — 3.6 ran every step at one depth,
+# while this checkpoint can take low on mechanical steps and xhigh on verdict
+# steps, which is the house policy the flows already encode. The reasons to
+# doubt it: the substrate is unchanged (same GDN hybrid, same orbit exposure),
+# and a depth dial that the model treats as advisory buys nothing — gemma's
+# think dial rendered byte-perfectly and never activated. If this lands BELOW
+# 3.6, suspect the dial is inert before suspecting the checkpoint, and check
+# probe (d) first.
+tier:
+  league: contemplator  # LOAD-BEARING — agent/tier/runner.py:config_league
+  status: not_yet_run  # history: llmvp/configs/archive/TIER_JUDGEMENTS.md

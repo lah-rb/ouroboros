@@ -1084,6 +1084,98 @@ def test_qwen_rendering_matches_official_template():
     assert "<think>\n\n</think>\n\n" in ours  # the exact suppressed bytes
 
 
+# ── Qwen 3.8 ──────────────────────────────────────────────────────────
+# 3.8 keeps 3.6's binary <think> prefill and ADDS an independent three-level
+# reasoning_effort dial rendered as a sentence atop the system message —
+# exactly the "Reasoning-effort line" that formats/qwen.yaml correctly denies
+# for 3.5/3.6. Hence its own family. Two facts this test exists to pin:
+# medium emits NOTHING (the neutral baseline), and the template aliases
+# high -> xhigh itself, so both canonical names render the xhigh sentence.
+
+
+def test_qwen38_rendering_matches_official_template():
+    from pathlib import Path
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    jinja2 = pytest.importorskip("jinja2")
+    tpl_path = (
+        Path(__file__).resolve().parents[2] / "dev" / "qwen38_chat_template.jinja"
+    )
+    if not tpl_path.is_file():
+        pytest.skip("official qwen3.8 template not banked")
+
+    from formats.registry import get_renderer, clear_cache
+
+    env = jinja2.Environment()
+    env.globals["raise_exception"] = lambda m: (_ for _ in ()).throw(Exception(m))
+    tpl = env.from_string(tpl_path.read_text())
+
+    def render_official(*, effort=None, enable_thinking=None):
+        kw = {
+            "messages": [
+                {"role": "system", "content": "You are a helpful assistant.\nPERSONA"},
+                {"role": "user", "content": "Hello"},
+            ],
+            "add_generation_prompt": True,
+            "tools": None,
+        }
+        if effort is not None:
+            kw["reasoning_effort"] = effort
+        if enable_thinking is not None:
+            kw["enable_thinking"] = enable_thinking
+        return tpl.render(**kw)
+
+    clear_cache()
+    r = get_renderer("qwen38")
+    cfg = SimpleNamespace(
+        model=SimpleNamespace(
+            thinking="per_request", thinking_available=True, thinking_mode=None
+        )
+    )
+
+    def render_ours(level):
+        with patch("core.config.get_config", return_value=cfg):
+            kw = {"reasoning": level} if level else {}
+            segs = r.render_system_segments(persona="PERSONA", **kw)
+            system = "".join(t for t, _ in segs)
+            return (
+                system
+                + r.render_user("Hello")
+                + r.render_generation_prompt(reasoning=level)
+            )
+
+    # Effort axis: our canonical name -> the official effort it must reproduce.
+    # high and xhigh collapse because the TEMPLATE aliases them, not us.
+    for canonical, effort in (
+        ("low", "low"),
+        ("medium", "medium"),
+        ("high", "xhigh"),
+        ("xhigh", "xhigh"),
+    ):
+        ours, official = render_ours(canonical), render_official(effort=effort)
+        assert (
+            ours == official
+        ), f"canonical={canonical}:\nours    : {ours!r}\nofficial: {official!r}"
+
+    # medium is the NEUTRAL baseline: no sentence, no blank line. If this ever
+    # starts emitting one, the dial has silently become always-on-verbose.
+    med = render_ours("medium")
+    assert "Reasoning effort is set to" not in med
+    assert med.startswith("<|im_start|>system\nYou are a helpful assistant.")
+    # ...and it is NOT the same render as low/xhigh, i.e. the dial does move.
+    assert med != render_ours("low") != render_ours("xhigh")
+
+    # low is SHALLOW, not off — the opener is still prefilled.
+    assert render_ours("low").endswith("<|im_start|>assistant\n<think>\n")
+    assert "brief and focused" in render_ours("low")
+
+    # Thinking-off is the other axis, and carries NO effort sentence.
+    off = render_official(enable_thinking=False)
+    assert off.endswith("<think>\n\n</think>\n\n")
+    assert "Reasoning effort is set to" not in off
+
+
 def test_genprompt_newline_audit_families():
     """laguna / glm4 / olmo-think official genprompts carry NO newline after
     the opener (templates f0ae8663 / 257e6e85 / 0c4c4e49); ours matched the

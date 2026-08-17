@@ -1,0 +1,127 @@
+# Qwen 3.8 format schema — split from `qwen` (2026-08-17)
+#
+# WHY A SEPARATE FAMILY. formats/qwen.yaml states, correctly for 3.5/3.6:
+#
+#     NO Reasoning-effort line: that is step-3.7's mechanic (chatml).
+#     Qwen's official template has no depth dial — thinking is binary on/off.
+#
+# That is FALSE for 3.8. Its template (banked: dev/qwen38_chat_template.jinja,
+# read from Qwen3.8-27B-Q6_K.gguf) adds a real depth dial on top of the binary
+# switch, and the two axes are INDEPENDENT:
+#
+#   axis 1 — enable_thinking (binary, PREFILL, unchanged from 3.6):
+#       true/default -> '<|im_start|>assistant\n<think>\n'
+#       false        -> '<|im_start|>assistant\n<think>\n\n</think>\n\n'
+#   axis 2 — reasoning_effort (three levels, SYSTEM TEXT, new in 3.8):
+#       a sentence prepended to the system message, then a blank line.
+#
+# Adding axis 2 to formats/qwen.yaml would have injected an effort sentence
+# into 3.5/3.6 renders — off-template for those checkpoints, and precisely the
+# breakage the original chatml->qwen split was made to stop. So: a new family,
+# and qwen.yaml is left byte-identical for the checkpoints it describes.
+#
+# THE OFFICIAL LEVELS ARE xhigh / medium / low, and the template ALIASES
+# high -> xhigh itself:
+#
+#     {%- if resolved_reasoning_effort == 'high' %}
+#         {%- set resolved_reasoning_effort = 'xhigh' %}
+#     {%- endif %}
+#     ... not in ('xhigh','medium','low') -> raise_exception
+#
+# so our canonical `high` and `xhigh` both render the xhigh sentence. That is
+# the model's own collapse, not ours. Default effort is xhigh.
+#
+# MEDIUM EMITS NOTHING. It is the neutral baseline — no sentence, no blank
+# line, an untouched system message. reasoning_prefix already collapses to ""
+# on an empty level (renderer.py), so the empty string in the level map below
+# is load-bearing and reproduces the official medium byte-for-byte.
+#
+# LOW IS SHALLOW, NOT OFF. Its sentence asks for brief thinking; the <think>
+# opener is still prefilled. So this family declares NO gate_levels: the effort
+# dial does not gate thinking, and only the config `thinking` flag turns it off
+# (via prefill_closed_literal). This is the opposite of qwen.yaml, which HAD to
+# spend gate_levels to give `low` a meaning because 3.5/3.6 had no depth dial.
+# Same shape as step-3.7: always-on thinking with a depth dial.
+#
+# HEAD-SWAP LIMITATION (deliberate). The levels are prose sentences of very
+# different token lengths (xhigh ~40, low ~20, medium 0), so the mid-session
+# splice's equal-length check refuses a swap and the session keeps the head it
+# baked at turn 0 — the documented fail-safe in ReasoningSpec, not corruption.
+# Turn-0 forking (the common path) works normally. Whitespace-padding to equal
+# length, as gemma/muse do for their one-token dials, is not viable across a
+# 40-token spread and would be off-distribution.
+#
+# Byte-parity with the official template is pinned by
+# test_qwen38_rendering_matches_official_template (llmvp/tests/test_config.py)
+# across all four canonical levels plus thinking-off.
+#
+# Reference: dev/qwen38_chat_template.jinja (embedded in the GGUF)
+
+family: qwen38
+display_name: "Qwen 3.8"
+
+tokens:
+  msg_open: "<|im_start|>"
+  msg_content: "\n"
+  msg_close: "<|im_end|>\n"
+  gen_stop: "<|im_end|>"
+  history_close: "<|im_end|>\n"
+
+roles:
+  system: "system"
+  user: "user"
+  assistant: "assistant"
+
+thinking:
+  style: inline_tags
+  open_tag: "<think>"
+  close_tag: "</think>"
+  # Official disabled branch, byte-exact: two newlines inside, two trailing.
+  # No composition of the boolean flags emits this (see ThinkingSpec).
+  prefill_closed_literal: "<think>\n\n</think>\n\n"
+  # NO gate_levels — see the header. Effort and on/off are independent axes,
+  # so every level keeps the opener and the config flag alone decides off.
+
+system_block:
+  identity: "You are a helpful assistant."
+  # Unrouted requests get the NEUTRAL baseline (medium = no sentence), not
+  # Qwen's own xhigh default. Deliberate: the router sends an explicit level on
+  # every flow step, so this governs only ad-hoc calls, and inheriting xhigh
+  # there would silently prepend a "think carefully, validate assumptions,
+  # consider alternatives" instruction to work that never asked for depth.
+  # Matches the "" convention already used by qwen.yaml and chatml.yaml.
+  reasoning_default: ""
+  # The level map carries the whole sentence, so the prefix is just the
+  # separator the official template puts between it and the system content.
+  reasoning_prefix: "{reasoning}\n\n"
+  channel_directive: ""
+  template: "{reasoning_prefix}{identity}\n{persona}"
+
+traits:
+  fold_system_into_first_user: false
+  # The template raises on a system message that is not at the beginning, and
+  # merges leading system/developer messages into one block.
+  supports_developer_role: false
+
+generation:
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
+  min_p: 0.0
+  repeat_penalty: 1.0
+
+turn_transition:
+  needs_close: true
+  # Bare token, matching qwen.yaml: the session path tokenizes this as plain
+  # text, where ">\n" merges into a different token and caused the measured
+  # runaway. See chatml.yaml's note.
+  after_generation: "<|im_end|>"
+
+reasoning:
+  # Verbatim from the official template. Whitespace and wording are the trained
+  # shape — do not paraphrase.
+  levels:
+    low: "Reasoning effort is set to low. Keep your thinking brief and focused, moving directly to the conclusion without unnecessary elaboration."
+    medium: ""
+    high: "Reasoning effort is set to xhigh. Please think carefully through the task, validate key assumptions, consider plausible alternatives, and prioritize correctness, consistency, and clarity in the final answer."
+    xhigh: "Reasoning effort is set to xhigh. Please think carefully through the task, validate key assumptions, consider plausible alternatives, and prioritize correctness, consistency, and clarity in the final answer."
