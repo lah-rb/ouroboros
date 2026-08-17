@@ -197,7 +197,7 @@ async def test_the_notice_reads_differently_while_the_program_still_runs():
 
 @pytest.mark.asyncio
 async def test_a_later_close_is_honoured_without_another_notice():
-    """One nudge per session: close → notice → close cannot ping-pong."""
+    """Budget exhausted: close → notice ping-pong cannot loop forever."""
     out = await action_confirm_close_gate(
         _si(
             MockEffects(),
@@ -206,6 +206,85 @@ async def test_a_later_close_is_honoured_without_another_notice():
     )
     assert out.result["should_notice"] is False
     assert not (out.context_updates or {}).get("session_injections")
+
+
+@pytest.mark.asyncio
+async def test_the_budget_survives_one_legitimate_program_exit():
+    """Budget raised 1 → 2 (operator, 2026-08-17). At 1, the muse gate
+    session's WIN-SCREEN exit consumed the only notice — the multi-run arc
+    the gate exists to enable disarmed it — and the second program exit
+    auto-closed with the brief half done. A second close must still draw a
+    notice."""
+    assert _MAX_CLOSE_NOTICES >= 2
+    out = await action_confirm_close_gate(
+        _si(MockEffects(), _gate_ctx(_EXITED_HISTORY, close_confirmations=1))
+    )
+    assert out.result["should_notice"] is True
+    assert out.context_updates["close_confirmations"] == 2
+
+
+@pytest.mark.asyncio
+async def test_relaunch_resets_the_close_notice_budget():
+    """A shell command that brings a program up where none was running
+    starts a NEW program run, and the pre-close guard protects each run.
+    Farming resets is bounded by _SESSION_TURN_BUDGET — each reset costs a
+    real relaunch plus the turns back to a close."""
+    effects = MockEffects()
+    effects._state["mcp_tool_responses"] = {
+        "send_input": {
+            "output": "=== Sunken Lighthouse ===\n> ",
+            "status": "settled",
+            "interactive_child": True,
+        }
+    }
+    out = await action_send_interaction(
+        _si(
+            effects,
+            {
+                "mcp_connection_id": "c1",
+                "mcp_session_id": "s1",
+                # Last recorded turn: the program had exited.
+                "session_history": [
+                    {"turn": 0, "status": "settled", "child_running": False}
+                ],
+                "launch_command": "python main.py",
+                "close_confirmations": 1,
+                "planned_action": "shell_command",
+                "planned_action_arg": "python main.py\n",
+            },
+        )
+    )
+    assert out.context_updates.get("close_confirmations") == 0
+
+
+@pytest.mark.asyncio
+async def test_plain_input_does_not_reset_the_budget():
+    """Only a genuine relaunch resets — driving a running program (or a
+    shell command while the child is already up) must leave the count."""
+    effects = MockEffects()
+    effects._state["mcp_tool_responses"] = {
+        "send_input": {
+            "output": "You move north.\n> ",
+            "status": "settled",
+            "interactive_child": True,
+        }
+    }
+    out = await action_send_interaction(
+        _si(
+            effects,
+            {
+                "mcp_connection_id": "c1",
+                "mcp_session_id": "s1",
+                "session_history": [
+                    {"turn": 0, "status": "settled", "child_running": True}
+                ],
+                "close_confirmations": 1,
+                "planned_action": "send_input",
+                "planned_action_arg": "north\n",
+            },
+        )
+    )
+    assert "close_confirmations" not in (out.context_updates or {})
 
 
 @pytest.mark.asyncio

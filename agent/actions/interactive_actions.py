@@ -239,15 +239,16 @@ _STUCK_IDENTICAL_RUNS = 4  # 4 identical priors → the 5th send trips
 # ample room while bounding a session that will never close itself.
 _SESSION_TURN_BUDGET = 120
 
-# Cycle detection: over the last _CYCLE_WINDOW exchanges, if the tester saw
-# at most _CYCLE_DISTINCT_MAX distinct screens AND every one of them had
-# already appeared earlier in the session, it is orbiting known states, not
-# exploring. Catches A-B-A-B and longer orbits that the identical-run check
-# structurally cannot. Requiring "all previously seen" is what keeps a
-# player legitimately walking back through known rooms toward something new
-# from tripping it — that traversal reveals a new screen and resets.
-_CYCLE_WINDOW = 12
-_CYCLE_DISTINCT_MAX = 3
+# A screen-orbit cycle detector (≤3 distinct screens over a 12-turn window,
+# all previously seen → force-close) lived here for one day (58eb83c) and
+# was REMOVED by operator verdict (2026-08-17): it closed a quality-gate
+# exploration session mid-brief straight through close_session — bypassing
+# the confirm_close gate entirely — on a `>`-only combat-screen orbit that
+# the session might have walked out of. It was a band-aid for the lost-model
+# orbit, and the real levers are upstream: charters that fit the session
+# (6d07d92), the close-notice budget below, and the turn budget above as
+# the one remaining hard bound. Do not reintroduce a mid-session
+# force-close without an operator decision.
 
 
 async def action_send_interaction(step_input: StepInput) -> StepOutput:
@@ -553,34 +554,6 @@ async def action_send_interaction(step_input: StepInput) -> StepOutput:
             },
         )
 
-    # Cycle detection — orbiting a handful of already-seen screens.
-    if len(session_history) >= _CYCLE_WINDOW * 2:
-        recent = session_history[-_CYCLE_WINDOW:]
-        earlier = session_history[:-_CYCLE_WINDOW]
-        recent_out = {(e.get("output", "") or "").strip() for e in recent}
-        earlier_out = {(e.get("output", "") or "").strip() for e in earlier}
-        if (
-            len(recent_out) <= _CYCLE_DISTINCT_MAX
-            and recent_out
-            and recent_out <= earlier_out
-        ):
-            return StepOutput(
-                result={
-                    "command_sent": False,
-                    "stuck_detected": True,
-                    "duplicate_input": text.strip(),
-                },
-                observations=(
-                    f"Cycling: the last {_CYCLE_WINDOW} exchanges revisited only "
-                    f"{len(recent_out)} screen(s), all seen earlier — orbiting, "
-                    f"not exploring"
-                ),
-                context_updates={
-                    "mcp_session_id": session_id,
-                    "session_history": session_history,
-                },
-            )
-
     if len(session_history) >= _STUCK_IDENTICAL_RUNS:
         tail = session_history[-_STUCK_IDENTICAL_RUNS:]
         outputs = {(e.get("output", "") or "").strip() for e in tail}
@@ -767,6 +740,9 @@ async def action_send_interaction(step_input: StepInput) -> StepOutput:
     entry["output_file"] = await _save_full_output(
         effects, entry.get("output", ""), entry["turn"]
     )
+    # Child state BEFORE this turn — read prior to append so a relaunch
+    # (exited → running transition) is detectable below.
+    prev_child_running = _last_child_running(session_history)
     session_history.append(entry)
 
     context_updates = {
@@ -778,6 +754,24 @@ async def action_send_interaction(step_input: StepInput) -> StepOutput:
     # the model needs another program run (e.g. to verify a save loads).
     if action_type == "shell_command" and not step_input.context.get("launch_command"):
         context_updates["launch_command"] = text.strip()
+    # RELAUNCH RESETS THE CLOSE-NOTICE BUDGET. A shell command that brings
+    # a program up where none was running starts a new program run, and the
+    # pre-close guard should protect each run — at budget 1 the muse gate
+    # session's first legitimate exit (the win screen) consumed the only
+    # notice, so its SECOND exit auto-closed with the brief half done.
+    # Farming resets to dodge the guard costs a real relaunch plus the
+    # turns back to a close each time; _SESSION_TURN_BUDGET bounds that.
+    if (
+        action_type == "shell_command"
+        and entry["child_running"]
+        and not prev_child_running
+        and int(step_input.context.get("close_confirmations", 0) or 0) > 0
+    ):
+        context_updates["close_confirmations"] = 0
+        logger.info(
+            "Turn %d: program relaunched — close-notice budget reset",
+            entry["turn"],
+        )
 
     return StepOutput(
         result={
@@ -1074,12 +1068,23 @@ async def action_end_inference_session(step_input: StepInput) -> StepOutput:
 # ══════════════════════════════════════════════════════════════════════
 
 
-# How many pre-close NOTICES a session gets. One: the first close draws the
-# brief-check notice and returns to the plan menu; any later close is
-# honoured without comment, so a close → notice → close ping-pong cannot
-# loop. (v1 asked through a second menu with a cap of 2 — see the notice
+# How many pre-close NOTICES a session gets before a close is honoured
+# without comment (so a close → notice → close ping-pong cannot loop).
+#
+# Raised 1 → 2 (operator, 2026-08-17), and the count RESETS on relaunch.
+# Measured failure at 1: this gate also fires on process_exited, so a
+# LEGITIMATE multi-run arc spent the whole budget on its first program
+# exit — the muse gate session hit the win screen (program exits), drew
+# notice #1, correctly relaunched and kept testing... and then its second
+# program exit auto-closed with the brief half done, because the one
+# notice was gone. The guard was disarmed BY the arc it exists to enable.
+# A budget of 2 survives one legitimate exit; the relaunch reset (see the
+# shell_command path) restores protection for each new program run, and
+# _SESSION_TURN_BUDGET bounds any attempt to farm resets — each one costs
+# a real relaunch plus the turns to reach another close.
+# (v1 asked through a second menu with a cap of 2 — see the notice
 # rationale on action_confirm_close_gate for why that design was replaced.)
-_MAX_CLOSE_NOTICES = 1
+_MAX_CLOSE_NOTICES = 2
 
 CLOSE_NOTICE_PROMPT = load_prompt_text("run_in_terminal/close_notice")
 

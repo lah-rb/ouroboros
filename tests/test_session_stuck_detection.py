@@ -111,16 +111,17 @@ def _cycle_hx(n, screens=("Foggy Shore\n> ", "Salt Marsh\n> ")):
     ]
 
 
-def test_alternating_two_room_orbit_is_caught():
-    """north/south/north/south — invisible to the identical-run check."""
+def test_alternating_orbit_is_NOT_force_closed():
+    """The screen-orbit cycle detector was REMOVED by operator verdict
+    (2026-08-17): it force-closed a quality-gate session mid-brief on a
+    `>`-only combat orbit, bypassing confirm_close. An A-B-A-B walk is
+    the model's to break out of (or the turn budget's to bound) — it must
+    NOT be force-closed mid-session. This test pins the removal."""
     out = _run(_cycle_hx(30), "north")
-    assert out.result.get("stuck_detected") is True
-    assert "rbiting" in out.observations or "Cycling" in out.observations
+    assert out.result.get("stuck_detected") is not True
 
 
-def test_walking_back_through_known_rooms_toward_something_new_is_not_a_cycle():
-    """The legitimate case the 'all previously seen' clause protects: a
-    traversal that reveals a NEW screen must keep going."""
+def test_walking_back_through_known_rooms_toward_something_new_keeps_going():
     hx = _cycle_hx(24)
     hx.append({"input": "east", "output": "Sunken Chapel — a NEW room\n> "})
     hx += [
@@ -131,7 +132,7 @@ def test_walking_back_through_known_rooms_toward_something_new_is_not_a_cycle():
     assert out.result.get("stuck_detected") is not True
 
 
-def test_a_long_but_varied_playthrough_is_not_a_cycle():
+def test_a_long_but_varied_playthrough_is_not_stuck():
     """40 turns, every screen distinct — exploration, not orbiting."""
     hx = [{"input": f"go {i}", "output": f"Room {i}\n> "} for i in range(40)]
     out = _run(hx, "go 40")
