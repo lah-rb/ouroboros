@@ -1239,6 +1239,46 @@ def expand_cache_strategy(raw: dict) -> list[str]:
     return applied
 
 
+def _override_n_ctx(raw_cfg: dict, log) -> None:
+    """Per-MACHINE n_ctx override from $LLMVP_N_CTX. Silent when unset.
+
+    n_ctx is the one model setting that is a property of the HOST, not the
+    model: this repo's configs are shared between a 128GB M1 Ultra and a
+    24GiB 3090, and muse-glimmer's 32768 was narrowed for the card — on the
+    Mac the same model's probe-verified 131072 costs ~25.6GiB against a
+    123.7GiB budget. Without an override the big machine silently inherits
+    the small machine's ceiling: measured 2026-08-16, twenty
+    windowed-resident drops in six hours of a tier arm, each evicting ~10k
+    tokens from deep diagnosis sessions — including the seed those sessions
+    were given (the static head survives; the seeded first turn does not).
+
+    Same shape as LLMVP_MODELS_ROOT above: the config keeps the SAFE value
+    (the one that cannot OOM anyone), and the roomier host opts up.
+    """
+    raw = os.environ.get("LLMVP_N_CTX", "").strip()
+    if not raw:
+        return
+    block = raw_cfg.get("model")
+    if not isinstance(block, dict):
+        return
+    try:
+        want = int(raw)
+    except ValueError:
+        log.warning("LLMVP_N_CTX=%r is not an integer — ignored", raw)
+        return
+    ceiling = block.get("probe_verified_n_ctx") or block.get("model_max_context")
+    if ceiling and want > int(ceiling):
+        log.warning(
+            "LLMVP_N_CTX=%d exceeds this model's verified ceiling %s — clamping",
+            want,
+            ceiling,
+        )
+        want = int(ceiling)
+    if want != block.get("n_ctx"):
+        log.warning("📐 n_ctx %s → %d (LLMVP_N_CTX)", block.get("n_ctx"), want)
+        block["n_ctx"] = want
+
+
 def _redirect_model_paths(raw_cfg: dict, log) -> None:
     """Re-root absent model paths onto $LLMVP_MODELS_ROOT, by basename.
 
@@ -1319,6 +1359,7 @@ def load_config(path: Optional[Path] = None) -> Config:
         # policy, and configs stay the single statement of WHICH weights a
         # model uses.
         _redirect_model_paths(raw_cfg, log)
+        _override_n_ctx(raw_cfg, log)
 
         # Resolve the strategy shorthand BEFORE construction, so every
         # validator below sees one consistent config and none of them has to
