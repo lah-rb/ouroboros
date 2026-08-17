@@ -19,6 +19,7 @@ preferred over silently dropping a possible defect.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from agent.models import StepInput, StepOutput
@@ -82,13 +83,55 @@ def _probe_launch(step_input: StepInput) -> str:
     return ux or run
 
 
+_UNTESTED_PREFIX = "untested:"
+_COVERAGE_TAIL = re.compile(
+    r"\s+(?:was|were|is|are)\s+not\s+"
+    r"(?:exercised|tested|verified|covered|attempted|reached)\b.*$",
+    re.IGNORECASE,
+)
+
+
+def _probe_claim_text(task: Any) -> tuple[str, bool]:
+    """Render a finding as a claim the probe can actually refute.
+
+    An `untested:` finding claims COVERAGE — that a previous UX session
+    never exercised the feature. The probe cannot refute that. The judge
+    is asked whether the transcript shows the claimed failure, and a past
+    session's coverage is not a property of the program, so the ambiguity
+    fail-safe ("answer confirmed: true") confirms EVERY untested claim by
+    construction — the same vacuous-verification shape as a rate gate that
+    passes on zero checkable items.
+
+    Live cost (2026-08-17, muse tier arm): "untested: drop command was not
+    exercised by the UX session" survived the gate, was then proven working
+    twice by real sessions, and still drove three repair rounds that burned
+    ~45k tokens rewriting defect-free files.
+
+    So reframe it into the question the probe CAN answer — does the feature
+    work? — which is sound because the probe run is itself the missing
+    exercise: if the repro drives the feature and it works, the coverage gap
+    is closed at that moment and the finding is genuinely resolved.
+
+    Returns (claim_text, was_untested)."""
+    text = _finding_text(task).strip()
+    if not text.lower().startswith(_UNTESTED_PREFIX):
+        return text, False
+    feature = text[len(_UNTESTED_PREFIX) :].strip()
+    subject = _COVERAGE_TAIL.sub("", feature).strip(" .,;:")
+    if not subject:
+        subject = feature.strip(" .,;:")
+    return f"{subject} does not work", True
+
+
 def _probe_keys(task: dict, launch: str, run_command: str) -> dict:
     """Context keys consumed by the run_probe and judge_finding steps."""
     repro = _usable_repro(task, launch, run_command)
+    claim, untested = _probe_claim_text(task)
     return {
         "probe_commands": [launch] + repro,
         "probe_launch": launch,
-        "probe_claim": _finding_text(task),
+        "probe_claim": claim,
+        "probe_untested": untested,
         "probe_expected": str(task.get("expected") or ""),
         "probe_repro_block": "\n".join(
             f"  {i}. {line}" for i, line in enumerate(repro, 1)

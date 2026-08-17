@@ -54,6 +54,18 @@ sections:
     The claim:
     {context.probe_claim}
 
+- id: untested_note
+  when: context.probe_untested
+  content: |
+    NOTE — this claim came from a review that said the feature was never
+    exercised by an earlier session. That is a statement about the
+    EARLIER session, not about the program, and it is not what you are
+    judging. This probe run IS the missing exercise. Judge only what the
+    transcript below shows: if the reproduction drove the feature and it
+    worked, answer `"confirmed": false` — the gap is closed. Answer
+    `"confirmed": true` only if the transcript shows it failing, or the
+    reproduction never reached the feature at all.
+
 - id: expected
   when: context.probe_expected
   content: |

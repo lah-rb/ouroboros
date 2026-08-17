@@ -86,9 +86,29 @@ async def test_prepare_partitions_functional_with_repro_vs_quality():
     assert cu["probe_commands"] == [_RUN, "take x", "use x"]
     assert cu["probe_claim"] == "use broken"
     assert cu["probe_expected"] == "x lights"
+    assert cu["probe_untested"] is False
     assert "1. take x" in cu["probe_repro_block"]
     # UX transcript snapshotted before probes clobber terminal_output.
     assert cu["gate_terminal_output"] == "ux"
+
+
+@pytest.mark.asyncio
+async def test_prepare_reframes_untested_claim_as_a_testable_defect():
+    """An `untested:` claim is about a PAST session's coverage, which the
+    probe can never refute — so the judge's ambiguity fail-safe confirmed
+    every one of them. The probe run IS the missing exercise, so ask
+    whether the feature works instead."""
+    out = await action_prepare_finding_verification(
+        _prepare_si(
+            _task(
+                "untested: drop command was not exercised by the UX session",
+                repro=["take x", "drop x"],
+            )
+        )
+    )
+    cu = out.context_updates
+    assert cu["probe_claim"] == "drop command does not work"
+    assert cu["probe_untested"] is True
 
 
 @pytest.mark.asyncio
