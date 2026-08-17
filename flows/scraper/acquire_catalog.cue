@@ -42,8 +42,8 @@ acquire_catalog: #FlowDefinition & {
 		// catalog_work's directive_report through under its own name.
 		run_batch: #StepDefinition & {
 			action:      "parallel"
-			description: "Catalog batch + figtext/translate drains, concurrently"
-			max_parallel: 3
+			description: "Catalog batch + figtext/translate/curate drains, concurrently"
+			max_parallel: 4
 			branches: [
 				{
 					flow: "catalog_work"
@@ -61,6 +61,12 @@ acquire_catalog: #FlowDefinition & {
 				},
 				{
 					flow: "translate_drain"
+					input_map: {
+						working_directory: {$ref: "input.working_directory"}
+					}
+				},
+				{
+					flow: "curate_drain"
 					input_map: {
 						working_directory: {$ref: "input.working_directory"}
 					}

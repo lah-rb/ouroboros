@@ -26,9 +26,16 @@ model:
   # needs both, and this machine's real path beats the base's /Users/… +
   # LLMVP_MODELS_ROOT basename redirect anyway.
   path: /home/lah-rb/models/muse-glimmer-30B-kquant-dynamic.gguf
-  # In batched mode this is the SHARED cell across seats: 4 x ~8k. Measured
-  # scraper-flow context (260 calls): median 5,382, p95 6,762, 1/260 over 8k.
-  n_ctx: 32768
+  # In batched mode this is the SHARED cell across seats. Grown 32768 →
+  # 65536 (2026-08-17) to admit the curate drain's whole-paper turns beside
+  # the measured scraper lanes (median 5,382, p95 6,762/turn): one curator
+  # seat needs doc (~30k) + answers, three sibling lanes ~20k p95 combined.
+  # VRAM: +32,768 tok ≈ +1.66 GiB KV against 1.94 GiB measured free
+  # (nvidia-smi, all buffers resident), funded by vision_n_ctx 16384 → 8192
+  # (−0.42 GiB). NOT 91k: probe_verified_n_ctx was a TEXT-ONLY probe; at 91k
+  # the resident vision KV + its 1.18 GiB compute buffer no longer fit and
+  # figtext dies. Verified at boot + canaries, 2026-08-17.
+  n_ctx: 65536
   probe_verified_weights_bytes: 19653957984
   probe_verified_n_ctx: 91136
   # The base declares vision_n_ctx 131072 — an M1 sizing (7 GB of lazy KV
@@ -36,8 +43,11 @@ model:
   # nothing, until one stray vision request tries to allocate 6.5 GiB into
   # ~3 GiB of free VRAM and kills the primary. Paddle owns page OCR here;
   # muse vision remains available for figure work at a window that fits.
-  # 16384 = 0.81 GiB, inside today's slack, ~10x a dense figure answer.
-  vision_n_ctx: 16384
+  # 8192 = 0.42 GiB, ~5x a dense figure answer (figure work peaks ~1.6k
+  # answer + split-panel image tokens; book pages ride paddle, not muse).
+  # Halved from 16384 (2026-08-17) to fund the batched cell's growth to
+  # 65536 for the curate drain.
+  vision_n_ctx: 8192
   # PROJECTOR ON THE 3060. GPU0 holds weights + the batched cell and has
   # ~2.9 GiB slack; the vision graph needs its KV (0.85 GiB) AND a compute
   # buffer (measured 1.18 GiB at reserve, 2026-08-16) — adding the ~1.3 GiB

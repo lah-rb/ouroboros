@@ -472,6 +472,9 @@ def build_action_registry() -> ActionRegistry:
     from agent.actions.translation_actions import action_translate_drain_batch
 
     registry.register("translate_drain_batch", action_translate_drain_batch)
+    from agent.actions.curation_actions import action_curate_drain_batch
+
+    registry.register("curate_drain_batch", action_curate_drain_batch)
     registry.register("curate_sweep_next", action_curate_sweep_next)
     registry.register("curate_ingest_review", action_curate_ingest_review)
     registry.register("curate_pack_data", action_curate_pack_data)

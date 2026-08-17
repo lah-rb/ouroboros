@@ -678,6 +678,273 @@ async def action_figtext_drain_batch(step_input):
     )
 
 
+# ── The curate drain: whole-paper review+pack on an idle text seat ───
+#
+# WHY STATELESS. The dispatch curator runs a memoryful session (ingest →
+# review → pack in one KV lineage). A drain branch instead re-sends the doc
+# per turn: the context PEAK is one doc + one prompt + one answer, never the
+# accumulated session — which is what lets whole-paper work fit a shared
+# batched cell at all. The doc prefix is identical across the two turns, so
+# prefix reuse recovers most of the re-prefill when the engine offers it.
+
+_CURATE_CLAIMS: set[str] = set()
+_CURATE_DOC_CACHE: dict[str, int] = {}  # paper_key -> curator-doc chars
+
+# Seat-budget derivation (tokens), against the live shared cell:
+#   static prefix 1,765 + three sibling lanes at their measured p95
+#   (3 x ~6.8k) + review answer 4k + pack answer 8k + prompt bodies ~1.5k.
+# Everything left is doc room. Chars/token ~3.3 measured on this corpus's
+# admitted markdown (18.25M muse tokens over ~60MB text).
+_CURATE_RESERVE_TOKENS = 36_000
+_CURATE_CHARS_PER_TOKEN = 3.3
+
+
+class _CurateTransportFault(Exception):
+    """Server/transport failure — decline the round, book NOTHING."""
+
+
+def _curate_drain_budget() -> int:
+    raw = os.environ.get("OUROBOROS_CURATE_PAPERS", "").strip()
+    try:
+        return max(0, int(raw)) if raw else 1
+    except ValueError:
+        return 1
+
+
+async def _curate_doc_budget_chars(effects) -> int:
+    """Doc budget scoped to the LIVE cell (health, never config).
+
+    0 means "don't run": server unreachable, or the cell is too small for
+    whole-paper work beside the sibling lanes — under the 32k cell this
+    drain self-gates OFF and costs nothing until the cell is grown.
+    """
+    raw = os.environ.get("OUROBOROS_CURATE_DOC_CHARS", "").strip()
+    if raw:
+        try:
+            return max(0, int(raw))
+        except ValueError:
+            pass
+    try:
+        pool = await effects.inference_pool_health()
+    except Exception:  # noqa: BLE001 — unreachable server just declines
+        return 0
+    cell = int((pool or {}).get("kvPoolTokens") or 0)
+    doc_tokens = cell - _CURATE_RESERVE_TOKENS
+    if doc_tokens < 4_000:
+        return 0
+    return int(doc_tokens * _CURATE_CHARS_PER_TOKEN)
+
+
+async def select_curate_paper(
+    effects, databank: dict, budget_chars: int
+) -> tuple[str, str]:
+    """Claim the smallest unclaimed curation-pending paper that fits.
+
+    Smallest-first is the coverage policy: the drain eats the corpus from
+    the short end, and papers over the seat budget are simply left for
+    dedicated curator dispatches (or a bigger cell) — never truncated.
+    """
+    sized: list[tuple[int, str]] = []
+    for key, rec in databank.items():
+        if key in _CURATE_CLAIMS or not _curation_pending(rec):
+            continue
+        chars = _CURATE_DOC_CACHE.get(key)
+        if chars is None:
+            doc = await _build_doc_for(effects, key)
+            chars = len(doc)
+            _CURATE_DOC_CACHE[key] = chars
+        if 0 < chars <= budget_chars:
+            sized.append((chars, key))
+    if not sized:
+        return "", ""
+    _, key = min(sized)
+    doc = await _build_doc_for(effects, key)
+    if len(doc) > budget_chars:  # doc changed since caching (e.g. new en.md)
+        _CURATE_DOC_CACHE[key] = len(doc)
+        return "", ""
+    _CURATE_CLAIMS.add(key)
+    return key, doc
+
+
+def release_curate_keys(keys: list[str]) -> None:
+    _CURATE_CLAIMS.difference_update(keys)
+
+
+async def _curate_turn(effects, prompt: str, max_tokens: int):
+    result = await effects.run_inference(
+        prompt, {"max_tokens": max_tokens, "temperature": "t*0.4"}
+    )
+    if getattr(result, "error", None):
+        raise _CurateTransportFault(str(result.error))
+    return result.text or ""
+
+
+async def _curate_stateless(effects, paper_key: str, doc: str) -> dict:
+    """Review + pack via stateless turns; returns book_result-shaped state.
+
+    Model-quality failures (unparseable review, gates failed twice) come
+    back as bookable review_failed/pack_failed states. Transport faults
+    raise — the caller declines the round without burning the paper (the
+    fig_review transport-burn lesson).
+    """
+    from agent.llm_json import parse_llm_json
+
+    state: dict = {"paper_key": paper_key, "session_id": ""}
+    review_prompt = await _render_prompt(
+        "curator/review_paper", {"corpus_subject": await _corpus_subject(effects)}
+    )
+    review = None
+    for nudge in (
+        "",
+        '\n\nReturn ONLY the fenced JSON verdict object with "verdict" '
+        '("accept" or "deny"), "summary", and "issues".',
+    ):
+        text = await _curate_turn(
+            effects, doc + "\n\n---\n\n" + review_prompt + nudge, 4096
+        )
+        review = parse_llm_json(text)
+        if isinstance(review, dict) and review.get("verdict") in ("accept", "deny"):
+            break
+        review = None
+    if review is None:
+        state["review"] = {"status": "review_failed", "summary": "", "issues": []}
+        return state
+
+    verdict = "accepted" if review["verdict"] == "accept" else "denied"
+    state["review"] = {
+        "status": verdict,
+        "summary": str(review.get("summary") or "").strip(),
+        "issues": [str(i) for i in (review.get("issues") or [])][:20],
+        "deny_category": (
+            str(review.get("deny_category") or "").strip().lower()
+            if verdict == "denied"
+            else ""
+        ),
+    }
+    if verdict == "denied":
+        return state
+
+    registry = await _load_registry(effects)
+    attempts = 0
+    gates: dict = {"passed": False, "feedback": ""}
+    data = None
+    feedback = ""
+    for _ in range(2):  # attempt 2 renders with attempt 1's gate findings
+        attempts += 1
+        pack_prompt = await _render_prompt(
+            "curator/pack_data",
+            {
+                "key_registry_block": format_key_registry(registry),
+                "gate_feedback": feedback,
+            },
+        )
+        text = await _curate_turn(effects, doc + "\n\n---\n\n" + pack_prompt, 8192)
+        parsed = parse_llm_json(text)
+        data = parsed if isinstance(parsed, dict) and parsed else None
+        gates = (
+            _run_pack_gates(data, doc, registry)
+            if data is not None
+            else {"passed": False, "feedback": "output was not a JSON object"}
+        )
+        if gates["passed"]:
+            break
+        feedback = gates["feedback"]
+
+    if not gates["passed"]:
+        state["pack"] = {
+            "status": "pack_failed",
+            "reason": f"gates failed twice: {gates['feedback'][:300]}",
+            "attempts": attempts,
+            "quality": {
+                "grounding_rate": gates.get("grounding", {}).get("grounding_rate"),
+                "parse_attempts": attempts,
+            },
+        }
+        return state
+    state["pack"] = {
+        "status": "packed",
+        "data": data,
+        "attempts": attempts,
+        "quality": {
+            "grounding_rate": gates["grounding"]["grounding_rate"],
+            "numeric_leaves": gates["grounding"]["numeric_leaves"],
+            "ungrounded": gates["grounding"]["ungrounded"],
+            "new_keys": len(gates["registry"]["new_keys"]),
+            "reused_keys": len(gates["registry"]["reused_keys"]),
+            "near_duplicate_flags": gates["near_dups"],
+            "parse_attempts": attempts,
+        },
+    }
+    return state
+
+
+async def action_curate_drain_batch(step_input):
+    """Curate ONE seat-sized paper per round — the curate_drain flow's work
+    step, built to ride as a parallel branch on an idle batched text seat.
+
+    Stateless review+pack (context peak = doc + one answer), booked through
+    action_curate_book_result so the envelope, registry update and
+    tag_review_agreement ride the production path. Transport faults decline
+    the round with nothing booked; the claim releases either way.
+
+    Inputs: working_directory. Result: attempted, outcome, paper_key.
+    """
+    from agent.actions.scholarly_actions import read_databank
+    from agent.models import StepInput, StepOutput
+
+    effects = step_input.effects
+
+    def _decline(reason: str) -> StepOutput:
+        summary = {"attempted": 0, "reason": reason}
+        return StepOutput(
+            result=summary,
+            observations=f"curate drain idle ({reason})",
+            context_updates={"curate_drain_summary": summary},
+        )
+
+    if _curate_drain_budget() <= 0:
+        return _decline("disabled")
+    if effects is None:
+        return _decline("no effects")
+    budget_chars = await _curate_doc_budget_chars(effects)
+    if budget_chars <= 0:
+        return _decline("cell below whole-paper threshold or server unreachable")
+
+    databank = await read_databank(effects)
+    key, doc = await select_curate_paper(effects, databank, budget_chars)
+    if not key:
+        return _decline("nothing unclaimed fits the seat budget")
+
+    try:
+        try:
+            state = await _curate_stateless(effects, key, doc)
+        except _CurateTransportFault as e:
+            logger.warning("curate drain transport fault on %s: %s", key, e)
+            return _decline(f"transport fault ({str(e)[:120]})")
+        except Exception:  # noqa: BLE001 — code faults must not burn papers
+            logger.exception("curate drain errored on %s — declining, not booking", key)
+            return _decline("internal error (see log)")
+        out = await action_curate_book_result(
+            StepInput(effects=effects, context={"curate_state": state})
+        )
+        _CURATE_DOC_CACHE.pop(key, None)
+    finally:
+        release_curate_keys([key])
+
+    outcome = str((out.result or {}).get("status") or state["review"].get("status", ""))
+    summary = {
+        "attempted": 1,
+        "paper_key": key,
+        "outcome": outcome,
+        "doc_chars": len(doc),
+    }
+    return StepOutput(
+        result=summary,
+        observations=f"curate drain: {key} → {outcome} ({len(doc)} chars)",
+        context_updates={"curate_drain_summary": summary},
+    )
+
+
 async def action_fig_review_sweep_next(step_input):
     """Dispatch the next fig-review batch; empty worklist completes the goal."""
     from agent.actions.scholarly_actions import read_databank

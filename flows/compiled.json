@@ -23494,7 +23494,7 @@
     "steps": {
       "run_batch": {
         "action": "parallel",
-        "description": "Catalog batch + figtext/translate drains, concurrently",
+        "description": "Catalog batch + figtext/translate/curate drains, concurrently",
         "context": {
           "required": [],
           "optional": []
@@ -23546,9 +23546,17 @@
                 "$ref": "input.working_directory"
               }
             }
+          },
+          {
+            "flow": "curate_drain",
+            "input_map": {
+              "working_directory": {
+                "$ref": "input.working_directory"
+              }
+            }
           }
         ],
-        "max_parallel": 3
+        "max_parallel": 4
       },
       "return_success": {
         "action": "noop",
@@ -23812,6 +23820,76 @@
       "fallback": "reorganize"
     }
   },
+  "curate_drain": {
+    "flow": "curate_drain",
+    "version": 1,
+    "description": "Review + pack one seat-sized extracted paper through the curator\ngates on an idle batched text seat. Runs as a parallel branch\nbeside other work; mission-clean; returns an attempt summary.",
+    "context_tier": "session_task",
+    "returns": {
+      "curate_drain_summary": {
+        "type": "dict",
+        "from": "context.curate_drain_summary",
+        "optional": true
+      }
+    },
+    "projections": {},
+    "input": {
+      "required": [
+        "working_directory"
+      ],
+      "optional": []
+    },
+    "defaults": {
+      "config": {}
+    },
+    "steps": {
+      "drain": {
+        "action": "curate_drain_batch",
+        "description": "Claim + curate one paper that fits the live seat budget",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "done"
+            }
+          ]
+        },
+        "publishes": [
+          "curate_drain_summary"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "done": {
+        "action": "noop",
+        "description": "Drain complete",
+        "context": {
+          "required": [],
+          "optional": [
+            "curate_drain_summary"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": true,
+        "status": "success"
+      }
+    },
+    "entry": "drain",
+    "overflow": {
+      "strategy": "split",
+      "fallback": "reorganize"
+    }
+  },
   "discover": {
     "flow": "discover",
     "version": 1,
@@ -23848,7 +23926,7 @@
     "steps": {
       "run_round": {
         "action": "parallel",
-        "description": "Discovery round + OCR/figtext/translate drains, concurrently",
+        "description": "Discovery round + OCR/figtext/translate/curate drains, concurrently",
         "context": {
           "required": [],
           "optional": []
@@ -23925,9 +24003,17 @@
                 "$ref": "input.working_directory"
               }
             }
+          },
+          {
+            "flow": "curate_drain",
+            "input_map": {
+              "working_directory": {
+                "$ref": "input.working_directory"
+              }
+            }
           }
         ],
-        "max_parallel": 4
+        "max_parallel": 5
       },
       "return_success": {
         "action": "noop",
