@@ -87,3 +87,71 @@ def test_true_circling_trips_on_the_fifth_identical_send():
     )
     assert out.result.get("stuck_detected") is True
     assert out.result.get("command_sent") is False
+
+
+# ── The two bounds the identical-run check cannot provide ────────────
+#
+# Live incident 2026-08-16 (muse win-screen charter): a playthrough hit
+# turn 97 and kept climbing, oscillating north/south/north/south. The
+# identical-run check requires the SAME input 4x consecutively, so an
+# A-B-A-B cycle is structurally invisible to it — and the "turn budget
+# bounds the rest" the module comment relied on did not exist anywhere in
+# the repo. The session dropped its own context twice (56k tokens each),
+# losing the first ~44 turns of its own playthrough. An unbounded session
+# also makes `tier pause` unlandable, since pause drains at a cycle
+# boundary and the session IS the cycle.
+
+
+def _cycle_hx(n, screens=("Foggy Shore\n> ", "Salt Marsh\n> ")):
+    """n exchanges alternating between `screens` — the observed shape."""
+    moves = ("north", "south")
+    return [
+        {"input": moves[i % len(moves)], "output": screens[i % len(screens)]}
+        for i in range(n)
+    ]
+
+
+def test_alternating_two_room_orbit_is_caught():
+    """north/south/north/south — invisible to the identical-run check."""
+    out = _run(_cycle_hx(30), "north")
+    assert out.result.get("stuck_detected") is True
+    assert "rbiting" in out.observations or "Cycling" in out.observations
+
+
+def test_walking_back_through_known_rooms_toward_something_new_is_not_a_cycle():
+    """The legitimate case the 'all previously seen' clause protects: a
+    traversal that reveals a NEW screen must keep going."""
+    hx = _cycle_hx(24)
+    hx.append({"input": "east", "output": "Sunken Chapel — a NEW room\n> "})
+    hx += [
+        {"input": "north", "output": "Foggy Shore\n> "},
+        {"input": "south", "output": "Salt Marsh\n> "},
+    ]
+    out = _run(hx, "north")
+    assert out.result.get("stuck_detected") is not True
+
+
+def test_a_long_but_varied_playthrough_is_not_a_cycle():
+    """40 turns, every screen distinct — exploration, not orbiting."""
+    hx = [{"input": f"go {i}", "output": f"Room {i}\n> "} for i in range(40)]
+    out = _run(hx, "go 40")
+    assert out.result.get("stuck_detected") is not True
+
+
+def test_turn_budget_closes_a_session_that_will_never_close_itself():
+    from agent.actions.interactive_actions import _SESSION_TURN_BUDGET
+
+    hx = [
+        {"input": f"go {i}", "output": f"Room {i}\n> "}
+        for i in range(_SESSION_TURN_BUDGET)
+    ]
+    out = _run(hx, "go on")
+    assert out.result.get("stuck_detected") is True
+    assert "budget" in out.observations.lower()
+
+
+def test_turn_budget_leaves_a_normal_length_playthrough_alone():
+    """40 turns is a long real session; it must not be truncated."""
+    hx = [{"input": f"go {i}", "output": f"Room {i}\n> "} for i in range(40)]
+    out = _run(hx, "go 40")
+    assert out.result.get("stuck_detected") is not True

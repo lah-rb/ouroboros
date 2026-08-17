@@ -217,6 +217,38 @@ async def _save_full_output(effects, output: str, turn) -> str | None:
 # 2-3 repeats navigation legitimately needs.
 _STUCK_IDENTICAL_RUNS = 4  # 4 identical priors → the 5th send trips
 
+# ── Two bounds the identical-run check cannot provide ─────────────────
+# Measured live 2026-08-16 (muse win-screen charter): a playthrough session
+# reached turn 97 and kept going, oscillating north/south/north/south. The
+# check above requires the SAME input 4x consecutively with byte-identical
+# output, so an A-B-A-B cycle never matches it — and the code comment's
+# claim that "the turn budget bounds the rest" was false: no turn budget
+# existed anywhere in the repo. The session dropped its own context TWICE
+# (56k tokens each, at ~114k), losing the first ~44 turns of its own
+# playthrough mid-game, which plausibly CAUSED the disorientation rather
+# than merely following it. `tier pause` drains at a cycle boundary, so an
+# unbounded session also makes the run unpausable.
+#
+# Both bounds below are deliberately generous, matching the philosophy that
+# set _STUCK_IDENTICAL_RUNS: an over-eager detector killed every
+# post-prologue session on 2026-08-07, and that is the worse failure.
+
+# Hard ceiling on one PTY session. Observed legitimate sessions run 10-40
+# turns; the runaway was still climbing at 97. 120 leaves a long
+# multi-room playthrough (navigate 8 rooms, collect, fight, reach a boss)
+# ample room while bounding a session that will never close itself.
+_SESSION_TURN_BUDGET = 120
+
+# Cycle detection: over the last _CYCLE_WINDOW exchanges, if the tester saw
+# at most _CYCLE_DISTINCT_MAX distinct screens AND every one of them had
+# already appeared earlier in the session, it is orbiting known states, not
+# exploring. Catches A-B-A-B and longer orbits that the identical-run check
+# structurally cannot. Requiring "all previously seen" is what keeps a
+# player legitimately walking back through known rooms toward something new
+# from tripping it — that traversal reveals a new screen and resets.
+_CYCLE_WINDOW = 12
+_CYCLE_DISTINCT_MAX = 3
+
 
 async def action_send_interaction(step_input: StepInput) -> StepOutput:
     """Parse the model's structured interaction and dispatch to MCP.
@@ -502,6 +534,53 @@ async def action_send_interaction(step_input: StepInput) -> StepOutput:
     # the tester is sending it yet again. "At that point it really looks
     # like circling, not productive terminal time." Repeated input whose
     # output changes is progress; the turn budget bounds the rest.
+    # Turn budget — the bound the comment below always assumed existed.
+    if len(session_history) >= _SESSION_TURN_BUDGET:
+        return StepOutput(
+            result={
+                "command_sent": False,
+                "stuck_detected": True,
+                "duplicate_input": "",
+            },
+            observations=(
+                f"Turn budget: session reached {len(session_history)} turns "
+                f"(cap {_SESSION_TURN_BUDGET}) — closing so the charter can be "
+                f"evaluated on what it did reach"
+            ),
+            context_updates={
+                "mcp_session_id": session_id,
+                "session_history": session_history,
+            },
+        )
+
+    # Cycle detection — orbiting a handful of already-seen screens.
+    if len(session_history) >= _CYCLE_WINDOW * 2:
+        recent = session_history[-_CYCLE_WINDOW:]
+        earlier = session_history[:-_CYCLE_WINDOW]
+        recent_out = {(e.get("output", "") or "").strip() for e in recent}
+        earlier_out = {(e.get("output", "") or "").strip() for e in earlier}
+        if (
+            len(recent_out) <= _CYCLE_DISTINCT_MAX
+            and recent_out
+            and recent_out <= earlier_out
+        ):
+            return StepOutput(
+                result={
+                    "command_sent": False,
+                    "stuck_detected": True,
+                    "duplicate_input": text.strip(),
+                },
+                observations=(
+                    f"Cycling: the last {_CYCLE_WINDOW} exchanges revisited only "
+                    f"{len(recent_out)} screen(s), all seen earlier — orbiting, "
+                    f"not exploring"
+                ),
+                context_updates={
+                    "mcp_session_id": session_id,
+                    "session_history": session_history,
+                },
+            )
+
     if len(session_history) >= _STUCK_IDENTICAL_RUNS:
         tail = session_history[-_STUCK_IDENTICAL_RUNS:]
         outputs = {(e.get("output", "") or "").strip() for e in tail}
