@@ -49,6 +49,15 @@ sections:
     curiosity (the kind of detail the vision calls out as notable). It
     is fine, even expected, to wander toward these.
 
+    If the product persists anything across runs (saves, documents,
+    databases), put ONE cross-restart probe in the list: reach a
+    distinctive state, persist it, quit the program, relaunch it with a
+    new shell command in the SAME session, restore, and see whether the
+    distinctive parts came back. The session survives the program's exit
+    for exactly this, and it is the only way to tell durable state from
+    state merely re-read in memory. The operator sees only this brief and
+    will not restart unless it is asked for.
+
     ## OBSERVE
     What to watch for: confusing or inconsistent output, missing
     feedback, awkward phrasing, behavior that contradicts the product's

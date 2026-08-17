@@ -31,6 +31,17 @@ content: |
     operator sees only this brief and
     cannot discover the map on its own.
   - Each step is one concrete action the tester types.
+  - A session may span MULTIPLE RUNS of the program. The tester can quit it
+    and relaunch it with a new shell command inside the same session — the
+    framework holds the session open across the exit for exactly this. So
+    when the capability under test is about state OUTLIVING the process
+    (persistence, resume, reload, restart-after-end), the steps must cross
+    that boundary: reach a distinctive state, persist it, exit the program,
+    relaunch it, restore, and verify the distinctive parts came back. An
+    in-process round trip only proves the restore path runs; a relaunch is
+    what proves the state survived. Write the exit and the relaunch as their
+    own numbered steps — the tester sees only this brief and will not
+    attempt a restart the brief does not ask for.
   - If the test objective contains a TEST GUIDANCE block, it was written
     by a diagnosis that read the code, the data, AND the previous failed
     session — its steps are computed from ground truth you cannot see

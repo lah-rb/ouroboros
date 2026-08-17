@@ -21,7 +21,12 @@ content: |
   If the program persists state (save files, databases, documents),
   include one FULL round-trip: save, CHANGE something, load, verify
   the change rolled back — a save/load with nothing changed in
-  between proves nothing.
+  between proves nothing. Cross the PROCESS boundary too: a session
+  may span multiple runs (quit the program, relaunch it with a new
+  shell command, restore), and only a relaunch proves the state
+  outlived the process rather than merely being re-read in memory.
+  Write the exit and the relaunch as their own steps — the tester
+  sees only this brief and will not restart unless asked.
 
   ## PASS CRITERIA
   One or two sentences stating what observed behavior means the
