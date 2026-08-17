@@ -230,11 +230,18 @@ async def action_discovery_sweep_next(step_input: StepInput) -> StepOutput:
                 aspect.dry_rounds = 0
             changed = True
         exhausted = aspect.dry_rounds >= DRY_ROUNDS_TO_STOP
-        if (
-            have >= aspect.coverage_target
-            or exhausted
-            or len(goal.reports) >= MAX_DISCOVERY_ROUNDS
-        ):
+        # A GATE-REOPENED GOAL MUST RUN AT LEAST ONE ROUND. The gate's
+        # coverage metric is TAGGED papers; this sweep's target counts RAW
+        # candidates — after a reopen (harvest empties goal.reports) the
+        # candidate count usually already exceeds the target, and completing
+        # on it re-closes the goal with "0 round(s)" without ever searching.
+        # Live: a 200-cycle gate↔harvest spin, zero discover dispatches,
+        # while four aspects sat at 149-797/833 TAGGED. With reports empty,
+        # the candidate target is not a reason to complete; only exhaustion
+        # or the round cap is. New rounds now also run with the seeded
+        # corpus_languages, which the exhaustion verdict predates.
+        target_met = have >= aspect.coverage_target and bool(goal.reports)
+        if target_met or exhausted or len(goal.reports) >= MAX_DISCOVERY_ROUNDS:
             goal.status = "complete"
             changed = True
             logger.info(

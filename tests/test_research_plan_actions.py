@@ -105,6 +105,10 @@ async def test_discovery_dispatches_until_target_then_completes():
     assert dc["flow"] == "discover" and dc["aspect_name"] == "gb"
     assert dc["have_count"] == 0
 
+    goal = next(g for g in m.goals if g.type == "discovery")
+    goal.reports.append(
+        DirectiveReport(flow="discover", status="success", summary="r1")
+    )
     fx2 = MockEffects(
         files=_bank(
             [
@@ -290,3 +294,35 @@ async def test_harvest_reopens_goals_and_marks_retag_with_note_freshen():
     assert bank["p1"]["status"] == "needs_retag"
     # Notes freshened from disk before save (lost-update guard).
     assert any(n.content == "gate note" for n in m.notes)
+
+
+@pytest.mark.asyncio
+async def test_reopened_goal_runs_a_round_before_recompleting():
+    """The gate reopens on TAGGED coverage; the sweep targets RAW
+    candidates — a reopened goal (reports emptied) whose candidates
+    already exceed target must dispatch at least one round, not
+    re-complete with '0 round(s)' (live: a 200-cycle gate loop)."""
+    from agent.actions.research_plan_actions import action_discovery_sweep_next
+    from agent.persistence.models import DirectiveReport
+
+    m = _mission([AspectSpec(name="gb")])
+    await action_derive_research_goals(_si(m))
+    goal = next(g for g in m.goals if g.type == "discovery")
+    aspect = m.research_plan.aspects[0]
+    aspect.coverage_target = 5
+    # Candidates already exceed the target (raw-candidate metric).
+    records = [
+        {"paper_key": f"c{i}", "status": "cataloged", "source_aspects": ["gb"]}
+        for i in range(8)
+    ]
+    fx = MockEffects(files=_bank(records))
+    # Reopened state: complete -> incomplete with reports emptied.
+    goal.status = "incomplete"
+    goal.reports = []
+    out = await action_discovery_sweep_next(_si(m, effects=fx))
+    assert out.result.get("needs_discover") is True  # one round runs
+    # After a round has been booked, the target may complete the goal.
+    goal.reports = [DirectiveReport(flow="discover", status="success", summary="r1")]
+    out2 = await action_discovery_sweep_next(_si(m, effects=fx))
+    assert out2.result.get("needs_discover") is not True
+    assert goal.status == "complete"
