@@ -12,6 +12,16 @@ content: |
     however short it is. (A quit test that launches and quits cleanly
     is a PASS — "no gameplay happened first" is not a failure of
     quitting.)
+  - A reproduction sequence in the objective names ONE route to the
+    behavior, not the only acceptable one. If the session exercised the
+    same capability with a different instance — another item, room, or
+    record — and it worked, that is a PASS; name the instance actually
+    used in the summary. Failing a session because it dropped the
+    oilskin coat instead of the rusted key sends the next step hunting
+    for a defect the transcript already disproved, and the charter
+    author is explicitly told to pick whatever instance is closest to
+    hand. Hold to the exact sequence only when the objective ties the
+    defect to that specific instance.
   - `goal_met: true` when the observed behavior is sufficient
     evidence that the objective was achieved — even if the session
     didn't run every planned step.

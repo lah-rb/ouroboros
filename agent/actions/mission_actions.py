@@ -4151,9 +4151,25 @@ def _functional_retest_directive(goal: Any, *, after: str) -> str:
         )
         repro_block = _goal_repro_block(goal)
         if repro_block:
+            # The sequence is a ROUTE, not a literal requirement (2026-08-17).
+            # "Re-run this exact sequence" contradicted charter_function's
+            # standing rule that a named example is an ILLUSTRATION and the
+            # tester should use whatever instance is closest to hand. The
+            # charter obeyed rule 1, the evaluator enforced rule 2 against it,
+            # and a session that PROVED drop works (took, dropped, and
+            # re-took the oilskin coat) was failed for not using the rusted
+            # key — which escalated a working feature into the repair loop and
+            # burned two 16k-token rewrites hunting a defect the transcript
+            # had already disproved.
             directive += (
                 f"{repro_block}\n"
-                "Re-run this exact sequence and confirm the defect no longer occurs."
+                "Re-run this sequence and confirm the defect no longer occurs. "
+                "The sequence is the known route to the behavior, not a literal "
+                "requirement: a session that exercises the SAME capability on a "
+                "different instance — another item, room, or record — resolves "
+                "it just as well. Report which instance was actually used. Hold "
+                "to the exact sequence only when the defect is tied to that "
+                "specific instance."
             )
         return directive + guidance_block
     return (

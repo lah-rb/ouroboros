@@ -297,7 +297,11 @@ def test_retest_directive_replays_verified_repro():
     g.repro_commands = ["take map", "use map"]
     d = _functional_retest_directive(g, after="fix")
     assert "1. take map" in d
-    assert "Re-run this exact sequence" in d
+    assert "Re-run this sequence" in d
+    # The sequence is a ROUTE, not a literal requirement: demanding the
+    # exact instance contradicted charter_function's closest-to-hand rule
+    # and failed sessions that had already proved the capability.
+    assert "not a literal" in d and "different instance" in d
 
 
 def test_directives_unchanged_without_repro():
