@@ -51,8 +51,8 @@ sections:
       (files exist, are non-empty/executable, a service responds, exit codes) —
       NOT the steps taken to get there. Each check exits 0 iff a required
       end-state condition holds. Prefer the smallest set of necessary,
-      independent conditions (2-5), run in the working directory with standard
-      tools.
+      independent conditions — every check must earn its place — run in the
+      working directory with standard tools.
 
       Above all: require that the task's REQUIRED OUTPUT ARTIFACT exists at the
       path the grader will read. Terminal tasks are graded on a produced file

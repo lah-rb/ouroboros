@@ -42,7 +42,7 @@ sections:
       One sentence: you as the operator carrying out this specific job.
 
       ## APPROACH
-      3-6 numbered steps: the concrete commands/actions to run, in order, from a
+      Numbered steps, as few as the task allows: the concrete commands/actions to run, in order, from a
       clean terminal in the working directory. FIRST inspect the specific inputs
       the task names — list and read the exact files/paths/data it references
       (e.g. the input files at the paths given) — so the steps fit what is

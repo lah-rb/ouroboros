@@ -42,7 +42,8 @@ sections:
       Produce checks that inspect OBSERVABLE END-STATE (files exist and are
       non-empty, an artifact the goal produces, an exit code, a port probe) —
       NOT the steps taken. Each check exits 0 iff a required condition holds.
-      Prefer the smallest set of necessary, independent conditions (0-3), run
+      Prefer the smallest set of necessary, independent conditions — none is a
+      valid answer when nothing observable would separate pass from fail — run
       in the working directory with standard tools.
 
       These checks are a SCREEN layered under a separate behavioral evaluator

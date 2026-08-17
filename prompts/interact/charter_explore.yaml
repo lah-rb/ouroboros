@@ -17,7 +17,7 @@ content: |
   include them.
 
   ## EXPLORE STEPS
-  A numbered short list (2-5 steps) that gathers the placement evidence:
+  A numbered list, as short as the job allows, that gathers the placement evidence:
   - Navigate the running program to where the feature would naturally live
     (e.g., go to the room it should connect to and `look`), reading the
     world/data files above to find the right spot.
