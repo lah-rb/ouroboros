@@ -80,9 +80,35 @@ class ClaudeCliProvider:
             ) from exc
 
         if proc.returncode != 0:
-            tail = stderr.decode("utf-8", errors="replace")[-500:]
+            # BOTH streams, because the CLI reports its own failures as JSON on
+            # STDOUT and leaves stderr empty. Measured live 2026-08-16: two
+            # escalation consults died as `claude CLI exited 1 (model
+            # claude-sonnet-5): ` — the trailing colon IS the whole diagnosis,
+            # and the identical command reproduced clean from a shell, so the
+            # message was the only thing standing between us and the cause.
+            # Prefer the CLI's own error text when it parses; fall back to raw
+            # stdout, then stderr, and say explicitly when both are empty so
+            # "silent" is never mistaken for "unreported".
+            err = stderr.decode("utf-8", errors="replace").strip()
+            out = stdout.decode("utf-8", errors="replace").strip()
+            detail = ""
+            if out:
+                try:
+                    _d = json.loads(out)
+                    detail = str(
+                        _d.get("result") or _d.get("error") or _d.get("subtype") or ""
+                    ).strip()
+                    _status = _d.get("api_error_status")
+                    if _status:
+                        detail = f"[api_error_status={_status}] {detail}".strip()
+                except json.JSONDecodeError:
+                    detail = f"stdout: {out[-500:]}"
+            if err:
+                detail = f"{detail} | stderr: {err[-500:]}".strip(" |")
+            if not detail:
+                detail = "(both stdout and stderr were EMPTY)"
             raise RemoteProviderError(
-                f"claude CLI exited {proc.returncode} (model {self._model}): {tail}"
+                f"claude CLI exited {proc.returncode} (model {self._model}): {detail}"
             )
 
         try:
@@ -93,7 +119,18 @@ class ClaudeCliProvider:
             ) from exc
 
         if data.get("is_error"):
-            raise RemoteProviderError(f"claude CLI error result: {data.get('result')}")
+            # api_error_status separates "the provider refused" (429/5xx —
+            # retryable, and the shape a rate limit takes) from "the CLI itself
+            # failed", which is the distinction that decides whether a caller
+            # should back off or reconfigure.
+            _status = data.get("api_error_status")
+            _sub = data.get("subtype") or ""
+            raise RemoteProviderError(
+                "claude CLI error result"
+                + (f" [api_error_status={_status}]" if _status else "")
+                + (f" [{_sub}]" if _sub else "")
+                + f": {data.get('result')}"
+            )
 
         tokens_in, tokens_out = _extract_usage(data)
         return RemoteCompletion(

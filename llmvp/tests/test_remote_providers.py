@@ -314,3 +314,63 @@ def test_remote_completion_applies_system_and_defaults(catalog, tmp_path, monkey
     assert r.text == "ok"
     args = Path(bin_path + ".args").read_text()
     assert "--system-prompt You are the boss." in args  # system_file applied
+
+
+# ── Failure reporting: the CLI talks on STDOUT ───────────────────────
+#
+# Measured live 2026-08-16: two escalation consults died as
+#   "claude CLI exited 1 (model claude-sonnet-5): "
+# — a trailing colon and nothing else, because the adapter reported only
+# stderr and the claude CLI writes its failures as JSON on stdout. The same
+# command reproduced clean from a shell, so the empty message was the only
+# thing between us and the cause. These pin the four shapes.
+
+
+def test_nonzero_exit_reports_the_clis_own_json_error_from_stdout(tmp_path):
+    payload = (
+        '{"type":"result","is_error":true,"api_error_status":429,'
+        '"subtype":"rate_limit","result":"upstream rate limit reached"}'
+    )
+    p = ClaudeCliProvider(
+        "claude-sonnet-5", claude_bin=_fake_claude(tmp_path, payload, exit_code=1)
+    )
+    with pytest.raises(RemoteProviderError) as e:
+        asyncio.run(p.complete("hi"))
+    msg = str(e.value)
+    assert "upstream rate limit reached" in msg
+    assert "api_error_status=429" in msg
+
+
+def test_nonzero_exit_falls_back_to_raw_stdout_when_unparseable(tmp_path):
+    p = ClaudeCliProvider(
+        "claude-sonnet-5",
+        claude_bin=_fake_claude(tmp_path, "not json at all, just noise", exit_code=1),
+    )
+    with pytest.raises(RemoteProviderError) as e:
+        asyncio.run(p.complete("hi"))
+    assert "not json at all" in str(e.value)
+
+
+def test_nonzero_exit_with_both_streams_empty_says_so(tmp_path):
+    """The exact live shape — silence must read as silence, not as a blank."""
+    p = ClaudeCliProvider(
+        "claude-sonnet-5", claude_bin=_fake_claude(tmp_path, "", exit_code=1)
+    )
+    with pytest.raises(RemoteProviderError) as e:
+        asyncio.run(p.complete("hi"))
+    assert "EMPTY" in str(e.value)
+
+
+def test_is_error_result_surfaces_status_and_subtype(tmp_path):
+    """Exit 0 but is_error — the retryable/reconfigure distinction."""
+    payload = (
+        '{"type":"result","is_error":true,"api_error_status":529,'
+        '"subtype":"overloaded","result":"service overloaded"}'
+    )
+    p = ClaudeCliProvider(
+        "claude-sonnet-5", claude_bin=_fake_claude(tmp_path, payload, exit_code=0)
+    )
+    with pytest.raises(RemoteProviderError) as e:
+        asyncio.run(p.complete("hi"))
+    msg = str(e.value)
+    assert "529" in msg and "overloaded" in msg and "service overloaded" in msg
