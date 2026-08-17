@@ -6,9 +6,27 @@
 # function check. Counterpart to interact/charter_function (the
 # function gate's direct, in-reach charter).
 #
-# Inputs: mission_objective (the product vision — describes the world,
-# features, and the interesting scenarios worth probing),
-# architecture_run_command (launch), project_listing (structure).
+# REWRITTEN 2026-08-17 after the muse tier arm showed the old text
+# produced auditors, not explorers. Two instructions did the damage,
+# both live-traced in the operator's own CoT:
+#   • "A short list (3-5) of things to try" + "must cover EVERY
+#     capability the objective implies" — the author obeyed both by
+#     compressing the whole ~25-requirement spec into 5 compound
+#     items (PROMPTING_CONVENTIONS.md §15: the count wins over the
+#     prose beside it). The operator then marched the list linearly,
+#     spent its low-effort turns re-auditing covered items ("We
+#     visited... That's >8" three turns running), starved the tail,
+#     and every unreached item became an `untested:` finding — 12 of
+#     49 mission goals were these, all duplicating design goals with
+#     verified passing play-tests, and they displaced the run's one
+#     real defect from the probe queue.
+# Coverage is not this session's job: every functional requirement
+# already gets its own dedicated play-test, and the framework knows
+# which passed. This session is the product's only chance to be USED
+# rather than verified.
+#
+# Inputs: mission_objective (the product vision), architecture_run_command
+# (launch), project_listing (structure).
 
 id: quality_gate/charter_explore
 # output_contract: free_text — an EXPLORE charter published as
@@ -28,50 +46,56 @@ sections:
   cache: true
 - id: instruction
   content: |
-    Write an exploration charter with these labeled parts:
+    Every individual feature already has its own dedicated play-test —
+    coverage is someone else's job. This session is the product's only
+    chance to be USED the way a person would use it. Write a brief that
+    sends the operator toward what a checklist cannot see.
+
+    The charter has four labeled parts:
 
     ## ROLE
     One sentence: a curious user trying the product as a real person
     would, after the basics already work.
 
     ## LAUNCH
-    The shell command to start it (from below; include any data file
-    arguments). The command below may be a non-interactive startup
-    check that pipes input or auto-quits (e.g. `echo quit | python
-    main.py`) — strip that wrapper and give the bare interactive
-    launch (`python main.py`); the operator drives the input live.
+    The bare interactive launch command (from below, with any data file
+    arguments). If the command below is a piped or auto-quitting startup
+    check (e.g. `echo quit | python main.py`), strip the wrapper — the
+    operator drives the input live.
 
     ## EXPLORE
-    A short list (3-5) of things to try. Exercise the core capabilities
-    briefly, then go BEYOND the happy path toward the interesting
-    scenarios the product vision implies — richer feature interactions,
-    state that changes based on prior actions, content that rewards
-    curiosity (the kind of detail the vision calls out as notable). It
-    is fine, even expected, to wander toward these.
-
-    If the product persists anything across runs (saves, documents,
-    databases), put ONE cross-restart probe in the list: reach a
-    distinctive state, persist it, quit the program, relaunch it with a
-    new shell command in the SAME session, restore, and see whether the
-    distinctive parts came back. The session survives the program's exit
-    for exactly this, and it is the only way to tell durable state from
-    state merely re-read in memory. The operator sees only this brief and
-    will not restart unless it is asked for.
+    A short list of threads worth pulling, each ONE thing — never a
+    compound tour, and never a restatement of the product's requirement
+    list. Draw them from what the vision makes interesting rather than
+    what it makes mandatory:
+    - the richest interaction the vision promises (follow it deeper than
+      a demo would — replay it, come back to it, combine it with
+      something else);
+    - what the product does when treated carelessly: a command it never
+      asked for, empty input, the same action twice, undoing what was
+      just done, walking away mid-scenario;
+    - the words themselves — read the output as a player would and note
+      what is confusing, contradictory, or flat.
+    If the product persists anything across runs, include ONE
+    cross-restart probe: reach a distinctive state, persist it, quit the
+    program, relaunch it with a new shell command in the SAME session,
+    restore, and see whether the distinctive parts came back. The
+    session survives the program's exit for exactly this, and the
+    operator will not restart unless the brief asks.
 
     ## OBSERVE
     What to watch for: confusing or inconsistent output, missing
     feedback, awkward phrasing, behavior that contradicts the product's
-    promise, or scenarios that feel unfinished. These are QUALITY
-    findings — report them as observations, not pass/fail. A feature
-    you could not reach is itself a finding to note, never a hard
-    failure of the product.
+    promise, scenarios that feel unfinished. These are QUALITY findings —
+    observations, not pass/fail. Something the operator could not reach
+    is one line in the summary, not a mission.
 
-    End the brief with one firm instruction: the operator must work
-    through EVERY item in the EXPLORE list before ending the session.
-    This is the product's final inspection — an item skipped here is
-    an item shipped unverified.
+    End the brief with one firm instruction: pull every thread in the
+    EXPLORE list before closing, and when the list is done and time
+    remains, keep playing — the best findings in this session will be
+    the ones nobody thought to list.
 
-    Keep it brief — a tester should take it in at a glance. Write naturally as a brief.
+    Keep the whole brief short enough to take in at a glance.
   cache: true
 - id: product
   when: input.mission_objective
@@ -93,12 +117,9 @@ sections:
 - id: charter_reminder
   content: |
     ---
-    Now write the brief. The EXPLORE list must cover EVERY capability the
-    objective implies — name them concretely (each command, each feature,
-    each content element the vision calls out), not "the core features."
-    Then push past the happy path into the interactions the vision promises.
-    A feature that is missing, unreachable, or behaves trivially is a QUALITY
-    FINDING to report, never a reason to pass. End with the firm instruction
-    that the operator works through EVERY EXPLORE item before closing — an
-    item skipped is an item shipped unverified.
-
+    Now write the brief. Do NOT re-serialize the objective into the
+    EXPLORE list — the operator has limited turns, and every item spent
+    re-verifying a feature that already has its own play-test is an item
+    not spent finding something new. Pick the threads a curious person
+    would actually pull, one thing each, and let the OBSERVE section do
+    the noticing.

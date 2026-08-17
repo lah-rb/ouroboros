@@ -52,9 +52,13 @@ sections:
     EVIDENCE RULE — broken requires observation. Only report a behavior
     as broken/not-functional if the evidence below SHOWS it failing (an
     error, wrong output, a crash). If the UX session simply did not
-    exercise a feature, that feature is UNTESTED, not broken — report it
-    as `{"issue": "untested: <feature> was not exercised by the UX
-    session", "class": "functional"}` so it gets verified by a play-test,
+    exercise a feature, first check the verified-behaviors list below:
+    a feature with a verified passing play-test is DONE, and one session
+    not re-touring it is not a finding — re-raising it spends a probe
+    and a repair cycle re-proving settled work. Only a feature with NO
+    passing play-test may be reported as
+    `{"issue": "untested: <feature> was not exercised by the UX
+    session", "class": "functional"}` so it gets verified by one,
     and never claim it does not work.
 
     Unresolved-reference counts in the cross-file consistency report are
