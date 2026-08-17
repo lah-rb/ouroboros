@@ -111,6 +111,51 @@ async def test_prepare_reframes_untested_claim_as_a_testable_defect():
     assert cu["probe_untested"] is True
 
 
+@pytest.mark.parametrize(
+    "issue,expected",
+    [
+        # Every shape below is a REAL goal description from the muse tier arm
+        # (tier_20260816-150520), where 12 of 49 goals — 24% of the mission —
+        # were this class. Invented fixtures only cover shapes you already
+        # thought of; the long compound one is the reason this is a corpus
+        # test and not three hand-written cases.
+        (
+            "untested: flee command was not exercised by the UX session",
+            "flee command does not work",
+        ),
+        (
+            "untested: save and load to JSON was not exercised by the UX session",
+            "save and load to JSON does not work",
+        ),
+        (
+            "untested: healing item use in combat and drop/re-take were not "
+            "exercised by the UX session",
+            "healing item use in combat and drop/re-take does not work",
+        ),
+        (
+            "untested: death/restart screen and persistence of defeated monsters "
+            "and NPC dialogue progression were not exercised by the UX session",
+            "death/restart screen and persistence of defeated monsters and NPC "
+            "dialogue progression does not work",
+        ),
+        (
+            "untested: boss weakness interaction with Sun-Bleached Lantern Lens "
+            "was not exercised by the UX session",
+            "boss weakness interaction with Sun-Bleached Lantern Lens does not work",
+        ),
+    ],
+)
+def test_untested_reframe_over_the_real_goal_corpus(issue, expected):
+    from agent.actions.verification_actions import _probe_claim_text
+
+    claim, untested = _probe_claim_text({"issue": issue})
+    assert untested is True
+    assert claim == expected
+    # The coverage framing must be GONE — leaving it in is what made the
+    # claim unrefutable, since no transcript can speak to a past session.
+    assert "not exercised" not in claim and "UX session" not in claim
+
+
 @pytest.mark.asyncio
 async def test_prepare_no_repro_permissive_passes_through_tagged():
     out = await action_prepare_finding_verification(
