@@ -42,6 +42,29 @@
 #      not cure it, they only hold the line — and it also means this config
 #      cannot host the batched swarm substrate.
 #
+# ── PROBE RESULTS (2026-08-17, dev/qwen38_dial_probe.py, n=2/arm) ────
+#   b) GRAPH SPLITS: 2 (clean; the DeepSeek pathology was 44-on-43-layers).
+#      b10355 genuinely supports qwen35 on Metal. PASSED.
+#   c) EXTRACTION: 12/12 completions well-formed (<think>...</think>\n\n
+#      content <|im_end|>, correct EOG), 12/12 non-empty extraction, and
+#      12/12 CORRECT on a multi-phase rate problem. No muse-style marker
+#      echo, no empty-block class. PASSED.
+#   d) THE DIAL MOVES — with a persona caveat that matters for routing:
+#        neutral persona: low 772/764 < medium 1279/991 < xhigh 1517/1184
+#          (monotonic BOTH runs — a real working dial, ~1.7x spread)
+#        SOUL persona:    low 706/524 | medium 1003/1126 | xhigh 688/898
+#      `low` separates reliably under BOTH personas. Under SOUL the
+#      medium/xhigh order FLIPPED across runs and total depth compressed
+#      ~40% vs neutral — a DAMPENER, not the gemma-style veto. Routing
+#      implication: low-vs-high is trustworthy in production; treat
+#      medium-vs-xhigh as unproven under the agent persona (n=2).
+#   e) MTP: resolved WITHOUT a boot — the binding exports the nextn
+#      primitives (n_layer_nextn, set/get_embeddings_nextn[_ith]) but has
+#      NO draft-loop integration (LlamaDraftModel is n-gram only). Wiring
+#      MTP = build the loop ourselves (enable nextn embeddings, project,
+#      draft, batch-verify): a real engineering task with Metal-regression
+#      risk, NOT a config flag. LM Studio's ~50% acceptance is theirs.
+#
 # ── OWED PROBES (nothing below was measured on this machine) ─────────
 # Deliberately NOT copied from the 3.6 config: probe_verified_n_ctx,
 # probe_verified_weights_bytes, kv_bytes_per_token_measured. Those fields are
@@ -87,7 +110,7 @@ model:
   # so no probe_verified_* override is needed to boot. 262144 would account to
   # 92.7 GB — it would squeak past the budget on paper while sitting far too
   # close to the 116 GB wired limit to share the machine with anything.
-  n_ctx: 131072
+  n_ctx: 262144
   n_gpu_layers: -1
   seed: -1
   verbose: false
