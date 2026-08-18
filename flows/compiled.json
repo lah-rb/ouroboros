@@ -13944,7 +13944,8 @@
           "optional": [
             "planned_action",
             "planned_action_arg",
-            "launch_command"
+            "launch_command",
+            "close_confirmations"
           ]
         },
         "params": {},
@@ -13977,7 +13978,8 @@
         "publishes": [
           "mcp_session_id",
           "session_history",
-          "launch_command"
+          "launch_command",
+          "close_confirmations"
         ],
         "effects": [],
         "terminal": false

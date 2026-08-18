@@ -182,7 +182,16 @@ run_session: #FlowDefinition & {
 				// first shell command; the pre-close notice names it as the
 				// relaunch line, and quality_gate's finding probes replay it.
 				// See action_send_interaction in interactive_actions.py.
-				optional: ["planned_action", "planned_action_arg", "launch_command"]
+				// close_confirmations: read so a RELAUNCH can reset the
+				// pre-close notice budget. Without this declaration the
+				// action's reset guard read a permanent 0 and was a silent
+				// no-op through two fix attempts (5d559a9, 3dc9648) — the
+				// step context is a FILTER, and an undeclared key is not
+				// absent-with-default, it is invisible.
+				optional: [
+					"planned_action", "planned_action_arg", "launch_command",
+					"close_confirmations",
+				]
 			}
 			resolver: {
 				type: "rule"
@@ -223,7 +232,10 @@ run_session: #FlowDefinition & {
 					{condition: "true", transition: "close_failure"},
 				]
 			}
-			publishes: ["mcp_session_id", "session_history", "launch_command"]
+			publishes: [
+				"mcp_session_id", "session_history", "launch_command",
+				"close_confirmations",
+			]
 		}
 
 		// ── Pre-close confirmation (operator, 2026-08-09; ONE-MENU rework

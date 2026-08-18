@@ -448,3 +448,23 @@ async def test_a_stale_arg_is_never_echoed_as_a_close_reason():
     assert "attack" not in notice
     assert "stated reason" not in notice
     assert "The program run ended" in notice
+
+
+class TestCloseBudgetWiring:
+    """The step context is a FILTER: an undeclared key reads as its default,
+    not as an error. The relaunch reset shipped twice (5d559a9, 3dc9648)
+    with correct action logic and was a silent no-op both times, because
+    execute_interaction never declared close_confirmations — the guard read
+    a permanent 0. Action-level tests missed it by injecting context
+    directly; only the compiled flow can pin the declaration."""
+
+    @staticmethod
+    def _step():
+        flow = json.loads((ROOT / "flows" / "compiled.json").read_text())["run_session"]
+        return flow["steps"]["execute_interaction"]
+
+    def test_close_confirmations_is_declared_readable(self):
+        assert "close_confirmations" in self._step()["context"]["optional"]
+
+    def test_close_confirmations_is_published(self):
+        assert "close_confirmations" in self._step()["publishes"]
