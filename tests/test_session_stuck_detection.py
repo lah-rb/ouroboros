@@ -156,3 +156,20 @@ def test_turn_budget_leaves_a_normal_length_playthrough_alone():
     hx = [{"input": f"go {i}", "output": f"Room {i}\n> "} for i in range(40)]
     out = _run(hx, "go 40")
     assert out.result.get("stuck_detected") is not True
+
+
+def test_turn_budget_fires_below_the_engine_step_ceiling():
+    """The budget only exists if it can fire: the flow engine crashes any
+    sub-flow at max_steps=200 (runtime.py), a turn costs ~2 steps, and the
+    original budget of 120 (~250 steps) was unreachable dead code — the
+    landing-test gate session died at step 200 with no evaluate turn. The
+    graceful close must trigger with margin for its own close chain."""
+    from agent.actions.interactive_actions import _SESSION_TURN_BUDGET
+
+    ENGINE_MAX_STEPS = 200  # runtime.py sub-flow budget
+    STEPS_PER_TURN = 2  # plan_interaction + execute_interaction
+    CLOSE_CHAIN_MARGIN = 10  # confirm/close/evaluate tail
+    assert (
+        1 + _SESSION_TURN_BUDGET * STEPS_PER_TURN + CLOSE_CHAIN_MARGIN
+        <= ENGINE_MAX_STEPS
+    )

@@ -234,10 +234,17 @@ _STUCK_IDENTICAL_RUNS = 4  # 4 identical priors → the 5th send trips
 # post-prologue session on 2026-08-07, and that is the worse failure.
 
 # Hard ceiling on one PTY session. Observed legitimate sessions run 10-40
-# turns; the runaway was still climbing at 97. 120 leaves a long
-# multi-room playthrough (navigate 8 rooms, collect, fight, reach a boss)
-# ample room while bounding a session that will never close itself.
-_SESSION_TURN_BUDGET = 120
+# turns; the runaway was still climbing at 97. Sized UNDER the flow
+# engine's sub-flow ceiling (runtime.py: max_steps=200), which this budget
+# must beat to matter: a session turn costs ~2 steps (plan + execute), so
+# the original value of 120 (~250 steps) was unreachable dead code — the
+# engine CRASHED the sub-flow at ~100 turns first, killing the session
+# with no evaluate turn (live: the landing-test gate session died at step
+# 200 mid-explore, turn ~100, and summarize ran on a failed session). 90
+# turns ≈ 185 steps triggers the GRACEFUL close — evaluated on what it
+# reached — with margin for the close/evaluate chain before the engine
+# backstop.
+_SESSION_TURN_BUDGET = 90
 
 # A screen-orbit cycle detector (≤3 distinct screens over a 12-turn window,
 # all previously seen → force-close) lived here for one day (58eb83c) and
