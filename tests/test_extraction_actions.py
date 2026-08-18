@@ -686,3 +686,106 @@ def test_the_fault_markers_never_match_a_document_verdict():
     ]
     for fault in faults:
         assert is_toolchain_fault(fault), fault
+
+
+# ── per-item durability ───────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_a_crash_midway_keeps_the_papers_already_finished():
+    """Work that is DONE must be booked before the next paper starts.
+
+    Live incident (2026-08-18): the batch form ran one subprocess over N
+    PDFs and appended every verdict once, at the end. A loop restart
+    mid-batch discarded them all — two 180-page German dissertations were
+    found fully extracted to markdown on disk with no databank record,
+    ~350 pages of paddle work redone. Per item, a kill costs at most the
+    paper being read.
+
+    Pins the CLASS, not that one incident: papers before the fault are
+    booked, papers after it are untouched and still selectable.
+    """
+    import os
+
+    from agent.actions import extraction_actions as ea
+    from agent.actions.scholarly_actions import read_databank
+
+    fx = _fx([_bank_line(k) for k in ("a", "b", "c", "d")])
+    tool = os.path.join(ea._repo_root(), ea._TOOL_PY)
+    calls = {"n": 0}
+    real_run = fx.run_command
+
+    async def flaky(command, working_dir=None, timeout=30):
+        calls["n"] += 1
+        if calls["n"] == 3:  # the third paper takes the process down
+            raise RuntimeError("process killed mid-batch")
+        key = command[command.index("--keys") + 1]
+        return CommandResult(return_code=0, stdout=_report(key), stderr="", command="x")
+
+    fx.run_command = flaky
+    with pytest.raises(RuntimeError):
+        await action_extract_pdf_batch(
+            _si(inputs=_batch_inputs(["a", "b", "c", "d"]), effects=fx)
+        )
+    fx.run_command = real_run
+
+    bank = await read_databank(fx)
+    assert bank["a"]["extraction_status"] == "extracted", "banked before the fault"
+    assert bank["b"]["extraction_status"] == "extracted", "banked before the fault"
+    # c was in flight and d never started — both must remain claimable.
+    assert not bank["c"].get("extraction_status")
+    assert not bank["d"].get("extraction_status")
+    assert ea._extraction_pending(bank["c"]) and ea._extraction_pending(bank["d"])
+
+
+@pytest.mark.asyncio
+async def test_one_bad_paper_no_longer_leaves_its_siblings_unjudged():
+    """The batch form's zero-report guard was all-or-nothing: one fault
+    held the whole batch. Per item, a paper that reports nothing is booked
+    on the retry ladder while its siblings are judged normally."""
+    import os
+
+    from agent.actions import extraction_actions as ea
+    from agent.actions.scholarly_actions import read_databank
+
+    fx = _fx([_bank_line(k) for k in ("good", "silent")])
+    tool = os.path.join(ea._repo_root(), ea._TOOL_PY)
+
+    async def per_key(command, working_dir=None, timeout=30):
+        key = command[command.index("--keys") + 1]
+        if key == "silent":
+            return CommandResult(return_code=0, stdout="", stderr="", command="x")
+        return CommandResult(return_code=0, stdout=_report(key), stderr="", command="x")
+
+    fx.run_command = per_key
+    await action_extract_pdf_batch(
+        _si(inputs=_batch_inputs(["good", "silent"]), effects=fx)
+    )
+    bank = await read_databank(fx)
+    assert bank["good"]["extraction_status"] == "extracted"
+    assert bank["silent"]["extraction_status"] == "needs_reextract"
+    assert "no report" in bank["silent"]["failure_reason"]
+
+
+@pytest.mark.asyncio
+async def test_batch_deadline_leaves_unstarted_papers_pending(monkeypatch):
+    """The round budget is checked BETWEEN papers. Papers past it stay in
+    exactly the state they were in before the round — pending, unclaimed,
+    and not carrying a burned retry."""
+    import os
+
+    from agent.actions import extraction_actions as ea
+    from agent.actions.scholarly_actions import read_databank
+
+    fx = _fx([_bank_line(k) for k in ("a", "b")])
+    tool = os.path.join(ea._repo_root(), ea._TOOL_PY)
+    fx._commands[tool] = CommandResult(
+        return_code=0, stdout=_report("a"), stderr="", command="x"
+    )
+    # Deadline expires immediately after the first paper.
+    monkeypatch.setattr(ea, "EXTRACT_TIMEOUT_S", 0)
+    await action_extract_pdf_batch(_si(inputs=_batch_inputs(["a", "b"]), effects=fx))
+    bank = await read_databank(fx)
+    assert not bank["a"].get("extraction_status")
+    assert not bank["b"].get("extraction_status")
+    assert ea._extraction_pending(bank["b"])

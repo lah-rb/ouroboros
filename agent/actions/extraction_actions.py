@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 
 from agent.models import StepInput, StepOutput
 from agent.paths import repo_root as _repo_root
@@ -35,7 +36,16 @@ from agent.paths import repo_root as _repo_root
 logger = logging.getLogger(__name__)
 
 EXTRACT_BATCH_SIZE = 3  # ~33 pages/paper × ~7s/page ≈ 12 min/dispatch
+# WHOLE-ROUND budget. Checked between papers, never mid-paper: a running
+# extraction is left to finish or hit its own item timeout.
 EXTRACT_TIMEOUT_S = 1800
+# PER-PAPER budget. Extraction runs one subprocess per paper (see
+# _extract_one), so the round budget above cannot also serve as the item
+# budget — reused directly it would silently become N x itself. A German
+# dissertation at ~4.3 s/page (measured on this rig) needs ~15 min for 200
+# pages; 600 s covers the sub-oversize population with margin, and anything
+# larger routes to the book lane instead.
+_EXTRACT_ITEM_TIMEOUT_S = int(os.environ.get("OUROBOROS_EXTRACT_ITEM_TIMEOUT_S", "600"))
 
 # Statuses this stage will not revisit. extract_unverified belongs here:
 # another OCR pass over a scan with no text layer yields the same
@@ -913,78 +923,93 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
             resolved_keys.append(k)
 
     root = _repo_root()
-    cmd = [
-        os.path.join(root, _TOOL_PY),
-        os.path.join(root, _TOOL_SCRIPT),
-        "--pdfs",
-        *pdfs,
-        "--keys",
-        *resolved_keys,
-        "--databank-dir",
-        os.path.join(working_dir, "databank"),
-        "--vl-backend",
-        _VL_BACKEND,
-    ]
-    result = await effects.run_command(cmd, timeout=EXTRACT_TIMEOUT_S)
 
-    reports: dict[str, dict] = {}
-    for line in (result.stdout or "").splitlines():
-        try:
-            r = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(r, dict) and r.get("paper_key"):
-            reports[r["paper_key"]] = r
+    async def _extract_one(pdf_path: str, key: str) -> tuple[dict | None, str]:
+        """Run the toolchain over ONE pdf. Returns (report, failure detail).
 
-    # A BATCH THAT REPORTED NOTHING INDICTS THE TOOLCHAIN, NOT THE PAPERS.
-    # extract_batch prints one JSON line per paper even when that paper
-    # fails — an unreadable PDF still gets a report carrying `error`. So
-    # ZERO lines across a whole batch means the process died before it
-    # could judge anything: a bad interpreter, a missing model, an import
-    # error, a path with no files behind it. None of that is evidence
-    # about the papers, and booking it against them destroys their
-    # eligibility for the run that finally works.
-    #
-    # This is the containment for the /Users-vs-/home port bug: 99 papers
-    # were marked extract_failed by a toolchain that never opened one of
-    # them. Two dispatches of the same batch burn the retry rung and reach
-    # a TERMINAL state, so the loss was silent and permanent. Leaving the
-    # records untouched means the sweep re-dispatches — noisy, and noise
-    # is the correct failure mode when the tool itself is broken.
-    if resolved_keys and not reports:
+        ONE SUBPROCESS PER PAPER, deliberately. The batch form booked every
+        verdict in a single append AFTER the whole subprocess returned, so a
+        kill anywhere discarded every completed paper in flight: two
+        180-page dissertations were observed fully extracted to markdown on
+        disk with no databank record, ~350 pages of GPU work redone. Per
+        paper, a kill costs at most the paper being read.
+
+        This is cheap because paddle serves over LLMVP (_VL_BACKEND
+        "llmvp"): the tool loads no local weights, so per-process cost is an
+        interpreter start against a ~65 s/paper job.
+        """
+        cmd = [
+            os.path.join(root, _TOOL_PY),
+            os.path.join(root, _TOOL_SCRIPT),
+            "--pdfs",
+            pdf_path,
+            "--keys",
+            key,
+            "--databank-dir",
+            os.path.join(working_dir, "databank"),
+            "--vl-backend",
+            _VL_BACKEND,
+        ]
+        res = await effects.run_command(cmd, timeout=_EXTRACT_ITEM_TIMEOUT_S)
+        for line in (res.stdout or "").splitlines():
+            try:
+                r = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(r, dict) and r.get("paper_key") == key:
+                return r, ""
         detail = (
             "timed out"
-            if result.timed_out
+            if res.timed_out
             else (
-                f"exit {result.return_code}"
-                if result.return_code
+                f"exit {res.return_code}"
+                if res.return_code
                 else "exited cleanly with no output"
             )
         )
-        tail = (result.stderr or "").strip().splitlines()[-3:]
-        summary = (
-            f"Extraction toolchain produced no report for any of "
-            f"{len(resolved_keys)} paper(s) ({detail}) — the batch is "
-            f"unjudged and stays pending"
-        )
-        return StepOutput(
-            result={"status": "failed"},
-            observations=summary + (f"; stderr: {' | '.join(tail)}" if tail else ""),
-            context_updates={
-                "directive_report": {
-                    "flow": "extract_pdfs",
-                    "status": "failed",
-                    "summary": summary,
-                    "headline": "extraction toolchain failed — no reports",
-                }
-            },
-        )
+        tail = (res.stderr or "").strip().splitlines()[-2:]
+        return None, detail + (f"; stderr: {' | '.join(tail)}" if tail else "")
 
-    updates: list[dict] = []
     extracted = retried = failed = lingual_count = 0
-    for k in resolved_keys:
+    unjudged: list[str] = []
+    unjudged_detail = ""
+    deadline = time.monotonic() + EXTRACT_TIMEOUT_S
+    for k, pdf_path in zip(resolved_keys, pdfs):
+        # BATCH DEADLINE, separate from the per-item timeout. EXTRACT_TIMEOUT_S
+        # was a whole-batch budget; reused per item it would silently become
+        # N times itself. Papers past the deadline stay pending and unclaimed,
+        # which is the same state they were in before the round.
+        if time.monotonic() > deadline:
+            unjudged.append(k)
+            unjudged_detail = unjudged_detail or "batch deadline reached"
+            continue
+
+        rep, detail = await _extract_one(pdf_path, k)
+
+        # NO REPORT INDICTS THE TOOLCHAIN, NOT THE PAPER.
+        # extract_batch prints one JSON line per paper even when that paper
+        # fails — an unreadable PDF still gets a report carrying `error`. So
+        # NO line means the process died before it could judge anything: a
+        # bad interpreter, a missing model, an import error, a path with no
+        # file behind it. None of that is evidence about the paper, and
+        # booking it destroys the paper's eligibility for the run that
+        # finally works.
+        #
+        # This is the containment for the /Users-vs-/home port bug: 99 papers
+        # were marked extract_failed by a toolchain that never opened one of
+        # them. Two dispatches burn the retry rung and reach a TERMINAL
+        # state, so the loss was silent and permanent. Leaving the record
+        # untouched means the sweep re-dispatches — noisy, and noise is the
+        # correct failure mode when the tool itself is broken.
+        #
+        # Per paper this is strictly better than the batch form it replaces:
+        # one bad paper no longer leaves its siblings unjudged.
+        if rep is None:
+            unjudged.append(k)
+            unjudged_detail = unjudged_detail or detail
+            continue
+
         rec = dict(databank.get(k) or {"paper_key": k})
-        rep = reports.get(k)
         prior_retry = rec.get("extraction_status") == "needs_reextract"
         truncated = bool(rep) and acquisition_is_truncated(rec, rep.get("pages", 0))
         oversize = bool(rep) and bool(rep.get("oversize"))
@@ -1217,14 +1242,72 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
                 rec["extraction_status"] = "needs_reextract"
                 rec["failure_reason"] = f"extraction (will retry): {reason}"
                 retried += 1
-        updates.append(rec)
 
-    # SIDECAR, not papers.jsonl — the scraper owns that file and both
-    # writers do a whole-file read-modify-write, so sharing it loses
-    # appends. Disjoint files let acquisition and OCR run at once.
-    await append_extraction_records(effects, updates)
+        # BOOK NOW, not at the end of the batch. This one append is the
+        # whole point of the per-item restructure: after it returns, this
+        # paper's work survives anything that happens to the rest of the
+        # round. SIDECAR, not papers.jsonl — the scraper owns that file and
+        # both writers do a whole-file read-modify-write, so sharing it
+        # loses appends. Disjoint files let acquisition and OCR run at once.
+        await append_extraction_records(effects, [rec])
 
-    status = "success" if extracted == len(resolved_keys) else "partial"
+    judged = len(resolved_keys) - len(unjudged)
+
+    # WHO IS AT FAULT FOR A MISSING REPORT — the round decides, not the paper.
+    #
+    # Under the old batch form, siblings were the discriminator: the tool
+    # prints one line per paper, so a paper with no line among siblings that
+    # DID report had itself broken the tool, and booking it needs_reextract
+    # was evidence-based. Per-item runs have no siblings, so the same
+    # question is answered one level up:
+    #
+    #   some papers judged  -> the toolchain works; this paper broke it.
+    #                          Run it through the normal retry ladder, which
+    #                          terminates instead of re-offering it forever.
+    #   none judged         -> the toolchain is broken. Leave every record
+    #                          untouched (the /Users-vs-/home containment).
+    #
+    # Both incident lessons survive, and neither can loop: a paper that
+    # reliably crashes the tool still reaches a terminal state.
+    if judged and unjudged:
+        for k in unjudged:
+            rec = dict(databank.get(k) or {"paper_key": k})
+            reason = f"no report from tool ({unjudged_detail})"
+            if rec.get("extraction_status") == "needs_reextract":
+                rec["extraction_status"] = "extract_failed"
+                rec["failure_reason"] = f"extraction: {reason}"
+                failed += 1
+            else:
+                rec["extraction_status"] = "needs_reextract"
+                rec["failure_reason"] = f"extraction (will retry): {reason}"
+                retried += 1
+            await append_extraction_records(effects, [rec])
+        unjudged = []
+
+    # NOTHING JUDGED AT ALL INDICTS THE TOOLCHAIN. If EVERY paper came back
+    # without a report, the tool itself is broken, and the summary has to say
+    # so by name or the next reader repeats the investigation that cost 99
+    # papers to the /Users-vs-/home port bug.
+    if resolved_keys and not judged:
+        summary = (
+            f"Extraction toolchain produced no report for any of "
+            f"{len(resolved_keys)} paper(s) ({unjudged_detail}) — the batch "
+            f"is unjudged and stays pending"
+        )
+        return StepOutput(
+            result={"status": "failed"},
+            observations=summary,
+            context_updates={
+                "directive_report": {
+                    "flow": "extract_pdfs",
+                    "status": "failed",
+                    "summary": summary,
+                    "headline": "extraction toolchain failed — no reports",
+                }
+            },
+        )
+
+    status = "success" if extracted == judged else "partial"
     if extracted == 0:
         status = "failed"
     summary = (
@@ -1232,6 +1315,11 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
         + (f", {retried} queued for retry" if retried else "")
         + (f", {lingual_count} queued for translation" if lingual_count else "")
         + (f", {failed} failed terminally" if failed else "")
+        + (
+            f", {len(unjudged)} unjudged and still pending ({unjudged_detail})"
+            if unjudged
+            else ""
+        )
     )
     return StepOutput(
         result={"status": status},
