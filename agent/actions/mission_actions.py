@@ -3014,7 +3014,10 @@ async def _sweep_first_test(
         "target_file_path": "",
         "flow_directive": (
             f"Test this capability: {goal.description}\n"
-            f"Run the program and verify the described behavior works correctly."
+            f"Run the program and verify the described behavior works correctly — "
+            f"in its intended role: the response AND the consequence the "
+            f"feature exists to produce. The message is not the mechanic; "
+            f"after the action, check the world agrees with what it claims."
         ),
         "interaction_mode": goal_mode,
         "run_command": run_command if goal_mode == "deterministic" else "",
@@ -4174,7 +4177,10 @@ def _functional_retest_directive(goal: Any, *, after: str) -> str:
         return directive + guidance_block
     return (
         f"Re-test this capability after a {after}: {desc}\n"
-        f"Run the program and verify the described behavior works correctly."
+        f"Run the program and verify the described behavior works correctly — "
+        f"in its intended role: the response AND the consequence the "
+        f"feature exists to produce. The message is not the mechanic; "
+        f"after the action, check the world agrees with what it claims."
         + guidance_block
     )
 

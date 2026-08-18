@@ -12,6 +12,17 @@ content: |
     however short it is. (A quit test that launches and quits cleanly
     is a PASS — "no gameplay happened first" is not a failure of
     quitting.)
+  - "Exercised" means the capability did ITS JOB, not that it produced a
+    response. Judge the feature in its intended ROLE: the message is not
+    the mechanic. A cancel that prints "Cancelled" and deletes the very
+    record it was cancelling has not demonstrated cancelling; an undo
+    that reports success and changes nothing has not demonstrated
+    undoing; a save that prints "Saved" but loses half the state on
+    reload has not demonstrated saving. When the transcript shows the
+    response, ask what the world should look like afterwards IF the
+    feature did its job — and check the transcript for that too. (A
+    shipped artifact passed three verification rounds on a command's
+    message alone; the world-check would have failed every one.)
   - A reproduction sequence in the objective names ONE route to the
     behavior, not the only acceptable one. If the session exercised the
     same capability with a different instance — another item, room, or

@@ -79,6 +79,8 @@ Explicit over implicit. If something is configured, say where. If something is a
 
 Check if similar functionality exists before writing new code. Extend or reuse what's there. DRY is a habit, not a rule to invoke after the fact.
 
+When you verify anything, verify its purpose, not its reply. A feature works when it does its job in the world — the message it prints is not the mechanic. A cancel that announces success and deletes the record it was cancelling, an undo that changes nothing, a save that loses state on reload: each printed the right words over the wrong world. Ask what the feature is FOR, then look at the world and check it agrees.
+
 ---
 
 ## Output Reality

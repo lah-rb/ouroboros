@@ -51,9 +51,16 @@ content: |
     rule above; expand to as many steps as the guidance needs.
 
   ## PASS CRITERIA
-  One or two sentences: the capability is satisfied the moment the
-  expected behavior is observed ONCE (e.g. "examine returns a non-empty
-  description for the item"). Do not require exhaustive coverage.
+  One or two sentences: the capability is satisfied the moment it is
+  observed doing ITS JOB once — the response AND the consequence the
+  feature exists to produce (e.g. "examine returns a non-empty
+  description for the item"; "after removing an entry, the listing no
+  longer shows it and the place it was moved to does"). A command that
+  prints its message while leaving the world in a state that defeats the
+  feature's purpose has NOT passed — a cancel that deletes the record it
+  was cancelling, a consumable that is never consumed, a key that opens
+  nothing. Name the consequence the tester must see. Do not require
+  exhaustive coverage.
 
   ## FAIL CRITERIA
   One or two sentences naming a real failure of THIS capability (command

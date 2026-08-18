@@ -22,6 +22,19 @@ content: |
 
   2. PIN THE INVARIANT, NOT A SESSION FINGERPRINT. Assert the rule that must always hold ("exporting then importing restores every record"), never the incidental state one run happened to reach ("page == 4 and ids == ['R-17']"). A fingerprint breaks every time the project legitimately changes.
 
+  2c. THE EXPECTED BEHAVIOUR COMES FROM THE FEATURE'S ROLE, NEVER FROM
+  WHAT THE CODE CURRENTLY DOES. Derive every assertion from what the goal
+  and the product's own text say the feature is FOR — then assert THAT.
+  Reading the implementation to learn its symbols is required (rule 3);
+  reading it to learn what to EXPECT is how a defect gets notarised. A
+  shipped test asserted `assert order.id in ledger.cancelled` and
+  `ledger.find(order.id) is None` after a cancel — faithfully pinning the
+  code's actual behaviour, which WAS the bug (cancelling deleted the
+  record outright, audit trail included, unrecoverably). The test
+  PASSED, green-lighting the defect for every later round. If the code's
+  current behaviour contradicts the feature's evident purpose, that
+  contradiction is a FINDING to report, not an expectation to pin.
+
   2b. IF THE BEHAVIOUR IS ONE HALF OF A PAIR, TEST THE ROUND TRIP. Save/load, encode/decode, write/read, push/pop. Testing one direction proves nothing about the other, and the defect is usually in the direction you did not test. That a saved file CONTAINS a key is a fingerprint of today's format — rule 2's mistake wearing a schema costume; that saving and then loading restores what you had is the invariant. One run shipped THREE separate tests asserting the writer's keys while the reader ignored every one of them, and the broken reader shipped.
 
   3. CALL THE CODE AS IT IS ACTUALLY WRITTEN. You traced these symbols earlier in this session — their real constructor arguments, method names and attribute names are in the bodies you read above. Use those exactly. Do NOT invent a constructor keyword or an attribute that "should" exist; if you are unsure how the object is built, construct it the way the program's own entry point does. A test that dies on `unexpected keyword argument` is red now AND red after the fix — it proves nothing and blocks the goal forever.

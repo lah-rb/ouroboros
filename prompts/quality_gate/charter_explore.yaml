@@ -86,7 +86,13 @@ sections:
     ## OBSERVE
     What to watch for: confusing or inconsistent output, missing
     feedback, awkward phrasing, behavior that contradicts the product's
-    promise, scenarios that feel unfinished. These are QUALITY findings —
+    promise, scenarios that feel unfinished — and actions whose EFFECT
+    contradicts their MEANING. After any consequential action, look at
+    the world and ask whether it agrees with what the action claims to
+    have done: fleeing should leave the threat existing behind you,
+    using a consumable should consume it, unlocking should have needed
+    the key. The most expensive defects in this campaign printed the
+    right message over the wrong world. These are QUALITY findings —
     observations, not pass/fail. Something the operator could not reach
     is one line in the summary, not a mission.
 

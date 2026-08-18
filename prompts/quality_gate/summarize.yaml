@@ -51,7 +51,11 @@ sections:
 
     EVIDENCE RULE — broken requires observation. Only report a behavior
     as broken/not-functional if the evidence below SHOWS it failing (an
-    error, wrong output, a crash). If the UX session simply did not
+    error, wrong output, a crash — or a consequence that contradicts the
+    feature's intended role: a cancel that deletes the record it was
+    cancelling, a consumable that is never consumed, a save that reports
+    success and loses state on load. The message printing is not
+    evidence of working; the world afterwards is). If the UX session simply did not
     exercise a feature, first check the verified-behaviors list below:
     a feature with a verified passing play-test is DONE, and one session
     not re-touring it is not a finding — re-raising it spends a probe

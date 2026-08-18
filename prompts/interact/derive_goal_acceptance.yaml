@@ -41,7 +41,10 @@ sections:
     content: |
       Produce checks that inspect OBSERVABLE END-STATE (files exist and are
       non-empty, an artifact the goal produces, an exit code, a port probe) —
-      NOT the steps taken. Each check exits 0 iff a required condition holds.
+      NOT the steps taken. Choose conditions that witness the feature's
+      PURPOSE, not its output: a check that a save file exists passes on a
+      save that lost half the state; a check that reloading it restores what
+      was saved witnesses what saving is for. Each check exits 0 iff a required condition holds.
       Prefer the smallest set of necessary, independent conditions — none is a
       valid answer when nothing observable would separate pass from fail — run
       in the working directory with standard tools.

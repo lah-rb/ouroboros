@@ -27,7 +27,13 @@ sections:
       failure: an error, wrong output, a crash, or the claimed missing
       behavior. A crash at launch confirms a startup claim.
     - `"confirmed": false` ONLY if the transcript shows the claimed
-      behavior visibly WORKING.
+      behavior visibly WORKING — and working means doing its JOB, not
+      producing a response. A feature's message is not its mechanic:
+      "Cancelled" followed by the cancelled record having been deleted
+      outright is cancel BROKEN, not cancel working; an undo that
+      changes nothing, a save that loses state on load — same. If the
+      transcript shows the response but the world state afterwards
+      contradicts what the feature is for, that CONFIRMS the claim.
     - If the transcript is ambiguous, or the reproduction never
       reached the feature, answer `"confirmed": true` — a claim is
       only dropped on clear evidence the behavior works.
