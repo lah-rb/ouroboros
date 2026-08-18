@@ -591,17 +591,49 @@ def _figtext_drain_budget() -> int:
         return 6
 
 
+def _figs_remaining(record: dict) -> int:
+    """Undescribed figures on this record, from booked partial progress."""
+    total = int(record.get("figure_count") or 0)
+    prog = str(record.get("figtext_progress") or "")
+    if "/" in prog:
+        try:
+            return max(0, total - int(prog.split("/")[0]))
+        except ValueError:
+            return total
+    return total
+
+
 def select_figtext_batch(databank: dict, max_figures: int) -> list[str]:
-    """Claimed, figure-budgeted paper selection for the drain."""
+    """Claimed, figure-budgeted selection — REMAINING-aware.
+
+    Papers in-progress finish first, then fewest-remaining. Whole papers
+    pack greedily into the budget; when none fits whole, the head paper is
+    taken ALONE and the tool's --max-figures pool caps the round — big
+    papers make progress across rounds instead of being skipped forever
+    (693 papers at 13+ figures were structurally unreachable under the
+    old skip rule)."""
+    pending = sorted(
+        (
+            k
+            for k, r in databank.items()
+            if _fig_pending(r) and k not in _FIGTEXT_CLAIMS
+        ),
+        key=lambda k: (
+            0 if "/" in str(databank[k].get("figtext_progress") or "") else 1,
+            _figs_remaining(databank[k]),
+            k,
+        ),
+    )
     batch: list[str] = []
     figures = 0
-    for key in sorted(k for k, r in databank.items() if _fig_pending(r)):
-        if key in _FIGTEXT_CLAIMS:
-            continue
-        n = int((databank.get(key) or {}).get("figure_count") or 0)
-        if n > max_figures:
-            continue  # dedicated-dispatch material, never drain material
+    for key in pending:
+        n = _figs_remaining(databank[key])
         if figures + n > max_figures:
+            if batch:
+                break
+            # Nothing fits whole: take the head paper alone; the tool's
+            # figure pool bounds the round.
+            batch.append(key)
             break
         batch.append(key)
         figures += n
@@ -653,10 +685,18 @@ async def action_figtext_drain_batch(step_input):
     keys = select_figtext_batch(databank, budget)
     if not keys:
         return _decline("nothing unclaimed pending")
-    figures = sum(int((databank.get(k) or {}).get("figure_count") or 0) for k in keys)
+    figures = min(budget, sum(_figs_remaining(databank.get(k) or {}) for k in keys))
     try:
         sub = step_input.model_copy(
-            update={"inputs": {**dict(step_input.inputs or {}), "paper_keys": keys}}
+            update={
+                "inputs": {
+                    **dict(step_input.inputs or {}),
+                    "paper_keys": keys,
+                    # The tool banks per-figure readings and resumes, so the
+                    # budget is a round PACER, not an eligibility wall.
+                    "max_figures": budget,
+                }
+            }
         )
         out = await action_fig_review_batch(sub)
         result = dict(out.result or {})
@@ -667,12 +707,14 @@ async def action_figtext_drain_batch(step_input):
         "figures": figures,
         "done": result.get("done", 0),
         "failed": result.get("failed", 0),
+        "partial": result.get("partial", 0),
     }
     return StepOutput(
         result=summary,
         observations=(
             f"figtext drain: {figures} figure(s) across {len(keys)} paper(s) — "
-            f"{summary['done']} done, {summary['failed']} failed"
+            f"{summary['done']} done, {summary['partial']} partial, "
+            f"{summary['failed']} failed"
         ),
         context_updates={"figtext_summary": summary},
     )
@@ -1067,6 +1109,9 @@ async def action_fig_review_batch(step_input):
         "--vl-backend",
         _fig_backend(),
     ]
+    max_figures = int(step_input.inputs.get("max_figures") or 0)
+    if max_figures > 0:
+        cmd += ["--max-figures", str(max_figures)]
     if _fig_backend() == "mlx" and _fig_mlx_model():
         cmd += ["--model", _fig_mlx_model()]
     result = await effects.run_command(cmd, timeout=FIG_TIMEOUT_S)
@@ -1083,15 +1128,26 @@ async def action_fig_review_batch(step_input):
     from agent.actions.extraction_actions import is_toolchain_fault
 
     databank = await read_databank(effects)
-    updates, done, failed, skipped = [], 0, 0, 0
+    updates, done, failed, skipped, partial = [], 0, 0, 0, 0
     for k in keys:
         rec = dict(databank.get(k) or {"paper_key": k})
         rep = reports.get(k)
         err = (rep or {}).get("error") or "no report from tool"
         if rep is not None and not rep.get("error"):
-            rec["figtext_status"] = "figtext_done"
-            rec["figtext_path"] = f"{FIGTEXT_DIR}/{k}.json"
-            done += 1
+            if int(rep.get("remaining") or 0) > 0:
+                # Partial round under --max-figures: readings are banked in
+                # the sidecar; the record stays fig-PENDING so a later round
+                # resumes where this one stopped. Progress is bookkeeping,
+                # never a terminal status.
+                rec["figtext_progress"] = (
+                    f"{int(rep.get('described') or 0)}/{int(rep.get('figs_total') or 0)}"
+                )
+                partial += 1
+            else:
+                rec["figtext_status"] = "figtext_done"
+                rec["figtext_path"] = f"{FIGTEXT_DIR}/{k}.json"
+                rec["figtext_progress"] = ""
+                done += 1
         elif rep is not None and is_toolchain_fault(err):
             # TRANSPORT, NOT VERDICT — the same rule the extraction ladder
             # learned from the vlm-500 incident: a reported HTTP 5xx /
@@ -1112,12 +1168,14 @@ async def action_fig_review_batch(step_input):
         updates.append(rec)
     await append_records(effects, updates)
 
-    status = "success" if done else "failed"
-    summary = f"Fig review: {done} done, {failed} failed of {len(keys)}" + (
-        f", {skipped} deferred (toolchain fault)" if skipped else ""
+    status = "success" if done or partial else "failed"
+    summary = (
+        f"Fig review: {done} done, {failed} failed of {len(keys)}"
+        + (f", {partial} partial" if partial else "")
+        + (f", {skipped} deferred (toolchain fault)" if skipped else "")
     )
     return StepOutput(
-        result={"status": status, "done": done, "failed": failed},
+        result={"status": status, "done": done, "failed": failed, "partial": partial},
         observations=summary,
         context_updates={
             "directive_report": {

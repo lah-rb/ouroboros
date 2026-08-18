@@ -42,19 +42,31 @@ def _si(effects, inputs=None) -> StepInput:
     )
 
 
-def test_selection_budget_skips_oversize_and_claims():
+def test_selection_packs_by_remaining_and_claims():
     bank = _bank({"a": 2, "big": 40, "b": 3, "c": 2})
     _FIGTEXT_CLAIMS.clear()
     try:
+        # Fewest-remaining first: a(2)+c(2) pack; b(3) would break 6.
         first = select_figtext_batch(bank, 6)
-        # 'big' (40 > 6) skipped entirely; a(2)+b(3) fit, c(2) would break
-        # the budget at 7.
-        assert first == ["a", "b"]
-        # Concurrent selector sees only the unclaimed remainder.
+        assert first == ["a", "c"]
         second = select_figtext_batch(bank, 6)
-        assert second == ["c"]
-        release_figtext_keys(first + second)
-        assert select_figtext_batch(bank, 6) == ["a", "b"]
+        assert second == ["b"]
+        # 'big' is NO LONGER skipped forever: taken alone, the tool's
+        # --max-figures pool caps the round.
+        third = select_figtext_batch(bank, 6)
+        assert third == ["big"]
+        release_figtext_keys(first + second + third)
+    finally:
+        _FIGTEXT_CLAIMS.clear()
+
+
+def test_selection_prefers_in_progress_papers():
+    bank = _bank({"fresh": 3, "started": 40})
+    bank["started"]["figtext_progress"] = "36/40"  # 4 remaining
+    _FIGTEXT_CLAIMS.clear()
+    try:
+        # In-progress finishes first even though 'fresh' has fewer total.
+        assert select_figtext_batch(bank, 6) == ["started"]
     finally:
         _FIGTEXT_CLAIMS.clear()
 
@@ -183,3 +195,67 @@ async def test_writers_enforce_field_ownership():
     await append_records(fx, [booked])
     bank = await read_databank(fx)
     assert bank["p1"]["figtext_status"] == "figtext_done"
+
+
+@pytest.mark.asyncio
+async def test_fig_review_partial_report_books_progress_not_status():
+    """A --max-figures partial report must book figtext_progress and leave
+    the record fig-PENDING; a complete report books figtext_done and
+    clears the progress marker."""
+    import json
+
+    from agent.actions.curation_actions import action_fig_review_batch
+    from agent.effects.protocol import CommandResult
+
+    # Extraction-owned fields live in the SIDECAR (field-ownership rule):
+    # they must survive papers-side rewrites via the overlay, exactly as
+    # in production.
+    paper = {"paper_key": "p1", "access_status": "oa_pdf"}
+    ext = {"paper_key": "p1", "extraction_status": "extracted", "figure_count": 40}
+
+    def tool_out(remaining, described):
+        return json.dumps(
+            {
+                "paper_key": "p1",
+                "figtext_path": "x/p1.json",
+                "figs": described,
+                "figs_total": 40,
+                "described": described,
+                "remaining": remaining,
+                "error": "",
+            }
+        )
+
+    class _ToolEffects(MockEffects):
+        stdout = tool_out(remaining=28, described=12)
+
+        async def run_command(self, command, working_dir=None, timeout=30):
+            return CommandResult(
+                return_code=0, stdout=self.stdout, stderr="", command="fig"
+            )
+
+    fx = _ToolEffects(
+        files={
+            "databank/papers.jsonl": json.dumps(paper) + "\n",
+            "databank/extraction.jsonl": json.dumps(ext) + "\n",
+        }
+    )
+    si = _si(fx, inputs={"paper_keys": ["p1"], "working_directory": "/tmp/x"})
+    out = await action_fig_review_batch(si)
+    assert out.result["partial"] == 1 and out.result["done"] == 0
+
+    from agent.actions.scholarly_actions import read_databank
+    from agent.actions.curation_actions import _fig_pending
+
+    bank = await read_databank(fx)
+    assert bank["p1"].get("figtext_progress") == "12/40"
+    assert "figtext_status" not in bank["p1"]
+    assert _fig_pending(bank["p1"])  # still selectable next round
+
+    # Completion round: remaining 0 → done, progress cleared.
+    _ToolEffects.stdout = tool_out(remaining=0, described=40)
+    out2 = await action_fig_review_batch(si)
+    assert out2.result["done"] == 1
+    bank = await read_databank(fx)
+    assert bank["p1"]["figtext_status"] == "figtext_done"
+    assert bank["p1"]["figtext_progress"] == ""

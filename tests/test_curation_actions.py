@@ -200,7 +200,7 @@ async def test_fig_batch_books_done_and_failed():
             effects=fx,
         )
     )
-    assert out.result == {"status": "success", "done": 1, "failed": 1}
+    assert out.result == {"status": "success", "done": 1, "failed": 1, "partial": 0}
     from agent.actions.scholarly_actions import read_databank
 
     bank = asyncio.get_event_loop() and await read_databank(fx)
