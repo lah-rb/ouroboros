@@ -112,7 +112,16 @@ catalog_work: #FlowDefinition & {
 				{formatter: "format_catalog_batch", output_key: "papers_block"
 					params: {source: {$ref: "context.catalog_batch"}, only_untagged: true}},
 			]
-			config: temperature: "t*0.3"
+			// BUDGET, NOT DEFAULT. Unset, this turn inherits the server's
+			// max_tokens_default of 16384 — and the batched engine charges KV
+			// by ENTITLEMENT, not use (batched_engine._live_occupancy), so an
+			// unset budget reserves 16k cells to spend ~3k. Measured over 954
+			// live tag turns: p50 1,696, p95 3,109, max 7,258. 8192 clears the
+			// observed max with headroom and halves the reservation.
+			config: {
+				temperature: "t*0.3"
+				max_tokens:  8192
+			}
 			resolver: {
 				type: "rule"
 				rules: [

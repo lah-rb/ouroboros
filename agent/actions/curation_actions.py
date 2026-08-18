@@ -546,11 +546,13 @@ def _fig_batch(databank: dict) -> list[str]:
     """The next batch, budgeted by FIGURES rather than papers.
 
     A paper-count batch was safe against an 8B MLX model at a few seconds a
-    figure. It is not safe against the endpoint: muse reads a figure in ~37s
-    (measured 2026-08-12, 4 figures in 147.9s), and this corpus has papers
-    with 54, 53 and 40 figures. Three of those in one dispatch is ~90 minutes
-    against a 3600s timeout — the batch would die mid-flight and every paper
-    in it would book figtext_failed, having done the work.
+    figure. It is not safe against the endpoint: muse reads a figure in ~16s
+    on this rig (measured 2026-08-16, afc65ec, once the vision projector moved
+    to CUDA1; it was ~37s on the M1, and that stale constant over-budgeted
+    figure batches by more than 2x). This corpus has papers with 54, 53 and 40
+    figures — three of those in one dispatch still approaches the 3600s
+    timeout, and the batch would die mid-flight with every paper in it booking
+    figtext_failed, having done the work.
 
     So the unit of work is the figure, which is what actually costs time.
     FIG_BATCH_SIZE still caps the paper count (a batch of many tiny papers

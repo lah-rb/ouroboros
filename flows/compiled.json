@@ -23751,7 +23751,8 @@
           }
         ],
         "config": {
-          "temperature": "t*0.3"
+          "temperature": "t*0.3",
+          "max_tokens": 8192
         },
         "resolver": {
           "type": "rule",
@@ -24102,7 +24103,8 @@
           ]
         },
         "config": {
-          "temperature": "t*0.5"
+          "temperature": "t*0.5",
+          "max_tokens": 3072
         },
         "resolver": {
           "type": "rule",
@@ -24498,7 +24500,8 @@
           }
         ],
         "config": {
-          "temperature": "t*0.4"
+          "temperature": "t*0.4",
+          "max_tokens": 6144
         },
         "resolver": {
           "type": "rule",

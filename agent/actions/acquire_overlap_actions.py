@@ -280,7 +280,14 @@ async def _tag_lane(step_input: StepInput, batch: list) -> list:
         async with sem:
             try:
                 prompt = _render_tag_prompt(mission, sub)
-                result = await effects.run_inference(prompt, {"temperature": "t*0.3"})
+                # BUDGET, NOT DEFAULT. Unset, this inherits the server's
+                # max_tokens_default (16384) — and the batched engine reserves
+                # KV by ENTITLEMENT, not use, so an unset budget holds 16k
+                # cells to spend ~3k and starves every sibling lane. Measured
+                # over 954 live tag turns: p95 3,109, max 7,258.
+                result = await effects.run_inference(
+                    prompt, {"temperature": "t*0.3", "max_tokens": 8192}
+                )
             except Exception as exc:  # noqa: BLE001 — lane boundary
                 logger.warning("tag lane turn failed (%d paper(s)): %s", len(sub), exc)
                 return None

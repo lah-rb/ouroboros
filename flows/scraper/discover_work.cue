@@ -50,7 +50,14 @@ discover_work: #FlowDefinition & {
 					"coverage_target", "have_count", "corpus_languages",
 				]
 			}
-			config: temperature: "t*0.5"
+			// See catalog_work's tag turn for why an explicit budget matters
+			// (unset = the server's 16384 default, reserved by entitlement).
+			// Measured over 90 live refine turns: p50 ~500, p95 940, max 940.
+			// 3072 is 3x the observed max — generous, and still 5x cheaper.
+			config: {
+				temperature: "t*0.5"
+				max_tokens:  3072
+			}
 			resolver: {
 				type: "rule"
 				rules: [
