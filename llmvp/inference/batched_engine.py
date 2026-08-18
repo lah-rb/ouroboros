@@ -1461,9 +1461,24 @@ class BatchedEngine:
         active = sum(
             1 for s in self._streams.values() if s.phase is not StreamPhase.DONE
         )
+        # SEATS FROM STREAM OCCUPANCY, not the backend's checkout queue.
+        # Those two answer different questions: the queue says "may I hold
+        # an instance", occupancy says "is a sequence actually decoding".
+        # A scheduler asking whether work can START now wants the latter,
+        # and it is the one this thread can read without a lock.
+        busy_seqs = {
+            s.slot.seq
+            for s in self._streams.values()
+            if s.phase is not StreamPhase.DONE and s.slot is not None
+        }
+        seats_total = len(self._seats)
         return {
             "serving": not self._paused and self._fatal is None,
             "decode_mode": "batched",
+            "seats_total": seats_total,
+            "seats_checked_out": len(busy_seqs),
+            "seats_free": max(0, seats_total - len(busy_seqs)),
+            "n_ctx_seq": max((int(seat._n_ctx) for seat in self._seats), default=0),
             "kv_pool_tokens": n_ctx,
             "free_cells": self._free_cells(n_ctx),
             "live_occupancy": live,

@@ -72,7 +72,11 @@ class CapacitySnapshot:
     # has the decode thread parked — a scheduler must read this as zero
     # capacity rather than as "lots of free cells".
     serving: bool = True
-    status: str = "ok"
+    # No `status` field on purpose. The engine never computes one, so it
+    # would read "ok" through a fatal latch — actively misleading on the
+    # subscription path, where a client sees only this type. `serving`
+    # plus `engine_fatal` carry the same information and are both set at
+    # the moment they change.
     decode_mode: str = "batched"
 
     # -- seats (the concurrency surface) --

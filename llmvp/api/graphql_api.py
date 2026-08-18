@@ -173,6 +173,133 @@ class HealthStatus:
     decode_failures: int = 0
     unhealed_decode_failures: int = 0
     unservable: bool = False
+    # Serving capacity — what a scheduler needs to decide whether work
+    # FITS right now. Optional so a client written against a newer schema
+    # degrades to the flat fields above rather than erroring.
+    capacity: Optional["Capacity"] = None
+
+
+@strawberry.type
+class Capacity:
+    """What the server can accept, at one instant.
+
+    ONE TYPE, TWO DELIVERIES: this is what `Subscription.capacity` pushes
+    and what `health { capacity }` returns, so the push and poll paths
+    cannot drift into disagreeing about the same server.
+
+    Every field is defaulted: a partially-initialized backend, or one
+    whose engine is not batched, must still validate rather than fail the
+    whole health query.
+
+    SEATS AND CELLS ARE DIFFERENT LIMITS and a scheduler needs both.
+    `seats_free` is concurrency (how many streams may run); `free_cells`
+    is context (how much KV a new stream can claim). Work that fits one
+    and not the other cannot be admitted. Note `free_cells` reflects
+    ENTITLEMENT — the engine charges each live stream its full granted
+    budget, not its current position — which is why an idle-looking
+    server can still refuse a large request.
+    """
+
+    seq: int = 0
+    model: str = ""
+    # False while a context rebuild has the decode thread parked. A parked
+    # engine still reports free cells; dispatching into it is the bug this
+    # flag exists to prevent.
+    serving: bool = True
+    decode_mode: str = ""
+
+    seats_total: int = 0
+    seats_free: int = 0
+    seats_checked_out: int = 0
+
+    kv_pool_tokens: int = 0
+    free_cells: int = 0
+    live_occupancy: int = 0
+    pinned_occupancy: int = 0
+    pool_slack: int = 0
+    min_admit_budget: int = 0
+    n_ctx_seq: int = 0
+    # The resident static prefix. Measured ~94% free (a static token costs
+    # ~6% of a private one), so a client sizing a request should discount
+    # it rather than counting it against free_cells.
+    static_prefix_tokens: int = 0
+
+    active_streams: int = 0
+    waiting: int = 0
+    prefill_budget: int = 0
+    engine_steps: int = 0
+    kv_pressure_events: int = 0
+    kv_forced_windows: int = 0
+    kv_evictions: int = 0
+    decode_failures: int = 0
+    engine_fatal: Optional[str] = None
+
+
+def _health_capacity(status: dict) -> Optional["Capacity"]:
+    """The poll half of the capacity contract.
+
+    Prefers the engine's last published snapshot (the same object the
+    subscription pushes, so the two paths cannot disagree), then overlays
+    the backend's AUTHORITATIVE seat availability — `available_instances`
+    is the queue a request must actually win to run, while the engine's
+    view is derived from stream occupancy. Returns None when the backend
+    predates the bus, which leaves the flat health fields as the client's
+    fallback rather than inventing zeros that read as "server full".
+    """
+    try:
+        from inference.capacity import BUS
+
+        snap = BUS.latest()
+    except Exception:  # noqa: BLE001 — health must never fail on telemetry
+        return None
+    if snap is None:
+        return None
+    cap = _capacity_from_snapshot(snap)
+    avail = status.get("available_instances")
+    if isinstance(avail, int):
+        cap.seats_free = avail
+    pool = status.get("pool_size")
+    if isinstance(pool, int) and pool:
+        cap.seats_total = pool
+    checked = status.get("checked_out")
+    if isinstance(checked, int):
+        cap.seats_checked_out = checked
+    return cap
+
+
+def _capacity_from_snapshot(snap) -> "Capacity":
+    """Map a CapacitySnapshot onto the GraphQL type.
+
+    Field-by-field rather than **asdict: the dataclass carries
+    seats_by_persona (a dict, which has no scalar GraphQL mapping) and
+    adding a field there must not silently change the wire schema.
+    """
+    return Capacity(
+        seq=snap.seq,
+        model=snap.model,
+        serving=snap.serving,
+        decode_mode=snap.decode_mode,
+        seats_total=snap.seats_total,
+        seats_free=snap.seats_free,
+        seats_checked_out=snap.seats_checked_out,
+        kv_pool_tokens=snap.kv_pool_tokens,
+        free_cells=snap.free_cells,
+        live_occupancy=snap.live_occupancy,
+        pinned_occupancy=snap.pinned_occupancy,
+        pool_slack=snap.pool_slack,
+        min_admit_budget=snap.min_admit_budget,
+        n_ctx_seq=snap.n_ctx_seq,
+        static_prefix_tokens=snap.static_prefix_tokens,
+        active_streams=snap.active_streams,
+        waiting=snap.waiting,
+        prefill_budget=snap.prefill_budget,
+        engine_steps=snap.engine_steps,
+        kv_pressure_events=snap.kv_pressure_events,
+        kv_forced_windows=snap.kv_forced_windows,
+        kv_evictions=snap.kv_evictions,
+        decode_failures=snap.decode_failures,
+        engine_fatal=snap.engine_fatal,
+    )
 
 
 @strawberry.type
@@ -692,6 +819,7 @@ class Query:
             engine_active_streams=(status.get("batched_engine") or {}).get(
                 "active_streams"
             ),
+            capacity=_health_capacity(status),
             **{
                 k: trend_status.get(k)
                 for k in (
@@ -1326,6 +1454,45 @@ class Mutation:
 @strawberry.type
 class Subscription:
     """GraphQL Subscription resolvers for streaming."""
+
+    @strawberry.subscription
+    async def capacity(self) -> AsyncGenerator["Capacity", None]:
+        """Push serving capacity whenever it changes.
+
+        WHY A SUBSCRIPTION AND NOT A POLL. Capacity changes on stream
+        admit and retire — events the server knows exactly and a client
+        can only guess at. A poller either runs hot (wasting a request per
+        interval to learn nothing) or runs cold (dispatching against a
+        stale picture). Neither error is necessary when the server can
+        simply say.
+
+        The first yield is the CURRENT snapshot, not the next change: a
+        scheduler connecting to an idle server must learn its capacity
+        immediately rather than blocking until something happens.
+
+        Unregisters in `finally`. session_events does not, and a client
+        that reconnects in a loop would otherwise accumulate mailboxes
+        until the bus refuses new ones.
+        """
+        import asyncio as _asyncio
+
+        from inference.capacity import BUS
+
+        loop = _asyncio.get_running_loop()
+        BUS.bind_loop(loop)
+        mb = BUS.subscribe(loop)
+        if mb is None:
+            # At the subscriber cap — say so by closing rather than
+            # hanging a client that would wait forever for a first frame.
+            return
+        try:
+            snap = BUS.latest()
+            if snap is not None:
+                yield _capacity_from_snapshot(snap)
+            while True:
+                yield _capacity_from_snapshot(await mb.get())
+        finally:
+            BUS.unsubscribe(mb)
 
     @strawberry.subscription
     async def stream_completion(
