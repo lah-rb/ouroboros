@@ -378,15 +378,27 @@ _OCR_CLAIMS: set[str] = set()
 
 
 def select_ocr_batch(databank: dict, max_pdfs: int) -> list[str]:
-    """Pick up to max_pdfs unclaimed pending keys (needs_reextract first —
-    a bounded retry should not queue behind the whole backlog) and CLAIM
-    them. Callers must release_ocr_keys() in a finally."""
+    """Pick up to max_pdfs unclaimed pending keys and CLAIM them. Callers
+    must release_ocr_keys() in a finally.
+
+    Order: papers already PART-EXTRACTED first, then needs_reextract, then
+    the rest. Finish-first matters more than it looks — a half-extracted
+    paper is holding banked part files and a page cursor, and every round
+    that starts something else instead leaves that work unfinished on disk
+    while the queue grows around it. A bounded retry still outranks fresh
+    work for the original reason: it should not queue behind the backlog.
+    """
     pending = [
         (k, r)
         for k, r in databank.items()
         if _extraction_pending(r) and r.get("pdf_path") and k not in _OCR_CLAIMS
     ]
-    pending.sort(key=lambda kr: kr[1].get("extraction_status") != "needs_reextract")
+    pending.sort(
+        key=lambda kr: (
+            not (kr[1].get("extract_progress") or {}).get("parts"),
+            kr[1].get("extraction_status") != "needs_reextract",
+        )
+    )
     keys = [k for k, _ in pending[:max_pdfs]]
     _OCR_CLAIMS.update(keys)
     return keys
@@ -406,6 +418,76 @@ def release_ocr_keys(keys: list[str]) -> None:
 # ~4 min; 0 disables) via the tool's --page-range mode, records progress on
 # the record (book_progress, extraction-owned), and on the final segment
 # assembles the part markdowns and applies the standard verdict.
+
+
+def _extract_pages() -> int:
+    """Pages per extraction segment.
+
+    THE UNIT OF LOSS. Extraction is resumable at segment granularity: a
+    kill, a pause, or a deadline costs at most the segment in hand, and
+    everything before it is already banked. So this number is really two
+    answers at once — how much work a stop can throw away, and how long a
+    pause takes to take effect.
+
+    25 pages is ~110 s at the 4.3 s/page measured on this rig. Most papers
+    (median ~12 pages) still finish in a single segment, so the common case
+    pays nothing for the property; a 250-page dissertation becomes ten
+    resumable pieces instead of one 18-minute all-or-nothing gamble.
+    """
+    raw = os.environ.get("OUROBOROS_EXTRACT_PAGES", "").strip()
+    try:
+        return max(1, int(raw)) if raw else 25
+    except ValueError:
+        return 25
+
+
+async def _mission_paused(effects) -> bool:
+    """Has the operator asked the mission to stop?
+
+    Checked BETWEEN segments so a pause lands at a page boundary with
+    progress banked, rather than killing an extraction mid-document. Any
+    failure reads as "not paused": a mission we cannot load is not a
+    reason to stop doing work.
+    """
+    try:
+        mission = await effects.load_mission()
+    except Exception:  # noqa: BLE001
+        return False
+    return str(getattr(mission, "status", "") or "") == "paused"
+
+
+def _part_from(rep: dict, start: int, seg: int) -> dict:
+    """One banked segment, in the shape aggregate_book_parts consumes."""
+    return {
+        "range": rep.get("page_range") or [start, start + seg],
+        "md_path": rep.get("md_path") or "",
+        "verified_pages": rep.get("verified_pages", 0),
+        "unverified_pages": rep.get("unverified_pages", 0),
+        "numeric_match_rate": rep.get("numeric_match_rate", 0),
+        "span_pass_rate": rep.get("span_pass_rate", 0),
+        "max_repeat_words": rep.get("max_repeat_words", 0),
+        "figures_kept": rep.get("figures_kept", 0),
+    }
+
+
+def _assemble_segments(working_dir: str, key: str, parts: list[dict]) -> str:
+    """Join banked part files in page order and write the paper's markdown.
+
+    Shared by both segmented lanes. Parts are ordered by their START PAGE
+    rather than by insertion, so a resumed run that re-banked a segment
+    out of order still assembles the document in reading order.
+    """
+    md_dir = os.path.join(working_dir, "databank", "markdown")
+    texts = []
+    for p in sorted(parts, key=lambda q: int((q.get("range") or [0])[0])):
+        pp = os.path.join(working_dir, "databank", p.get("md_path") or "")
+        if os.path.isfile(pp):
+            texts.append(open(pp, encoding="utf-8", errors="replace").read())
+    assembled = "\n\n---\n\n".join(texts)
+    os.makedirs(md_dir, exist_ok=True)
+    with open(os.path.join(md_dir, f"{key}.md"), "w", encoding="utf-8") as f:
+        f.write(assembled)
+    return assembled
 
 
 def _book_pages() -> int:
@@ -924,20 +1006,8 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
 
     root = _repo_root()
 
-    async def _extract_one(pdf_path: str, key: str) -> tuple[dict | None, str]:
-        """Run the toolchain over ONE pdf. Returns (report, failure detail).
-
-        ONE SUBPROCESS PER PAPER, deliberately. The batch form booked every
-        verdict in a single append AFTER the whole subprocess returned, so a
-        kill anywhere discarded every completed paper in flight: two
-        180-page dissertations were observed fully extracted to markdown on
-        disk with no databank record, ~350 pages of GPU work redone. Per
-        paper, a kill costs at most the paper being read.
-
-        This is cheap because paddle serves over LLMVP (_VL_BACKEND
-        "llmvp"): the tool loads no local weights, so per-process cost is an
-        interpreter start against a ~65 s/paper job.
-        """
+    async def _run_segment(pdf_path: str, key: str, a: int, b: int):
+        """One page range through the toolchain. (report, failure detail)."""
         cmd = [
             os.path.join(root, _TOOL_PY),
             os.path.join(root, _TOOL_SCRIPT),
@@ -949,6 +1019,8 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
             os.path.join(working_dir, "databank"),
             "--vl-backend",
             _VL_BACKEND,
+            "--page-range",
+            f"{a}:{b}",
         ]
         res = await effects.run_command(cmd, timeout=_EXTRACT_ITEM_TIMEOUT_S)
         for line in (res.stdout or "").splitlines():
@@ -970,8 +1042,133 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
         tail = (res.stderr or "").strip().splitlines()[-2:]
         return None, detail + (f"; stderr: {' | '.join(tail)}" if tail else "")
 
+    async def _extract_one(pdf_path: str, key: str, rec: dict):
+        """Extract one paper IN PAGE SEGMENTS, banking after each.
+
+        Returns (report | None, detail, paused) where `report` is an
+        aggregate shaped like a whole-document report, so the verdict
+        policy below judges a segmented paper exactly as it judges any
+        other. `paused` means work stopped cleanly with progress banked —
+        no verdict, no burned retry, resumes where it left off.
+
+        WHY SEGMENTS AND NOT WHOLE DOCUMENTS. A paper was previously one
+        subprocess: a kill at page 200 of a 237-page dissertation threw
+        away all 200 pages, and the only way to stop the pipeline without
+        losing work was to wait for the document to finish (observed:
+        ~26 minutes of nothing but waiting for a safe restart window).
+        Segments make the unit of loss a page range instead of a document,
+        which is also what lets a pause land promptly: the check happens
+        between segments, at a boundary where everything before it is
+        already on disk.
+
+        The machinery is the oversize book lane's, generalized — page
+        ranges, part files, and a `next_page` cursor were already proven
+        there on a 422-page volume.
+        """
+        progress = dict(rec.get("extract_progress") or {})
+        parts = list(progress.get("parts") or [])
+        start = int(progress.get("next_page") or 0)
+        total = int(progress.get("total_pages") or 0)
+        seg = _extract_pages()
+
+        # Hard backstop on the loop. Every termination condition below
+        # depends on the tool reporting a page count, and a loop whose exit
+        # depends on a subprocess's output must not be able to run forever
+        # if that output is ever shaped differently than expected.
+        max_segments = 400
+        while len(parts) < max_segments:
+            if total and start >= total:
+                break
+            rep, detail = await _run_segment(pdf_path, key, start, start + seg)
+            if rep is None:
+                # No report at all — the round decides whether that is the
+                # tool's fault or this paper's (see the caller).
+                return None, detail, False
+            if rep.get("error"):
+                # AN IN-TOOL ERROR IS STILL A REPORT, and the verdict
+                # policy below owns what it means — a 500 from the VLM is
+                # a transient that must not condemn the paper, while an
+                # unreadable PDF is terminal. Returning None here would
+                # route both through the no-report path and lose that
+                # distinction (two papers reached a terminal state on a
+                # server 500 before the toolchain-fault branch existed).
+                # Pages already banked stay banked; the retry resumes.
+                return rep, detail, False
+
+            seg_total = int(rep.get("total_pages") or 0)
+            if not seg_total:
+                # NO PAGE COUNT, NO SEGMENTATION. Without a total there is
+                # no way to know whether more pages remain, and guessing
+                # "yes" re-runs the same range forever. Treat what came
+                # back as the whole document — which is exactly the
+                # pre-segmentation behaviour for a report of this shape.
+                parts.append(_part_from(rep, start, seg))
+                break
+            total = seg_total
+            parts.append(_part_from(rep, start, seg))
+            start = min(start + seg, total)
+
+            if start >= total:
+                break
+
+            # BANK BEFORE CONTINUING. Everything up to here survives
+            # whatever happens next, and the record stays PENDING so the
+            # paper is still selectable — it simply resumes at next_page.
+            rec["extract_progress"] = {
+                "next_page": start,
+                "total_pages": total,
+                "parts": parts,
+            }
+            await append_extraction_records(effects, [rec])
+
+            # A pause lands HERE: at a page boundary, with the work banked.
+            if await _mission_paused(effects):
+                return None, f"paused at page {start}/{total}", True
+            if time.monotonic() > deadline:
+                return None, f"deadline at page {start}/{total}", True
+
+        # COMPLETE — assemble and synthesize a whole-document report so the
+        # verdict policy below needs no knowledge of segmentation.
+        assembled = _assemble_segments(working_dir, key, parts)
+        agg = aggregate_book_parts(parts)
+        # Figures come from what the segments REPORTED keeping. Figure
+        # numbering is append-aware across ranges, so the sum is the
+        # document's count; the directory is only a fallback for a report
+        # that predates the field.
+        figures = sum(int(p.get("figures_kept") or 0) for p in parts)
+        if not figures:
+            figdir = os.path.join(working_dir, "databank", "figures", key)
+            if os.path.isdir(figdir):
+                figures = sum(1 for f in os.listdir(figdir) if f.startswith("fig_"))
+        rec["extract_progress"] = {}
+        # Script profile from the ASSEMBLED document when there is one —
+        # it sees the whole paper rather than one range. When assembly
+        # produced nothing (a part file missing under us), fall back to
+        # what the last segment reported rather than to a census of the
+        # empty string, which would read as 100% Latin and mis-route a
+        # non-Latin paper away from the translation lane.
+        profile = (
+            markdown_script_profile(assembled)
+            if assembled.strip()
+            else (rep.get("script_profile") or {})
+        )
+        return (
+            {
+                "paper_key": key,
+                "md_path": os.path.join("markdown", f"{key}.md"),
+                "figures_kept": figures,
+                "script_profile": profile,
+                "oversize": False,
+                "error": "",
+                **agg,
+            },
+            "",
+            False,
+        )
+
     extracted = retried = failed = lingual_count = 0
     unjudged: list[str] = []
+    paused_keys: list[str] = []
     unjudged_detail = ""
     deadline = time.monotonic() + EXTRACT_TIMEOUT_S
     for k, pdf_path in zip(resolved_keys, pdfs):
@@ -984,7 +1181,16 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
             unjudged_detail = unjudged_detail or "batch deadline reached"
             continue
 
-        rep, detail = await _extract_one(pdf_path, k)
+        rec = dict(databank.get(k) or {"paper_key": k})
+        rep, detail, paused = await _extract_one(pdf_path, k, rec)
+
+        # A CLEAN STOP IS NOT A FAILURE. Progress is banked, the record is
+        # still pending, and the paper resumes at its next_page. Booking
+        # anything here — even "unjudged" — would misreport an orderly
+        # pause as something that went wrong.
+        if paused:
+            paused_keys.append(k)
+            break
 
         # NO REPORT INDICTS THE TOOLCHAIN, NOT THE PAPER.
         # extract_batch prints one JSON line per paper even when that paper
@@ -1009,7 +1215,10 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
             unjudged_detail = unjudged_detail or detail
             continue
 
-        rec = dict(databank.get(k) or {"paper_key": k})
+        # NOTE: `rec` is the same dict _extract_one just worked on — it
+        # carries the cleared extract_progress. Re-reading it from the
+        # databank here would resurrect the finished paper's segment
+        # cursor and make it look perpetually half-done.
         prior_retry = rec.get("extraction_status") == "needs_reextract"
         truncated = bool(rep) and acquisition_is_truncated(rec, rep.get("pages", 0))
         oversize = bool(rep) and bool(rep.get("oversize"))
@@ -1318,6 +1527,11 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
         + (
             f", {len(unjudged)} unjudged and still pending ({unjudged_detail})"
             if unjudged
+            else ""
+        )
+        + (
+            f", {len(paused_keys)} paused mid-document with progress banked"
+            if paused_keys
             else ""
         )
     )

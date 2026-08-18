@@ -493,20 +493,29 @@ async def test_batch_without_page_metadata_is_unaffected():
 
 
 @pytest.mark.asyncio
-async def test_batch_refers_a_book_instead_of_attempting_it():
-    """A dispatch shares ONE timeout across its whole batch, so a book does
-    not merely fail — it burns the budget its companions needed. One corpus
-    asset is a 560-page volume; 30 minutes went into discovering it could not
-    fit. This is a referral, not a quality verdict, so it gets its own
-    terminal state and says why."""
+async def test_a_long_document_is_segmented_rather_than_referred():
+    """Superseded contract, kept as a marker of WHY it changed.
+
+    A book used to be referred to a human queue (extract_oversize) because
+    one dispatch shared a single timeout across its batch, so a 560-page
+    volume did not merely fail — it burned the budget its companions
+    needed. Extraction is now per-paper AND per-page-range, so length is
+    no longer a reason to refuse: a long document is simply more segments,
+    each independently banked. The tool does not even evaluate its
+    oversize rule when given an explicit --page-range.
+
+    The referral state still exists for the records that reached it before
+    this change; nothing new routes there.
+    """
     import os
 
     from agent.actions import extraction_actions as ea
 
     fx = _fx([_bank_line("book")])
     tool = os.path.join(ea._repo_root(), ea._TOOL_PY)
+    # Three 25-page segments of a 60-page document, then done.
     payload = json.loads(_report("book"))
-    payload.update({"oversize": True, "pages": 560, "verified_pages": 0, "md_path": ""})
+    payload.update({"total_pages": 60, "page_range": [0, 25]})
     fx._commands[tool] = CommandResult(
         return_code=0, stdout=json.dumps(payload), stderr="", command="x"
     )
@@ -515,12 +524,10 @@ async def test_batch_refers_a_book_instead_of_attempting_it():
 
     bank = await read_databank(fx)
     rec = bank["book"]
-    assert rec["extraction_status"] == "extract_oversize"
-    assert "oversize" in rec["failure_reason"] and "560" in rec["failure_reason"]
-    # Oversize outranks the no-text-layer branch: the report carries 0 verified
-    # pages only because nothing was READ, and calling that "unverifiable"
-    # would send a book to the wrong queue.
-    assert "no verifiable text layer" not in rec["failure_reason"]
+    assert rec["extraction_status"] != "extract_oversize", "length is not a refusal"
+    assert rec["extraction_status"] in ("extracted", "extract_unverified")
+    # Every page range was covered and the cursor is cleared on completion.
+    assert not (rec.get("extract_progress") or {}).get("parts")
 
 
 @pytest.mark.asyncio
@@ -789,3 +796,186 @@ async def test_batch_deadline_leaves_unstarted_papers_pending(monkeypatch):
     assert not bank["a"].get("extraction_status")
     assert not bank["b"].get("extraction_status")
     assert ea._extraction_pending(bank["b"])
+
+
+# ── segmented extraction: pause and resume ────────────────────────────
+
+
+def _seg_report(key, a, b, total, **kw):
+    payload = json.loads(_report(key))
+    payload.update(
+        {
+            "total_pages": total,
+            "page_range": [a, b],
+            "md_path": f"markdown/{key}.part_{a:04d}.md",
+            **kw,
+        }
+    )
+    return json.dumps(payload)
+
+
+@pytest.mark.asyncio
+async def test_a_pause_stops_at_a_page_boundary_with_progress_banked():
+    """The operator can stop the pipeline without losing OCR work.
+
+    Before segmentation the only safe moment to stop was between whole
+    documents, so pausing during a 237-page dissertation meant either
+    waiting ~18 minutes or throwing the pages away. Now the check happens
+    between segments, at a boundary where everything before it is on disk.
+    """
+    import os
+
+    from agent.actions import extraction_actions as ea
+    from agent.actions.scholarly_actions import read_databank
+
+    fx = _fx([_bank_line("thesis")])
+    tool = os.path.join(ea._repo_root(), ea._TOOL_PY)
+    calls = {"n": 0}
+
+    async def segment(command, working_dir=None, timeout=30):
+        a = int(command[command.index("--page-range") + 1].split(":")[0])
+        calls["n"] += 1
+        return CommandResult(
+            return_code=0,
+            stdout=_seg_report("thesis", a, a + 25, total=200),
+            stderr="",
+            command="x",
+        )
+
+    fx.run_command = segment
+
+    # Paused from the start of the second segment onward.
+    async def paused_after_first(effects):
+        return calls["n"] >= 1
+
+    import agent.actions.extraction_actions as mod
+
+    orig = mod._mission_paused
+    mod._mission_paused = paused_after_first
+    try:
+        out = await action_extract_pdf_batch(
+            _si(inputs=_batch_inputs(["thesis"]), effects=fx)
+        )
+    finally:
+        mod._mission_paused = orig
+
+    bank = await read_databank(fx)
+    rec = bank["thesis"]
+    # NOT judged, NOT failed, NOT retried — simply stopped.
+    assert not rec.get("extraction_status"), "a pause is not a verdict"
+    prog = rec.get("extract_progress") or {}
+    assert prog.get("next_page") == 25, prog
+    assert prog.get("total_pages") == 200
+    assert len(prog.get("parts") or []) == 1, "the finished segment is banked"
+    assert "paused" in out.observations
+
+
+@pytest.mark.asyncio
+async def test_a_resumed_paper_starts_at_its_cursor_not_at_page_zero():
+    """The banked pages must not be read again — that was the whole cost
+    being avoided."""
+    import os
+
+    from agent.actions import extraction_actions as ea
+    from agent.actions.scholarly_actions import read_databank
+
+    rec = json.loads(_bank_line("thesis"))
+    fx = MockEffects(
+        files={
+            "databank/papers.jsonl": json.dumps(rec) + "\n",
+            "databank/extraction.jsonl": json.dumps(
+                {
+                    "paper_key": "thesis",
+                    "extract_progress": {
+                        "next_page": 150,
+                        "total_pages": 175,
+                        "parts": [
+                            {
+                                "range": [0, 150],
+                                "md_path": "markdown/thesis.part_0000.md",
+                                "verified_pages": 140,
+                                "unverified_pages": 10,
+                                "numeric_match_rate": 0.95,
+                                "span_pass_rate": 0.9,
+                                "figures_kept": 7,
+                            }
+                        ],
+                    },
+                }
+            )
+            + "\n",
+        }
+    )
+    ranges = []
+
+    async def segment(command, working_dir=None, timeout=30):
+        spec = command[command.index("--page-range") + 1]
+        a, b = (int(x) for x in spec.split(":"))
+        ranges.append((a, b))
+        return CommandResult(
+            return_code=0,
+            stdout=_seg_report("thesis", a, b, total=175),
+            stderr="",
+            command="x",
+        )
+
+    fx.run_command = segment
+    await action_extract_pdf_batch(_si(inputs=_batch_inputs(["thesis"]), effects=fx))
+
+    assert ranges and ranges[0][0] == 150, f"restarted from scratch: {ranges}"
+    bank = await read_databank(fx)
+    assert bank["thesis"]["extraction_status"] in ("extracted", "extract_unverified")
+    # Both the resumed part and the banked one contribute to the verdict.
+    assert bank["thesis"]["extraction_quality"]["verified_pages"] >= 140
+
+
+def test_selection_finishes_a_part_extracted_paper_first():
+    """A half-extracted paper holds banked parts and a cursor; starting
+    something else instead leaves that work stranded on disk."""
+    from agent.actions.extraction_actions import _OCR_CLAIMS, select_ocr_batch
+
+    bank = {
+        "fresh": {"access_status": "oa_pdf", "pdf_path": "a.pdf"},
+        "half": {
+            "access_status": "oa_pdf",
+            "pdf_path": "b.pdf",
+            "extract_progress": {"next_page": 50, "parts": [{"range": [0, 50]}]},
+        },
+        "retry": {
+            "access_status": "oa_pdf",
+            "pdf_path": "c.pdf",
+            "extraction_status": "needs_reextract",
+        },
+    }
+    _OCR_CLAIMS.clear()
+    try:
+        assert select_ocr_batch(bank, 3)[0] == "half"
+    finally:
+        _OCR_CLAIMS.clear()
+
+
+@pytest.mark.asyncio
+async def test_a_report_without_a_page_count_cannot_loop_forever():
+    """Every exit condition depends on the tool reporting a total. A loop
+    whose termination depends on subprocess output must be unable to run
+    forever if that output is ever shaped differently."""
+    import os
+
+    from agent.actions import extraction_actions as ea
+    from agent.actions.scholarly_actions import read_databank
+
+    fx = _fx([_bank_line("odd")])
+    tool = os.path.join(ea._repo_root(), ea._TOOL_PY)
+    calls = {"n": 0}
+
+    async def no_total(command, working_dir=None, timeout=30):
+        calls["n"] += 1
+        return CommandResult(
+            return_code=0, stdout=_report("odd"), stderr="", command="x"
+        )
+
+    fx.run_command = no_total
+    await action_extract_pdf_batch(_si(inputs=_batch_inputs(["odd"]), effects=fx))
+    assert calls["n"] == 1, "no total means treat it as the whole document"
+    bank = await read_databank(fx)
+    assert bank["odd"]["extraction_status"] in ("extracted", "extract_unverified")
