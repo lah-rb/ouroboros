@@ -1146,10 +1146,15 @@ def test_qwen38_rendering_matches_official_template():
             )
 
     # Effort axis: our canonical name -> the official effort it must reproduce.
-    # high and xhigh collapse because the TEMPLATE aliases them, not us.
+    # high and xhigh collapse because the TEMPLATE aliases them (not us);
+    # medium collapses onto low because the official neutral measured
+    # near-xhigh depth live (8,939 vs 10,180 mean CoT tokens on the first
+    # tier arm) — the family has no genuine middle, and the ReasoningSpec
+    # bimodal-collapse convention maps the planning tier onto the elastic
+    # brief sentence rather than the unbounded neutral.
     for canonical, effort in (
         ("low", "low"),
-        ("medium", "medium"),
+        ("medium", "low"),
         ("high", "xhigh"),
         ("xhigh", "xhigh"),
     ):
@@ -1158,13 +1163,18 @@ def test_qwen38_rendering_matches_official_template():
             ours == official
         ), f"canonical={canonical}:\nours    : {ours!r}\nofficial: {official!r}"
 
-    # medium is the NEUTRAL baseline: no sentence, no blank line. If this ever
-    # starts emitting one, the dial has silently become always-on-verbose.
-    med = render_ours("medium")
-    assert "Reasoning effort is set to" not in med
-    assert med.startswith("<|im_start|>system\nYou are a helpful assistant.")
-    # ...and it is NOT the same render as low/xhigh, i.e. the dial does move.
-    assert med != render_ours("low") != render_ours("xhigh")
+    # No canonical level renders the official NEUTRAL baseline any more —
+    # if medium ever renders it again, planning-tier steps silently regain
+    # near-xhigh depth. (Under this per_request harness None routes LOW by
+    # the 2026-08-03 rule, so the neutral is asserted structurally: the
+    # official medium form carries no effort sentence, and none of our four
+    # canonical renders reproduce it.)
+    neutral_official = render_official(effort="medium")
+    assert "Reasoning effort is set to" not in neutral_official
+    for canonical in ("low", "medium", "high", "xhigh"):
+        assert render_ours(canonical) != neutral_official
+    # ...and the dial still moves: brief != deep.
+    assert render_ours("medium") == render_ours("low") != render_ours("xhigh")
 
     # low is SHALLOW, not off — the opener is still prefilled.
     assert render_ours("low").endswith("<|im_start|>assistant\n<think>\n")

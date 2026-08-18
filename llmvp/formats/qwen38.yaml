@@ -31,10 +31,11 @@
 # so our canonical `high` and `xhigh` both render the xhigh sentence. That is
 # the model's own collapse, not ours. Default effort is xhigh.
 #
-# MEDIUM EMITS NOTHING. It is the neutral baseline — no sentence, no blank
-# line, an untouched system message. reasoning_prefix already collapses to ""
-# on an empty level (renderer.py), so the empty string in the level map below
-# is load-bearing and reproduces the official medium byte-for-byte.
+# THE OFFICIAL "MEDIUM" EMITS NOTHING — it is the neutral baseline: no
+# sentence, no blank line, an untouched system message (reasoning_prefix
+# collapses on an empty level). CANONICAL medium no longer maps to it: the
+# neutral measured near-xhigh depth live, so it collapses onto low — see the
+# reasoning block below. The neutral remains the unrouted default.
 #
 # LOW IS SHALLOW, NOT OFF. Its sentence asks for brief thinking; the <think>
 # opener is still prefilled. So this family declares NO gate_levels: the effort
@@ -120,8 +121,24 @@ turn_transition:
 reasoning:
   # Verbatim from the official template. Whitespace and wording are the trained
   # shape — do not paraphrase.
+  #
+  # CANONICAL medium COLLAPSES ONTO low (2026-08-18, measured on the first
+  # tier arm). The official template's own "medium" is the EMPTY neutral
+  # baseline — and this checkpoint's unconstrained default is nearly as deep
+  # as xhigh: live means 8,939 CoT tokens at neutral vs 10,180 at xhigh
+  # (the onboarding probe agreed at ~80%). The family has no genuine middle —
+  # its dial is [brief | deep | slightly-deeper] — so mapping canonical
+  # medium to the neutral gave every planning-tier step near-xhigh depth
+  # (one charter-authoring turn hit 25,233 CoT tokens) and the arm ran at
+  # 1.3 cyc/h. The low sentence is ELASTIC, not a mute: live median 0 but
+  # stretched to 3,561 tokens when the task demanded — the right shape for
+  # the planning tier. This is the documented ReasoningSpec bimodal
+  # collapse; the true neutral remains reachable only as the unrouted
+  # default (reasoning_default "").
+  # Token lengths (model tokenizer): low 25 · neutral 0 · xhigh 37 — the
+  # equal-length splice constraint is inert under session_full_replay.
   levels:
     low: "Reasoning effort is set to low. Keep your thinking brief and focused, moving directly to the conclusion without unnecessary elaboration."
-    medium: ""
+    medium: "Reasoning effort is set to low. Keep your thinking brief and focused, moving directly to the conclusion without unnecessary elaboration."
     high: "Reasoning effort is set to xhigh. Please think carefully through the task, validate key assumptions, consider plausible alternatives, and prioritize correctness, consistency, and clarity in the final answer."
     xhigh: "Reasoning effort is set to xhigh. Please think carefully through the task, validate key assumptions, consider plausible alternatives, and prioritize correctness, consistency, and clarity in the final answer."
