@@ -396,3 +396,124 @@ def test_script_profile_covers_arabic_hebrew():
     assert fa["nonlatin"] > 0.9 and fa["arabic"] > 0.9
     he = markdown_script_profile("ספקטרוסקופיה של דגימות")
     assert he["hebrew"] > 0.9
+
+
+@pytest.mark.asyncio
+async def test_translate_drain_partial_progress_two_rounds(monkeypatch):
+    """A paper over the round budget BANKS chunks instead of blocking.
+
+    The original whole-paper budget check head-of-line-blocked the lane:
+    deterministic selection re-offered the same over-budget paper every
+    window and declined it, freezing `translated` while the lingual queue
+    grew. Round 1 must bank a slice; round 2 completes, gates, books.
+    """
+    import json
+
+    from agent.actions.scholarly_actions import read_databank
+    from agent.actions.translation_actions import (
+        _TRANSLATE_CLAIMS,
+        _parts_path,
+        action_translate_drain_batch,
+        chunk_markdown,
+    )
+    from agent.effects.mock import MockEffects
+    from agent.models import FlowMeta, StepInput
+
+    monkeypatch.setenv("OUROBOROS_TRANSLATE_CHUNKS", "2")
+    # Three ~12k-char paragraphs, VARIED wording (the gate's degeneration
+    # check rightly rejects `"x " * 500` fixtures) with distinct numerics.
+    paras = [
+        " ".join(
+            f"sample{j} of series {i} yields {i * 1000 + j} counts" for j in range(300)
+        )
+        for i in range(3)
+    ]
+    src = "\n\n".join(paras)
+    chunks = chunk_markdown(src)
+    assert len(chunks) == 3
+    rec = {
+        "paper_key": "p1",
+        "extraction_status": "extract_lingual",
+        "md_path": "databank/markdown/p1.md",
+        "script_profile": {"cjk": 0.6},
+    }
+    fx = MockEffects(
+        files={
+            "databank/papers.jsonl": json.dumps(rec) + "\n",
+            "databank/markdown/p1.md": src,
+        },
+        # Identity "translations" pass the deterministic gate (numeric 1.0,
+        # ratio 1.0, no img tags either side).
+        inference_responses=[chunks[0], chunks[1], chunks[2]],
+    )
+
+    def _si():
+        return StepInput(
+            context={},
+            params={},
+            inputs={},
+            meta=FlowMeta(flow_name="translate_drain", step_id="drain"),
+            effects=fx,
+        )
+
+    _TRANSLATE_CLAIMS.clear()
+    out1 = await action_translate_drain_batch(_si())
+    assert out1.result["status"] == "progress" and out1.result["banked"] == 2
+    parts = (await fx.read_file(_parts_path("p1"))).content.strip().splitlines()
+    assert len(parts) == 2
+    assert not _TRANSLATE_CLAIMS
+
+    out2 = await action_translate_drain_batch(_si())
+    assert out2.result["status"] == "translated"
+    bank = await read_databank(fx)
+    assert bank["p1"]["extraction_status"] == "extracted"
+    assert bank["p1"]["translated"] is True
+    # Parts reclaimed after the verdict.
+    assert not (await fx.read_file(_parts_path("p1"))).content.strip()
+    assert not _TRANSLATE_CLAIMS
+
+
+@pytest.mark.asyncio
+async def test_translate_drain_chunk_failure_banks_successes(monkeypatch):
+    """A mid-round chunk failure persists what succeeded and declines —
+    no verdict, no attempt burn; the paper resumes where it left off."""
+    import json
+
+    from agent.actions.translation_actions import (
+        _TRANSLATE_CLAIMS,
+        _parts_path,
+        action_translate_drain_batch,
+        chunk_markdown,
+    )
+    from agent.effects.mock import MockEffects
+    from agent.models import FlowMeta, StepInput
+
+    monkeypatch.setenv("OUROBOROS_TRANSLATE_CHUNKS", "2")
+    paras = [f"value {100 + i} counts " * 500 for i in range(3)]
+    src = "\n\n".join(paras)
+    chunks = chunk_markdown(src)
+    rec = {
+        "paper_key": "p1",
+        "extraction_status": "extract_lingual",
+        "md_path": "databank/markdown/p1.md",
+    }
+    fx = MockEffects(
+        files={
+            "databank/papers.jsonl": json.dumps(rec) + "\n",
+            "databank/markdown/p1.md": src,
+        },
+        inference_responses=[chunks[0], ""],  # second chunk comes back empty
+    )
+    si = StepInput(
+        context={},
+        params={},
+        inputs={},
+        meta=FlowMeta(flow_name="translate_drain", step_id="drain"),
+        effects=fx,
+    )
+    _TRANSLATE_CLAIMS.clear()
+    out = await action_translate_drain_batch(si)
+    assert out.result["paper"] == ""  # declined, no verdict
+    banked = (await fx.read_file(_parts_path("p1"))).content.strip().splitlines()
+    assert len(banked) == 1  # the success was persisted
+    assert not _TRANSLATE_CLAIMS

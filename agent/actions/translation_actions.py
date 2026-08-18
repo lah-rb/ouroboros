@@ -155,10 +155,82 @@ def _render_translate_prompt(chunk: str, script_hint: str) -> str:
     return static_prefix + dynamic
 
 
+# Partial-progress store (the book-segment pattern): a paper larger than
+# one round's chunk budget accumulates translated chunks here across
+# rounds and books only when complete. Without this, deterministic
+# selection + a whole-paper budget check head-of-line-blocked the lane:
+# the first over-budget paper was re-selected and re-declined every
+# window, and `translated` froze while the lingual queue tripled.
+_PARTS_DIR = "databank/translations"
+
+
+def _parts_path(key: str) -> str:
+    return f"{_PARTS_DIR}/{key}.parts.jsonl"
+
+
+async def _load_parts(
+    effects, key: str, n_chunks: int, src_len: int, attempt: int
+) -> dict[int, str]:
+    """Valid persisted chunk translations for THIS source and attempt.
+
+    A part is valid only if it was cut from the same chunking (n, src_len)
+    and the same attempt (a warmer retry re-translates everything —
+    mixing temperatures inside one assembly would blur the gate's verdict).
+    """
+    import json
+
+    fc = await effects.read_file(_parts_path(key))
+    if not getattr(fc, "exists", False) or not fc.content.strip():
+        return {}
+    parts: dict[int, str] = {}
+    for line in fc.content.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            d = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        try:
+            n_ok = int(d.get("n", -1)) == n_chunks
+            src_ok = int(d.get("src_len", -1)) == src_len
+            # `.get(...) or -1` would turn a legitimate attempt 0 into -1
+            # and silently invalidate every first-attempt part.
+            att_ok = int(d.get("attempt", -1)) == attempt
+        except (TypeError, ValueError):
+            continue
+        if n_ok and src_ok and att_ok and str(d.get("text") or "").strip():
+            parts[int(d["idx"])] = str(d["text"])
+    return parts
+
+
+async def _append_parts(
+    effects, key: str, new: dict[int, str], n_chunks: int, src_len: int, attempt: int
+) -> None:
+    import json
+
+    lines = "".join(
+        json.dumps(
+            {
+                "idx": i,
+                "n": n_chunks,
+                "src_len": src_len,
+                "attempt": attempt,
+                "text": t,
+            },
+            ensure_ascii=False,
+        )
+        + "\n"
+        for i, t in sorted(new.items())
+    )
+    if lines:
+        await effects.append_file(_parts_path(key), lines)
+
+
 def select_translation_paper(databank: dict) -> str | None:
     """One unclaimed extract_lingual paper with retry budget left
-    (deterministic order; the chunk-budget check happens after the md is
-    read, since chunk count needs the content)."""
+    (deterministic order — which doubles as finish-first: a partially
+    translated paper keeps being selected until it completes)."""
     from agent.actions.extraction_actions import _translation_pending
 
     for key in sorted(databank):
@@ -211,10 +283,6 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
         return _decline(f"markdown unreadable: {md_rel}")
     src = fc.content
     chunks = chunk_markdown(src)
-    if len(chunks) > budget:
-        # Over-budget papers wait for a bigger window; never drain them
-        # mid-discovery (mirrors the figtext skip-oversize rule).
-        return _decline(f"{key}: {len(chunks)} chunks > budget {budget}")
 
     _TRANSLATE_CLAIMS.add(key)
     try:
@@ -232,27 +300,67 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
         temperature = 0.3 if attempts == 0 else 0.7
         sem = asyncio.Semaphore(_TRANSLATE_SEATS)
 
-        async def one(chunk: str):
+        # ROUND SLICE. Papers over the round budget make PROGRESS instead
+        # of blocking: translate up to `budget` missing chunks, persist
+        # them, and assemble+gate only when every chunk has a valid part.
+        done = await _load_parts(effects, key, len(chunks), len(src), attempts)
+        todo = [i for i in range(len(chunks)) if i not in done][:budget]
+
+        async def one(idx: int):
             async with sem:
                 result = await effects.run_inference(
-                    _render_translate_prompt(chunk, hint),
+                    _render_translate_prompt(chunks[idx], hint),
                     {
                         "temperature": temperature,
-                        "max_tokens": max(1024, int(len(chunk) / 2)),
+                        "max_tokens": max(1024, int(len(chunks[idx]) / 2)),
                     },
                 )
                 if getattr(result, "error", None):
                     raise RuntimeError(str(result.error))
-                return str(getattr(result, "text", "") or "")
+                text = str(getattr(result, "text", "") or "")
+                if not text.strip():
+                    raise RuntimeError("empty translation text")
+                return idx, text
 
-        try:
-            translated = await asyncio.gather(*(one(c) for c in chunks))
-        except Exception as exc:  # noqa: BLE001 — inference failure = no verdict
-            return _decline(f"inference failed on {key}: {str(exc)[:150]}")
+        results = await asyncio.gather(*(one(i) for i in todo), return_exceptions=True)
+        fresh = {
+            i: t for r in results if not isinstance(r, BaseException) for i, t in [r]
+        }
+        errors = [r for r in results if isinstance(r, BaseException)]
+        await _append_parts(effects, key, fresh, len(chunks), len(src), attempts)
+        done.update(fresh)
 
-        out_md = "\n\n".join(translated)
+        if errors:
+            # Persisted what succeeded; the round ends without a verdict and
+            # the paper resumes next window.
+            return _decline(
+                f"{key}: {len(errors)} chunk failure(s), "
+                f"{len(done)}/{len(chunks)} banked ({str(errors[0])[:100]})"
+            )
+        if len(done) < len(chunks):
+            summary = {
+                "paper": key,
+                "chunks": len(chunks),
+                "status": "progress",
+                "banked": len(done),
+            }
+            return StepOutput(
+                result=summary,
+                observations=(
+                    f"translate drain: {key} — {len(done)}/{len(chunks)} "
+                    f"chunk(s) banked, continues next round"
+                ),
+                context_updates={"translate_summary": summary},
+            )
+
+        out_md = "\n\n".join(done[i] for i in range(len(chunks)))
         gate = translation_gate(src, out_md)
 
+        # Any verdict ends this attempt's parts: passed/failed-final leave
+        # the pending pool; a warmer retry re-translates everything (the
+        # attempt key already invalidates old parts — this just reclaims
+        # the space).
+        await effects.write_file(_parts_path(key), "")
         rec["translate_attempts"] = attempts + 1
         if gate["passed"]:
             en_rel = (
