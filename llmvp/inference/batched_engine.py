@@ -597,11 +597,17 @@ class BatchedEngine:
             self._wake.notify_all()
         if not self._drained.wait(timeout=timeout):
             raise TimeoutError("decode thread did not reach a step boundary")
+        # THE REBUILD WINDOW. A paused engine still shows free cells, and a
+        # scheduler reading only those would dispatch into a context that is
+        # being rebuilt. The decode thread is parked at a step boundary here,
+        # so reading engine state from this caller is race-free.
+        self._publish_capacity()
 
     def resume(self) -> None:
         with self._wake:
             self._paused = False
             self._wake.notify_all()
+        self._publish_capacity()
 
     # -- decode thread ----------------------------------------------------
 
@@ -862,6 +868,7 @@ class BatchedEngine:
             effective_max,
             " (buffered)" if buffer_mode else "",
         )
+        self._publish_capacity()  # occupancy grew
 
     # -- the step loop -------------------------------------------------------
 
@@ -1045,6 +1052,7 @@ class BatchedEngine:
         s.phase = StreamPhase.DONE
         s.end_reason = reason or (str(error) if error else "completed")
         self._streams.pop(s.stream_id, None)
+        self._publish_capacity()  # occupancy shrank — the seat is claimable
 
         # Telemetry contract (read by core/inference + session_manager).
         slot = s.slot
@@ -1436,13 +1444,73 @@ class BatchedEngine:
 
     # -- health -----------------------------------------------------------
 
-    def health(self) -> dict:
+    def _pool_n_ctx(self) -> int:
+        """The shared cell size, from a CACHED int — never a live context
+        dereference (see inference/capacity.py rule 2)."""
+        return int(getattr(self._llama, "_n_ctx", 0) or 0)
+
+    def capacity_fields(self) -> dict:
+        """Every number a scheduler needs, as plain ints.
+
+        MUST be called on the decode thread (or with it parked): it walks
+        `self._streams` and `self._seats`, which the decode thread mutates.
+        """
+        n_ctx = self._pool_n_ctx()
+        live = self._live_occupancy()
+        pinned = self._pinned_occupancy()
         active = sum(
             1 for s in self._streams.values() if s.phase is not StreamPhase.DONE
         )
         return {
+            "serving": not self._paused and self._fatal is None,
+            "decode_mode": "batched",
+            "kv_pool_tokens": n_ctx,
+            "free_cells": self._free_cells(n_ctx),
+            "live_occupancy": live,
+            "pinned_occupancy": pinned,
+            "pool_slack": _POOL_SLACK,
+            "min_admit_budget": _MIN_ADMIT_BUDGET,
+            "static_prefix_tokens": max(
+                (int(seat.static_len) for seat in self._seats), default=0
+            ),
+            "active_streams": active,
+            "waiting": len(self._waiting),
+            "prefill_budget": self._live_prefill_budget,
+            "engine_steps": self._h_steps,
+            "kv_pressure_events": self._h_kv_pressure_events,
+            "kv_forced_windows": self._h_forced_windows,
+            "kv_evictions": self._h_evictions,
+            "decode_failures": self.h_decode_failures,
+            "engine_fatal": str(self._fatal) if self._fatal else None,
+        }
+
+    def _publish_capacity(self) -> None:
+        """Occupancy changed — tell anyone watching.
+
+        Telemetry must never break decode: this is the same bare-except
+        contract as the report_completion call in _retire. A publish that
+        raises costs a snapshot, never a generation.
+        """
+        try:
+            from inference.capacity import BUS
+
+            BUS.publish(self.capacity_fields())
+        except Exception:  # noqa: BLE001 — see docstring
+            pass
+
+    def health(self) -> dict:
+        active = sum(
+            1 for s in self._streams.values() if s.phase is not StreamPhase.DONE
+        )
+        n_ctx = self._pool_n_ctx()
+        return {
             "decode_mode": "batched",
             "active_streams": active,
+            "waiting": len(self._waiting),
+            "free_cells": self._free_cells(n_ctx),
+            "live_occupancy": self._live_occupancy(),
+            "pinned_occupancy": self._pinned_occupancy(),
+            "kv_pool_tokens": n_ctx,
             "engine_steps": self._h_steps,
             "prefill_budget": self._live_prefill_budget,
             "kv_pressure_events": self._h_kv_pressure_events,
