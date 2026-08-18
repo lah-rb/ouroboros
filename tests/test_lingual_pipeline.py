@@ -517,3 +517,58 @@ async def test_translate_drain_chunk_failure_banks_successes(monkeypatch):
     banked = (await fx.read_file(_parts_path("p1"))).content.strip().splitlines()
     assert len(banked) == 1  # the success was persisted
     assert not _TRANSLATE_CLAIMS
+
+
+@pytest.mark.asyncio
+async def test_translate_chunk_img_mismatch_gets_one_retry(monkeypatch):
+    """A chunk that drops its <img> tag is retried once at chunk level —
+    the live failure mode was 7/9 tags surviving and burning both
+    whole-paper attempts on single-chunk drops."""
+    import json
+
+    from agent.actions.translation_actions import (
+        _TRANSLATE_CLAIMS,
+        action_translate_drain_batch,
+    )
+    from agent.effects.mock import MockEffects
+    from agent.models import FlowMeta, StepInput
+
+    monkeypatch.setenv("OUROBOROS_TRANSLATE_CHUNKS", "8")
+    src = (
+        "Результаты при 532 нм.\n\n"
+        '<img src="../figures/p1/fig_00.png" />\n\n'
+        "Таблица: 1.25 и 950."
+    )
+    good = (
+        "Results at 532 nm.\n\n"
+        '<img src="../figures/p1/fig_00.png" />\n\n'
+        "Table: 1.25 and 950."
+    )
+    dropped = good.replace('<img src="../figures/p1/fig_00.png" />', "(figure)")
+    rec = {
+        "paper_key": "p1",
+        "extraction_status": "extract_lingual",
+        "md_path": "databank/markdown/p1.md",
+    }
+    fx = MockEffects(
+        files={
+            "databank/papers.jsonl": json.dumps(rec) + "\n",
+            "databank/markdown/p1.md": src,
+        },
+        inference_responses=[dropped, good],  # retry rescues the tag
+    )
+    si = StepInput(
+        context={},
+        params={},
+        inputs={},
+        meta=FlowMeta(flow_name="translate_drain", step_id="drain"),
+        effects=fx,
+    )
+    _TRANSLATE_CLAIMS.clear()
+    out = await action_translate_drain_batch(si)
+    assert out.result["status"] == "translated", out.result
+    from agent.actions.scholarly_actions import read_databank
+
+    bank = await read_databank(fx)
+    assert bank["p1"]["translated"] is True
+    assert len([c for c in fx.calls if c.method == "run_inference"]) == 2

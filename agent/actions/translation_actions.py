@@ -308,18 +308,29 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
 
         async def one(idx: int):
             async with sem:
-                result = await effects.run_inference(
-                    _render_translate_prompt(chunks[idx], hint),
-                    {
-                        "temperature": temperature,
-                        "max_tokens": max(1024, int(len(chunks[idx]) / 2)),
-                    },
-                )
-                if getattr(result, "error", None):
-                    raise RuntimeError(str(result.error))
-                text = str(getattr(result, "text", "") or "")
-                if not text.strip():
-                    raise RuntimeError("empty translation text")
+                # A dropped <img> tag in ONE chunk fails the whole-paper
+                # gate and burns a paper attempt (live: 7/9 tags survived,
+                # translate_failed after both attempts). The tag census is
+                # per-chunk checkable, so give each chunk one warmer retry
+                # at the right granularity; the assembly gate stays the
+                # authority on whatever this banks.
+                want_imgs = len(_IMG_RE.findall(chunks[idx]))
+                text = ""
+                for temp in (temperature, 0.7):
+                    result = await effects.run_inference(
+                        _render_translate_prompt(chunks[idx], hint),
+                        {
+                            "temperature": temp,
+                            "max_tokens": max(1024, int(len(chunks[idx]) / 2)),
+                        },
+                    )
+                    if getattr(result, "error", None):
+                        raise RuntimeError(str(result.error))
+                    text = str(getattr(result, "text", "") or "")
+                    if not text.strip():
+                        raise RuntimeError("empty translation text")
+                    if len(_IMG_RE.findall(text)) == want_imgs:
+                        break
                 return idx, text
 
         results = await asyncio.gather(*(one(i) for i in todo), return_exceptions=True)
