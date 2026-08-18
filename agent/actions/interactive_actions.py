@@ -950,6 +950,9 @@ async def action_execute_commands_batch_mcp(step_input: StepInput) -> StepOutput
     output_parts = []
     exit_codes = []
     all_passed = True
+    # Whether an interactive program owned the terminal when the NEXT
+    # command was sent — decides the transcript framing below.
+    child_running = False
 
     for cmd in commands:
         cmd = str(cmd).strip()
@@ -973,8 +976,21 @@ async def action_execute_commands_batch_mcp(step_input: StepInput) -> StepOutput
             status = result.get("status", "error")
             exit_code = result.get("exit_code")
 
-            output_parts.append(f"$ {cmd}")
+            # FRAME FAITHFULLY (2026-08-18). This transcript is EVIDENCE:
+            # the quality gate's probe judge reads it to decide whether a
+            # claimed defect is real, and its rubric treats a shell-executed
+            # line as proof the program was not running. The old
+            # unconditional `$ {cmd}` prefix fabricated exactly that signal
+            # for input typed INTO a running program — a live probe typed
+            # `help` into the game, the game answered with its full command
+            # list, and the judge still confirmed "help does not work"
+            # because the transcript said `$ help`. `$` is only true when
+            # the SHELL executed the line; input consumed by a running
+            # child renders bare, composing with the program's own echoed
+            # prompt in the captured output.
+            output_parts.append(f"$ {cmd}" if not child_running else cmd)
             output_parts.append(output if output else "(no output)")
+            child_running = bool(result.get("interactive_child", False))
 
             # For shell commands, try to detect exit code from status
             # If process exited, use the exit_code. Otherwise assume

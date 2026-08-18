@@ -399,3 +399,71 @@ async def test_apply_summary_carries_verification_counts():
     qr = out.context_updates["quality_results"]
     assert "1 confirmed, 1 refuted, 1 passthrough" in qr["summary"]
     assert len(qr["fix_tasks"]) == 2
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Probe transcript framing — the evidence must say where input WENT
+# ══════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.asyncio
+async def test_probe_transcript_does_not_fabricate_shell_prompts():
+    """The batch executor prefixed EVERY command with `$ `, including input
+    typed into a running program. The probe judge's rubric reads a
+    shell-executed line as proof the program was not running, so a live
+    probe that typed `help` into the game and got the full command list
+    back was still CONFIRMED as "help does not work" (B-leg 2026-08-18).
+    `$` may only frame lines the SHELL executed."""
+    from agent.actions.interactive_actions import action_execute_commands_batch_mcp
+    from agent.models import FlowMeta
+
+    effects = MockEffects()
+    effects._state["mcp_tool_responses"] = {
+        "send_input": {
+            "output": "=== Game ===\n> ",
+            "status": "settled",
+            "interactive_child": True,
+        }
+    }
+    out = await action_execute_commands_batch_mcp(
+        StepInput(
+            context={"mcp_connection_id": "c1", "mcp_session_id": "s1"},
+            params={"commands": ["python main.py", "help"], "stop_on_error": False},
+            meta=FlowMeta(flow_name="run_commands", step_id="x"),
+            effects=effects,
+        )
+    )
+    transcript = out.context_updates["terminal_output"]
+    # The launch WAS executed by the shell — its framing stays.
+    assert "$ python main.py" in transcript
+    # `help` was consumed by the running program — no fabricated shell sigil.
+    assert "$ help" not in transcript
+    assert "help" in transcript
+
+
+@pytest.mark.asyncio
+async def test_shell_batches_keep_their_shell_framing():
+    """Deterministic check batches (lint, pytest) really are shell commands
+    — every line keeps `$ ` when no interactive child ever appears."""
+    from agent.actions.interactive_actions import action_execute_commands_batch_mcp
+    from agent.models import FlowMeta
+
+    effects = MockEffects()
+    effects._state["mcp_tool_responses"] = {
+        "send_input": {
+            "output": "ok",
+            "status": "settled",
+            "interactive_child": False,
+        }
+    }
+    out = await action_execute_commands_batch_mcp(
+        StepInput(
+            context={"mcp_connection_id": "c1", "mcp_session_id": "s1"},
+            params={"commands": ["ruff check .", "pytest -q"], "stop_on_error": False},
+            meta=FlowMeta(flow_name="run_commands", step_id="x"),
+            effects=effects,
+        )
+    )
+    transcript = out.context_updates["terminal_output"]
+    assert "$ ruff check ." in transcript
+    assert "$ pytest -q" in transcript
