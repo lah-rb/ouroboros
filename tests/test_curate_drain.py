@@ -198,3 +198,21 @@ async def test_drain_transport_fault_books_nothing():
     bank = await read_databank(fx)
     assert "review_status" not in bank["p1"]  # paper NOT burned
     assert not _CURATE_CLAIMS  # claim released for the next round
+
+
+@pytest.mark.asyncio
+async def test_drain_empty_response_defers_not_books():
+    """An empty response is contention, not a verdict — the paper must NOT
+    be booked review_failed (that exclusion is permanent); it defers."""
+    _clear_state()
+    fx = MockEffects(
+        files=_bank_files([_rec("p1")], {"p1": "some text"}),
+        pool_health={"kvPoolTokens": 65536},
+        inference_responses=["", ""],  # both review attempts come back empty
+    )
+    out = await action_curate_drain_batch(_si(fx))
+    assert out.result["attempted"] == 0
+    assert "transport" in out.result["reason"]
+    bank = await read_databank(fx)
+    assert "review_status" not in bank["p1"]
+    assert not _CURATE_CLAIMS

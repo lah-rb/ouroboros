@@ -776,7 +776,14 @@ async def _curate_turn(effects, prompt: str, max_tokens: int):
     )
     if getattr(result, "error", None):
         raise _CurateTransportFault(str(result.error))
-    return result.text or ""
+    text = result.text or ""
+    if not text.strip():
+        # An empty response is an infrastructure symptom (contention,
+        # reasoning-swallowed budget), never a verdict — replaying the same
+        # doc parsed cleanly. Booking it as review_failed would burn the
+        # paper permanently; deferring re-selects it next round.
+        raise _CurateTransportFault("empty response text")
+    return text
 
 
 async def _curate_stateless(effects, paper_key: str, doc: str) -> dict:
