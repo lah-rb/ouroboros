@@ -48,6 +48,10 @@ _CHUNK_CHARS = 12_000
 _TRANSLATE_SEATS = 2
 
 TRANSLATE_MIN_NUMERIC = 0.98
+# Per-chunk retry threshold — looser than the assembly bar on purpose: a
+# chunk is a small sample (a few dozen tokens), so one boundary artifact
+# shouldn't force a retry; the assembly gate still holds 0.98 overall.
+_CHUNK_MIN_NUMERIC = 0.95
 TRANSLATE_MAX_ATTEMPTS = 2
 # Length-ratio sanity band for translated/source text (whitespace-free).
 _RATIO_MIN, _RATIO_MAX = 0.4, 2.5
@@ -84,9 +88,40 @@ def chunk_markdown(md: str, target_chars: int = _CHUNK_CHARS) -> list[str]:
     return chunks
 
 
+# Reference-section headings across the corpus's languages. Character-level
+# \s* because CJK journals typeset headings with inter-character spacing
+# ("参 考 文 献", "文 献" — both live in this corpus).
+_REFS_HEADING_RE = re.compile(
+    r"^#{1,6}\s*(?:"
+    r"参\s*考\s*文\s*献|引\s*用\s*文\s*献|文\s*献|"
+    r"references?|bibliography|literatur(?:verzeichnis)?|"
+    r"referencias|références|참\s*고\s*문\s*헌|список\s+литературы"
+    r")\s*\.?\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def strip_reference_section(md: str) -> str:
+    """Body of the document: everything before the reference-list heading.
+
+    THE GATE WAS MEASURING FURNITURE (the extraction-gate lesson, recurred):
+    on the live failures, up to 69% of a paper's numeric tokens were
+    reference-list years/volumes/pages/DOIs, weighed identically to
+    measurement values — so a translator reformatting citations failed the
+    0.98 bar while preserving every number the curator will ever ground
+    against. The verdict must score the BODY. When no heading matches, the
+    full text stands (over-stripping would blind the gate for real)."""
+    m = _REFS_HEADING_RE.search(md)
+    return md[: m.start()] if m else md
+
+
 def _numeric_preservation(src: str, out: str) -> float:
-    """Fraction of the source's numeric tokens present in the output."""
-    src_tokens = _NUM_RE.findall(src)
+    """Fraction of the source BODY's numeric tokens present in the output.
+
+    The source is stripped of its reference section (furniture — see
+    strip_reference_section); the output is searched in FULL, so a
+    translation keeping its references can only gain, never lose."""
+    src_tokens = _NUM_RE.findall(strip_reference_section(src))
     if not src_tokens:
         return 1.0
     out_compact = re.sub(r"[\s,]", "", out)
@@ -227,21 +262,39 @@ async def _append_parts(
         await effects.append_file(_parts_path(key), lines)
 
 
+def _tag_priority(record: dict) -> int:
+    """0 = tagged exact/close (corpus-bound), 1 = adjacent-only/untagged.
+
+    The multilingual wave sweeps in humanities/pedagogy strays (a
+    translation-studies paper, a design paper — live finds) that the
+    curator will deny after we spend seats translating them. Strong-tagged
+    papers translate first; the strays still get their turn, just last."""
+    tiers = {
+        str(t.get("relevance") or "").strip().lower()
+        for t in (record.get("tags") or [])
+        if isinstance(t, dict)
+    }
+    return 0 if tiers & {"exact", "close"} else 1
+
+
 def select_translation_paper(databank: dict) -> str | None:
-    """One unclaimed extract_lingual paper with retry budget left
-    (deterministic order — which doubles as finish-first: a partially
-    translated paper keeps being selected until it completes)."""
+    """One unclaimed extract_lingual paper with retry budget left.
+
+    Ordered by (tag strength, key): relevance first, then deterministic —
+    which doubles as finish-first: a partially translated paper keeps
+    being selected until it completes."""
     from agent.actions.extraction_actions import _translation_pending
 
-    for key in sorted(databank):
-        r = databank[key]
-        if (
-            _translation_pending(r)
-            and key not in _TRANSLATE_CLAIMS
-            and int(r.get("translate_attempts") or 0) < TRANSLATE_MAX_ATTEMPTS
-        ):
-            return key
-    return None
+    eligible = [
+        key
+        for key, r in databank.items()
+        if _translation_pending(r)
+        and key not in _TRANSLATE_CLAIMS
+        and int(r.get("translate_attempts") or 0) < TRANSLATE_MAX_ATTEMPTS
+    ]
+    if not eligible:
+        return None
+    return min(eligible, key=lambda k: (_tag_priority(databank[k]), k))
 
 
 async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
@@ -308,12 +361,15 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
 
         async def one(idx: int):
             async with sem:
-                # A dropped <img> tag in ONE chunk fails the whole-paper
-                # gate and burns a paper attempt (live: 7/9 tags survived,
-                # translate_failed after both attempts). The tag census is
-                # per-chunk checkable, so give each chunk one warmer retry
-                # at the right granularity; the assembly gate stays the
-                # authority on whatever this banks.
+                # Chunk-level defect checks with ONE warmer retry: a dropped
+                # <img> tag or a truncated/abridged passage in ONE chunk
+                # fails the whole-paper gate and burns a paper attempt (live:
+                # 7/9 tags; numeric misses down to 0.78 on real papers). Both
+                # censuses are per-chunk checkable, so retry at the
+                # granularity where the defect happens; the assembly gate
+                # stays the authority on whatever this banks. Reference-list
+                # chunks strip to zero body tokens and score 1.0, so citation
+                # reformatting never churns retries.
                 want_imgs = len(_IMG_RE.findall(chunks[idx]))
                 text = ""
                 for temp in (temperature, 0.7):
@@ -329,7 +385,11 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
                     text = str(getattr(result, "text", "") or "")
                     if not text.strip():
                         raise RuntimeError("empty translation text")
-                    if len(_IMG_RE.findall(text)) == want_imgs:
+                    if (
+                        len(_IMG_RE.findall(text)) == want_imgs
+                        and _numeric_preservation(chunks[idx], text)
+                        >= _CHUNK_MIN_NUMERIC
+                    ):
                         break
                 return idx, text
 

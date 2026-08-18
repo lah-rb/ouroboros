@@ -572,3 +572,114 @@ async def test_translate_chunk_img_mismatch_gets_one_retry(monkeypatch):
     bank = await read_databank(fx)
     assert bank["p1"]["translated"] is True
     assert len([c for c in fx.calls if c.method == "run_inference"]) == 2
+
+
+# ── furniture-aware gate + relevance ordering ─────────────────────────
+
+
+def test_refs_section_stripped_across_languages():
+    from agent.actions.translation_actions import strip_reference_section
+
+    for heading in (
+        "## 参考文献",
+        "## 文 献",
+        "## References",
+        "# REFERENCES.",
+        "### 참 고 문 헌",
+        "## Список литературы",
+    ):
+        md = "body 532 nm\n\n" + heading + "\n\n[1] Author, 2020, 42(6): 276-277."
+        assert strip_reference_section(md).strip() == "body 532 nm", heading
+    # No heading -> full text stands (never over-strip).
+    plain = "body 532 nm\n\n[1] Author, 2020."
+    assert strip_reference_section(plain) == plain
+
+
+def test_gate_ignores_reference_furniture_but_guards_body():
+    """Citation reformatting must not fail the gate; dropped BODY numbers
+    still must. This is the live failure class: 46-69% of failed papers'
+    numeric tokens were reference-list years/volumes/pages."""
+    src = (
+        "Raman peak at 1085 and 532 nm.\n\n"
+        "## 参考文献\n\n"
+        "[1] 现代语言学, 2025, 13(8): 955-963.\n"
+        "[2] Anal. Chem., 2016, 88(21): 10530-10537.\n"
+    )
+    # Translation keeps the body, consolidates/reformats every citation.
+    out_refs_mangled = (
+        "Raman peak at 1085 and 532 nm.\n\n## References\n\n[1-2] (refs)."
+    )
+    g = translation_gate(src, out_refs_mangled)
+    assert g["numeric_preservation"] == 1.0
+    assert g["passed"], g["problems"]
+    # A body number lost is still a failure.
+    out_body_loss = "Raman peak at 532 nm.\n\n## References\n\n[1-2] (refs)."
+    g2 = translation_gate(src, out_body_loss)
+    assert not g2["passed"] and any("numeric" in p for p in g2["problems"])
+
+
+@pytest.mark.asyncio
+async def test_translate_chunk_numeric_miss_gets_one_retry(monkeypatch):
+    """A chunk that drops body numbers is retried once at chunk level."""
+    import json
+
+    from agent.actions.translation_actions import (
+        _TRANSLATE_CLAIMS,
+        action_translate_drain_batch,
+    )
+    from agent.effects.mock import MockEffects
+    from agent.models import FlowMeta, StepInput
+
+    monkeypatch.setenv("OUROBOROS_TRANSLATE_CHUNKS", "8")
+    src = "Измерения при 532 нм показали пик на 1085 и ширину 14.2."
+    good = "Measurements at 532 nm showed a peak at 1085 and a width of 14.2."
+    truncated = "Measurements at 532 nm."  # dropped 1085 and 14.2
+    rec = {
+        "paper_key": "p1",
+        "extraction_status": "extract_lingual",
+        "md_path": "databank/markdown/p1.md",
+    }
+    fx = MockEffects(
+        files={
+            "databank/papers.jsonl": json.dumps(rec) + "\n",
+            "databank/markdown/p1.md": src,
+        },
+        inference_responses=[truncated, good],
+    )
+    si = StepInput(
+        context={},
+        params={},
+        inputs={},
+        meta=FlowMeta(flow_name="translate_drain", step_id="drain"),
+        effects=fx,
+    )
+    _TRANSLATE_CLAIMS.clear()
+    out = await action_translate_drain_batch(si)
+    assert out.result["status"] == "translated", out.result
+    assert len([c for c in fx.calls if c.method == "run_inference"]) == 2
+
+
+def test_translation_selection_prefers_strong_tags():
+    from agent.actions.translation_actions import select_translation_paper
+
+    bank = {
+        "a_stray": {
+            "extraction_status": "extract_lingual",
+            "md_path": "a.md",
+            "tags": [{"relevance": "adjacent"}],
+        },
+        "z_close": {
+            "extraction_status": "extract_lingual",
+            "md_path": "z.md",
+            "tags": [{"relevance": "close"}],
+        },
+        "m_untagged": {"extraction_status": "extract_lingual", "md_path": "m.md"},
+    }
+    _TRANSLATE_CLAIMS.clear()
+    try:
+        # z_close wins despite sorting last alphabetically.
+        assert select_translation_paper(bank) == "z_close"
+        _TRANSLATE_CLAIMS.add("z_close")
+        assert select_translation_paper(bank) == "a_stray"
+    finally:
+        _TRANSLATE_CLAIMS.clear()
