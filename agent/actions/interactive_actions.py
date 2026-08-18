@@ -754,16 +754,23 @@ async def action_send_interaction(step_input: StepInput) -> StepOutput:
     # the model needs another program run (e.g. to verify a save loads).
     if action_type == "shell_command" and not step_input.context.get("launch_command"):
         context_updates["launch_command"] = text.strip()
-    # RELAUNCH RESETS THE CLOSE-NOTICE BUDGET. A shell command that brings
-    # a program up where none was running starts a new program run, and the
-    # pre-close guard should protect each run — at budget 1 the muse gate
+    # RELAUNCH RESETS THE CLOSE-NOTICE BUDGET. A new program run means the
+    # pre-close guard should protect it — at budget 1 the muse gate
     # session's first legitimate exit (the win screen) consumed the only
     # notice, so its SECOND exit auto-closed with the brief half done.
-    # Farming resets to dodge the guard costs a real relaunch plus the
-    # turns back to a close each time; _SESSION_TURN_BUDGET bounds that.
+    # Keyed on the OBSERVED exited->running transition, NOT on the action
+    # type: a child can only appear because something launched it, but the
+    # turn that OBSERVES the liveness is often the next one — the launch
+    # turn's settle window closes while the interpreter is still starting,
+    # so `interactive_child` flips true one turn late (live-measured on
+    # the B-leg gate 2026-08-17: a real relaunch drew notice #2 because
+    # the shell_command-keyed reset never saw child_running=True). And a
+    # model that relaunches by typing the command at the bare shell via
+    # send_input has still relaunched. Farming resets to dodge the guard
+    # costs a real relaunch plus the turns back to a close each time;
+    # _SESSION_TURN_BUDGET bounds that.
     if (
-        action_type == "shell_command"
-        and entry["child_running"]
+        entry["child_running"]
         and not prev_child_running
         and int(step_input.context.get("close_confirmations", 0) or 0) > 0
     ):

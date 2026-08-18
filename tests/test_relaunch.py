@@ -258,9 +258,45 @@ async def test_relaunch_resets_the_close_notice_budget():
 
 
 @pytest.mark.asyncio
+async def test_transition_observed_on_send_input_still_resets():
+    """The reset keys on the OBSERVED exited->running transition, not the
+    action type: the launch turn's settle window often closes before the
+    interpreter is up, so liveness flips true one turn late — and a model
+    may relaunch by typing the command at the bare shell via send_input.
+    Live-measured miss (B-leg 2026-08-17): a real relaunch drew notice #2
+    because the shell_command-keyed reset never saw child_running=True."""
+    effects = MockEffects()
+    effects._state["mcp_tool_responses"] = {
+        "send_input": {
+            "output": "=== Sunken Lighthouse ===\n> ",
+            "status": "settled",
+            "interactive_child": True,
+        }
+    }
+    out = await action_send_interaction(
+        _si(
+            effects,
+            {
+                "mcp_connection_id": "c1",
+                "mcp_session_id": "s1",
+                # Launch turn recorded no child (settle beat the interpreter);
+                # THIS turn observes it running.
+                "session_history": [
+                    {"turn": 0, "status": "settled", "child_running": False}
+                ],
+                "close_confirmations": 2,
+                "planned_action": "send_input",
+                "planned_action_arg": "look\n",
+            },
+        )
+    )
+    assert out.context_updates.get("close_confirmations") == 0
+
+
+@pytest.mark.asyncio
 async def test_plain_input_does_not_reset_the_budget():
-    """Only a genuine relaunch resets — driving a running program (or a
-    shell command while the child is already up) must leave the count."""
+    """No transition, no reset — driving a program that was already
+    running must leave the count."""
     effects = MockEffects()
     effects._state["mcp_tool_responses"] = {
         "send_input": {
