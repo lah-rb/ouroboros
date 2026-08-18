@@ -146,7 +146,8 @@ async def test_drain_accept_pack_books_production_path():
         ],
     )
     out = await action_curate_drain_batch(_si(fx))
-    assert out.result["attempted"] == 1 and out.result["paper_key"] == "p1"
+    assert out.result["attempted"] == 1
+    assert out.result["outcomes"][0]["paper_key"] == "p1"
     bank = await read_databank(fx)
     rec = bank["p1"]
     assert rec["review_status"] == "accepted"
@@ -173,7 +174,7 @@ async def test_drain_denied_books_without_pack_turn():
         ],
     )
     out = await action_curate_drain_batch(_si(fx))
-    assert out.result["outcome"]
+    assert out.result["outcomes"][0]["outcome"]
     bank = await read_databank(fx)
     assert bank["p1"]["review_status"] == "denied"
     assert "pack_status" not in bank["p1"]
@@ -215,4 +216,38 @@ async def test_drain_empty_response_defers_not_books():
     assert "transport" in out.result["reason"]
     bank = await read_databank(fx)
     assert "review_status" not in bank["p1"]
+    assert not _CURATE_CLAIMS
+
+
+@pytest.mark.asyncio
+async def test_drain_budget_curates_multiple_papers_serially(monkeypatch):
+    """OUROBOROS_CURATE_PAPERS is a real count: budget 2 curates two papers
+    in one round (serially), not a kill-switch that still does one."""
+    monkeypatch.setenv("OUROBOROS_CURATE_PAPERS", "2")
+    _clear_state()
+    md_a = "Raman at 532 nm on quartz."
+    md_b = "XRD peak at 26.6 degrees for quartz."
+    fx = MockEffects(
+        files=_bank_files([_rec("a"), _rec("b")], {"a": md_a, "b": md_b}),
+        pool_health={"kvPoolTokens": 65536},
+        inference_responses=[
+            json.dumps({"verdict": "accept", "summary": "ok", "issues": []}),
+            json.dumps({"laser_nm": 532}),
+            json.dumps(
+                {
+                    "verdict": "deny",
+                    "summary": "no data",
+                    "issues": [],
+                    "deny_category": "no_usable_data",
+                }
+            ),
+        ],
+    )
+    out = await action_curate_drain_batch(_si(fx))
+    assert out.result["attempted"] == 2
+    keys = {o["paper_key"] for o in out.result["outcomes"]}
+    assert keys == {"a", "b"}
+    bank = await read_databank(fx)
+    assert bank["a"]["review_status"] == "accepted"
+    assert bank["b"]["review_status"] == "denied"
     assert not _CURATE_CLAIMS

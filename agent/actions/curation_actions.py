@@ -886,70 +886,86 @@ async def _curate_stateless(effects, paper_key: str, doc: str) -> dict:
 
 
 async def action_curate_drain_batch(step_input):
-    """Curate ONE seat-sized paper per round — the curate_drain flow's work
-    step, built to ride as a parallel branch on an idle batched text seat.
+    """Curate up to OUROBOROS_CURATE_PAPERS seat-sized papers per round —
+    the curate_drain flow's work step, built to ride as a parallel branch
+    on an idle batched text seat. Papers run SERIALLY (one seat, one doc
+    in the cell at a time); the budget exists for long network-bound
+    windows where one paper leaves the seat idle for the back half.
 
     Stateless review+pack (context peak = doc + one answer), booked through
     action_curate_book_result so the envelope, registry update and
-    tag_review_agreement ride the production path. Transport faults decline
-    the round with nothing booked; the claim releases either way.
+    tag_review_agreement ride the production path. Transport faults end
+    the round with nothing booked for that paper; claims release either
+    way.
 
-    Inputs: working_directory. Result: attempted, outcome, paper_key.
+    Inputs: working_directory. Result: attempted, outcomes[].
     """
     from agent.actions.scholarly_actions import read_databank
     from agent.models import StepInput, StepOutput
 
     effects = step_input.effects
+    budget = _curate_drain_budget()
 
-    def _decline(reason: str) -> StepOutput:
-        summary = {"attempted": 0, "reason": reason}
+    def _summary_out(outcomes: list, reason: str = "") -> StepOutput:
+        summary = {"attempted": len(outcomes), "outcomes": outcomes}
+        if reason:
+            summary["reason"] = reason
+        obs = (
+            "curate drain: "
+            + "; ".join(f"{o['paper_key']} → {o['outcome']}" for o in outcomes)
+            if outcomes
+            else f"curate drain idle ({reason})"
+        )
         return StepOutput(
             result=summary,
-            observations=f"curate drain idle ({reason})",
+            observations=obs,
             context_updates={"curate_drain_summary": summary},
         )
 
-    if _curate_drain_budget() <= 0:
-        return _decline("disabled")
+    if budget <= 0:
+        return _summary_out([], "disabled")
     if effects is None:
-        return _decline("no effects")
+        return _summary_out([], "no effects")
     budget_chars = await _curate_doc_budget_chars(effects)
     if budget_chars <= 0:
-        return _decline("cell below whole-paper threshold or server unreachable")
-
-    databank = await read_databank(effects)
-    key, doc = await select_curate_paper(effects, databank, budget_chars)
-    if not key:
-        return _decline("nothing unclaimed fits the seat budget")
-
-    try:
-        try:
-            state = await _curate_stateless(effects, key, doc)
-        except _CurateTransportFault as e:
-            logger.warning("curate drain transport fault on %s: %s", key, e)
-            return _decline(f"transport fault ({str(e)[:120]})")
-        except Exception:  # noqa: BLE001 — code faults must not burn papers
-            logger.exception("curate drain errored on %s — declining, not booking", key)
-            return _decline("internal error (see log)")
-        out = await action_curate_book_result(
-            StepInput(effects=effects, context={"curate_state": state})
+        return _summary_out(
+            [], "cell below whole-paper threshold or server unreachable"
         )
-        _CURATE_DOC_CACHE.pop(key, None)
-    finally:
-        release_curate_keys([key])
 
-    outcome = str((out.result or {}).get("status") or state["review"].get("status", ""))
-    summary = {
-        "attempted": 1,
-        "paper_key": key,
-        "outcome": outcome,
-        "doc_chars": len(doc),
-    }
-    return StepOutput(
-        result=summary,
-        observations=f"curate drain: {key} → {outcome} ({len(doc)} chars)",
-        context_updates={"curate_drain_summary": summary},
-    )
+    outcomes: list[dict] = []
+    for _ in range(budget):
+        databank = await read_databank(effects)
+        key, doc = await select_curate_paper(effects, databank, budget_chars)
+        if not key:
+            return _summary_out(outcomes, "nothing unclaimed fits the seat budget")
+        try:
+            try:
+                state = await _curate_stateless(effects, key, doc)
+            except _CurateTransportFault as e:
+                logger.warning("curate drain transport fault on %s: %s", key, e)
+                return _summary_out(outcomes, f"transport fault ({str(e)[:120]})")
+            except Exception:  # noqa: BLE001 — code faults must not burn papers
+                logger.exception(
+                    "curate drain errored on %s — ending round, not booking", key
+                )
+                return _summary_out(outcomes, "internal error (see log)")
+            out = await action_curate_book_result(
+                StepInput(effects=effects, context={"curate_state": state})
+            )
+            _CURATE_DOC_CACHE.pop(key, None)
+        finally:
+            release_curate_keys([key])
+        outcomes.append(
+            {
+                "paper_key": key,
+                "outcome": str(
+                    (out.result or {}).get("status")
+                    or state["review"].get("status", "")
+                ),
+                "doc_chars": len(doc),
+            }
+        )
+    return _summary_out(outcomes)
 
 
 async def action_fig_review_sweep_next(step_input):
