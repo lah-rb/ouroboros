@@ -34,6 +34,12 @@ dependencies = [
     "tree-sitter-language-pack>=1.8.1",
     "weasyprint>=68.1",
     "jedi>=0.20.0",
+    # graphql-transport-ws client for the LLMVP capacity subscription
+    # (agent/effects/capacity.py). Chosen over gql[websockets] deliberately:
+    # gql drags in graphql-core's full parser for an agent that sends query
+    # strings as plain text, and its Client owns the reconnect policy — which
+    # is the one behaviour here that has to be ours to tune and test.
+    "websockets>=14.0",
     # The adaptive reasoning router (agent/reasoning_router.py) loads
     # models/reasoning_router_v1.joblib, whose artifact unpickles a
     # sklearn FeatureUnion + LogisticRegression — so BOTH are needed, and

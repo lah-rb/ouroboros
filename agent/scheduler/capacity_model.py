@@ -1,0 +1,214 @@
+"""Does this work fit right now? — an OPTIMIZER, never a guarantee.
+
+THE SAFETY ARGUMENT, first, because everything else follows from it.
+
+LLMVP's own admission control is the correctness backstop. `_size_against_pool`
+admits at full budget, shrinks to fit above a floor, queues below it, and
+fails only what can never fit. That logic runs on the server, holds the
+authoritative numbers, and cannot be raced. This module exists purely to
+stop us SENDING work that will queue — nothing here is load-bearing for
+correctness, and any future change that makes this model authoritative
+about remote state is a bug, not an optimization.
+
+That asymmetry is what makes the reservation scheme safe. Holding a
+reservation too long makes us conservative: we under-dispatch and lose
+throughput. Dropping one too early makes us over-dispatch — and the
+server absorbs it by shrinking or queueing. One error costs speed, the
+other costs nothing but a queued request. So every ambiguous case here
+resolves toward holding on.
+
+THE RACE, precisely. We dispatch at t0 against snapshot seq=k. The server
+admits at t1 and publishes seq=k+1 at t2. Between t0 and t2 the snapshot
+under-reports our own draw, so a second dispatch in that window would
+spend the same cells twice. Reservations cover exactly that gap.
+
+Reservations retire on whichever comes first:
+  * the request finishes (the common case, and exact);
+  * a snapshot arrives with seq > issued_against + 1, meaning a full
+    publish cycle has elapsed SINCE the dispatch, so the admit is
+    necessarily reflected in what we are now reading;
+  * a wall-clock settle timeout, which catches a request that died
+    without telling us.
+
+Note what is deliberately absent: matching reservations to individual
+server streams. The snapshot carries no request id, and adding one would
+couple this client to the server's internals — the coupling the whole
+capacity design exists to avoid.
+
+TWO LIMITS, NOT ONE. Seats are concurrency; cells are context. Free KV
+does not manufacture a seat, and a free seat does not make a large prompt
+fit. Work needs both, and the two exhaust independently.
+"""
+
+from __future__ import annotations
+
+import logging
+import time
+from dataclasses import dataclass, field
+from typing import Dict, Optional
+
+logger = logging.getLogger(__name__)
+
+# What a lane may run when we have NO capacity signal at all. One: the
+# behaviour the system had before any of this existed, so the worst case
+# of the whole capacity stack is "no faster than before".
+DEGRADED_WIDTH = 1
+
+
+@dataclass
+class Reservation:
+    token: str
+    lane: str
+    seats: int
+    est_kv: int
+    issued_at: float
+    issued_against_seq: int
+
+
+@dataclass
+class Verdict:
+    """Why admission was refused, in words a log can use."""
+
+    admitted: bool
+    reason: str = ""
+    free_cells: int = 0
+    free_seats: int = 0
+
+
+class CapacityModel:
+    """Local view of remote capacity, minus what we have already spent."""
+
+    def __init__(self, feed=None) -> None:
+        self._feed = feed
+        self._pending: Dict[str, Reservation] = {}
+        self._counter = 0
+        self._reservation_settle_s = 30.0
+        self._now = time.monotonic  # seam for tests
+
+    # -- accounting ------------------------------------------------------
+
+    def _reap(self, seq: int) -> None:
+        """Drop reservations the server has certainly accounted for."""
+        now = self._now()
+        for token, r in list(self._pending.items()):
+            settled_by_seq = seq > r.issued_against_seq + 1
+            settled_by_time = now - r.issued_at > self._reservation_settle_s
+            if settled_by_seq or settled_by_time:
+                del self._pending[token]
+
+    def effective(self) -> tuple[int, int]:
+        """(free_cells, free_seats) after subtracting our own in-flight."""
+        snap = self._feed.snapshot() if self._feed else None
+        if snap is None:
+            return (0, 0)
+        self._reap(snap.seq)
+        held_kv = sum(r.est_kv for r in self._pending.values())
+        held_seats = sum(r.seats for r in self._pending.values())
+        return (
+            max(0, snap.free_cells - held_kv),
+            max(0, snap.seats_free - held_seats),
+        )
+
+    # -- the gate --------------------------------------------------------
+
+    def admit(self, lane: str, est_kv: int, seats: int = 1) -> Verdict:
+        """May this unit of work start now?"""
+        snap = self._feed.snapshot() if self._feed else None
+
+        # No signal — the caller's own conservative default governs, and
+        # it is the pre-capacity behaviour rather than a stall.
+        if snap is None:
+            inflight = len(self._pending)
+            if inflight >= DEGRADED_WIDTH:
+                return Verdict(False, "no capacity signal (degraded to width 1)")
+            return Verdict(True, "degraded")
+
+        # A PARKED ENGINE STILL SHOWS FREE CELLS. Dispatching into a
+        # context rebuild is the bug `serving` exists to prevent.
+        if not snap.serving:
+            return Verdict(False, "server not serving (paused or rebuilding)")
+        if snap.engine_fatal:
+            return Verdict(False, f"engine fatal: {snap.engine_fatal[:60]}")
+
+        free_cells, free_seats = self.effective()
+
+        # WAITING > 0 MEANS STOP, not "try harder". The server's queue is
+        # head-blocking by design, so adding load behind a queued request
+        # only lengthens its wait.
+        if snap.waiting > 0:
+            return Verdict(
+                False, f"server queue depth {snap.waiting}", free_cells, free_seats
+            )
+
+        if free_seats < seats:
+            return Verdict(
+                False, f"no free seat ({free_seats} free)", free_cells, free_seats
+            )
+
+        # Legacy snapshots know seats but not cells; admit on seats alone
+        # rather than reading an unknown 0 as "full".
+        if snap.knows_kv:
+            needed = est_kv + snap.min_admit_budget
+            if free_cells < needed:
+                return Verdict(
+                    False,
+                    f"needs {needed} cells, {free_cells} free",
+                    free_cells,
+                    free_seats,
+                )
+
+        return Verdict(True, "fits", free_cells, free_seats)
+
+    def reserve(self, lane: str, est_kv: int, seats: int = 1) -> str:
+        """Record what we are about to spend, before the server sees it."""
+        snap = self._feed.snapshot() if self._feed else None
+        self._counter += 1
+        token = f"{lane}-{self._counter}"
+        self._pending[token] = Reservation(
+            token=token,
+            lane=lane,
+            seats=seats,
+            est_kv=est_kv,
+            issued_at=self._now(),
+            issued_against_seq=snap.seq if snap else 0,
+        )
+        return token
+
+    def release(self, token: str) -> None:
+        """The request finished — exact, and the common case."""
+        self._pending.pop(token, None)
+
+    def on_seat_busy(self) -> None:
+        """The server said every seat is taken.
+
+        A hard fact that outranks any snapshot: hold a full set of
+        reservations so nothing else dispatches until the next publish
+        corrects us.
+        """
+        snap = self._feed.snapshot() if self._feed else None
+        total = snap.seats_total if snap else 1
+        for _ in range(max(1, total)):
+            self.reserve("seat-busy", est_kv=0, seats=1)
+
+    @property
+    def inflight(self) -> int:
+        return len(self._pending)
+
+
+def estimate_kv_draw(
+    prompt_chars: int, max_tokens: int, static_prefix_tokens: int = 0
+) -> int:
+    """Cells one request will be charged.
+
+    ENTITLEMENT, NOT USAGE — the engine charges `gen_start_pos +
+    effective_max`, so the full max_tokens counts from the moment of
+    admission whether or not it is generated. Sizing against expected
+    output instead is how a pool ends up 59% phantom.
+
+    The resident static prefix is discounted: it is shared KV that a new
+    stream forks rather than duplicates (a static token measured ~6% of a
+    private one), so counting it against free cells over-charges every
+    request by the same fixed amount.
+    """
+    prompt_tokens = (prompt_chars * 13) // 40
+    return max(0, prompt_tokens - static_prefix_tokens) + max_tokens

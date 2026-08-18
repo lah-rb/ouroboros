@@ -551,6 +551,22 @@ class InferenceEffect:
         except Exception:  # noqa: BLE001 — downgrade to "not reported"
             return {}
 
+    async def raw_graphql(self, query: str, timeout: float = 10.0) -> dict:
+        """POST a query and return the decoded envelope verbatim.
+
+        Unlike pool_health this does NOT swallow `errors`: a caller that
+        needs to tell "the server refused this field" (a version gap worth
+        degrading over) from "the server is unreachable" (a transient worth
+        retrying) cannot do it from an empty dict. Raises on transport
+        failure for the same reason.
+        """
+        client = await self._get_client()
+        response = await client.post(
+            self._endpoint, json={"query": query}, timeout=timeout
+        )
+        response.raise_for_status()
+        return response.json()
+
     async def fetch_thinking(self, request_id: str = "") -> str:
         """Fetch chain-of-thought content from the last inference call.
 

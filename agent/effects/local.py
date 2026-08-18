@@ -1299,6 +1299,47 @@ class LocalEffects:
             )
         return self._inference
 
+    def _get_capacity(self):
+        """Lazy-initialize the capacity feed.
+
+        A SIBLING of the inference client, not a method on it: that client
+        is request-scoped machinery (one watchdog per call), while the feed
+        is a process-lifetime subscription. Callers reach it through
+        `capacity_snapshot()` so no action ever imports the client.
+        """
+        if getattr(self, "_capacity", None) is None:
+            from agent.effects.capacity import CapacityFeed
+
+            inference = self._get_inference()
+            self._capacity = CapacityFeed(
+                self._llmvp_endpoint,
+                pool_health_fn=inference.pool_health,
+                post_fn=inference.raw_graphql,
+            )
+        return self._capacity
+
+    async def capacity_snapshot(self):
+        """Freshest serving capacity, or None when there is no usable
+        signal (unreachable, too old, or never started). None means "use
+        your conservative default" — never "the server is full"."""
+        try:
+            return self._get_capacity().snapshot()
+        except Exception as e:  # noqa: BLE001 — capacity never breaks a caller
+            logger.debug("capacity_snapshot failed: %s", e)
+            return None
+
+    def capacity_start(self) -> None:
+        """Begin the subscription. Idempotent; safe without a server."""
+        try:
+            self._get_capacity().start()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("capacity feed did not start: %s", e)
+
+    async def capacity_stop(self) -> None:
+        feed = getattr(self, "_capacity", None)
+        if feed is not None:
+            await feed.stop()
+
     async def run_inference(
         self,
         prompt: str,
