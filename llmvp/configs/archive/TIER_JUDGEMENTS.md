@@ -3671,3 +3671,34 @@ context per interact turn against a real world. `LLMVP_THINK_STRIP=0` is the
 clean A/B if it matters.
 
 Record: `dev/blind_panel/records/flight_20260815_guardian_vs_gptoss_fixed.md`.
+
+---
+
+## 2026-08-17 — FRONTIER scorecard: muse-glimmer-30b COMPLETED artifact (out-of-band, never moves the ladder)
+
+**Delivery: B(frontier) 4–0 · Character: B 6–0 · OVERALL: FRONTIER.** No
+split, no CLOSE flag. Candidate = the first COMPLETED session-mode mission
+(tier_20260816-150520/arm01: 59/59 goals, final gate SUCCESS, 1663min, 5
+documented seams). Judge: ONE claude-opus-5, FLIGHT_PROMPT verbatim,
+candidate on A (rotation honored).
+
+The candidate **WON its own game** (second WON muse artifact ever), 46/47
+conformance, and — for the first time in the campaign — BOTH artifacts show
+zero seam bugs, zero unplaced entities, fully-connected room graphs. The
+campaign's historic killers are gone from our side; what separated the
+frontier was DEPTH: stateful monster AI vs one-line behaviour tags,
+serialized combat state vs monster HP dropped on save, tense randomized
+combat vs deterministic arithmetic.
+
+**Decisive defect (ours): `flee` permanently deletes the fled monster —
+boss included — via an unserialized in-memory set; one flee at the summit
+silently bricks the run.** Worse for the framework: a SHIPPED test asserts
+the bug as correct, inside a red suite (6/29 failing) whose filenames are
+quality-gate goal descriptions verbatim
+(`test_untested__flee_command_was_not_exercised_by_the_`). Every gate round
+"verified" flee by observing the flee MESSAGE; none asked what flee should
+MEAN. Semantics, not presence, is the next verification lever — and authored
+tests must not ship red, must not encode goal prose in filenames, and must
+not ratify observed behaviour as intended behaviour.
+
+Record: `dev/blind_panel/records/flight_20260817_frontier_vs_completed.md`.
