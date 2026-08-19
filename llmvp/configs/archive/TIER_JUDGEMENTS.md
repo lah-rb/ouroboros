@@ -3742,3 +3742,49 @@ Charged against the candidate for later work: encounter balance at the boss
 with zero tests behind a documented `make test` target, `s`-means-status
 colliding with directional single letters, and the title screen not honouring
 `load`.
+
+---
+
+## 2026-08-19 — FRONTIER: qwen3.8-27b loses 2-8, and the loss changed shape
+
+**Delivery: A(candidate) 2 – B(frontier) 2 · Character: A 0 – B 6 · OVERALL:
+FRONTIER.** No split, no CLOSE flag. Out-of-band scorecard — never moves the
+ladder. Record:
+`dev/blind_panel/records/flight_20260819_frontier_vs_qwen38.md`.
+
+**Read against the baseline, this is the real measurement.** The Guardian
+sweep hours earlier was a REGRESSION CHECK (operator: 3.6-27b also beat the
+Guardian handily). This is the same anchor that beat the muse COMPLETED
+artifact **10-0** on 08-17. The qwen3.8 artifact — INCOMPLETE, ended on cycle
+exhaustion — took **two Delivery axes** off it:
+  * **A2 state integrity** — it round-trips a MID-COMBAT save (monster HP,
+    boss phase, turn parity) and resumes inside the same fight; the frontier
+    refuses to save in combat at all.
+  * **A3 robustness** — zero tracebacks across five nested EOF prompts,
+    against the frontier's unhandled EOFError at its own title screen.
+
+Character stayed **0-6**, the identical sweep muse suffered: ambition,
+imagination, felt play, craft, workability, documentation.
+
+**CAMPAIGN MILESTONE — the historic killers are gone from both sides.** The
+judge: *"neither artifact had the cross-module seam bug or the placement
+defect that has decided every prior flight... A lost this flight on NUMBERS —
+a boss the player cannot beat and a `flee` that voids the world's own gates —
+and on prose, not on a mismatched identifier."* Both graphs fully connected,
+both registries fully placed, both parsers accepting the names their rooms
+print. Seven prior artifacts died on placement alone.
+
+**WHAT BEAT US, measured not estimated.** The boss is winnable at **~0.3%**
+(best cell 19/6000 across a 20,000-trial Monte Carlo run against the
+artifact's OWN combat.py, with a policy search over heal thresholds and
+routes); 39 real playthroughs, zero wins. The Guardian judge had called this
+"balance" from feel — this one quantified it. Second decisive defect, new
+this flight: **`flee` clears combat but leaves the player standing in the
+monster's room**, free to loot it and walk out, so every guard in the world
+is optional. Third: a healing item used at full HP is consumed and destroyed.
+
+**THE STANDING GAP IS NOW GAME DESIGN, NOT WIRING.** Two artifacts in a row
+have shipped connected worlds with no seam bugs and lost Character 0-6 on
+prose, systems depth, and encounter tuning. That is a different problem from
+the one the framework was built to solve, and no amount of verification
+hardening addresses it.
