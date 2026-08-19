@@ -1,7 +1,7 @@
 id: interact/charter_specification
 content: |
   Write a test charter — a self-contained tester brief — for the test
-  objective above. The charter must contain five labeled parts:
+  objective above. The charter must contain these labeled parts, in order:
 
   ## ROLE
   One sentence describing who the tester is playing in this session

@@ -35,7 +35,7 @@ sections:
   - id: instruction
     cache: true
     content: |
-      Write the brief with three labeled parts, all in service of the
+      Write the brief with these labeled parts, all in service of the
       ---YOUR TASK--- below:
 
       ## ROLE

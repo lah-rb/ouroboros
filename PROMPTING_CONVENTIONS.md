@@ -707,6 +707,28 @@ existed to raise:
     is too large for one patch, and a silently shortened list hides that.
 ```
 
+**THE ANNOUNCEMENT SUBTYPE — a count that restates a list it sits above.**
+Every example so far is a BUDGET: a number constraining how much output to
+produce. The other shape is a number that merely announces an enumeration
+which then follows literally — `The charter must contain five labeled
+parts:` above a list of six. It cannot constrain the job, because the list
+underneath is the authority; it can only be correct and redundant, or wrong
+and expensive. `interact/charter_function` carried exactly that for as long
+as its CONSTRAINT part existed, and a live CoT shows the model paying for it
+on every charter turn:
+
+> *"Potential issue: The user said 'The charter must contain five labeled
+> parts' but listed six. We include six. Good."*
+
+This is the rule's stated failure mode — a number the model must reconcile
+with the work — in its mildest and most durable form: nobody re-counts the
+list when a part is added, so the number silently drifts out of agreement.
+Two reviewers (and two editing passes on that same file) read past it.
+**Write `these labeled parts, in order:` and let the list speak.** When
+auditing for §15, grep for spelled-out counts in front of enumerations
+(`\b(one|two|three|four|five|six|seven|eight) (labeled|numbered)\b`), not
+just for parenthesised ranges.
+
 A hard bound is legitimate only where the number is a REAL external limit
 (a context window, an API page size, a protocol field), not a stylistic
 preference. If violating it would merely make the output longer than you

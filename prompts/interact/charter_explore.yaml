@@ -6,7 +6,7 @@ content: |
   job is to explore the running program AND the code, then produce a precise
   build spec: what to build and where it connects to the existing structure.
 
-  The charter must contain five labeled parts:
+  The charter must contain these labeled parts, in order:
 
   ## ROLE
   One sentence: an engineer locating where a new capability should be built.
