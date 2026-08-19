@@ -161,7 +161,8 @@ class WorkerPool:
             except asyncio.TimeoutError:
                 pass
             try:
-                self._emit_report()
+                snap = self._emit_report()
+                await self._emit_capacity_trace(snap)
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001 — telemetry never kills itself
@@ -171,7 +172,8 @@ class WorkerPool:
                 # mode for the one thing whose job is to tell us otherwise.
                 logger.exception("lane report failed (continuing)")
 
-    def _emit_report(self) -> None:
+    def _emit_report(self):
+        """Log one lane/capacity line. Returns the snapshot for the tracer."""
         snap = (
             self.model._feed.snapshot() if getattr(self.model, "_feed", None) else None
         )
@@ -190,6 +192,71 @@ class WorkerPool:
             ),
             self._last_refusal or "none",
         )
+        return snap
+
+    async def _emit_capacity_trace(self, snap) -> None:
+        """Persist the same reading the log line shows.
+
+        The log line answers "is anything moving" for a human watching
+        live; this answers it for anyone reading the run afterwards. They
+        are deliberately fed from ONE snapshot read — two reads would let
+        the log and the trace disagree about the same instant, and the
+        resulting "the log said seats were free" argument is unwinnable.
+
+        Never raises: `effects` is None in unit tests and a degraded feed
+        returns no snapshot at all, and neither is a reason to take down
+        the reporting task (see the sibling guard in `_report_loop`).
+        """
+        if snap is None or self.effects is None:
+            return
+        emit = getattr(self.effects, "emit_trace", None)
+        if emit is None:
+            return
+        pool = int(getattr(snap, "kv_pool_tokens", 0) or 0)
+        live = int(getattr(snap, "live_occupancy", 0) or 0)
+        pinned = int(getattr(snap, "pinned_occupancy", 0) or 0)
+        try:
+            from agent.trace import CapacitySample
+
+            await emit(
+                CapacitySample(
+                    # The pool is handed a working_directory, not an id;
+                    # LocalEffects already tracks the run's mission id from
+                    # the first event that carried one, so borrow that
+                    # rather than threading a second copy through.
+                    mission_id=str(
+                        self.inputs.get("mission_id")
+                        or getattr(self.effects, "_traced_mission_id", "")
+                        or ""
+                    ),
+                    cycle=-1,  # out-of-band: never 0, which is a real cycle
+                    seats_total=int(getattr(snap, "seats_total", 0) or 0),
+                    seats_free=int(getattr(snap, "seats_free", 0) or 0),
+                    kv_pool_tokens=pool,
+                    free_cells=int(getattr(snap, "free_cells", 0) or 0),
+                    live_occupancy=live,
+                    pinned_occupancy=pinned,
+                    pool_slack=int(getattr(snap, "pool_slack", 0) or 0),
+                    active_streams=int(getattr(snap, "active_streams", 0) or 0),
+                    waiting=int(getattr(snap, "waiting", 0) or 0),
+                    serving=bool(getattr(snap, "serving", True)),
+                    source=str(getattr(snap, "source", "") or ""),
+                    seq=int(getattr(snap, "seq", 0) or 0),
+                    # free_cells clamps at 0, so the overshoot that idles
+                    # seats is only visible as a ratio above 1.0.
+                    occupancy_ratio=round((live + pinned) / pool, 4) if pool else 0.0,
+                    lanes={
+                        n: f"{s.units_done}d/{s.units_idle}i/{s.units_failed}f"
+                        + (f"/{s.inflight} live" if s.inflight else "")
+                        for n, s in self.state.items()
+                    },
+                    last_refusal=self._last_refusal or "",
+                )
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 — telemetry never kills itself
+            logger.debug("capacity trace emit skipped", exc_info=True)
 
     async def stop(self) -> None:
         """Ask lanes to finish the unit in hand, then cancel what is left.

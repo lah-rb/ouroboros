@@ -369,3 +369,78 @@ async def test_a_lane_cannot_spin_even_if_work_is_misclassified():
         await asyncio.sleep(0.25)
     # Without the floor this would run hundreds of times.
     assert calls["n"] <= 8, f"lane spun {calls['n']} times despite the rate floor"
+
+
+# ── capacity telemetry ────────────────────────────────────────────────
+
+
+class _RecordingEffects:
+    """Minimal effects stand-in that captures emitted trace events."""
+
+    def __init__(self, boom: bool = False):
+        self.events: list = []
+        self._boom = boom
+        self._traced_mission_id = "m1"
+
+    async def emit_trace(self, event):
+        if self._boom:
+            raise RuntimeError("trace backend down")
+        self.events.append(event)
+
+
+@pytest.mark.asyncio
+async def test_capacity_sample_records_entitlement_oversubscription():
+    """THE state this event exists for.
+
+    Live 2026-08-19: seats_total=4, seats_free=2, free_cells=0 — two seats
+    idle while two streams had entitled 67,045 cells of a 65,536 pool. The
+    seat count alone says there is room; only the ratio shows why there
+    isn't. free_cells clamps at 0, so the overshoot has to be carried as a
+    ratio or it is lost.
+    """
+    eff = _RecordingEffects()
+    snap = _snap(
+        seats_total=4,
+        seats_free=2,
+        free_cells=0,
+        kv_pool_tokens=65_536,
+        live_occupancy=67_045,
+        pinned_occupancy=0,
+        active_streams=2,
+    )
+    pool = _pool([Lane(name="curate", flow="f", resource="text_seat")], None, snap=snap)
+    pool.effects = eff
+
+    await pool._emit_capacity_trace(pool.model._feed.snapshot())
+
+    assert len(eff.events) == 1
+    e = eff.events[0]
+    assert e.event_type == "capacity_sample"
+    assert e.seats_free == 2 and e.free_cells == 0
+    assert e.occupancy_ratio > 1.0, "oversubscription must survive the clamp"
+    assert e.cycle == -1, "out-of-band events must not claim cycle 0"
+    assert e.mission_id == "m1"
+    assert "curate" in e.lanes
+
+
+@pytest.mark.asyncio
+async def test_capacity_trace_failure_does_not_kill_the_report_loop():
+    """Same rule as the log line: the thing that reports trouble must not
+    become the trouble. A raise here previously had no guard at all."""
+    pool = _pool([Lane(name="x", flow="f", resource="paddle")], None)
+    pool.effects = _RecordingEffects(boom=True)
+    # Must not raise.
+    await pool._emit_capacity_trace(pool.model._feed.snapshot())
+
+
+@pytest.mark.asyncio
+async def test_capacity_trace_is_silent_without_effects_or_snapshot():
+    """A degraded feed yields no snapshot; unit pools carry no effects.
+    Neither is an error, and neither may emit a half-filled event."""
+    pool = _pool([Lane(name="x", flow="f", resource="paddle")], None)
+    pool.effects = None
+    await pool._emit_capacity_trace(pool.model._feed.snapshot())  # no effects
+    eff = _RecordingEffects()
+    pool.effects = eff
+    await pool._emit_capacity_trace(None)  # no snapshot
+    assert eff.events == []
