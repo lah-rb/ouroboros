@@ -80,6 +80,7 @@ class FakeEngine:
         head = SimpleNamespace(seq=1, n_tokens=0, tokens=[])
         self._persona_heads = {"default": head}
         self._streams = {}
+        self._waiting = []  # queued admissions — their seats are LEASED
         self.prepared = []
         self.cleared = []
         self.cancelled = []
@@ -338,3 +339,93 @@ def test_health_reports_kv_pool_tokens_and_seat_accounting():
         assert info["batched_engine"]["active_streams"] == 3
 
     asyncio.run(scenario())
+
+
+# ── the reaper must not reclaim a QUEUED admission's seat ─────────────
+
+
+def test_reaper_spares_a_queued_admissions_seat():
+    """THE seq-wedge root cause (2026-08-19, X=1764/Y=9595). A request the
+    engine parked in _waiting (QUEUE verdict) holds its pre-acquired seat
+    but has no StreamState, so a liveness snapshot of _streams alone calls
+    the seat orphaned. Under contention the queue wait outlives two sweep
+    strikes, the reaper cleared the seat, and the clear landed between the
+    admitted stream's prefill chunks — KV lost 7,830 positions mid-flight
+    and the shared context wedged. Queued seats are live seats."""
+    be = _backend()
+    engine = FakeEngine()
+
+    async def scenario():
+        (queued,) = _wire(be, engine)
+        be._pool_queue.get_nowait()
+        be._checked_out = 1
+        queued._leased_at = 1.0  # ancient — stale by wall clock
+        engine._waiting.append(SimpleNamespace(slot=queued))
+
+        strikes = {}
+        await be._seat_reaper_sweep(strikes)
+        await be._seat_reaper_sweep(strikes)
+        await be._seat_reaper_sweep(strikes)
+
+        assert engine.cleared == [], "reaper cleared a queued admission's seat"
+        assert be._pool_queue.qsize() == 0 and be._checked_out == 1
+        assert queued._leased_at is not None
+
+        # Once the queue drains (request admitted then retired, seat
+        # released by its consumer), the reaper treats it normally again.
+        engine._waiting.clear()
+        await be._seat_reaper_sweep(strikes)
+        await be._seat_reaper_sweep(strikes)
+        assert engine.cleared == [queued.seq]
+
+    asyncio.run(scenario())
+
+
+# ── clear_seat refuses to strip an occupied seat ──────────────────────
+
+
+def test_clear_seat_refuses_an_occupied_seat():
+    """Belt and braces UNDER the reaper fix: whatever bookkeeping goes
+    stale next, a clear that lands on a seat with a live stream (or a
+    queued request) removes KV out from under an in-flight prefill and
+    wedges the shared context. The engine's own registry is the truth on
+    the decode thread, so the clear itself checks it."""
+    from inference.batched_engine import BatchedEngine
+
+    class _Ctx:
+        def __init__(self):
+            self.removed = []
+
+        def memory_seq_rm(self, seq, a, b):
+            self.removed.append((seq, a, b))
+
+    ctx = _Ctx()
+    eng = SimpleNamespace(
+        _streams={},
+        _waiting=[],
+        _llama=SimpleNamespace(_ctx=ctx),
+        h_clear_refusals=0,
+    )
+    seat = SimpleNamespace(
+        seq=2, n_tokens=9595, static_len=1765, input_ids=[1], pinned=False
+    )
+
+    # Occupied by a live stream -> refused, KV untouched, counter up.
+    eng._streams["s"] = SimpleNamespace(
+        slot=seat, phase=StreamPhase.DECODING, stream_id="s"
+    )
+    BatchedEngine.clear_seat(eng, seat)
+    assert ctx.removed == [] and seat.n_tokens == 9595
+    assert eng.h_clear_refusals == 1
+
+    # Occupied by a QUEUED request -> also refused.
+    eng._streams.clear()
+    eng._waiting.append(SimpleNamespace(slot=seat, request_id="q1"))
+    BatchedEngine.clear_seat(eng, seat)
+    assert ctx.removed == [] and eng.h_clear_refusals == 2
+
+    # Free -> clears normally.
+    eng._waiting.clear()
+    BatchedEngine.clear_seat(eng, seat)
+    assert ctx.removed == [(2, 0, -1)]
+    assert seat.n_tokens == 0 and seat.input_ids == [] and seat.static_len == 0

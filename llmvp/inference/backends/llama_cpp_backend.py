@@ -1917,6 +1917,19 @@ class LlamaCppBackend(BaseBackend):
         from inference.batched_engine import StreamPhase
 
         try:
+            # LIVE = admitted streams AND queued admissions. A request the
+            # engine parked in _waiting (QUEUE verdict — not enough free
+            # cells) holds its pre-acquired seat but has no StreamState yet,
+            # so a snapshot of _streams alone calls its seat orphaned. That
+            # false positive IS the seq-wedge (2026-08-19, X=1764/Y=9595):
+            # the reaper reclaimed a parked large request's seat, its
+            # clear_seat landed between the admitted stream's prefill
+            # chunks, and the KV lost 7,830 positions mid-flight. Queue
+            # waits under contention run minutes — far past two sweep
+            # strikes — and only LARGE prompts queue, which is why every
+            # capture involved a large-prompt handoff. Both sets are read
+            # inside one control op: the decode thread owns _streams and
+            # _waiting, so this is the only race-free vantage.
             live = await asyncio.wrap_future(
                 engine.control(
                     lambda: {
@@ -1924,6 +1937,7 @@ class LlamaCppBackend(BaseBackend):
                         for s in engine._streams.values()
                         if s.phase is not StreamPhase.DONE
                     }
+                    | {id(r.slot) for r in engine._waiting if r.slot is not None}
                 )
             )
         except Exception:  # noqa: BLE001 — engine busy/parked, try next sweep

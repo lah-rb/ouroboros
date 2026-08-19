@@ -502,6 +502,9 @@ class BatchedEngine:
         self.h_final_channel_stops = 0
         self.h_decode_failures = 0
         self.h_latch_heals = 0
+        # Occupied-seat clears refused — each one is a PREVENTED seq-wedge;
+        # a nonzero count means some caller's seat bookkeeping went stale.
+        self.h_clear_refusals = 0
 
     # -- lifecycle -------------------------------------------------------
 
@@ -1230,6 +1233,41 @@ class BatchedEngine:
         slot._last_completion_tokens = None
 
     def clear_seat(self, slot: SeqSlot) -> None:
+        """Strip a seat's KV for reuse — REFUSED while the seat is occupied.
+
+        A clear that lands on a seat with a live stream removes KV cells
+        out from under an in-flight prefill/decode: the stream's next
+        chunk claims position N while the cache ends at the static
+        boundary, ggml asserts Y = X + 1, and the shared context wedges
+        (the 2026-08-19 capture: a reaper false-positive cleared a seat
+        1.4s after _drain_waiting re-admitted onto it). The caller's
+        bookkeeping said the seat was free; the engine's says otherwise —
+        and on the decode thread the engine's view is the truth. Refusing
+        costs nothing: every legitimate clear happens after retire has
+        popped the stream and before the next admit.
+        """
+        occupant = next(
+            (
+                s
+                for s in self._streams.values()
+                if s.slot is slot and s.phase is not StreamPhase.DONE
+            ),
+            None,
+        )
+        if occupant is None:
+            occupant = next((r for r in self._waiting if r.slot is slot), None)
+        if occupant is not None:
+            self.h_clear_refusals += 1
+            logger.warning(
+                "🛑 clear_seat REFUSED: seq %d has a live occupant "
+                "(%s) — a stale release or reaper false-positive tried to "
+                "strip an occupied seat (refusal #%d)",
+                slot.seq,
+                getattr(occupant, "stream_id", None)
+                or getattr(occupant, "request_id", "queued request"),
+                self.h_clear_refusals,
+            )
+            return
         self._llama._ctx.memory_seq_rm(slot.seq, 0, -1)
         slot.n_tokens = 0
         slot.static_len = 0
@@ -1533,6 +1571,7 @@ class BatchedEngine:
             "kv_evictions": self._h_evictions,
             "decode_failures": self.h_decode_failures,
             "latch_heals": self.h_latch_heals,
+            "clear_refusals": self.h_clear_refusals,
             "engine_fatal": str(self._fatal) if self._fatal else None,
         }
 
