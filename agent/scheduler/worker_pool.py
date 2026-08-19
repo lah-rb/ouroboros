@@ -53,6 +53,14 @@ class Lane:
     # seats (paddle OCR, vision figure reads) declare 0 and are gated on
     # their own resource instead.
     est_kv: int = 0
+    # TEXT SEATS this unit occupies. 0 for lanes served by something other
+    # than the batched text pool — paddle OCR runs on its own device and
+    # figure reads run on muse's separate vision contexts. Declaring 1 for
+    # those refuses them whenever muse's text seats fill, which starves
+    # GPU1 work on a GPU0 constraint; caught on the first mileage run,
+    # where "ocr: no free seat" was refusing paddle work while paddle sat
+    # idle. Those lanes are bounded by max_inflight for their own
+    # resource instead.
     seats: int = 1
     # How long to wait before re-checking an empty queue. Idle lanes must
     # not spin: there is no work-arrival signal from the databank.
@@ -116,6 +124,8 @@ class WorkerPool:
         # the real loop rather than a rewritten one.
         self._admit_wait_s = 5.0
         self._stop_grace_s = 30.0
+        self._report_every_s = 300.0
+        self._last_refusal = ""
         self._now = time.monotonic
 
     # -- lifecycle -------------------------------------------------------
@@ -131,6 +141,40 @@ class WorkerPool:
         for lane in self.lanes:
             self._tasks.append(
                 asyncio.create_task(self._run_lane(lane), name=f"lane:{lane.name}")
+            )
+        # A pool that only reports at shutdown is unobservable for exactly
+        # as long as it matters. One line per interval is enough to answer
+        # "is anything moving, and what is refusing admission".
+        self._tasks.append(asyncio.create_task(self._report_loop(), name="lane:stats"))
+
+    async def _report_loop(self) -> None:
+        while not self._stopping.is_set():
+            try:
+                await asyncio.wait_for(
+                    self._stopping.wait(), timeout=self._report_every_s
+                )
+                return  # stopping
+            except asyncio.TimeoutError:
+                pass
+            snap = (
+                self.model._feed.snapshot()
+                if getattr(self.model, "_feed", None)
+                else None
+            )
+            logger.info(
+                "lanes %s | capacity %s | last refusal: %s",
+                {
+                    n: f"{s.units_done}d/{s.units_idle}i/{s.units_failed}f"
+                    + (f" [{s.inflight} live]" if s.inflight else "")
+                    for n, s in self.state.items()
+                },
+                (
+                    f"free={snap.free_cells} seats={snap.seats_free}"
+                    f" wait={snap.waiting} src={snap.source}"
+                    if snap
+                    else "no signal (degraded)"
+                ),
+                self._last_refusal or "none",
             )
 
     async def stop(self) -> None:
@@ -204,6 +248,10 @@ class WorkerPool:
         if self.model is not None:
             verdict = self.model.admit(lane.name, lane.est_kv, lane.seats)
             if not verdict.admitted:
+                # Kept for the periodic report: "nothing is moving" and
+                # "nothing is being ADMITTED" are different diagnoses, and
+                # only the refusal reason separates them.
+                self._last_refusal = f"{lane.name}: {verdict.reason}"
                 logger.debug("lane %s not admitted: %s", lane.name, verdict.reason)
                 return False
             token = self.model.reserve(lane.name, lane.est_kv, lane.seats)
@@ -293,11 +341,17 @@ def lanes_for_scraper() -> List[Lane]:
     return [
         # Paddle OCR: its own device, no text seat. One at a time — the
         # tool is a subprocess and the 3060 serves one page batch.
-        Lane(name="ocr", flow="ocr_drain", resource="paddle", est_kv=0),
+        Lane(name="ocr", flow="ocr_drain", resource="paddle", est_kv=0, seats=0),
         # Figure reads run on muse's vision contexts, which are separate
         # from the batched text cell (measured vision/text serialization
         # 0.068 — effectively free against text).
-        Lane(name="figtext", flow="figtext_drain", resource="vision_ctx", est_kv=0),
+        Lane(
+            name="figtext",
+            flow="figtext_drain",
+            resource="vision_ctx",
+            est_kv=0,
+            seats=0,
+        ),
         # Both of these hold a text seat and real KV.
         Lane(
             name="translate",

@@ -391,6 +391,16 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
                         >= _CHUNK_MIN_NUMERIC
                     ):
                         break
+                # BANK THIS CHUNK NOW, not after the round's gather.
+                # A chunk is minutes of decode; under continuous
+                # scheduling a round of eight can run 20 minutes against a
+                # contended server, and banking at the end means a stop
+                # anywhere in that window throws away everything. Writes
+                # are serialized per path by append_file's lock, so
+                # concurrent chunks appending is safe.
+                await _append_parts(
+                    effects, key, {idx: text}, len(chunks), len(src), attempts
+                )
                 return idx, text
 
         results = await asyncio.gather(*(one(i) for i in todo), return_exceptions=True)
@@ -398,7 +408,8 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
             i: t for r in results if not isinstance(r, BaseException) for i, t in [r]
         }
         errors = [r for r in results if isinstance(r, BaseException)]
-        await _append_parts(effects, key, fresh, len(chunks), len(src), attempts)
+        # Already banked by `one()` as each chunk landed — nothing to
+        # write here.
         done.update(fresh)
 
         if errors:

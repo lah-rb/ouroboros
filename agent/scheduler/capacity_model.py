@@ -164,7 +164,13 @@ class CapacityModel:
                 False, f"server queue depth {snap.waiting}", free_cells, free_seats
             )
 
-        if free_seats < seats:
+        # SEATS ARE THE TEXT POOL'S limit, and only work that runs there
+        # may be refused for want of one. `seats=0` means "served by
+        # something else" — paddle on its own device, muse's separate
+        # vision contexts — and gating those on the text pool starves a
+        # whole GPU on the other one's contention. Observed live: "ocr: no
+        # free seat" refusing paddle work while paddle was idle.
+        if seats and free_seats < seats:
             return Verdict(
                 False, f"no free seat ({free_seats} free)", free_cells, free_seats
             )

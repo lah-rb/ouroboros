@@ -353,3 +353,22 @@ def test_a_reservation_cannot_clear_before_our_request_could_be_admitted():
     # Past the round-trip floor, the seq evidence is trustworthy.
     clock["t"] = 6.0
     assert m.effective()[0] == 5_000
+
+
+def test_work_served_off_the_text_pool_is_not_refused_for_want_of_a_seat():
+    """CAUGHT ON THE FIRST MILEAGE RUN. Seats are the batched TEXT pool's
+    limit. paddle OCR runs on its own device and figure reads run on
+    muse's separate vision contexts, so gating them on text-seat
+    availability starves one GPU on the other's contention — the live
+    report read 'ocr: no free seat' while paddle sat idle."""
+    m = _model(_snap(seats_free=0, seats_total=4, free_cells=60_000))
+    assert not m.admit("curate", est_kv=1000, seats=1).admitted
+    v = m.admit("ocr", est_kv=0, seats=0)
+    assert v.admitted, v.reason
+
+
+def test_a_seatless_lane_is_still_bounded_by_free_cells():
+    """seats=0 means 'not a text seat', not 'unbounded'. A lane that
+    genuinely draws KV must still fit."""
+    m = _model(_snap(seats_free=0, free_cells=500))
+    assert not m.admit("odd", est_kv=10_000, seats=0).admitted

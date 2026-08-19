@@ -683,3 +683,76 @@ def test_translation_selection_prefers_strong_tags():
         assert select_translation_paper(bank) == "a_stray"
     finally:
         _TRANSLATE_CLAIMS.clear()
+
+
+@pytest.mark.asyncio
+async def test_a_chunk_is_banked_as_it_lands_not_at_the_end_of_the_round(monkeypatch):
+    """Under continuous scheduling a round of eight chunks can run 20+
+    minutes against a contended server (observed on the first v2 mileage
+    run). Banking only after the round's gather means a stop anywhere in
+    that window discards every completed chunk — the same class of loss
+    that per-item extraction fixed."""
+    import json
+
+    from agent.actions.translation_actions import (
+        _TRANSLATE_CLAIMS,
+        _parts_path,
+        action_translate_drain_batch,
+        chunk_markdown,
+    )
+    from agent.effects.mock import MockEffects
+    from agent.models import FlowMeta, StepInput
+
+    monkeypatch.setenv("OUROBOROS_TRANSLATE_CHUNKS", "3")
+    paras = [
+        " ".join(f"item{j} of set {i} reads {i * 100 + j} units" for j in range(300))
+        for i in range(3)
+    ]
+    src = "\n\n".join(paras)
+    chunks = chunk_markdown(src)
+    rec = {
+        "paper_key": "p1",
+        "extraction_status": "extract_lingual",
+        "md_path": "databank/markdown/p1.md",
+    }
+
+    banked_when = []
+
+    class _Watching(MockEffects):
+        async def append_file(self, path, content):
+            if "translations" in path:
+                # How many chunk inferences had completed at this point?
+                banked_when.append(self._done)
+            return await super().append_file(path, content)
+
+        _done = 0
+
+        async def run_inference(self, *a, **k):
+            out = await super().run_inference(*a, **k)
+            self._done += 1
+            return out
+
+    fx = _Watching(
+        files={
+            "databank/papers.jsonl": json.dumps(rec) + "\n",
+            "databank/markdown/p1.md": src,
+        },
+        inference_responses=list(chunks),
+    )
+    si = StepInput(
+        context={},
+        params={},
+        inputs={},
+        meta=FlowMeta(flow_name="translate_drain", step_id="drain"),
+        effects=fx,
+    )
+    _TRANSLATE_CLAIMS.clear()
+    await action_translate_drain_batch(si)
+
+    # One append per chunk, each landing while the round was still in
+    # flight — not a single batched write at the end.
+    assert len(banked_when) >= len(chunks), banked_when
+    assert banked_when[0] < len(chunks), (
+        f"first bank happened after {banked_when[0]} of {len(chunks)} chunks "
+        "— that is end-of-round batching, not per-chunk durability"
+    )
