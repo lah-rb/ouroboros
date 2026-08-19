@@ -359,6 +359,20 @@ FLOW_SETS: dict[str, FlowSetSpec] = {
         entry_flow="research_control",
         phases=SCRAPER_PHASES,
     ),
+    # Scraper v2: the same pipeline WITHOUT the parallel barrier. The
+    # drains are not branches here — a WorkerPool runs them continuously
+    # against server-reported capacity — so the controller dispatches the
+    # work flows directly and there are no wrapper flows. Same phases:
+    # the pipeline's SHAPE is unchanged, only how work is scheduled.
+    #
+    # v1 stays registered and keeps running: flow_set is per-mission
+    # config, so an existing mission resolves v1 by name and cannot be
+    # altered by v2 work.
+    "scraper_v2": FlowSetSpec(
+        name="scraper_v2",
+        entry_flow="research_control_v2",
+        phases=SCRAPER_PHASES,
+    ),
     "extractor": FlowSetSpec(
         name="extractor",
         entry_flow="extract_control",
