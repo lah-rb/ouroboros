@@ -5,7 +5,7 @@ content: |
   FUNCTION gate: the job is to demonstrate the feature works once, not to
   explore the product or hunt for quality issues. Keep it tight and direct.
 
-  The charter must contain five labeled parts:
+  The charter must contain these labeled parts, in order:
 
   ## ROLE
   One sentence: a tester verifying this specific capability works.
