@@ -317,6 +317,7 @@ def build_action_registry() -> ActionRegistry:
         action_merge_candidates,
         action_resolve_oa_pdf,
         action_scholarly_search,
+        action_load_query_history,
         action_snowball_expand,
     )
     from agent.actions.research_plan_actions import (
@@ -526,6 +527,7 @@ def build_action_registry() -> ActionRegistry:
 
     # ── Scraper flow set ───────────────────────────────────────────
     registry.register("scholarly_search", action_scholarly_search)
+    registry.register("load_query_history", action_load_query_history)
     registry.register("snowball_expand", action_snowball_expand)
     registry.register("merge_candidates", action_merge_candidates)
     registry.register("catalog_batch_next", action_catalog_batch_next)

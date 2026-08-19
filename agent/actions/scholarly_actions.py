@@ -52,6 +52,11 @@ logger = logging.getLogger(__name__)
 DATABANK_PATH = "databank/papers.jsonl"
 # Extractor-owned sidecar — see read_databank for why it is separate.
 EXTRACTION_PATH = "databank/extraction.jsonl"
+# Append-only ledger of queries actually SENT to the search APIs. Not a
+# cache and not state — an audit trail, so a later pass can be told what
+# has already been tried instead of rediscovering it. See
+# `record_search_queries` for why this is not folded into papers.jsonl.
+QUERY_LEDGER_PATH = "databank/search_queries.jsonl"
 PDF_DIR = "pdfs"
 RELEVANCE_TIERS = ("exact", "close", "adjacent")
 MAX_REFERENCE_DOIS = 200
@@ -728,6 +733,98 @@ async def _append_jsonl(effects: Any, path: str, records: list[dict]) -> None:
     await effects.write_file(path, existing + payload)
 
 
+# ── search-query ledger ───────────────────────────────────────────────
+#
+# WHY A SEPARATE FILE. The queries are not a property of any paper, so
+# they have no home in papers.jsonl, and the one place they DID appear —
+# the `Extracted N search queries: [...]` observation string — is not
+# persisted anywhere: traces record step metadata without payloads, and
+# goal reports record counts. Ninety-five discovery rounds across six
+# aspects therefore left no record of a single term that was tried.
+#
+# That is fine while a mission runs once. It stops being fine the moment
+# a SECOND pass opens new goals over the same corpus, because the model
+# refining queries cannot avoid ground it has already covered — the
+# refine prompt has always had a "do NOT repeat these" section, and we
+# had nothing to put in it beyond the original static seeds.
+
+
+async def record_search_queries(effects: Any, aspect: str, entries: list[dict]) -> None:
+    """Append one ledger row per query actually sent.
+
+    Never raises: discovery must not fail because an audit write failed.
+    A missing row costs a future duplicate query; a raised exception here
+    would cost the round's candidates.
+    """
+    if not entries:
+        return
+    from agent.persistence.models import _now_iso
+
+    now = _now_iso()
+    lines = []
+    for e in entries:
+        lines.append(
+            json.dumps(
+                {
+                    "aspect": aspect,
+                    "query": e.get("query", ""),
+                    "hits": int(e.get("hits") or 0),
+                    "source": e.get("source", "refined"),
+                    "ts": now,
+                },
+                ensure_ascii=False,
+            )
+        )
+    payload = "\n".join(lines) + "\n"
+    try:
+        appender = getattr(effects, "append_file", None)
+        if appender is not None:
+            await appender(QUERY_LEDGER_PATH, payload)
+            return
+        fc = await effects.read_file(QUERY_LEDGER_PATH)
+        existing = fc.content if getattr(fc, "exists", False) else ""
+        if existing and not existing.endswith("\n"):
+            existing += "\n"
+        await effects.write_file(QUERY_LEDGER_PATH, existing + payload)
+    except Exception:  # noqa: BLE001 — an audit trail never breaks the run
+        logger.warning("could not append to the query ledger", exc_info=True)
+
+
+async def read_search_queries(effects: Any, aspect: str = "") -> list[dict]:
+    """Ledger rows, oldest first; all aspects when `aspect` is empty."""
+    try:
+        fc = await effects.read_file(QUERY_LEDGER_PATH)
+    except Exception:  # noqa: BLE001
+        return []
+    if not getattr(fc, "exists", False):
+        return []
+    rows: list[dict] = []
+    for line in fc.content.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if aspect and row.get("aspect") != aspect:
+            continue
+        rows.append(row)
+    return rows
+
+
+def _dedup_preserving_order(queries: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for q in queries:
+        k = " ".join(str(q).lower().split())
+        if not k or k in seen:
+            continue
+        seen.add(k)
+        out.append(str(q).strip())
+    return out
+
+
 # ── API normalization ─────────────────────────────────────────────────
 
 _S2_BASE = "https://api.semanticscholar.org/graph/v1"
@@ -1042,7 +1139,11 @@ async def action_scholarly_search(step_input: StepInput) -> StepOutput:
 
     candidates: list[dict] = []
     s2_count = openalex_count = core_count = 0
+    # Per-query yield, for the ledger. Counted as a delta on `candidates`
+    # so it stays correct however many APIs the loop body grows to call.
+    ledger_rows: list[dict] = []
     for query in queries:
+        _hits_before = len(candidates)
         s2 = await polite_request(
             effects,
             "GET",
@@ -1114,6 +1215,20 @@ async def action_scholarly_search(step_input: StepInput) -> StepOutput:
                 core.error or core.status,
                 "" if _core_key() else " (no API key — keyless CORE 429s early)",
             )
+        ledger_rows.append(
+            {
+                "query": query,
+                "hits": len(candidates) - _hits_before,
+                # Whether the model refined this one or it fell back to the
+                # aspect's static seeds — a second pass wants to know which
+                # terms were CHOSEN and which were merely inherited.
+                "source": (
+                    "refined" if step_input.context.get("search_queries") else "seed"
+                ),
+            }
+        )
+
+    await record_search_queries(effects, aspect_name, ledger_rows)
 
     return StepOutput(
         result={
@@ -1128,6 +1243,60 @@ async def action_scholarly_search(step_input: StepInput) -> StepOutput:
             f"(S2 {s2_count}, OpenAlex {openalex_count}, CORE {core_count})"
         ),
         context_updates={"raw_candidates": candidates},
+    )
+
+
+async def action_load_query_history(step_input: StepInput) -> StepOutput:
+    """Publish the aspect's already-tried queries, for the refine prompt.
+
+    The refine template has always carried a "do NOT repeat these" section;
+    until the ledger existed the only thing available to fill it was the
+    aspect's static seed list, so by round three the model was re-proposing
+    terms it had already spent rounds on with no way to know.
+
+    HITS ARE INCLUDED DELIBERATELY. A bare exclusion list tells the model
+    only where not to go. The yield tells it which *directions* paid, so it
+    can vary a phrasing that worked instead of only avoiding one that ran.
+
+    Newest first and capped: the cap protects the prompt budget, and newest
+    first means that when it does bite, what survives is the recent frontier
+    rather than the opening rounds.
+    """
+    effects = step_input.effects
+    aspect_name = str(step_input.params.get("aspect_name") or "")
+    max_shown = int(step_input.params.get("max_shown") or 80)
+
+    rows = await read_search_queries(effects, aspect_name)
+    if not rows:
+        return StepOutput(
+            result={"prior_query_count": 0},
+            observations="No prior queries recorded for this aspect",
+            context_updates={"prior_queries": ""},
+        )
+
+    # Last write wins per distinct query, so a term tried twice is listed
+    # once with its most recent yield.
+    best: dict[str, dict] = {}
+    for row in rows:
+        key = " ".join(str(row.get("query") or "").lower().split())
+        if key:
+            best[key] = row
+    ordered = list(best.values())[::-1][:max_shown]
+
+    lines = [
+        f"- {row.get('query')} ({int(row.get('hits') or 0)} hits)" for row in ordered
+    ]
+    block = "\n".join(lines)
+    if len(best) > max_shown:
+        block += f"\n(+{len(best) - max_shown} older queries not listed)"
+
+    return StepOutput(
+        result={"prior_query_count": len(best), "shown": len(ordered)},
+        observations=(
+            f"Loaded {len(ordered)} of {len(best)} prior queries for "
+            f"{aspect_name or 'no aspect'}"
+        ),
+        context_updates={"prior_queries": block},
     )
 
 

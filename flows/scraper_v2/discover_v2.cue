@@ -39,12 +39,33 @@ discover_v2: #FlowDefinition & {
 
 	steps: {
 
+		// Feeds the refine turn what has already been SENT for this aspect.
+		// Without it the "do NOT repeat these" section of the prompt could
+		// only ever show the aspect's static seeds, so every round after the
+		// first re-proposed ground it had already covered. Declining (no
+		// ledger yet) publishes an empty block and the section drops out.
+		load_history: #StepDefinition & {
+			action:      "load_query_history"
+			description: "Load queries already sent for this aspect"
+			params: {
+				aspect_name: {$ref: "input.aspect_name"}
+				max_shown:   80
+			}
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "true", transition: "refine_queries"},
+				]
+			}
+			publishes: ["prior_queries"]
+		}
+
 		refine_queries: #StepDefinition & {
 			action:      "inference"
 			description: "Refine scholarly queries for the aspect"
 			prompt_template: {
 				template: "scraper/refine_queries"
-				context_keys: []
+				context_keys: ["prior_queries"]
 				input_keys: [
 					"aspect_name", "aspect_description", "seed_queries",
 					"coverage_target", "have_count", "corpus_languages",
@@ -161,5 +182,5 @@ discover_v2: #FlowDefinition & {
 		}
 	}
 
-	entry: "refine_queries"
+	entry: "load_history"
 }
