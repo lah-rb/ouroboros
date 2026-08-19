@@ -189,4 +189,15 @@ logging:
 # probe (d) first.
 tier:
   league: contemplator  # LOAD-BEARING — agent/tier/runner.py:config_league
-  status: not_yet_run  # history: llmvp/configs/archive/TIER_JUDGEMENTS.md
+  status: recorded  # history: llmvp/configs/archive/TIER_JUDGEMENTS.md
+# RESULT (2026-08-19 Guardian flight, ladder-bearing): SWEPT the anchor 10-0
+# (Delivery 4-0, Character 6-0) on an INCOMPLETE artifact — 23/35 goals, arm
+# ended on cycle exhaustion. 47/47 conformance vs the anchor's 42/47, zero
+# seam bugs, zero unplaced entities, no source knowledge needed to play.
+# WINNABLE-NOT-WON: the win chain fires; boss encounter balance is the gap.
+# The pre-registered expectation above ("match or modestly beat 3.6-27B; if it
+# lands BELOW, suspect the dial before the checkpoint") is SETTLED on the
+# upside — and note the dial was NOT the lever: the medium→low remap measured
+# WORSE on charter authoring (8,552 → 18,220 CoT), while the append fast path
+# (96e5ef5) carried the throughput win. The checkpoint is strong; our routing
+# assumptions about it were the weak part.

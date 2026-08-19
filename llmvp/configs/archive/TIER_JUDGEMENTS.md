@@ -3702,3 +3702,43 @@ tests must not ship red, must not encode goal prose in filenames, and must
 not ratify observed behaviour as intended behaviour.
 
 Record: `dev/blind_panel/records/flight_20260817_frontier_vs_completed.md`.
+
+---
+
+## 2026-08-19 — GUARDIAN: qwen3.8-27b first arm SWEEPS 10-0 (ladder-bearing)
+
+**Delivery: B 4–0 · Character: B 6–0 · OVERALL: candidate.** No split, no
+CLOSE flag. Judge: ONE claude-opus-5, FLIGHT_PROMPT verbatim, candidate at B
+(rotation honored). Record:
+`dev/blind_panel/records/flight_20260819_guardian_vs_qwen38.md`.
+
+**The candidate beat the Guardian on an INCOMPLETE artifact.** Its arm ended
+on cycle exhaustion at 23/35 goals — 12 functional goals never verified,
+including the entire save/load and boss arc — and it still took every axis.
+Conformance 47/47 (NEAR-FULL) against the anchor's 42/47
+(SIGNIFICANTLY-DEVIATED; trigger = CORE-LOOP, no win state anywhere in the
+anchor's tree). Zero seam bugs, 9/9 rooms reachable, zero unplaced entities,
+and — the B7 line that has charged every previous candidate — the judge
+needed NO source knowledge to play it.
+
+WINNABLE-NOT-WON, and the distinction matters: every link on the win path
+fired in play (prism dispels the shadow form, `_kill_monster` sets the won
+flag, victory screen exists). The judge reached boss 20/100 with the prism
+spent and lost to encounter BALANCE across 60+ attempts. That is a tuning
+gap, not a broken chain.
+
+**THE FRAMEWORK FINDING, and it reframes goal %.** The mission ledger called
+save/load and the boss arc unreached; the judge found save/load round-tripping
+mid-fight state (monster HP, boss_phase, per-room contents, dialogue nodes)
+and the two-phase weakness working end to end. **Goal % measures VERIFICATION
+progress, not build completeness.** The build phase shipped these; the
+functional sweep never got to confirm them before the cycle budget ran out.
+Any reading of "23/35" as "two-thirds of a game" was wrong — and this is the
+second warning this month that the goal ledger is design-relative and cannot
+be read as artifact quality.
+
+Charged against the candidate for later work: encounter balance at the boss
+(the only thing between this and a WON artifact), a shipped `tests/` package
+with zero tests behind a documented `make test` target, `s`-means-status
+colliding with directional single letters, and the title screen not honouring
+`load`.
