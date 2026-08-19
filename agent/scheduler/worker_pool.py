@@ -83,6 +83,7 @@ class LaneState:
     units_done: int = 0  # rounds that actually moved work
     units_idle: int = 0  # rounds that found nothing to do
     units_failed: int = 0
+    fast_units: int = 0  # consecutive suspiciously-quick "successes"
     inflight: int = 0
 
 
@@ -125,6 +126,9 @@ class WorkerPool:
         self._admit_wait_s = 5.0
         self._stop_grace_s = 30.0
         self._report_every_s = 300.0
+        # A real unit is a document, a figure batch, or a translation
+        # round — none complete in under a second.
+        self._min_unit_s = 1.0
         self._last_refusal = ""
         self._now = time.monotonic
 
@@ -241,6 +245,28 @@ class WorkerPool:
                         str(exc)[:160],
                     )
                     ran = False
+                # RATE FLOOR, independent of the work verdict. Whatever
+                # `_did_work` concludes, a unit that returned in under a
+                # second did not do a document's worth of work, and a lane
+                # that believes otherwise burns a CPU against a broken
+                # dependency. This is the backstop for a
+                # classification bug rather than a substitute for one:
+                # 2,864 rounds ran against a dead server before it existed.
+                elapsed = self._now() - st.last_dispatch_at
+                if ran and elapsed < self._min_unit_s:
+                    st.fast_units += 1
+                    if st.fast_units >= 3:
+                        logger.warning(
+                            "lane %s: %d units in under %.1fs each — treating "
+                            "as a stall and backing off",
+                            lane.name,
+                            st.fast_units,
+                            self._min_unit_s,
+                        )
+                        ran = False
+                elif ran:
+                    st.fast_units = 0
+
                 if not ran:
                     # Nothing to do, or nothing fits. Either way, wait —
                     # and prefer waiting on the CAPACITY signal, because a
@@ -367,12 +393,24 @@ class WorkerPool:
 def _did_work(result: dict, context: dict) -> bool:
     """Did this drain round actually move anything?
 
-    The drains report their own idleness in summaries — `attempted`,
-    `attempted_papers`, `figures`, `chunks` — and a lane that treats a
-    decline as work would spin on an empty queue at full speed.
+    ATTEMPTED IS NOT ACCOMPLISHED. An earlier version counted `attempted`
+    alone, so when the inference server died the OCR drain kept reporting
+    "attempted 4", failing instantly, and the lane looped as fast as the
+    toolchain could fail — 2,864 rounds against a dead server, hammering
+    a machine that could not answer. A round only counts as work if it
+    was neither an explicit DECLINE (drains set `reason` when they stand
+    down) nor an outright FAILURE.
     """
     for blob in (result, *(v for v in context.values() if isinstance(v, dict))):
-        for key in ("attempted", "attempted_papers", "figures", "chunks", "done"):
+        if not isinstance(blob, dict):
+            continue
+        if blob.get("reason"):
+            continue  # the drain said why it did nothing
+        if str(blob.get("status") or "") == "failed":
+            continue  # it tried and nothing landed
+        if blob.get("outcomes"):
+            return True
+        for key in ("done", "figures", "chunks", "attempted_papers", "attempted"):
             try:
                 if int(blob.get(key) or 0) > 0:
                     return True

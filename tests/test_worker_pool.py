@@ -335,3 +335,37 @@ async def test_the_report_loop_survives_a_failing_snapshot():
 
 async def _true():
     return True
+
+
+def test_attempted_is_not_accomplished():
+    """THE 7-HOUR BUG. When the inference server died, the OCR drain kept
+    reporting 'attempted 4' and failing instantly, and the lane counted
+    each failure as work — 2,864 rounds against a dead machine. A round
+    that DECLINED (drains set `reason`) or outright FAILED is not work."""
+    assert not _did_work({"attempted": 4, "status": "failed"}, {})
+    assert not _did_work({"attempted": 0, "reason": "nothing pending"}, {})
+    assert not _did_work({}, {"ocr_summary": {"attempted": 8, "status": "failed"}})
+    # A round that actually judged papers still counts.
+    assert _did_work({"attempted": 4, "status": "partial"}, {})
+    assert _did_work({"attempted": 1, "outcomes": [{"paper_key": "p"}]}, {})
+
+
+@pytest.mark.asyncio
+async def test_a_lane_cannot_spin_even_if_work_is_misclassified():
+    """Belt and braces for the above: whatever the verdict says, a unit
+    that returned in milliseconds did not do a document's worth of work.
+    This is the backstop for a FUTURE classification bug, not a substitute
+    for classifying correctly."""
+    calls = {"n": 0}
+
+    async def instant_success(lane):
+        calls["n"] += 1
+        return True  # lies: claims work, returns immediately
+
+    lanes = [Lane(name="ocr", flow="f", resource="paddle", idle_backoff_s=0.05)]
+    pool = _pool(lanes, instant_success)
+    pool._min_unit_s = 1.0
+    async with pool:
+        await asyncio.sleep(0.25)
+    # Without the floor this would run hundreds of times.
+    assert calls["n"] <= 8, f"lane spun {calls['n']} times despite the rate floor"
