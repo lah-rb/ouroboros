@@ -3788,3 +3788,46 @@ have shipped connected worlds with no seam bugs and lost Character 0-6 on
 prose, systems depth, and encounter tuning. That is a different problem from
 the one the framework was built to solve, and no amount of verification
 hardening addresses it.
+
+---
+
+## 2026-08-19 — GUARDIAN: gpt-oss grinder candidate LOSES 3-7 to the gpt-oss anchor
+
+**Delivery: A(anchor) 3–1 · Character: A 4–2 · OVERALL: ANCHOR.** No split, no
+CLOSE flag. Record:
+`dev/blind_panel/records/flight_20260819_guardian_vs_gptoss_grinder.md`.
+
+**Same model family, sixteen days apart** — the Guardian anchor is itself a
+gpt-oss artifact (banked 08-03), so the checkpoint is held constant and the
+framework is nominally the variable. **But the comparison is NOT clean and
+must not be read as a framework regression:** the candidate was WALL-BOUND at
+18/30 goals after 121 min and never reached its quality gate even once, while
+the anchor is a completed artifact. An unfinished run lost to a finished one.
+
+**THE RESULT THAT MATTERS IS THE LEDGER AUDIT, AND IT EXONERATES THE SWEEP.**
+The candidate's 12 open goals map almost 1:1 onto the judge's unmet checklist
+items — `use` (item 6, an `AttributeError` crash on a dispatch branch whose
+`_handle_use` was never written), `talk` (9), `flee` (11), boss phases (28),
+win path (31), restart (33), the unread `weaken_factor`, the unread
+`behavior` field, and unpersisted room state. **Every substantive defect the
+judge found was already on our open list.** The functional sweep did not
+false-pass them; the wall arrived before the repair loop could.
+
+ONE genuine false pass out of 18 completions: `Help command lists all
+available commands` completed, but help omits `status` — a verb that is
+implemented and whose own goal passed. Worth a look at what the help charter
+actually checks.
+
+Also notable, and charged by the judge as interaction: the artifact ships a
+**RED test suite** — `pytest tests -q` gives `1 failed, 3 passed`, and the
+failure is `test_use_consumable_item_heals_player`, i.e. the framework
+authored a test that correctly catches the artifact's worst bug. Read
+together with the open-goal list, that is the authored-test loop working:
+it wrote the test, the test failed, and the goal stayed open. It shipped red
+only because the wall staged the artifact mid-repair.
+
+Judge's summary of the pair: both are UNWINNABLE with no win state anywhere
+in either tree; "a broken destination beats an absent journey" — the anchor
+kept combat tension and a transforming boss, while the candidate's
+equipment bonus is applied twice across a module boundary, making it
+unloseable after the breastplate (final boss killed at 100/100).
