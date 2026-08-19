@@ -195,7 +195,16 @@ class CapacityFeed:
         self._backoff_initial_s = 1.0
         self._backoff_max_s = 30.0
         self._poll_fallback_s = 5.0
+        # How long a snapshot survives AFTER the link drops. Short: once
+        # disconnected we no longer learn about admits or retires.
         self._snapshot_stale_s = 15.0
+        # Backstop for a connection that is open but delivering nothing.
+        # Far above the measured 27.7 s median publish gap, because on a
+        # push feed a long quiet period is normal and means "no change".
+        self._absolute_stale_s = 900.0
+
+        self._connected = False
+        self._disconnected_at: Optional[float] = None
 
         self._backoff = self._backoff_initial_s
         self._sleep = asyncio.sleep  # seam: tests record instead of sleeping
@@ -221,18 +230,48 @@ class CapacityFeed:
     # -- reading ---------------------------------------------------------
 
     def snapshot(self) -> Optional[Snapshot]:
-        """The freshest reading, or None if it is too old to act on.
+        """The freshest reading, or None when we cannot vouch for it.
 
-        A STALE SNAPSHOT IS MORE DANGEROUS THAN NONE: None makes a caller
-        fall back to its conservative default, while a stale one makes it
-        confidently dispatch against a picture of the past.
+        AGE IS NOT STALENESS ON A PUSH FEED, and getting this wrong makes
+        the whole capacity system inert. Capacity only changes when a
+        stream is admitted or retires; through a network-bound discovery
+        stretch nothing changes for minutes, and the server is right to
+        say nothing. Measured beside the live mission over 25 minutes:
+        median gap between publishes 27.7 s, and the original 15 s age cap
+        would have declared the feed dead in 46 intervals out of 25
+        minutes — every lane degrading to width 1 while the subscription
+        sat there perfectly healthy.
+
+        So what actually invalidates a snapshot is losing the CONNECTION:
+        while we are connected, silence means "nothing changed" and the
+        last frame is current by construction. Once disconnected we no
+        longer know what we missed, and the age cap applies from the
+        moment the link dropped.
+
+        `_snapshot_stale_s` is kept as an absolute backstop against a
+        connection that is nominally open but delivering nothing.
         """
         snap = self._snapshot
         if snap is None:
             return None
-        if time.monotonic() - snap.received_at > self._snapshot_stale_s:
-            return None
-        return snap
+        now = time.monotonic()
+        age = now - snap.received_at
+
+        # A PUSHED frame on a live link: silence means nothing changed, so
+        # only the backstop applies.
+        if snap.source == "ws" and self._connected:
+            return snap if age <= self._absolute_stale_s else None
+
+        # A PULLED frame (poll or legacy) has no such guarantee — nobody
+        # promised to tell us about the next change, so its freshness is
+        # simply its age.
+        if snap.source in ("poll", "legacy"):
+            return snap if age <= self._snapshot_stale_s else None
+
+        # A pushed frame whose link has since dropped: we stopped learning
+        # about admits and retires at the drop, so age from there.
+        since_drop = now - (self._disconnected_at or snap.received_at)
+        return snap if since_drop <= self._snapshot_stale_s else None
 
     @property
     def source(self) -> str:
@@ -332,6 +371,10 @@ class CapacityFeed:
                     }
                 )
             )
+            # Subscribed and listening: from here, silence means "nothing
+            # changed" rather than "we have lost track".
+            self._connected = True
+            self._disconnected_at = None
             async for raw in conn:
                 msg = json.loads(raw)
                 kind = msg.get("type")
@@ -353,6 +396,11 @@ class CapacityFeed:
                 elif kind == "ping":
                     await conn.send(json.dumps({"type": "pong"}))
         finally:
+            # Link down — we stop learning about admits and retires here,
+            # which is the moment the snapshot starts aging out.
+            if self._connected:
+                self._connected = False
+                self._disconnected_at = time.monotonic()
             try:
                 await conn.close()
             except Exception:  # noqa: BLE001

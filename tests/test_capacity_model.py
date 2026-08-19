@@ -109,11 +109,18 @@ def test_completion_retires_a_reservation_exactly():
 def test_a_reservation_settles_after_a_full_publish_cycle():
     """seq > issued_against + 1 means a publish happened AFTER our
     dispatch, so the server's numbers already include it. Settling at
-    +1 exactly would be wrong: that snapshot may have been in flight."""
+    +1 exactly would be wrong: that snapshot may have been in flight.
+
+    The clock is advanced past _min_settle_s deliberately — the seq
+    evidence alone is not sufficient (see the burst test below), so this
+    exercises the seq rule in the regime where it is trustworthy.
+    """
     feed = _Feed(_snap(seq=10, free_cells=20_000))
     m = CapacityModel(feed)
-    m._now = lambda: 0.0
+    clock = {"t": 0.0}
+    m._now = lambda: clock["t"]
     m.reserve("a", est_kv=15_000)
+    clock["t"] = 10.0  # past the dispatch -> admit floor
 
     feed.set(_snap(seq=11, free_cells=5_000))  # may predate our admit
     assert m.effective()[0] == 0, "still held at +1"
@@ -296,3 +303,53 @@ async def test_a_raising_tokenizer_still_yields_a_size():
 
     cells, how = await size_request(_Boom(), "abc" * 100, max_tokens=64)
     assert how == "estimated" and cells > 0
+
+
+def test_a_reservation_cannot_clear_before_our_request_could_be_admitted():
+    """MEASURED REGRESSION. The seq rule reads 'a publish cycle passed, so
+    our admit is counted' — but `seq` is moved by EVERY seat, and observed
+    publishes came as little as 46 ms apart. Without a floor, a burst of
+    other streams' activity clears our reservation before our own request
+    reaches the engine, and the same cells go out twice exactly when the
+    pool is busiest."""
+    from agent.effects.capacity import Snapshot
+    from agent.scheduler.capacity_model import CapacityModel
+
+    class _F:
+        def __init__(self, s):
+            self._s = s
+
+        def snapshot(self):
+            return self._s
+
+        def set(self, s):
+            self._s = s
+
+    def snap(seq, free):
+        return Snapshot(
+            seq=seq,
+            serving=True,
+            seats_total=4,
+            seats_free=4,
+            kv_pool_tokens=65536,
+            free_cells=free,
+            min_admit_budget=512,
+            source="ws",
+            received_at=0.0,
+        )
+
+    feed = _F(snap(10, 20_000))
+    m = CapacityModel(feed)
+    clock = {"t": 0.0}
+    m._now = lambda: clock["t"]
+    m._min_settle_s = 5.0
+    m.reserve("a", est_kv=15_000)
+
+    # A burst: seq races ahead in 100ms because other seats are churning.
+    clock["t"] = 0.1
+    feed.set(snap(14, 5_000))
+    assert m.effective()[0] == 0, "held — our request cannot have landed yet"
+
+    # Past the round-trip floor, the seq evidence is trustworthy.
+    clock["t"] = 6.0
+    assert m.effective()[0] == 5_000

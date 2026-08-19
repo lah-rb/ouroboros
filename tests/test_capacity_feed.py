@@ -230,3 +230,59 @@ async def test_wait_for_change_wakes_on_the_next_snapshot():
     feed._publish(Snapshot(free_cells=999, source="ws", received_at=_t.monotonic()))
     got = await waiter
     assert got is not None and got.free_cells == 999
+
+
+# ── staleness is about the LINK, not the clock ────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_a_quiet_but_connected_feed_is_not_stale():
+    """MEASURED REGRESSION. Beside the live mission the median gap
+    between publishes was 27.7 s, because capacity only changes on admit
+    and retire and a network-bound stretch changes nothing. The original
+    15 s age cap declared the feed dead in 46 intervals over 25 minutes —
+    every lane would have degraded to width 1 against a perfectly healthy
+    subscription. On a push feed, silence while connected means "nothing
+    changed", not "we lost track".
+    """
+    import time as _t
+
+    feed = _feed()
+    feed._snapshot_stale_s = 15.0
+    feed._connected = True
+    old = Snapshot(free_cells=1000, source="ws", received_at=_t.monotonic() - 120)
+    feed._publish(old)
+    assert feed.snapshot() is not None, "120s of quiet on a live link is fine"
+    assert feed.snapshot().free_cells == 1000
+
+
+@pytest.mark.asyncio
+async def test_a_dropped_link_ages_the_snapshot_out():
+    """Once disconnected we no longer learn about admits or retires, so
+    the last frame stops being current — and the clock starts at the
+    DROP, not at the frame."""
+    import time as _t
+
+    feed = _feed()
+    feed._snapshot_stale_s = 10.0
+    feed._connected = True
+    feed._publish(Snapshot(free_cells=1000, source="ws", received_at=_t.monotonic()))
+    feed._connected = False
+    feed._disconnected_at = _t.monotonic()
+    assert feed.snapshot() is not None, "just dropped — still usable"
+    feed._disconnected_at = _t.monotonic() - 11
+    assert feed.snapshot() is None, "link gone long enough to have missed changes"
+
+
+@pytest.mark.asyncio
+async def test_an_open_but_silent_link_still_has_a_backstop():
+    """A connection can be nominally open and delivering nothing. The
+    backstop sits far above the measured publish gap so it never fires on
+    ordinary quiet."""
+    import time as _t
+
+    feed = _feed()
+    feed._connected = True
+    feed._absolute_stale_s = 900.0
+    feed._publish(Snapshot(free_cells=1, source="ws", received_at=_t.monotonic() - 901))
+    assert feed.snapshot() is None

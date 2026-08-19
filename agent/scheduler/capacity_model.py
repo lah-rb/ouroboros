@@ -83,16 +83,40 @@ class CapacityModel:
         self._pending: Dict[str, Reservation] = {}
         self._counter = 0
         self._reservation_settle_s = 30.0
+        # Floor under the seq-based release: no reservation clears until
+        # at least this long after dispatch, because `seq` is moved by
+        # every seat and can advance in milliseconds (measured min gap
+        # 46 ms). Sized above a dispatch -> admit round trip.
+        self._min_settle_s = 5.0
         self._now = time.monotonic  # seam for tests
 
     # -- accounting ------------------------------------------------------
 
     def _reap(self, seq: int) -> None:
-        """Drop reservations the server has certainly accounted for."""
+        """Drop reservations the server has certainly accounted for.
+
+        THE SEQ RULE NEEDS A FLOOR, and the reason is measured. The rule
+        reads "a publish cycle has elapsed since we dispatched, so our
+        admit is in the numbers" — which silently assumes OUR dispatch is
+        what moved `seq`. It is not: every seat's admits and retires move
+        it. Observed beside the live mission, consecutive publishes came
+        as little as 46 ms apart, so under any burst a reservation could
+        clear seq+1 long before our own request reached the engine, and
+        the model would hand the same cells out twice at exactly the
+        moment the pool was busiest.
+
+        So a seq-based release also has to be older than the dispatch ->
+        admit round trip. Completion (the exact signal, and the common
+        case) still releases immediately; the timeout still catches a
+        request that died silently.
+        """
         now = self._now()
         for token, r in list(self._pending.items()):
-            settled_by_seq = seq > r.issued_against_seq + 1
-            settled_by_time = now - r.issued_at > self._reservation_settle_s
+            age = now - r.issued_at
+            settled_by_seq = (
+                seq > r.issued_against_seq + 1 and age >= self._min_settle_s
+            )
+            settled_by_time = age > self._reservation_settle_s
             if settled_by_seq or settled_by_time:
                 del self._pending[token]
 

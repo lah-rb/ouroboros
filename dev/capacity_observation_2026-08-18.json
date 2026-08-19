@@ -1,0 +1,29 @@
+capacity feed: none -> ws (free_cells=14555 seats=0/4)
+{
+ "minutes": 25,
+ "frames": 13,
+ "source_mix": {
+  "ws": 13
+ },
+ "stale_intervals": 46,
+ "seq_regressions": 0,
+ "publish_gap_s": {
+  "n": 12,
+  "p50": 27.66,
+  "p10": 0.18,
+  "min": 0.046
+ },
+ "free_cells": {
+  "min": 14555,
+  "p50": 45173,
+  "max": 63515
+ },
+ "seats_free_hist": {
+  "0": 1,
+  "1": 2,
+  "2": 2,
+  "3": 4,
+  "4": 4
+ },
+ "waiting_nonzero_frames": 0
+}
