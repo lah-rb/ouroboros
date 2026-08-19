@@ -184,6 +184,20 @@ class SessionState:
     # turn instead of save/load state surgery. A degenerate turn simply
     # never enters the history.
     token_history: list = field(default_factory=list)
+    # Full-replay APPEND FAST PATH (2026-08-18). The replay stream is
+    # append-only — turn N+1 is exactly turn N plus new tokens — so a session
+    # whose KV still matches token_history can CONTINUE forward instead of
+    # restoring the static snapshot and re-feeding everything. Measured on
+    # qwen3.8 (memory_can_shift=False), dev/append_continuation_probe.py:
+    # depth 8 → 6.3x fewer tokens fed, depth 24 → 17.4x (3.8x prefill wall),
+    # needle recalled at both depths in both paths. `memory_can_shift` gates
+    # REMOVAL and SHIFTING (seq_rm/seq_cp/windowing); continuing forward needs
+    # neither, and the recurrent state after [0,N) is exactly what extends.
+    # kv_dirty means the live KV no longer matches token_history — a degenerate
+    # turn left its span resident while the history never took it — so the next
+    # turn MUST restore-and-replay once. This architecture supports restart or
+    # continue, never rewind (a bare n_tokens rewind dies at the next decode).
+    kv_dirty: bool = False
     # Resident session flow-fork (model.resident_session_flow_fork): an invariant
     # per-flow preamble ABOVE the global static, pinned + forked onto the live seq at
     # turn 0 so only the first user message prefills. static_base is the resident
@@ -632,6 +646,7 @@ class SessionManager:
             resident = bool(getattr(self._backend, "_resident_active", False))
             pre_turn_pos = 0
             flow_turn_suffix = None  # set by the turn-0 flow fork, if any
+            append_ok = False
             if resident:
                 # Turn 0 of a flow session: fork the pinned [global static + flow
                 # head] onto the live seq (BUILD once per instance, HIT after) so
@@ -665,11 +680,30 @@ class SessionManager:
                         )
                 pre_turn_pos = int(getattr(instance, "n_tokens", 0) or 0)
             else:
-                static = getattr(self._backend, "static_state", None)
-                if static is not None:
-                    await run_in_threadpool(instance.load_state, static)
-                else:
-                    await run_in_threadpool(instance.reset)
+                # Append fast path: continue from the live KV when it still
+                # matches token_history. (append_ok is pre-bound above so the
+                # later `not resident and not append_ok` never depends on
+                # short-circuit evaluation to stay defined.) Turn 0 and any dirtied session fall
+                # back to the restore-and-replay path below.
+                append_ok = (
+                    bool(session.token_history)
+                    and not session.kv_dirty
+                    and int(getattr(instance, "n_tokens", 0) or 0) > 0
+                )
+                if not append_ok:
+                    static = getattr(self._backend, "static_state", None)
+                    if static is not None:
+                        await run_in_threadpool(instance.load_state, static)
+                    else:
+                        await run_in_threadpool(instance.reset)
+                    if session.kv_dirty:
+                        log.info(
+                            "🧩 Session %s: KV was dirty — restored static and "
+                            "replaying %d history tokens",
+                            session_id,
+                            len(session.token_history),
+                        )
+                    session.kv_dirty = False
 
             # Build turn tokens — different paths for first turn vs continuation
             renderer = _get_format_renderer(config.model.family)
@@ -731,12 +765,13 @@ class SessionManager:
                 tokenizer = get_cached_tokenizer()
                 turn_tokens = tokenize_segments(tokenizer, segments)
                 turn_only = turn_tokens
-                if not resident:
+                if not resident and not append_ok:
                     # Full replay: re-prefill everything this session has ever
                     # evaluated, then this turn — identical token stream to
                     # what the KV would have held under state splicing, rebuilt
                     # exactly. (Resident keeps the KV live, so it appends
-                    # turn_only only.)
+                    # turn_only only; the append fast path above does the same
+                    # for full-replay sessions whose KV is still trustworthy.)
                     turn_tokens = list(session.token_history) + turn_only
 
             # Resident windowing: if this turn + its generation won't fit in the
@@ -913,12 +948,17 @@ class SessionManager:
                         pre_turn_pos,
                     )
                     raise
-                # Full replay: nothing to purge — the history was never
-                # extended, so the degenerate span simply doesn't exist as far
-                # as the next turn's re-prefill is concerned.
+                # Full replay: the history was never extended, so the
+                # degenerate span does not exist as far as a re-prefill is
+                # concerned — but it IS resident in the live KV, so the append
+                # fast path can no longer continue from it. Mark the session
+                # dirty: the next turn restores the static snapshot and replays
+                # the (clean) history once, then resumes appending.
+                session.kv_dirty = True
                 log.warning(
                     "🛑 Session %s degenerate generation (%s) — full-replay "
-                    "mode, degenerate turn dropped from history",
+                    "mode, degenerate turn dropped from history; KV marked "
+                    "dirty (next turn restores + replays)",
                     session_id,
                     e.reason,
                 )

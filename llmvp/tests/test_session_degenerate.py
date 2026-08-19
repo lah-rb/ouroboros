@@ -364,3 +364,75 @@ def test_global_temperature_floor_clamps_any_request():
         temperature_floor = None
 
     assert _global_temperature_floor(0.08, Off()) == 0.08
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Append fast path (2026-08-18) — full-replay sessions CONTINUE forward
+# ══════════════════════════════════════════════════════════════════════
+#
+# The replay stream is append-only (turn N+1 == turn N + new tokens), so a
+# session whose live KV still matches token_history can feed ONLY the new
+# turn instead of restoring the static snapshot and re-feeding everything.
+# Measured on a memory_can_shift=False model (dev/append_continuation_probe.py):
+# 17.4x fewer tokens fed at depth 24, needle recalled identically on both
+# paths. `memory_can_shift` gates REMOVAL/SHIFTING, which continuing does not
+# need. The one divergence source is a degenerate turn: its span stays in the
+# KV while token_history never took it, so the session is marked dirty and the
+# NEXT turn restores + replays once before resuming the fast path.
+
+
+def _ok_gen_factory(text="fine"):
+    async def gen():
+        yield text
+
+    return gen
+
+
+def _drive(mgr, prompt="hi"):
+    async def run():
+        return [c async for c in mgr.session_turn("s1", prompt, max_tokens=16)]
+
+    return asyncio.run(run())
+
+
+def test_first_turn_restores_static_then_later_turns_append():
+    mgr = SessionManager(FakeBackend(_ok_gen_factory()))
+    inst, sess = _make_session(mgr)
+    mgr._backend.static_state = "STATIC"
+
+    _drive(mgr)
+    assert inst.load_calls == ["STATIC"], "turn 0 must establish the static prefix"
+    assert sess.token_history, "history must record turn 0"
+
+    # Turn 1: KV is live and clean — no restore, and the fed stream is the new
+    # turn only (not history + turn).
+    inst.n_tokens = 128
+    _drive(mgr)
+    assert inst.load_calls == ["STATIC"], "clean continuation must NOT restore"
+
+
+def test_a_degenerate_turn_dirties_the_kv_and_forces_one_replay():
+    """The degenerate span is resident in the KV but absent from history, so
+    continuing forward would decode against poisoned state."""
+
+    async def degen():
+        yield "collapse"
+        raise DegenerateGenerationError("long-cycle", tokens_generated=48)
+
+    mgr = SessionManager(FakeBackend(_ok_gen_factory()))
+    inst, sess = _make_session(mgr)
+    mgr._backend.static_state = "STATIC"
+    _drive(mgr)  # turn 0 — clean
+    inst.n_tokens = 128
+
+    mgr._backend._gen_factory = degen
+    with pytest.raises(DegenerateGenerationError):
+        _drive(mgr)
+    assert sess.kv_dirty is True, "degenerate turn must dirty the KV"
+
+    # Next turn restores the static snapshot and replays the clean history,
+    # then clears the flag so the fast path resumes.
+    mgr._backend._gen_factory = _ok_gen_factory()
+    _drive(mgr)
+    assert inst.load_calls == ["STATIC", "STATIC"], "dirty session must restore"
+    assert sess.kv_dirty is False, "flag must clear after the replay turn"
