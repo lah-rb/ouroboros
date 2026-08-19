@@ -235,6 +235,78 @@ class Capacity:
     engine_fatal: Optional[str] = None
 
 
+@strawberry.type
+class TokenCount:
+    """Exact token counts for texts, from the model's OWN tokenizer.
+
+    WHY THIS IS A SERVER FIELD. Only the server knows how a model
+    tokenizes: muse carries a 202,048-token vocabulary, paddle 103,424,
+    and a client counting characters cannot bridge that (the standing
+    estimate, chars x 13/40, is a fitted constant with no model in it).
+    Sizing work against a guess means either over-reserving context — the
+    pool is charged by ENTITLEMENT, so an over-estimate is capacity nobody
+    can use — or under-reserving and being queued.
+
+    Cheap by construction: tokenizing is a CPU string-to-ids pass with no
+    prefill, no decode, and no GPU work, so a caller may ask before every
+    dispatch. `model` selects a resident secondary; empty means the active
+    model. `n_vocab` is returned so a caller can tell WHICH tokenizer
+    answered — a count from the wrong model is worse than no count, and
+    that exact confusion (muse's BOS fed through paddle's vocab) is on
+    record.
+    """
+
+    counts: List[int] = strawberry.field(default_factory=list)
+    total: int = 0
+    model: str = ""
+    n_vocab: int = 0
+    error: str = ""
+
+
+# A text far larger than any real prompt is a mistake or an attack, not a
+# sizing question. Tokenizing is cheap per byte but not free, and this
+# runs on the serving loop.
+_MAX_TOKENIZE_CHARS = 4_000_000
+
+
+def _token_count(texts: List[str], model: str = "") -> TokenCount:
+    """Count tokens for each text. Never raises — a sizing hint that can
+    fail a caller is worse than one that degrades to an estimate."""
+    try:
+        total_chars = sum(len(t or "") for t in texts)
+        if total_chars > _MAX_TOKENIZE_CHARS:
+            return TokenCount(
+                error=f"payload too large ({total_chars} chars)", model=model
+            )
+        cfg = get_config()
+        if model:
+            from core import resident_models
+
+            entry = resident_models.get_resident(model)
+            if entry is None:
+                return TokenCount(error=f"unknown model {model!r}", model=model)
+            cfg = getattr(entry, "config", cfg)
+
+        from inference.tokenizer import get_cached_tokenizer, tokenize_text
+
+        tok = get_cached_tokenizer(cfg)
+        counts = [len(tokenize_text(tok, t or "", add_bos=False)) for t in texts]
+        n_vocab = 0
+        try:
+            n_vocab = int(tok.n_vocab())
+        except Exception:  # noqa: BLE001 — provenance is a nicety, not the answer
+            n_vocab = 0
+        return TokenCount(
+            counts=counts,
+            total=sum(counts),
+            model=model or str(getattr(cfg, "name", "") or ""),
+            n_vocab=n_vocab,
+        )
+    except Exception as e:  # noqa: BLE001
+        log.warning("token_count failed: %s", e)
+        return TokenCount(error=f"{type(e).__name__}: {e}"[:200], model=model)
+
+
 def _health_capacity(status: dict) -> Optional["Capacity"]:
     """The poll half of the capacity contract.
 
@@ -743,6 +815,19 @@ async def _serve_remote_if_routed(
 @strawberry.type
 class Query:
     """GraphQL Query resolvers."""
+
+    @strawberry.field
+    def token_count(self, texts: List[str], model: str = "") -> TokenCount:
+        """Exact token counts, so callers can size work instead of guessing.
+
+        The intended use is admission sizing: tokenize, add a margin for
+        the chat template the renderer will wrap around the text, and
+        reserve THAT rather than a character-derived estimate. Costs a
+        CPU pass and no GPU time, so it is affordable before every
+        dispatch — and it is the same question a swarm asks N times when
+        it sizes a fan-out, which is why it takes a list.
+        """
+        return _token_count(list(texts or []), model)
 
     @strawberry.field
     def health(self) -> HealthStatus:

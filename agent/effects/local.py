@@ -1299,6 +1299,18 @@ class LocalEffects:
             )
         return self._inference
 
+    async def token_count(self, texts: list[str], model: str = "") -> list[int]:
+        """Exact token counts from the serving model's own tokenizer.
+
+        [] means "the server would not say" — callers fall back to their
+        character estimate rather than blocking on a sizing hint.
+        """
+        try:
+            return await self._get_inference().token_count(texts, model)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("token_count failed: %s", e)
+            return []
+
     def _get_capacity(self):
         """Lazy-initialize the capacity feed.
 

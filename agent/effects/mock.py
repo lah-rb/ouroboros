@@ -407,6 +407,15 @@ class MockEffects:
         self._record("inference_pool_health", {}, health)
         return health
 
+    async def token_count(self, texts: list[str], model: str = "") -> list[int]:
+        """Canned exact token counts, or [] meaning "the server would not
+        say" — which is the branch callers must degrade through, so it is
+        the DEFAULT here rather than a fabricated number."""
+        counts = getattr(self, "_token_counts", None)
+        result = list(counts) if counts else []
+        self._record("token_count", {"n": len(texts), "model": model}, result)
+        return result
+
     # ── Memoryful inference sessions ──────────────────────────────
 
     _session_counter: int = 0

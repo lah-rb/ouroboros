@@ -217,3 +217,82 @@ def test_draw_counts_entitlement_and_discounts_the_shared_prefix():
     # The discount cannot exceed the prompt itself — a short turn does not
     # earn negative cells just because the prefix is large.
     assert estimate_kv_draw(100, 512, static_prefix_tokens=10_000) == 512
+
+
+# ── exact sizing via the model's own tokenizer ────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_exact_tokens_beat_the_char_heuristic_on_non_latin():
+    """THE case the character estimate cannot get right.
+
+    chars x 13/40 is a constant fitted to English prose. The same
+    character count is a very different token count in CJK, so a
+    translation lane sized by characters mis-reserves every non-Latin
+    paper — in the direction that matters, since the pool is charged by
+    entitlement and over-reserving is capacity nobody can use.
+    """
+    from agent.scheduler.capacity_model import estimate_kv_draw
+
+    zh = "样品的光谱分析显示在532纳米处有明显吸收" * 50  # 950 chars
+    guessed = estimate_kv_draw(len(zh), max_tokens=1000)
+    exact = estimate_kv_draw(len(zh), max_tokens=1000, exact_prompt_tokens=1400)
+    assert guessed != exact
+    # The heuristic under-counts CJK badly; the exact path is authoritative.
+    assert exact - 1000 == int(1400 * 1.10)
+
+
+def test_margin_covers_the_template_the_client_cannot_see():
+    """We tokenize the text we hold; the server wraps it in a chat
+    template before decoding. The margin is for that wrapper."""
+    from agent.scheduler.capacity_model import TOKENIZE_MARGIN, estimate_kv_draw
+
+    d = estimate_kv_draw(0, max_tokens=0, exact_prompt_tokens=1000)
+    assert d == int(1000 * TOKENIZE_MARGIN) > 1000
+
+
+def test_static_prefix_is_discounted_on_the_exact_path_too():
+    from agent.scheduler.capacity_model import estimate_kv_draw
+
+    d = estimate_kv_draw(
+        0, max_tokens=500, static_prefix_tokens=800, exact_prompt_tokens=1000
+    )
+    assert d == int(1000 * 1.10) - 800 + 500
+
+
+@pytest.mark.asyncio
+async def test_size_request_uses_the_server_when_it_answers():
+    from agent.effects.mock import MockEffects
+    from agent.scheduler.capacity_model import size_request
+
+    fx = MockEffects()
+    fx._token_counts = [4321]
+    cells, how = await size_request(fx, "some prompt", max_tokens=2048)
+    assert how == "exact"
+    assert cells == int(4321 * 1.10) + 2048
+
+
+@pytest.mark.asyncio
+async def test_size_request_degrades_silently_in_value_but_loudly_in_label():
+    """A server that will not tokenize must not block a dispatch — but the
+    caller has to be able to SEE that it got the weaker answer, or a
+    sizing regression becomes invisible."""
+    from agent.effects.mock import MockEffects
+    from agent.scheduler.capacity_model import size_request
+
+    fx = MockEffects()  # no canned counts: the degrade branch
+    cells, how = await size_request(fx, "x" * 4000, max_tokens=2048)
+    assert how == "estimated"
+    assert cells == (4000 * 13) // 40 + 2048
+
+
+@pytest.mark.asyncio
+async def test_a_raising_tokenizer_still_yields_a_size():
+    from agent.scheduler.capacity_model import size_request
+
+    class _Boom:
+        async def token_count(self, texts, model=""):
+            raise ConnectionError("server down")
+
+    cells, how = await size_request(_Boom(), "abc" * 100, max_tokens=64)
+    assert how == "estimated" and cells > 0

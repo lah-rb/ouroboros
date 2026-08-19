@@ -195,8 +195,18 @@ class CapacityModel:
         return len(self._pending)
 
 
+# Margin over an EXACT token count. The count is of the text we hold; the
+# server wraps it in a chat template (role markers, system framing) before
+# decoding, and that wrapper is not ours to measure. 10% covers it with
+# room, and unlike the char heuristic it scales with the thing it protects.
+TOKENIZE_MARGIN = 1.10
+
+
 def estimate_kv_draw(
-    prompt_chars: int, max_tokens: int, static_prefix_tokens: int = 0
+    prompt_chars: int,
+    max_tokens: int,
+    static_prefix_tokens: int = 0,
+    exact_prompt_tokens: int | None = None,
 ) -> int:
     """Cells one request will be charged.
 
@@ -205,10 +215,57 @@ def estimate_kv_draw(
     admission whether or not it is generated. Sizing against expected
     output instead is how a pool ends up 59% phantom.
 
-    The resident static prefix is discounted: it is shared KV that a new
-    stream forks rather than duplicates (a static token measured ~6% of a
-    private one), so counting it against free cells over-charges every
-    request by the same fixed amount.
+    TWO WAYS TO SIZE THE PROMPT, and they are not equally good.
+    `exact_prompt_tokens` comes from the serving model's own tokenizer
+    (Query.tokenCount) and is the right answer: only the server knows that
+    muse counts against a 202,048-token vocabulary and paddle against
+    103,424. Without it we fall back to chars x 13/40 — a fitted constant
+    with no model in it, which mis-sizes anything that is not the English
+    prose it was fitted on. Non-Latin text is the obvious break: the same
+    character count is a very different token count in CJK.
+
+    The resident static prefix is discounted either way: it is shared KV
+    that a new stream forks rather than duplicates (a static token measured
+    ~6% of a private one), so charging it over-bills every request by the
+    same fixed amount.
     """
-    prompt_tokens = (prompt_chars * 13) // 40
+    if exact_prompt_tokens is not None:
+        prompt_tokens = int(exact_prompt_tokens * TOKENIZE_MARGIN)
+    else:
+        prompt_tokens = (prompt_chars * 13) // 40
     return max(0, prompt_tokens - static_prefix_tokens) + max_tokens
+
+
+async def size_request(
+    effects,
+    prompt: str,
+    max_tokens: int,
+    static_prefix_tokens: int = 0,
+    model: str = "",
+) -> tuple[int, str]:
+    """(cells, how) for one request — exact if the server will say, else
+    estimated. `how` is returned so a caller can log WHICH answer it got:
+    a silent fallback to the heuristic is the failure mode that makes a
+    sizing bug invisible.
+    """
+    counts: list[int] = []
+    fn = getattr(effects, "token_count", None)
+    if fn is not None:
+        try:
+            counts = await fn([prompt], model)
+        except Exception:  # noqa: BLE001 — sizing never fails a dispatch
+            counts = []
+    if counts:
+        return (
+            estimate_kv_draw(
+                len(prompt),
+                max_tokens,
+                static_prefix_tokens,
+                exact_prompt_tokens=counts[0],
+            ),
+            "exact",
+        )
+    return (
+        estimate_kv_draw(len(prompt), max_tokens, static_prefix_tokens),
+        "estimated",
+    )
