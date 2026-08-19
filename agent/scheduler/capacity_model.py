@@ -177,7 +177,16 @@ class CapacityModel:
 
         # Legacy snapshots know seats but not cells; admit on seats alone
         # rather than reading an unknown 0 as "full".
-        if snap.knows_kv:
+        # WORK THAT OPENS NO TEXT STREAM IS NOT BOUND BY THE TEXT POOL.
+        # `est_kv == 0 and seats == 0` says this unit is served elsewhere
+        # entirely — paddle OCR is a subprocess against its own resident
+        # model, figure reads run on separate vision contexts. Neither
+        # allocates a cell in the batched text cell, so charging them
+        # min_admit_budget refuses them exactly when muse is busy. This is
+        # the same mistake as gating them on seats, surviving one check
+        # further down: observed live as "ocr: needs 512 cells, 0 free"
+        # while paddle had capacity to spare.
+        if snap.knows_kv and (est_kv or seats):
             needed = est_kv + snap.min_admit_budget
             if free_cells < needed:
                 return Verdict(

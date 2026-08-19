@@ -372,3 +372,24 @@ def test_a_seatless_lane_is_still_bounded_by_free_cells():
     genuinely draws KV must still fit."""
     m = _model(_snap(seats_free=0, free_cells=500))
     assert not m.admit("odd", est_kv=10_000, seats=0).admitted
+
+
+def test_work_that_opens_no_text_stream_is_not_bound_by_text_cells():
+    """The seat fix's twin, one check further down. paddle OCR allocates
+    nothing in the batched text cell, so charging it min_admit_budget
+    refuses it precisely when muse is busy — observed live as
+    'ocr: needs 512 cells, 0 free' while paddle had capacity to spare."""
+    m = _model(_snap(seats_free=0, free_cells=0, min_admit_budget=512))
+    # A text lane is correctly refused.
+    assert not m.admit("curate", est_kv=8000, seats=1).admitted
+    # A lane served entirely elsewhere is not.
+    v = m.admit("ocr", est_kv=0, seats=0)
+    assert v.admitted, v.reason
+
+
+def test_a_lane_that_draws_any_kv_is_still_bounded():
+    """est_kv=0 AND seats=0 is the escape hatch; either one non-zero means
+    the unit really does touch the pool."""
+    m = _model(_snap(seats_free=0, free_cells=100, min_admit_budget=512))
+    assert not m.admit("odd", est_kv=5_000, seats=0).admitted
+    assert not m.admit("odd2", est_kv=0, seats=1).admitted
