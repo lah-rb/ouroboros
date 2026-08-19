@@ -72,7 +72,8 @@ DEFAULT_LANE_MAX_INFLIGHT: Dict[str, int] = {
 @dataclass
 class LaneState:
     last_dispatch_at: float = 0.0
-    units_done: int = 0
+    units_done: int = 0  # rounds that actually moved work
+    units_idle: int = 0  # rounds that found nothing to do
     units_failed: int = 0
     inflight: int = 0
 
@@ -222,11 +223,18 @@ class WorkerPool:
             if token is not None and self.model is not None:
                 self.model.release(token)
 
-        st.units_done += 1
         # A drain that declined (nothing pending, tool missing, server
         # unreachable) did no work — treat it as idle so the lane backs off
-        # instead of spinning on an empty queue.
-        return bool(result)
+        # instead of spinning on an empty queue. Counted separately from
+        # work: a shutdown line reporting "9 units" for nine declines
+        # against an empty databank is the kind of number that misleads
+        # exactly when someone is trying to find out why nothing happened.
+        did = bool(result)
+        if did:
+            st.units_done += 1
+        else:
+            st.units_idle += 1
+        return did
 
     def _may_dispatch(self, lane: Lane) -> bool:
         cap = self.max_inflight.get(lane.resource, 1)

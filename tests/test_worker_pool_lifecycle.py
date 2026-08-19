@@ -104,3 +104,32 @@ async def test_the_deadline_is_handed_to_the_pool():
 
 def test_only_v2_is_pooled():
     assert POOLED_FLOW_SETS == {"scraper_v2"}
+
+
+@pytest.mark.asyncio
+async def test_an_exception_from_the_mission_passes_through_untouched():
+    """CAUGHT LIVE on the first v2 run. The startup guard originally
+    wrapped the `yield`, so it caught whatever the mission body raised —
+    including the budget-park RuntimeError that is the NORMAL end of a
+    bounded run — logged it as a startup failure, and then yielded a
+    second time. That breaks the context-manager protocol and replaces
+    the real error with 'generator didn't stop after athrow()', which is
+    how a clean cycle-limit park came back looking like a crash.
+    """
+    fx = _Fx("scraper_v2")
+    with pytest.raises(RuntimeError, match="Mission parked as paused"):
+        async with worker_pool_for(fx, flows_dir="flows"):
+            raise RuntimeError("Agent completed 3 cycles. Mission parked as paused")
+    # And the pool still shut down on the way out.
+    assert fx.capacity_stopped
+
+
+@pytest.mark.asyncio
+async def test_the_pool_stops_even_when_the_mission_raises():
+    fx = _Fx("scraper_v2")
+    seen = {}
+    with pytest.raises(ValueError):
+        async with worker_pool_for(fx, flows_dir="flows") as pool:
+            seen["pool"] = pool
+            raise ValueError("boom")
+    assert seen["pool"] is not None and seen["pool"].stopping

@@ -63,6 +63,13 @@ async def worker_pool_for(
 
     pool = None
     started_feed = False
+    # STARTUP ONLY. The yield must sit OUTSIDE this guard: wrapping it
+    # would catch whatever the mission body raises — including the
+    # budget-park RuntimeError that is the normal end of a bounded run —
+    # report it as a startup failure, and then yield a second time, which
+    # breaks the context-manager protocol and replaces the real error with
+    # "generator didn't stop after athrow()". Caught live on the first v2
+    # run, where it masked a clean cycle-limit park.
     try:
         from agent.actions.registry import build_action_registry
         from agent.loop import _load_flows
@@ -110,17 +117,22 @@ async def worker_pool_for(
             flow_set,
             [ln.name for ln in pool.lanes],
         )
-        yield pool
     except Exception:  # noqa: BLE001 — never block the mission on the pool
         logger.exception("worker pool failed to start — running controller-only")
-        yield None
+        pool = None
+
+    try:
+        yield pool
     finally:
         if pool is not None:
             with contextlib.suppress(Exception):
                 await pool.stop()
             logger.info(
                 "worker pool stopped: %s",
-                {n: s.units_done for n, s in pool.state.items()},
+                {
+                    n: f"{s.units_done} done/{s.units_idle} idle/{s.units_failed} failed"
+                    for n, s in pool.state.items()
+                },
             )
         if started_feed and hasattr(effects, "capacity_stop"):
             with contextlib.suppress(Exception):
