@@ -3831,3 +3831,36 @@ in either tree; "a broken destination beats an absent journey" — the anchor
 kept combat tension and a transforming boss, while the candidate's
 equipment bonus is applied twice across a module boundary, making it
 unloseable after the breastplate (final boss killed at 100/100).
+
+### Addendum (same day) — attribution vs the 08-15 pre-stack baseline
+
+CORRECTION to the entry above: the Guardian anchor was ALSO taken under a 2h
+wall (operator), so "an unfinished run lost to a finished one" was wrong —
+the comparison IS partially framework-attributable. The controlled baseline
+is flight_20260815_guardian_vs_gptoss_session: same model, same anchor, same
+2h wall, same session mission, PRE-dating the prompt stack. That arm lost
+2-8 (Delivery 2-2, Character 0-6); today's lost 3-7 (Delivery 1-3,
+Character 2-4). Three axes flipped:
+
++B6 imagination (HIGH confidence, attributable): the 08-15 arm WAS the
+  content-brief-dedup incident (2-room stub, items named "Placeholder";
+  fixed 03ffa69). Briefs restored -> a named coherent kingdom the judge
+  preferred over the anchor. The flip is that fix paying out ~1:1.
++B9 workability (MED-HIGH, attributable): 08-15 shipped 3/7 junk failing
+  tests (wrong-module imports, bare except); 08-19 shipped 3 passing + ONE
+  RED test correctly asserting `use` should heal — intended-behaviour
+  expectations, the rule-2c (dd7af76) signature, inverse of muse's
+  flee-ratifying test. Judge credited the red suite by name. The
+  mod-probe half of the axis is build maturation, not prompts.
+-A2 state integrity (attributable as COST, not quality regression): 08-15
+  reached 28/32 with save/load wired; 08-19 hit the wall at 18/30 with
+  save/load OPEN — flagged, never false-passed. The wall-time went to
+  (a) building a real 8-room world instead of a stub (B6's price),
+  (b) stricter role-semantics verdicts driving more repair cycles, and
+  (c) ~30min in the diagnosis-evasion loop (file_ops guard gap).
+  The stack traded goals-per-wall for correctness-per-goal.
+
+The seven unmoved axes are the null result: session-mode gpt-oss character
+(missing verbs, thin combat agency, doc drift) is model-innate; the prompt
+stack neither caused nor cured it. n=1 judge per flight; read flips, not
+margins.
