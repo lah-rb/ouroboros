@@ -280,3 +280,58 @@ async def test_lanes_run_real_flows_through_child_effects(monkeypatch):
     assert await pool._run_flow(lane) is True
     assert seen["flow"] == "FLOWDEF"
     assert seen["branch"] == "lane:ocr"
+
+
+@pytest.mark.asyncio
+async def test_a_failing_idle_wait_does_not_silently_kill_the_lane():
+    """A lane task holds a reference in the pool, so asyncio never
+    reports its exception — a raise in the idle path killed the lane
+    SILENTLY and the pool went on looking alive with a dead lane inside
+    it. Observed on the live v2 run as a pool that had stopped reporting
+    while the controller kept working."""
+    calls = {"n": 0}
+
+    async def declines(lane):
+        calls["n"] += 1
+        return False
+
+    lanes = [Lane(name="ocr", flow="f", resource="paddle", idle_backoff_s=0.01)]
+    pool = _pool(lanes, declines)
+
+    boom = {"n": 0}
+
+    async def bad_idle(lane):
+        boom["n"] += 1
+        raise RuntimeError("idle exploded")
+
+    pool._idle = bad_idle
+    async with pool:
+        await asyncio.sleep(0.08)
+    # The lane kept going despite the idle path failing every time.
+    assert boom["n"] >= 2, boom
+    assert calls["n"] >= 2, "lane died on the first idle failure"
+
+
+@pytest.mark.asyncio
+async def test_the_report_loop_survives_a_failing_snapshot():
+    """Telemetry that dies silently is worse than none: the resulting
+    quiet is indistinguishable from a healthy idle pool."""
+    pool = _pool([Lane(name="x", flow="f", resource="paddle")], lambda l: _true())
+    pool._report_every_s = 0.01
+    boom = {"n": 0}
+
+    def bad_report():
+        boom["n"] += 1
+        raise RuntimeError("snapshot exploded")
+
+    pool._emit_report = bad_report
+    task = asyncio.create_task(pool._report_loop())
+    await asyncio.sleep(0.06)
+    pool._stopping.set()
+    await asyncio.sleep(0.02)
+    task.cancel()
+    assert boom["n"] >= 2, f"report loop died after {boom['n']} failure(s)"
+
+
+async def _true():
+    return True

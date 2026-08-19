@@ -156,26 +156,36 @@ class WorkerPool:
                 return  # stopping
             except asyncio.TimeoutError:
                 pass
-            snap = (
-                self.model._feed.snapshot()
-                if getattr(self.model, "_feed", None)
-                else None
-            )
-            logger.info(
-                "lanes %s | capacity %s | last refusal: %s",
-                {
-                    n: f"{s.units_done}d/{s.units_idle}i/{s.units_failed}f"
-                    + (f" [{s.inflight} live]" if s.inflight else "")
-                    for n, s in self.state.items()
-                },
-                (
-                    f"free={snap.free_cells} seats={snap.seats_free}"
-                    f" wait={snap.waiting} src={snap.source}"
-                    if snap
-                    else "no signal (degraded)"
-                ),
-                self._last_refusal or "none",
-            )
+            try:
+                self._emit_report()
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 — telemetry never kills itself
+                # Unguarded, a raise here ends the reporting task while the
+                # pool keeps running, and the SILENCE looks exactly like a
+                # healthy quiet pool. That is the worst possible failure
+                # mode for the one thing whose job is to tell us otherwise.
+                logger.exception("lane report failed (continuing)")
+
+    def _emit_report(self) -> None:
+        snap = (
+            self.model._feed.snapshot() if getattr(self.model, "_feed", None) else None
+        )
+        logger.info(
+            "lanes %s | capacity %s | last refusal: %s",
+            {
+                n: f"{s.units_done}d/{s.units_idle}i/{s.units_failed}f"
+                + (f" [{s.inflight} live]" if s.inflight else "")
+                for n, s in self.state.items()
+            },
+            (
+                f"free={snap.free_cells} seats={snap.seats_free}"
+                f" wait={snap.waiting} src={snap.source}"
+                if snap
+                else "no signal (degraded)"
+            ),
+            self._last_refusal or "none",
+        )
 
     async def stop(self) -> None:
         """Ask lanes to finish the unit in hand, then cancel what is left.
@@ -202,29 +212,68 @@ class WorkerPool:
     # -- the loop --------------------------------------------------------
 
     async def _run_lane(self, lane: Lane) -> None:
+        """One lane, until stopped.
+
+        THE WHOLE BODY IS GUARDED, including the idle wait. An earlier
+        version guarded only the unit and left `_idle` outside, so a raise
+        there killed the lane SILENTLY — the task holds a reference in
+        self._tasks, so asyncio never reports the exception, and the pool
+        went on looking alive with a dead lane inside it. The comment said
+        "a lane never dies" while the code allowed exactly that.
+        """
         st = self.state[lane.name]
-        while not self._stopping.is_set():
-            if self.deadline is not None and self._now() > self.deadline:
-                logger.info("lane %s: run deadline reached, stopping", lane.name)
-                return
-            try:
-                ran = await self._one_unit(lane, st)
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:  # noqa: BLE001 — a lane never dies
-                st.units_failed += 1
-                logger.warning(
-                    "lane %s: unit failed (%s: %s)",
-                    lane.name,
-                    type(exc).__name__,
-                    str(exc)[:160],
-                )
-                ran = False
-            if not ran:
-                # Nothing to do, or nothing fits. Either way, wait — and
-                # prefer waiting on the CAPACITY signal, because a stream
-                # retiring is the event that changes the answer.
-                await self._idle(lane)
+        reason = "stopping"
+        try:
+            while not self._stopping.is_set():
+                if self.deadline is not None and self._now() > self.deadline:
+                    reason = "deadline"
+                    return
+                try:
+                    ran = await self._one_unit(lane, st)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # noqa: BLE001
+                    st.units_failed += 1
+                    logger.warning(
+                        "lane %s: unit failed (%s: %s)",
+                        lane.name,
+                        type(exc).__name__,
+                        str(exc)[:160],
+                    )
+                    ran = False
+                if not ran:
+                    # Nothing to do, or nothing fits. Either way, wait —
+                    # and prefer waiting on the CAPACITY signal, because a
+                    # stream retiring is the event that changes the answer.
+                    try:
+                        await self._idle(lane)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "lane %s: idle wait failed (%s) — backing off",
+                            lane.name,
+                            type(exc).__name__,
+                        )
+                        await asyncio.sleep(lane.idle_backoff_s)
+        except asyncio.CancelledError:
+            reason = "cancelled"
+            raise
+        except Exception:  # noqa: BLE001
+            reason = "CRASHED"
+            logger.exception("lane %s died", lane.name)
+            raise
+        finally:
+            # A lane leaving is always worth a line: a pool with a dead
+            # lane looks identical to a pool with an idle one.
+            logger.info(
+                "lane %s exited (%s): %dd/%di/%df",
+                lane.name,
+                reason,
+                st.units_done,
+                st.units_idle,
+                st.units_failed,
+            )
 
     async def _idle(self, lane: Lane) -> None:
         feed = getattr(self.model, "_feed", None)
