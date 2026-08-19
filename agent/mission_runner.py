@@ -117,18 +117,34 @@ def run_mission_isolated(
     prompts = prompts_dir or os.path.join(root, "prompts")
 
     async def _run_with_drain():
+        from agent.scheduler.lifecycle import worker_pool_for
+
         try:
-            return await run_agent(
-                mission_id=mission_id,
-                effects=effects,
+            # Continuous lane workers, for flow sets that use them. A
+            # non-pooled mission (every v1 mission, including the live
+            # corpus run) gets None and behaves exactly as before. The
+            # pool is created HERE so it lives on this thread's own event
+            # loop — the reason the mission runs on its own thread at all
+            # is that anyio cancel scopes are task-bound.
+            async with worker_pool_for(
+                effects,
                 flows_dir=flows,
-                prompts_dir=prompts,
-                entry_flow=entry_flow,
-                entry_inputs=entry_inputs,
-                max_cycles=max_cycles,
                 max_wall_clock_s=max_wall_clock_s,
-            )
+            ):
+                return await run_agent(
+                    mission_id=mission_id,
+                    effects=effects,
+                    flows_dir=flows,
+                    prompts_dir=prompts,
+                    entry_flow=entry_flow,
+                    entry_inputs=entry_inputs,
+                    max_cycles=max_cycles,
+                    max_wall_clock_s=max_wall_clock_s,
+                )
         finally:
+            # Outside the pool's scope on purpose: the pool releases its
+            # claims and stops its lanes first, then sessions and MCP are
+            # drained.
             await drain_effects(effects)
 
     box: dict[str, Any] = {}
