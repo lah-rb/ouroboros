@@ -756,3 +756,195 @@ async def test_a_chunk_is_banked_as_it_lands_not_at_the_end_of_the_round(monkeyp
         f"first bank happened after {banked_when[0]} of {len(chunks)} chunks "
         "— that is end-of-round batching, not per-chunk durability"
     )
+
+
+# ── exact-token output budgets ────────────────────────────────────────
+
+
+def _budget_fixture(monkeypatch, n_chunks=2):
+    """A claimable lingual paper whose chunks are ready to translate."""
+    import json
+
+    from agent.actions.translation_actions import _TRANSLATE_CLAIMS, chunk_markdown
+    from agent.effects.mock import MockEffects
+
+    monkeypatch.setenv("OUROBOROS_TRANSLATE_CHUNKS", str(n_chunks))
+    paras = [
+        " ".join(f"probe{j} of run {i} gives {i * 1000 + j} counts" for j in range(300))
+        for i in range(n_chunks)
+    ]
+    src = "\n\n".join(paras)
+    chunks = chunk_markdown(src)
+    assert len(chunks) == n_chunks
+    rec = {
+        "paper_key": "p1",
+        "extraction_status": "extract_lingual",
+        "md_path": "databank/markdown/p1.md",
+        "script_profile": {"cjk": 0.6},
+    }
+    fx = MockEffects(
+        files={
+            "databank/papers.jsonl": json.dumps(rec) + "\n",
+            "databank/markdown/p1.md": src,
+        },
+        inference_responses=list(chunks),
+    )
+    _TRANSLATE_CLAIMS.clear()
+    return fx, chunks
+
+
+def _budgets_sent(fx):
+    return [
+        c.args["config_overrides"]["max_tokens"]
+        for c in fx.calls
+        if c.method == "run_inference"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_translate_budget_uses_exact_tokens_when_the_server_answers(monkeypatch):
+    """THE fix for the moving-target char heuristic. len(chunk)/2 erred in
+    BOTH directions by script: ~1.75x source tokens for Latin/Cyrillic
+    (live: a 13,236-token chunk entitled max_gen=22,686 and starved the
+    pool) and BELOW expected output length for dense CJK — silent
+    truncation that drops trailing numbers and reads as a numeric-gate
+    failure. With exact counts the budget is tokens * margin, per chunk."""
+    from agent.actions.translation_actions import (
+        _TRANSLATE_OUT_MARGIN,
+        action_translate_drain_batch,
+    )
+    from agent.models import FlowMeta, StepInput
+
+    fx, chunks = _budget_fixture(monkeypatch)
+    fx._token_counts = [3000, 5000]
+
+    await action_translate_drain_batch(
+        StepInput(
+            context={},
+            params={},
+            inputs={},
+            meta=FlowMeta(flow_name="translate_drain", step_id="drain"),
+            effects=fx,
+        )
+    )
+    assert _budgets_sent(fx) == [
+        int(3000 * _TRANSLATE_OUT_MARGIN),
+        int(5000 * _TRANSLATE_OUT_MARGIN),
+    ]
+    # One BATCHED count for the round's slice, not one call per chunk.
+    assert len([c for c in fx.calls if c.method == "token_count"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_translate_budget_degrades_to_the_char_heuristic(monkeypatch):
+    """[] means "the server would not say" — the documented degrade path,
+    not an error. The old formula survives exactly there and only there."""
+    from agent.actions.translation_actions import action_translate_drain_batch
+    from agent.models import FlowMeta, StepInput
+
+    fx, chunks = _budget_fixture(monkeypatch)  # MockEffects default: []
+
+    await action_translate_drain_batch(
+        StepInput(
+            context={},
+            params={},
+            inputs={},
+            meta=FlowMeta(flow_name="translate_drain", step_id="drain"),
+            effects=fx,
+        )
+    )
+    assert _budgets_sent(fx) == [max(1024, len(c) // 2) for c in chunks]
+
+
+@pytest.mark.asyncio
+async def test_a_short_count_answer_falls_back_whole_not_half(monkeypatch):
+    """A count list shorter than the slice must not be zipped partway: a
+    half-exact, half-heuristic round would misbudget chunks silently, and
+    which half got which answer would be unrecoverable afterwards."""
+    from agent.actions.translation_actions import action_translate_drain_batch
+    from agent.models import FlowMeta, StepInput
+
+    fx, chunks = _budget_fixture(monkeypatch)
+    fx._token_counts = [3000]  # server answered for one of two chunks
+
+    await action_translate_drain_batch(
+        StepInput(
+            context={},
+            params={},
+            inputs={},
+            meta=FlowMeta(flow_name="translate_drain", step_id="drain"),
+            effects=fx,
+        )
+    )
+    assert _budgets_sent(fx) == [max(1024, len(c) // 2) for c in chunks]
+
+
+# ── chunk-failure deferral ────────────────────────────────────────────
+
+
+def test_a_chunk_failure_defers_the_paper_instead_of_wedging_the_lane():
+    """THE head-of-line bug. Selection is finish-first and attempts only
+    advance at assembly, so a chunk that fails every retry re-offered its
+    paper forever — live, one degenerating chunk held the lane for hours
+    while 87 papers sat at zero attempts. Deferred papers sort last."""
+    from agent.actions.translation_actions import (
+        _TRANSLATE_CLAIMS,
+        _TRANSLATE_DEFERRED,
+        select_translation_paper,
+    )
+
+    def _rec():
+        return {
+            "extraction_status": "extract_lingual",
+            "md_path": "databank/markdown/x.md",
+            "tags": [],
+        }
+
+    bank = {"aaa_wedged": _rec(), "zzz_fresh": _rec()}
+    _TRANSLATE_CLAIMS.clear()
+    _TRANSLATE_DEFERRED.clear()
+    # Undeferred: deterministic order picks the lexically-first paper.
+    assert select_translation_paper(bank) == "aaa_wedged"
+    # Its round ends in chunk failure -> deferred -> the OTHER paper runs.
+    _TRANSLATE_DEFERRED.add("aaa_wedged")
+    assert select_translation_paper(bank) == "zzz_fresh"
+    # Deferred is LAST, not banned: alone, it is still selected.
+    assert select_translation_paper({"aaa_wedged": bank["aaa_wedged"]}) == "aaa_wedged"
+    _TRANSLATE_DEFERRED.clear()
+
+
+@pytest.mark.asyncio
+async def test_the_drain_round_itself_defers_and_forgives(monkeypatch):
+    """End-to-end through the action: a chunk failure adds the paper to
+    the deferred set; a later clean round removes it."""
+    from agent.actions.translation_actions import (
+        _TRANSLATE_DEFERRED,
+        action_translate_drain_batch,
+    )
+    from agent.models import FlowMeta, StepInput
+
+    fx, chunks = _budget_fixture(monkeypatch)
+    fx._inference_responses = ["", ""]  # every chunk comes back empty -> raises
+
+    def _si():
+        return StepInput(
+            context={},
+            params={},
+            inputs={},
+            meta=FlowMeta(flow_name="translate_drain", step_id="drain"),
+            effects=fx,
+        )
+
+    _TRANSLATE_DEFERRED.clear()
+    out = await action_translate_drain_batch(_si())
+    assert "chunk failure" in out.result["reason"]
+    assert "p1" in _TRANSLATE_DEFERRED
+
+    # The retry ladder consumed 2 responses per failing chunk; reload with
+    # clean identity translations and the SAME paper (alone -> still last
+    # -> still selected) completes and is forgiven.
+    fx._inference_responses = list(chunks)
+    fx._inference_index = 0
+    out2 = await action_translate_drain_batch(_si())
+    assert out2.result["status"] == "translated"
+    assert "p1" not in _TRANSLATE_DEFERRED

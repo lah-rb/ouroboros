@@ -53,11 +53,30 @@ TRANSLATE_MIN_NUMERIC = 0.98
 # shouldn't force a retry; the assembly gate still holds 0.98 overall.
 _CHUNK_MIN_NUMERIC = 0.95
 TRANSLATE_MAX_ATTEMPTS = 2
+# Output budget per source TOKEN, applied when the server's tokenizer
+# answers (effects.token_count — the size_request idiom). The honest
+# expectation for a translation is ~1.0x source tokens across this
+# corpus's scripts; the one large stream observed running to completion
+# (2026-08-19) generated 0.70x. 1.5 covers both with real headroom, and
+# a truncated output is the worse failure — it drops trailing numbers,
+# fails the numeric gate, and burns one of the paper's two attempts.
+_TRANSLATE_OUT_MARGIN = 1.5
 # Length-ratio sanity band for translated/source text (whitespace-free).
 _RATIO_MIN, _RATIO_MAX = 0.4, 2.5
 _MAX_REPEAT_WORDS = 200
 
 _TRANSLATE_CLAIMS: set[str] = set()
+# Papers whose last round ended in CHUNK failure(s). Selection is
+# finish-first by design — "a partially translated paper keeps being
+# selected until it completes" — but attempts only advance at ASSEMBLY,
+# so a chunk that fails every retry re-selects its paper forever without
+# ever burning an attempt. Live 2026-08-19: one degenerating 12.6k-token
+# chunk held the lane for hours while 87 eligible papers sat at zero
+# attempts. Deferred papers sort LAST, not out: banked parts survive, and
+# when nothing else is eligible the lane still returns to them rather
+# than idling. In-process on purpose, like the claims set — a restart
+# forgiving all deferrals is the right amnesty.
+_TRANSLATE_DEFERRED: set[str] = set()
 
 
 def _budget_chunks() -> int:
@@ -294,7 +313,10 @@ def select_translation_paper(databank: dict) -> str | None:
     ]
     if not eligible:
         return None
-    return min(eligible, key=lambda k: (_tag_priority(databank[k]), k))
+    return min(
+        eligible,
+        key=lambda k: (k in _TRANSLATE_DEFERRED, _tag_priority(databank[k]), k),
+    )
 
 
 async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
@@ -359,6 +381,26 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
         done = await _load_parts(effects, key, len(chunks), len(src), attempts)
         todo = [i for i in range(len(chunks)) if i not in done][:budget]
 
+        # EXACT-TOKEN OUTPUT BUDGETS, one batched call for the round's
+        # slice. The char heuristic it replaces (len/2) was a moving
+        # target that erred in BOTH directions by script: ~1.75x source
+        # tokens for Latin/Cyrillic (measured live: a 13,236-token chunk
+        # entitled max_gen=22,686 and starved the pool), and BELOW the
+        # expected English output length for dense CJK (~1.7 chars/tok),
+        # i.e. silent truncation — which drops trailing numbers and reads
+        # as a numeric-gate failure. [] or a short answer means "the
+        # server would not say": every chunk falls back to the heuristic,
+        # never a mix (a half-zipped dict would misbudget silently).
+        tok_counts: dict[int, int] = {}
+        counter = getattr(effects, "token_count", None)
+        if counter is not None and todo:
+            try:
+                counts = await counter([chunks[i] for i in todo])
+            except Exception:  # noqa: BLE001 — sizing never fails the round
+                counts = []
+            if counts and len(counts) == len(todo):
+                tok_counts = {i: int(c) for i, c in zip(todo, counts)}
+
         async def one(idx: int):
             async with sem:
                 # Chunk-level defect checks with ONE warmer retry: a dropped
@@ -377,7 +419,11 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
                         _render_translate_prompt(chunks[idx], hint),
                         {
                             "temperature": temp,
-                            "max_tokens": max(1024, int(len(chunks[idx]) / 2)),
+                            "max_tokens": (
+                                max(1024, int(tok_counts[idx] * _TRANSLATE_OUT_MARGIN))
+                                if idx in tok_counts
+                                else max(1024, int(len(chunks[idx]) / 2))
+                            ),
                         },
                     )
                     if getattr(result, "error", None):
@@ -413,12 +459,16 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
         done.update(fresh)
 
         if errors:
-            # Persisted what succeeded; the round ends without a verdict and
-            # the paper resumes next window.
+            # Persisted what succeeded; the round ends without a verdict.
+            # DEFER the paper so the next round tries someone else first —
+            # without this, finish-first re-offers it immediately and one
+            # unfixable chunk wedges the whole lane.
+            _TRANSLATE_DEFERRED.add(key)
             return _decline(
                 f"{key}: {len(errors)} chunk failure(s), "
                 f"{len(done)}/{len(chunks)} banked ({str(errors[0])[:100]})"
             )
+        _TRANSLATE_DEFERRED.discard(key)  # a clean round earns the front again
         if len(done) < len(chunks):
             summary = {
                 "paper": key,
