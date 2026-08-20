@@ -3904,3 +3904,36 @@ Revised attribution vs the clean baseline (today: 3-7, winning A3/B6/B9):
   (summarize/judge_finding/evaluate_ux_session/explorer charter, zero gate
   runs), where the noise-reduction wins live. Those remain unmeasured for
   gpt-oss; a gate-inclusive run is the measurement that would show them.
+
+---
+
+## 2026-08-19 (evening) — GUARDIAN: the rerun WINS 8-2 — first gpt-oss Guardian win
+
+**Delivery: A(candidate) 3–1 · Character: A 5–1 · OVERALL: CANDIDATE.** No
+split, no CLOSE flag. Ladder-bearing. Completability: **WON** — a real
+two-sided ending, reached and reproduced — against the anchor's UNWINNABLE.
+Record: `dev/blind_panel/records/flight_20260819_guardian_vs_gptoss_rerun.md`.
+
+**The framework-longitudinal series closes its arc.** Same model family,
+same anchor, same 2h wall:
+  2-8 (stub arm) → 4-6 (content briefs) → 3-7 (role semantics) →
+  **8-2 (collapsed diagnose, uncapped investigation — 8e1e1cf)**
+Run-side, the final step's like-for-like deltas: junk-target diagnoses
+11→0, goals 18/30→24/32, and use/talk/attack/flee/combat-rounds verified
+in-run — the exact verbs whose absence decided the morning flight. The
+judge's B5/B6/B7 justifications (a BossPhase enum, behaviour-driven
+monsters, a fight you can genuinely lose, item text doing narrative work)
+describe systems that exist BECAUSE the repair loop stopped burning its
+wall on evidence-free edits.
+
+Charged for next round: the id-only parser refusing the display names it
+prints (B7 nearly flipped; B8 lost on it — a wall in front of a finished
+game); help FALSE-PASSED in-run for the second consecutive run while
+omitting examine/status/go/restart; the phantom "You save." in combat;
+three uncaught tracebacks; the inert crystal shard; zero-damage regular
+monsters; shipped debug litter and a 4-of-5-failing test suite.
+
+Framework note: the sweep's blind spot on the parser wall is structural —
+charters are authored FROM the data files, so the operator plays with
+id-knowledge a player cannot have. The judge's "knowledge a player has no
+way to obtain" charge applies to our own verification path.
