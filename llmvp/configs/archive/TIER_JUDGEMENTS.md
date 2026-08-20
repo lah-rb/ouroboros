@@ -4015,3 +4015,38 @@ the guardian's orphan __init__ that is three artifacts, two models,
 three framework eras. The add_symbol bare-name routing crack
 (ast_actions.py Phase D) now has a case file spanning the whole anchor
 shelf.
+
+## 2026-08-20 — FLOOR DISPLACEMENT, second attempt: the continuation WINS (CLOSE) — first WON-class devstral artifact
+
+**Delivery: A(Floor) 3–1 · Character: 3–3 (no direction) · OVERALL:
+B (CANDIDATE) — SELF-FLAG: CLOSE.** Candidate rotated to B. The
+candidate is the same workspace as the morning's 1-9 loser, continued
+100 min under the c0417a8 prompt fix (module_statement in the schema
+block): 16/31 gate-verified goals. Record:
+`dev/blind_panel/records/flight_20260820_continuation_vs_floor.md`.
+
+The judge rested the overall on the rubric's two elevated facts, both
+pointing the candidate's way: **WON vs UNWINNABLE** (The Dark Sovereign
+killed at 5 HP; the anchor's boss sits in a 3-room island nothing links
+into) and **placement clean 8/8 vs both placement failure forms at
+once** (anchor: 5 of 9 rooms orphaned; boss, weakness sword, 3 of 4
+NPCs stranded; conversation 100% dead via the condition-vocabulary
+seam). The tension is recorded verbatim: Delivery went 3-1 to the
+anchor, and the judge names what would flip the call — weighting
+source-blind playability first, since the candidate never prints its
+snake_case ids ("a source-blind player is stopped on turn one") and
+`save` still NameErrors (the third import seam, unfixed at park).
+
+**The same-day pair now measures the prompting gap directly**: same
+model, same anchor — 2-8 in the morning without module_statement in
+the schema block; winner-with-CLOSE in the afternoon with it. The
+operator's characterization stands in the ledger: the anchor's ~29
+in-run goals rode the old framework's open false-pass channel; the
+candidate's 16 are honest. Blind play preferred honest-16's ceiling
+(a winnable, fully-connected castle) over inflated-29's floor.
+
+**Anchor consequence: HELD FOR THE OPERATOR.** A CLOSE overall against
+a 3-1 Delivery deficit is a displacement case, not a sweep. If
+promoted, PROVENANCE should carry the judge's flip condition and the
+known unfixed defects (id-only parser, save NameError, no terminal
+states, 4/6 failing shipped tests).
