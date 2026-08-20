@@ -72,6 +72,7 @@ async def test_a_v2_mission_starts_lanes_and_stops_them_cleanly():
             "figtext",
             "translate",
             "curate",
+            "recover",
         }
         # Lanes reach the real drain flows by name from the global
         # registry — they are not forked into v2.

@@ -1873,6 +1873,7 @@ async def action_download_papers(step_input: StepInput) -> StepOutput:
 # is-a-document checks and the polite per-host pacer.
 
 _WAYBACK_API = "https://archive.org/wayback/available"
+_WAYBACK_CDX = "https://web.archive.org/cdx/search/cdx"
 _CORE_SEARCH_POST = "https://api.core.ac.uk/v3/search/works"
 # name-then-content and content-then-name attribute orders both occur.
 _META_PDF_RE = re.compile(
@@ -1902,17 +1903,44 @@ def _meta_pdf_url(html: str, base_url: str) -> str:
 
 
 async def _wayback_snapshot(effects: Any, url: str) -> str:
-    """Closest archived snapshot of `url` (status 200), or ''."""
-    r = await polite_request(effects, "GET", _WAYBACK_API, params={"url": url})
-    if r.status != 200 or not isinstance(r.json_data, dict):
+    """Newest archived PDF capture of `url`, or ''.
+
+    CDX, not the availability API. The first sweep (2026-08-20) ran 427
+    availability-based attempts to ZERO recoveries, for two reasons the
+    post-mortem separated cleanly:
+
+      * The availability API silently answered "nothing" for ~81% of
+        walked papers — including one KNOWN-GOOD case (a 404'd Dovepress
+        PDF probed by hand hours earlier) — and its empty answer is
+        indistinguishable from "no snapshot".
+      * Its `closest` snapshot is whatever was captured, which for
+        walled publishers is the WALL: archived interstitials
+        (text/html rejects), a figure JPEG where the source URL was a
+        wrong asset, and archive-side 403 playback exclusions.
+
+    CDX fixes both: it is the archive's real index, and
+    `mimetype:application/pdf&statuscode:200` asks only for captures
+    that ARE the document. Newest capture wins (latest version of the
+    file); `id_` in the replay URL requests raw bytes rather than the
+    toolbar-wrapped page.
+    """
+    r = await polite_request(
+        effects,
+        "GET",
+        _WAYBACK_CDX,
+        params={
+            "url": url,
+            "output": "json",
+            "filter": ["statuscode:200", "mimetype:application/pdf"],
+            "fl": "timestamp,original",
+            "limit": "8",
+        },
+    )
+    rows = r.json_data if r.status == 200 else None
+    if not isinstance(rows, list) or len(rows) < 2:
         return ""
-    snap = ((r.json_data.get("archived_snapshots") or {}).get("closest")) or {}
-    if not snap.get("available") or str(snap.get("status")) != "200":
-        return ""
-    u = str(snap.get("url") or "")
-    # The API returns http://; the archive serves https and the pacer
-    # should see one canonical host.
-    return u.replace("http://web.archive.org", "https://web.archive.org", 1)
+    ts, original = rows[-1][0], rows[-1][1]  # newest capture
+    return f"https://web.archive.org/web/{ts}id_/{original}"
 
 
 async def _core_fulltext_urls(effects: Any, doi: str) -> list[str]:

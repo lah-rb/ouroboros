@@ -23,7 +23,7 @@ from agent.effects.mock import MockEffects
 from agent.effects.protocol import DownloadResult, HttpResult
 from agent.models import FlowMeta, StepInput
 
-_WAYBACK = "https://archive.org/wayback/available"
+_WAYBACK = "https://web.archive.org/cdx/search/cdx"
 _CORE = "https://api.core.ac.uk/v3/search/works"
 
 
@@ -58,23 +58,17 @@ def _fx(records, http=None, downloads=None):
     )
 
 
-def _wb(snapshot_url):
+def _wb(original, ts="20240101000000"):
+    """A CDX answer with one PDF capture (output=json: header row first)."""
     return HttpResult(
         status=200,
         url=_WAYBACK,
-        json_data={
-            "archived_snapshots": {
-                "closest": {
-                    "available": True,
-                    "status": "200",
-                    "url": snapshot_url,
-                }
-            }
-        },
+        json_data=[["timestamp", "original"], [ts, original]],
     )
 
 
-_WB_MISS = HttpResult(status=200, url=_WAYBACK, json_data={"archived_snapshots": {}})
+# Header row only = the index holds no PDF capture of that URL.
+_WB_MISS = HttpResult(status=200, url=_WAYBACK, json_data=[["timestamp", "original"]])
 
 
 # ── the route ladder ──────────────────────────────────────────────────
@@ -82,12 +76,11 @@ _WB_MISS = HttpResult(status=200, url=_WAYBACK, json_data={"archived_snapshots":
 
 @pytest.mark.asyncio
 async def test_wayback_snapshot_recovers_a_walled_pdf():
-    snap = "http://web.archive.org/web/2024/https://pub.example/p1/pdf"
     fx = _fx(
         [_rec()],
-        http={_WAYBACK: _wb(snap)},
+        http={_WAYBACK: _wb("https://pub.example/p1/pdf")},
         downloads={
-            "https://web.archive.org/web/2024/https://pub.example/p1/pdf": DownloadResult(
+            "https://web.archive.org/web/20240101000000id_/https://pub.example/p1/pdf": DownloadResult(
                 success=True, url="u", path="pdfs/p1.pdf", bytes_written=9999
             )
         },
@@ -98,8 +91,8 @@ async def test_wayback_snapshot_recovers_a_walled_pdf():
     bank = await read_databank(fx)
     assert bank["p1"]["access_status"] == "oa_pdf"
     assert bank["p1"]["pdf_path"] == "pdfs/p1.pdf"
-    # http, not https: the API's scheme is normalized before download
-    assert bank["p1"]["oa_pdf_url"].startswith("https://web.archive.org/")
+    # id_ replay form: raw bytes, never the toolbar-wrapped page.
+    assert "id_/" in bank["p1"]["oa_pdf_url"]
 
 
 @pytest.mark.asyncio
@@ -188,7 +181,6 @@ async def test_a_total_miss_is_stamped_and_never_rewalked():
 async def test_each_record_books_before_the_next_is_walked():
     """Per-record append: a recovered PDF must survive whatever stops the
     round mid-walk (the OCR batch-booking lesson, ~350 pages redone)."""
-    snap = "http://web.archive.org/web/2024/x"
     recs = [_rec("p1"), _rec("p2")]
 
     class _Boom(MockEffects):
@@ -201,7 +193,7 @@ async def test_each_record_books_before_the_next_is_walked():
     fx = _Boom(
         files={"databank/papers.jsonl": "".join(json.dumps(r) + "\n" for r in recs)},
         http_responses={
-            _WAYBACK: _wb(snap),
+            _WAYBACK: _wb("https://pub.example/x"),
             _CORE: HttpResult(status=200, url=_CORE, json_data={"results": []}),
         },
     )
@@ -238,12 +230,11 @@ async def test_already_attempted_urls_are_not_retried():
     """A URL in oa_attempted already failed http_download's document
     check once; hitting it again is the beat-on-the-wall pattern this
     action exists to replace."""
-    snap_http = "http://web.archive.org/web/2024/x"
-    snap_https = "https://web.archive.org/web/2024/x"
+    snap_https = "https://web.archive.org/web/20240101000000id_/https://pub.example/x"
     fx = _fx(
         [_rec(oa_attempted=[snap_https])],
         http={
-            _WAYBACK: _wb(snap_http),
+            _WAYBACK: _wb("https://pub.example/x"),
             _CORE: HttpResult(status=200, url=_CORE, json_data={"results": []}),
         },
         downloads={
