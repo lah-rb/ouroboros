@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 
 from agent.models import StepInput, StepOutput
@@ -148,6 +149,123 @@ def markdown_script_profile(text: str) -> dict:
     out = {k: round(v / total, 3) for k, v in counts.items()}
     out["nonlatin"] = round(1.0 - counts["latin"] / total, 3)
     return out
+
+
+# SCRIPT IS NOT LANGUAGE. The lingual gate above keys on non-Latin
+# LETTERS, so Spanish, French, Portuguese and German sail through it as
+# "English" — the 2026-08-20 census found 168 extracted papers
+# predominantly in those languages with no lingual verdict, 22 already
+# accepted and packed. The packs feed a 1B trainee that should not be
+# handed mixed-language record cards, so Latin-script language gets its
+# own vote: distinctive stopwords, counted against English's own.
+_LATIN_STOPWORDS = {
+    "de": {
+        "und",
+        "der",
+        "die",
+        "das",
+        "nicht",
+        "wurde",
+        "werden",
+        "durch",
+        "mit",
+        "für",
+        "eine",
+        "ist",
+    },
+    "fr": {
+        "les",
+        "des",
+        "dans",
+        "une",
+        "est",
+        "être",
+        "avec",
+        "pour",
+        "sont",
+        "cette",
+        "par",
+        "nous",
+    },
+    "es": {
+        "los",
+        "las",
+        "una",
+        "está",
+        "como",
+        "para",
+        "por",
+        "con",
+        "del",
+        "han",
+        "más",
+        "entre",
+    },
+    "pt": {
+        "não",
+        "uma",
+        "são",
+        "com",
+        "para",
+        "dos",
+        "das",
+        "foi",
+        "como",
+        "mais",
+        "pela",
+    },
+    "it": {
+        "della",
+        "delle",
+        "sono",
+        "con",
+        "per",
+        "una",
+        "più",
+        "anche",
+        "come",
+        "nel",
+        "alla",
+    },
+    "en": {
+        "the",
+        "and",
+        "with",
+        "were",
+        "was",
+        "from",
+        "this",
+        "that",
+        "which",
+        "have",
+        "been",
+    },
+}
+# Census separation was clean: flagged papers voted 0.51-0.79 for their
+# language; English papers vote ~0.9+ for "en". 0.5 sits in the gap.
+LINGUAL_LATIN_MIN_CONF = 0.5
+
+_LATIN_WORD_RE = re.compile(r"[a-zA-Z\u00c0-\u00ff\u0100-\u017f]+")
+
+
+def latin_language_vote(text: str) -> tuple[str, float]:
+    """(language, confidence) by stopword vote over the first ~4k words.
+
+    ("", 0.0) when the text is too short to judge — never guess a
+    language from a page of table furniture.
+    """
+    words = _LATIN_WORD_RE.findall((text or "").lower())[:4000]
+    if len(words) < 200:
+        return "", 0.0
+    from collections import Counter
+
+    counts = Counter(words)
+    scores = {lang: sum(counts[w] for w in ws) for lang, ws in _LATIN_STOPWORDS.items()}
+    total = sum(scores.values())
+    if not total:
+        return "", 0.0
+    best = max(scores, key=scores.get)
+    return best, scores[best] / total
 
 
 def collapse_degenerate_runs(
@@ -654,7 +772,16 @@ async def _book_segment_round(
             and agg["span_pass_rate"] >= MIN_SPAN_RATE
             and agg["max_repeat_words"] <= MAX_REPEAT_WORDS
         )
-        lingual = (
+        # Latin-script language vote: an otherwise-clean Spanish book is
+        # translation work, not corpus text (see _LATIN_STOPWORDS).
+        latin_lang, latin_conf = ("", 0.0)
+        if ok and profile["nonlatin"] < LINGUAL_NONLATIN_MIN:
+            latin_lang, latin_conf = latin_language_vote(assembled)
+        latin_lingual = (
+            latin_lang not in ("", "en") and latin_conf >= LINGUAL_LATIN_MIN_CONF
+        )
+        ok = ok and not latin_lingual
+        lingual = latin_lingual or (
             not ok
             and agg["verified_pages"] > 0
             and agg["max_repeat_words"] <= MAX_REPEAT_WORDS
@@ -689,11 +816,17 @@ async def _book_segment_round(
             )
         elif lingual:
             rec["extraction_status"] = "extract_lingual"
+            if latin_lingual and not rec.get("language"):
+                rec["language"] = latin_lang
             rec["failure_reason"] = (
                 "extraction (book): lingual — numerics verified "
                 f"({agg['numeric_match_rate']:.2f}) on a "
-                f"{int(100 * profile['nonlatin'])}% non-Latin volume; "
-                "queued for translation"
+                + (
+                    f"Latin-script {latin_lang} volume ({latin_conf:.2f} vote); "
+                    if latin_lingual
+                    else f"{int(100 * profile['nonlatin'])}% non-Latin volume; "
+                )
+                + "queued for translation"
             )
         else:
             rec["extraction_status"] = "extract_failed"
@@ -1242,6 +1375,28 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
             # which is the right default for a metric that did not exist.
             and rep.get("max_repeat_words", 0) <= MAX_REPEAT_WORDS
         )
+        # Latin-script language vote (see _LATIN_STOPWORDS): the metrics
+        # above cannot fail a clean Spanish paper, and the script gate
+        # below cannot see it. Read the head of the markdown the tool
+        # just wrote — a 60KB slice is plenty for a stopword vote.
+        latin_lang, latin_conf = ("", 0.0)
+        if (
+            ok
+            and script_nonlatin_frac(rep.get("script_profile")) < LINGUAL_NONLATIN_MIN
+        ):
+            try:
+                with open(
+                    os.path.join(working_dir, "databank", rep["md_path"]),
+                    encoding="utf-8",
+                    errors="replace",
+                ) as fh:
+                    latin_lang, latin_conf = latin_language_vote(fh.read(60_000))
+            except OSError:
+                pass
+        latin_lingual = (
+            latin_lang not in ("", "en") and latin_conf >= LINGUAL_LATIN_MIN_CONF
+        )
+        ok = ok and not latin_lingual
         if ok:
             rec["extraction_status"] = "extracted"
             rec["md_path"] = os.path.join("databank", rep["md_path"])
@@ -1275,7 +1430,7 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
             # extraction is CLEAN (verified pages, no loop, numerics anchor
             # holds) and only the English-prose span metric failed on a
             # substantially non-Latin document.
-            lingual = (
+            lingual = latin_lingual or (
                 bool(rep)
                 and not rep.get("error")
                 and not oversize
@@ -1316,12 +1471,22 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
                     "loop keeps every number"
                 )
             elif lingual:
+                if latin_lingual and not rec.get("language"):
+                    rec["language"] = latin_lang
                 reason = (
                     "lingual — numerics verified "
-                    f"({rep.get('numeric_match_rate', 0):.2f}) but span is an "
-                    f"English-prose metric on a "
-                    f"{int(100 * script_nonlatin_frac(rep.get('script_profile')))}% "
-                    "non-Latin document; queued for translation"
+                    f"({rep.get('numeric_match_rate', 0):.2f}) on a "
+                    + (
+                        f"Latin-script {latin_lang} document "
+                        f"({latin_conf:.2f} vote); "
+                        if latin_lingual
+                        else (
+                            "document whose span metric is English-prose on a "
+                            f"{int(100 * script_nonlatin_frac(rep.get('script_profile')))}% "
+                            "non-Latin volume; "
+                        )
+                    )
+                    + "queued for translation"
                 )
             elif rep:
                 reason = (
@@ -1440,6 +1605,8 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
                 # script and scores the same. The markdown (already recorded
                 # above, with figures) is the translation drain's input.
                 rec["extraction_status"] = "extract_lingual"
+                if latin_lingual and not rec.get("language"):
+                    rec["language"] = latin_lang
                 rec["failure_reason"] = f"extraction: {reason}"
                 rec["script_profile"] = rep.get("script_profile") or {}
                 lingual_count += 1

@@ -673,6 +673,13 @@ EXTRACTION_OWNED_FIELDS = frozenset(
         # page zero, and the durability it exists for is quietly absent —
         # the failure mode is invisible because nothing errors.
         "extract_progress",
+        # The Latin-language vote's verdict. Catalog metadata also writes
+        # a language on the papers side, but for the 168-paper blind-spot
+        # cohort it was empty or wrong ("en" on Spanish text) — extraction
+        # is the layer that actually READ the document, so its verdict is
+        # the one translation should trust. Only set when detected, so an
+        # absent key never shadows a real catalog value on overlay.
+        "language",
     }
 )
 

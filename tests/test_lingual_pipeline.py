@@ -948,3 +948,100 @@ async def test_the_drain_round_itself_defers_and_forgives(monkeypatch):
     out2 = await action_translate_drain_batch(_si())
     assert out2.result["status"] == "translated"
     assert "p1" not in _TRANSLATE_DEFERRED
+
+
+# ── Latin-script language vote ────────────────────────────────────────
+
+
+def test_latin_language_vote_separates_the_census_cases():
+    """Script is not language: the lingual gate keys on non-Latin LETTERS,
+    so 168 Spanish/French/Portuguese/German papers sailed through as
+    "English" — 22 already packed for a 1B trainee that must not eat
+    mixed-language record cards. The vote separates on stopwords."""
+    from agent.actions.extraction_actions import (
+        LINGUAL_LATIN_MIN_CONF,
+        latin_language_vote,
+    )
+
+    es = (
+        "los resultados de las muestras obtenidas para el análisis "
+        "muestran que la composición del material con más fases entre "
+    ) * 30
+    en = (
+        "the results and the spectra were measured with this method "
+        "that was applied from which regions have been selected "
+    ) * 30
+    lg, conf = latin_language_vote(es)
+    assert lg == "es" and conf >= LINGUAL_LATIN_MIN_CONF
+    lg, conf = latin_language_vote(en)
+    assert lg == "en"
+    # Too short to judge -> no guess, never a route.
+    assert latin_language_vote("tabla 1 2 3") == ("", 0.0)
+
+
+@pytest.mark.asyncio
+async def test_a_clean_spanish_batch_extraction_routes_to_lingual(tmp_path):
+    """The forward fix: an extraction whose METRICS pass (numerics, span,
+    no loop) but whose text votes Spanish books extract_lingual, not
+    extracted — the metrics measure fidelity, never language, and the
+    script gate cannot see Latin-script languages at all."""
+    import json as _json
+    import os as _os
+
+    from agent.actions.extraction_actions import action_extract_pdf_batch
+    from agent.actions.scholarly_actions import read_databank
+    from agent.effects.mock import MockEffects
+    from agent.effects.protocol import CommandResult
+    from agent.models import FlowMeta, StepInput
+
+    es_text = (
+        "los resultados de las muestras obtenidas para el análisis "
+        "muestran que la composición del material con más fases entre "
+    ) * 30
+    (tmp_path / "databank" / "markdown").mkdir(parents=True)
+    (tmp_path / "databank" / "markdown" / "p1.md").write_text(es_text, encoding="utf-8")
+    (tmp_path / "pdfs").mkdir()
+    (tmp_path / "pdfs" / "p1.pdf").write_bytes(b"%PDF-1.4 x")
+
+    rec = {
+        "paper_key": "p1",
+        "access_status": "oa_pdf",
+        "pdf_path": "pdfs/p1.pdf",
+        "title": "T",
+    }
+    report = {
+        "paper_key": "p1",
+        "md_path": _os.path.join("markdown", "p1.md"),
+        "pages": 4,
+        "total_pages": 4,
+        "verified_pages": 4,
+        "numeric_match_rate": 1.0,
+        "span_pass_rate": 0.95,
+        "max_repeat_words": 3,
+        "figures_kept": 0,
+        "script_profile": {"latin": 0.99, "nonlatin": 0.01},
+    }
+    fx = MockEffects(files={"databank/papers.jsonl": _json.dumps(rec) + "\n"})
+
+    async def fake_run_command(command, working_dir=None, timeout=30):
+        return CommandResult(
+            return_code=0,
+            stdout=_json.dumps(report) + "\n",
+            stderr="",
+            command=" ".join(command),
+        )
+
+    fx.run_command = fake_run_command
+
+    await action_extract_pdf_batch(
+        StepInput(
+            context={},
+            params={},
+            inputs={"working_directory": str(tmp_path), "paper_keys": ["p1"]},
+            meta=FlowMeta(flow_name="acquire", step_id="extract"),
+            effects=fx,
+        )
+    )
+    bank = await read_databank(fx)
+    assert bank["p1"]["extraction_status"] == "extract_lingual"
+    assert bank["p1"].get("language") == "es"
