@@ -313,6 +313,7 @@ def build_action_registry() -> ActionRegistry:
         action_catalog_batch_next,
         action_download_papers,
         action_navigate_landing_page,
+        action_recover_oa_locations,
         action_fetch_references,
         action_merge_candidates,
         action_resolve_oa_pdf,
@@ -534,6 +535,7 @@ def build_action_registry() -> ActionRegistry:
     registry.register("resolve_oa_pdf", action_resolve_oa_pdf)
     registry.register("download_papers", action_download_papers)
     registry.register("navigate_landing_page", action_navigate_landing_page)
+    registry.register("recover_oa_locations", action_recover_oa_locations)
     registry.register("fetch_references", action_fetch_references)
     # Concurrent wrapper over the three above, gathered with an OCR lane.
     # They stay registered and independently usable — this only changes how

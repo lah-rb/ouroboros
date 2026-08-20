@@ -520,4 +520,17 @@ def lanes_for_scraper() -> List[Lane]:
             est_kv=20_000,
             idle_backoff_s=30.0,
         ),
+        # OA recovery: pure network I/O (Wayback / CORE / meta-tag routes)
+        # — no muse seat, no KV, paced by the shared per-host politeness
+        # state. Long idle backoff: each record is walked ONCE (stamped),
+        # so once the pool is swept the lane is a cheap periodic no-op
+        # until new unresolved records arrive from cataloging.
+        Lane(
+            name="recover",
+            flow="oa_recover_drain",
+            resource="network",
+            est_kv=0,
+            seats=0,
+            idle_backoff_s=300.0,
+        ),
     ]

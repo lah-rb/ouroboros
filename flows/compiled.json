@@ -25987,6 +25987,76 @@
       "fallback": "reorganize"
     }
   },
+  "oa_recover_drain": {
+    "flow": "oa_recover_drain",
+    "version": 1,
+    "description": "Walk a bounded slice of oa_unresolved papers through Wayback,\ncitation_pdf_url, and CORE-by-DOI recovery routes. A success\nflips the record to oa_pdf so the OCR lane picks it up.",
+    "context_tier": "session_task",
+    "returns": {
+      "recover_summary": {
+        "type": "dict",
+        "from": "context.recover_summary",
+        "optional": true
+      }
+    },
+    "projections": {},
+    "input": {
+      "required": [
+        "working_directory"
+      ],
+      "optional": []
+    },
+    "defaults": {
+      "config": {}
+    },
+    "steps": {
+      "drain": {
+        "action": "recover_oa_locations",
+        "description": "Try archive/aggregator routes for unresolved papers",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "done"
+            }
+          ]
+        },
+        "publishes": [
+          "recover_summary"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "done": {
+        "action": "noop",
+        "description": "Recovery slice complete",
+        "context": {
+          "required": [],
+          "optional": [
+            "recover_summary"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": true,
+        "status": "success"
+      }
+    },
+    "entry": "drain",
+    "overflow": {
+      "strategy": "split",
+      "fallback": "reorganize"
+    }
+  },
   "research_control_v2": {
     "flow": "research_control_v2",
     "version": 1,

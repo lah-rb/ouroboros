@@ -43,6 +43,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from typing import Any
 
 from agent.models import StepInput, StepOutput
@@ -454,6 +455,7 @@ async def polite_request(
     *,
     params: dict | None = None,
     headers: dict | None = None,
+    json_body=None,
     timeout: float = 30.0,
 ):
     """http_request with per-host min-interval + mission budget.
@@ -478,7 +480,12 @@ async def polite_request(
 
     await _pacer().reserve(url)
     result = await effects.http_request(
-        method, url, params=params, headers=headers, timeout=timeout
+        method,
+        url,
+        params=params,
+        headers=headers,
+        json_body=json_body,
+        timeout=timeout,
     )
     if result.status == 429:
         # Shared-pool contention (live-observed on S2's unauthenticated
@@ -492,7 +499,12 @@ async def polite_request(
         await asyncio.sleep(delay)
         await _pacer().reserve(url)
         result = await effects.http_request(
-            method, url, params=params, headers=headers, timeout=timeout
+            method,
+            url,
+            params=params,
+            headers=headers,
+            json_body=json_body,
+            timeout=timeout,
         )
     if result.status and result.status != 429:
         await _pacer().note_ok(url)
@@ -1840,6 +1852,222 @@ async def action_download_papers(step_input: StepInput) -> StepOutput:
         result={"downloaded": downloaded, "failed": failed},
         observations=f"Downloads: {downloaded} fetched, {failed} unresolved",
         context_updates={"catalog_batch": batch},
+    )
+
+
+# ── OA recovery: archive + aggregator + meta-tag routes ──────────────
+#
+# The oa_unresolved pool (2,244 papers at build time, 2026-08-20) is NOT
+# retryable by re-fetching: 44% are publisher bot-walls (403) where a
+# retry is the same request to the same wall, and 37% are landing pages
+# whose declared PDF target refuses automated clients too. Live probes:
+#
+#   Wayback availability   PROVEN  (a 404'd Dovepress PDF -> live snapshot)
+#   citation_pdf_url meta  works where the landing page itself serves us
+#   CORE v3 by DOI (keyed) API works; full text lags for RECENT articles
+#   MDPI direct            Akamai on landing AND pdf; OAI-PMH metadata-only
+#
+# So recovery = ASK SOMEONE ELSE (the Internet Archive, CORE's aggregated
+# copies) or READ THE PAGE'S OWN DECLARATION (citation_pdf_url), never
+# beat on the wall. Every candidate still goes through http_download's
+# is-a-document checks and the polite per-host pacer.
+
+_WAYBACK_API = "https://archive.org/wayback/available"
+_CORE_SEARCH_POST = "https://api.core.ac.uk/v3/search/works"
+# name-then-content and content-then-name attribute orders both occur.
+_META_PDF_RE = re.compile(
+    r'<meta[^>]+?(?:name|property)=["\']citation_pdf_url["\'][^>]*?'
+    r'content=["\']([^"\']+)'
+    r'|<meta[^>]+?content=["\']([^"\']+)["\'][^>]*?'
+    r'(?:name|property)=["\']citation_pdf_url',
+    re.IGNORECASE,
+)
+
+
+def _meta_pdf_url(html: str, base_url: str) -> str:
+    """The page's own machine-declared PDF location, or ''.
+
+    Cross-host targets are ALLOWED here, unlike LLM navigation: this is
+    the publisher's structured self-declaration (Google Scholar indexing
+    contract), not a model's guess — MDPI declares mdpi-res.com, Springer
+    declares link.springer.com assets. http_download's document check
+    remains the arbiter of what we accept.
+    """
+    m = _META_PDF_RE.search(html or "")
+    if not m:
+        return ""
+    from urllib.parse import urljoin
+
+    return urljoin(base_url, (m.group(1) or m.group(2) or "").strip())
+
+
+async def _wayback_snapshot(effects: Any, url: str) -> str:
+    """Closest archived snapshot of `url` (status 200), or ''."""
+    r = await polite_request(effects, "GET", _WAYBACK_API, params={"url": url})
+    if r.status != 200 or not isinstance(r.json_data, dict):
+        return ""
+    snap = ((r.json_data.get("archived_snapshots") or {}).get("closest")) or {}
+    if not snap.get("available") or str(snap.get("status")) != "200":
+        return ""
+    u = str(snap.get("url") or "")
+    # The API returns http://; the archive serves https and the pacer
+    # should see one canonical host.
+    return u.replace("http://web.archive.org", "https://web.archive.org", 1)
+
+
+async def _core_fulltext_urls(effects: Any, doi: str) -> list[str]:
+    """CORE's aggregated copies for a DOI: downloadUrl + source URLs.
+
+    POST, not GET — the GET form of /search/works 500s (probed live
+    2026-08-20); the JSON-body POST returns the record. Recent articles
+    often index with no cached full text yet — an empty answer is lag,
+    not absence, which is why recovery stamps are dated (see the action).
+    """
+    if not doi:
+        return []
+    r = await polite_request(
+        effects,
+        "POST",
+        _CORE_SEARCH_POST,
+        headers=_core_headers(),
+        json_body={"q": f'doi:"{doi}"', "limit": 1},
+    )
+    if r.status != 200 or not isinstance(r.json_data, dict):
+        return []
+    hits = r.json_data.get("results") or []
+    if not hits:
+        return []
+    h = hits[0]
+    urls = []
+    if h.get("downloadUrl"):
+        urls.append(str(h["downloadUrl"]))
+    for u in h.get("sourceFulltextUrls") or []:
+        urls.append(str(u))
+    return urls
+
+
+async def action_recover_oa_locations(step_input: StepInput) -> StepOutput:
+    """Recover oa_unresolved papers through archive/aggregator routes.
+
+    Drain-shaped (budgeted, claim-free, declines with a reason): walks
+    unrecovered oa_unresolved records — strong-tagged first, then
+    deterministic — and tries, per record:
+
+      1. Wayback snapshots of the stored OA locations
+      2. the landing page's citation_pdf_url declaration (when the page
+         itself serves us), plus Wayback of THAT target on a direct miss
+      3. CORE's aggregated copy by DOI (keyed POST)
+
+    A success flips the record to oa_pdf with pdf_path set, so the OCR
+    lane picks it up with no further wiring. Each record is stamped
+    `oa_recover_attempted_at` — one pass per record per e-poch; re-arming
+    a miss is deliberate operator action (aggregators lag months for
+    recent articles, so a later pass IS worth it — but on a calendar,
+    not a loop).
+
+    Params/env: budget (OUROBOROS_OA_RECOVER_PAPERS, default 6; 0 disables).
+    """
+    from agent.persistence.models import _now_iso
+
+    effects = step_input.effects
+    raw = os.environ.get("OUROBOROS_OA_RECOVER_PAPERS", "").strip()
+    try:
+        budget = int(step_input.params.get("budget") or (raw or 6))
+    except ValueError:
+        budget = 6
+
+    def _decline(reason: str) -> StepOutput:
+        summary = {"attempted": 0, "recovered": 0, "reason": reason}
+        return StepOutput(
+            result=summary,
+            observations=f"oa recovery idle ({reason})",
+            context_updates={"recover_summary": summary},
+        )
+
+    if budget <= 0:
+        return _decline("disabled (budget 0)")
+    databank = await read_databank(effects)
+    pend = [
+        r
+        for r in databank.values()
+        if r.get("access_status") == "oa_unresolved"
+        and not r.get("oa_recover_attempted_at")
+        and (r.get("oa_pdf_urls") or r.get("oa_pdf_url"))
+    ]
+    if not pend:
+        return _decline("nothing unrecovered pending")
+
+    def _prio(r: dict):
+        strong = any(
+            isinstance(t, dict) and t.get("relevance") in ("exact", "close")
+            for t in (r.get("tags") or [])
+        )
+        return (0 if strong else 1, r.get("paper_key", ""))
+
+    pend.sort(key=_prio)
+    attempted = recovered = 0
+    outcomes: list[dict] = []
+    for rec in pend[:budget]:
+        rec = dict(rec)
+        attempted += 1
+        rec["oa_recover_attempted_at"] = _now_iso()
+        stored = list(
+            rec.get("oa_pdf_urls")
+            or ([rec["oa_pdf_url"]] if rec.get("oa_pdf_url") else [])
+        )
+
+        candidates: list[tuple[str, str]] = []
+        for u in stored[:2]:
+            snap = await _wayback_snapshot(effects, u)
+            if snap:
+                candidates.append(("wayback", snap))
+        page = await polite_request(effects, "GET", stored[0]) if stored else None
+        if page is not None and page.status == 200 and page.text:
+            meta = _meta_pdf_url(page.text, stored[0])
+            if meta and meta not in stored:
+                candidates.append(("meta", meta))
+                snap = await _wayback_snapshot(effects, meta)
+                if snap:
+                    candidates.append(("meta-wayback", snap))
+        for u in await _core_fulltext_urls(effects, str(rec.get("doi") or "")):
+            candidates.append(("core", u))
+
+        tried = set(rec.get("oa_attempted") or [])
+        seen: set[str] = set()
+        for how, u in candidates:
+            if not u or u in tried or u in seen:
+                continue
+            seen.add(u)
+            key = rec.get("paper_key") or paper_key(rec)
+            path = f"{PDF_DIR}/{key}.pdf"
+            dl = await effects.http_download(u, path)
+            rec.setdefault("oa_attempted", []).append(u)
+            if dl.success:
+                rec["pdf_path"] = path
+                rec["oa_pdf_url"] = u
+                rec["access_status"] = "oa_pdf"
+                rec["failure_reason"] = ""
+                recovered += 1
+                outcomes.append({"paper_key": key, "via": how})
+                break
+        # Book PER RECORD: a recovered PDF must survive whatever stops the
+        # round, and a stamped miss must not be re-walked next round.
+        await append_records(effects, [rec])
+
+    summary = {
+        "attempted": attempted,
+        "recovered": recovered,
+        "outcomes": outcomes,
+        "remaining": max(0, len(pend) - attempted),
+    }
+    return StepOutput(
+        result=summary,
+        observations=(
+            f"oa recovery: {recovered}/{attempted} recovered "
+            f"({', '.join(o['via'] for o in outcomes) or 'none'}); "
+            f"{summary['remaining']} still unwalked"
+        ),
+        context_updates={"recover_summary": summary},
     )
 
 
