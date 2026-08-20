@@ -1,13 +1,32 @@
 id: diagnose_issue/investigate_instruction
 content: |
-  Turn {context.investigation_turn} of 8.
+  Turn {context.investigation_turn}.
 
   Each turn you pick one action: `trace` to gather evidence, or
-  `conclude` to produce the diagnosis.
+  `conclude` to deliver the diagnosis. Trace until you can name the
+  defect precisely — you judge when the evidence is sufficient, and
+  a diagnosis grounded in one trace too many beats one guessed a
+  turn too early.
 
   Response format (abstract — `symbol_ref` is `file.py:symbol`):
       {"choice": "trace", "symbol_ref": "<file>:<qualified_symbol>"}
-      {"choice": "conclude"}
+      {"choice": "conclude",
+       "target_file": "<real path in this project>",
+       "target_symbol": "<Class.method or function>",
+       "root_cause": "<the defect, and why it produces the observed failure>",
+       "change_spec": "<what to change, concretely>",
+       "kind": "<code_fix | module_fix | enhancement>",
+       "related_symbols": ["file.py:co_dependent_symbol"],
+       "recommended_flow": "<file_ops | project_ops | retest>"}
+
+  `conclude` carries the diagnosis IN THE SAME OBJECT — there is no
+  separate diagnosis turn. A bare {"choice": "conclude"} is not a
+  conclusion. If the code is actually correct and the failing session
+  simply never reached the behavior, use recommended_flow "retest" and
+  add "test_guidance": the concrete steps that reach it. For
+  kind "module_fix", add "module_statement": the literal module-level
+  line. If success means an input must now RAISE, add
+  "expected_error": the exception type.
 
   Placeholder format reference only (do NOT pick this symbol —
   it's not in the project):

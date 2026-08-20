@@ -3929,7 +3929,7 @@
               },
               "conclude": {
                 "key": "conclude",
-                "description": "Produce the diagnosis from the evidence gathered so far",
+                "description": "Deliver the diagnosis \u2014 the SAME object carries the diagnosis fields (see the format above)",
                 "terminal": false
               }
             },
@@ -3949,7 +3949,9 @@
           "retries": 3
         },
         "config": {},
-        "publishes": [],
+        "publishes": [
+          "investigation_response"
+        ],
         "effects": [],
         "terminal": false
       },
@@ -4011,7 +4013,7 @@
           "type": "rule",
           "rules": [
             {
-              "condition": "context.investigation_turn >= 10",
+              "condition": "context.investigation_turn >= 55",
               "transition": "conclude"
             },
             {
@@ -4033,7 +4035,8 @@
           ],
           "optional": [
             "investigation_turn",
-            "traced_symbols"
+            "traced_symbols",
+            "investigation_response"
           ]
         },
         "params": {},
@@ -4041,6 +4044,10 @@
         "resolver": {
           "type": "rule",
           "rules": [
+            {
+              "condition": "result.payload_incomplete == true",
+              "transition": "investigate"
+            },
             {
               "condition": "true",
               "transition": "systemic_scan"

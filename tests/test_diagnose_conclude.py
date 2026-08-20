@@ -232,3 +232,109 @@ async def test_conclude_clears_stale_expected_error_on_redigagnose():
     )
     assert out.context_updates["expected_error"] == ""
     assert (await effects.load_mission()).goals[0].expected_error == ""
+
+
+# ══════════════════════════════════════════════════════════════════════
+# One menu shape per session (2026-08-19) — conclude carries its payload
+# ══════════════════════════════════════════════════════════════════════
+#
+# The 08-19 gpt-oss run lost ~7 repair laps because the model answered the
+# separate conclude turn in the MENU vocabulary — {"choice": "trace", ...}
+# recorded verbatim as root_cause, target_file empty, junk guard, arbitrary
+# LLM-menu edit. The 779 lesson again: two answer shapes in one session and
+# the model reverts to the dominant one (534 of 660 turns were menu turns).
+# Now the conclude CHOICE carries the diagnosis fields in the same object;
+# the CONCLUDE_PROMPT inference survives only as the no-answer fallback.
+
+
+@pytest.mark.asyncio
+async def test_inline_conclude_payload_is_recorded_without_a_second_inference():
+    effects = MockEffects()
+    out = await action_conclude_diagnosis(
+        _step_input(
+            effects,
+            diagnosis_session_id="s1",
+            investigation_turn=4,
+            traced_symbols=["src/game.py:GameEngine._dispatch"],
+            investigation_response=(
+                '{"choice": "conclude", "target_file": "src/game.py", '
+                '"target_symbol": "GameEngine._dispatch", '
+                '"root_cause": "examine dispatch branch missing", '
+                '"change_spec": "add _handle_examine branch", '
+                '"kind": "code_fix", "recommended_flow": "file_ops"}'
+            ),
+        )
+    )
+    cu = out.context_updates or {}
+    assert cu.get("target_file") == "src/game.py"
+    assert cu.get("target_symbol") == "GameEngine._dispatch"
+    assert cu.get("recommended_flow") == "file_ops"
+    # THE point: no CONCLUDE_PROMPT inference ran — the payload was the
+    # diagnosis. A second inference here is the second vocabulary reborn.
+    calls = [c for c in effects.calls if c.method == "session_inference"]
+    assert not calls, "inline payload must not trigger a conclude inference"
+
+
+@pytest.mark.asyncio
+async def test_bare_conclude_choice_bounces_back_with_a_correction():
+    """{"choice": "conclude"} with no fields is not a conclusion — the old
+    pipeline recorded it as a junk diagnosis and downstream edited an
+    arbitrary file. Now it names the missing keys IN the session and routes
+    back to the (uncapped) menu."""
+    effects = MockEffects()
+    out = await action_conclude_diagnosis(
+        _step_input(
+            effects,
+            diagnosis_session_id="s1",
+            investigation_turn=2,
+            investigation_response='{"choice": "conclude"}',
+        )
+    )
+    assert out.result.get("payload_incomplete") is True
+    inj = (out.context_updates or {}).get("session_injections") or []
+    assert inj and "conclude" in inj[0], "correction must be queued in-session"
+    calls = [c for c in effects.calls if c.method == "session_inference"]
+    assert not calls
+
+
+@pytest.mark.asyncio
+async def test_no_answer_path_still_runs_the_fallback_inference():
+    """No investigation_response at all (retries exhausted / crash guard):
+    the legacy CONCLUDE_PROMPT inference is the fallback, unchanged."""
+    effects = MockEffects(
+        inference_responses=[
+            '```json\n{"target_file": "src/x.py", "target_symbol": "f", '
+            '"root_cause": "r", "change_spec": "c", "kind": "code_fix", '
+            '"confidence": "medium", "recommended_flow": "file_ops"}\n```'
+        ]
+    )
+    out = await action_conclude_diagnosis(
+        _step_input(effects, diagnosis_session_id="s1", investigation_turn=9)
+    )
+    assert (out.context_updates or {}).get("target_file") == "src/x.py"
+    calls = [c for c in effects.calls if c.method == "session_inference"]
+    assert len(calls) == 1
+
+
+def test_flow_pins_one_shape_and_the_crash_guard():
+    import json as _json
+    from pathlib import Path
+
+    flow = _json.loads(
+        (Path(__file__).resolve().parents[1] / "flows" / "compiled.json").read_text()
+    )["diagnose_issue"]
+    steps = flow["steps"]
+    # investigate publishes the full response for conclude to consume
+    assert "investigation_response" in steps["investigate"].get("publishes", [])
+    # conclude declares it readable (the context FILTER lesson, 6ac6a78)
+    assert "investigation_response" in steps["conclude"]["context"]["optional"]
+    # incomplete payload routes back to the menu
+    rules = steps["conclude"]["resolver"]["rules"]
+    assert any(
+        "payload_incomplete" in r.get("condition", "")
+        and r.get("transition") == "investigate"
+        for r in rules
+    )
+    # the budget is an engine-crash guard, not a judgment cap
+    budget = steps["check_budget"]["resolver"]["rules"][0]["condition"]
+    assert ">= 55" in budget, budget

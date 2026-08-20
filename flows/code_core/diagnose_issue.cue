@@ -212,8 +212,17 @@ diagnose_issue: #FlowDefinition & {
 		// compound-menu convention. See _tool_run_command's docblock
 		// in diagnosis_session_actions.py for the naming rule.
 		//
-		// ``conclude`` takes no arg — indicates the model has gathered
-		// enough evidence to produce a diagnosis.
+		// ``conclude`` CARRIES THE DIAGNOSIS INLINE (2026-08-19, operator:
+		// one menu shape per session). The same JSON object holds the
+		// choice AND the diagnosis fields — there is no separate
+		// diagnosis vocabulary for the model to drift into. The runtime
+		// menu parse extracts only "choice"; the full object rides the
+		// step's publishes (investigation_response) into conclude, which
+		// short-circuits its own inference when the payload is usable.
+		// WHY: the 08-19 gpt-oss run lost ~7 repair laps because the
+		// model answered the OLD separate conclude turn in the menu
+		// vocabulary ({"choice":"trace",...} recorded as root_cause) —
+		// the 779 menu-confusion class. One shape ends the class.
 		//
 		// Safety fallbacks route ambiguous / no-answer responses to
 		// conclude rather than escalating to failure, so the
@@ -247,7 +256,7 @@ diagnose_issue: #FlowDefinition & {
 						}
 						conclude: #MenuOption & {
 							key:         "conclude"
-							description: "Produce the diagnosis from the evidence gathered so far"
+							description: "Deliver the diagnosis — the SAME object carries the diagnosis fields (see the format above)"
 						}
 					}
 					publish_selection: "investigation_choice"
@@ -277,6 +286,10 @@ diagnose_issue: #FlowDefinition & {
 				config: temperature: "t*0.3"
 				retries: 3
 			}
+			// The full response object (choice + inline diagnosis fields)
+			// for conclude to consume — the runtime publishes response
+			// text under every listed key.
+			publishes: ["investigation_response"]
 		}
 
 		// ══════════════════════════════════════════════════════════
@@ -362,10 +375,17 @@ diagnose_issue: #FlowDefinition & {
 			resolver: {
 				type: "rule"
 				rules: [
-					// Cap at 10 traces — a clean investigation needs
-					// 3-4; past 10 the model is oscillating, not
-					// converging. A runaway safety net, not a guardian.
-					{condition: "context.investigation_turn >= 10", transition: "conclude"},
+					// UNCAPPED as judgment (operator, 2026-08-19): a model
+					// that cannot decide when its investigation is done
+					// should not be run by Ouroboros — the old cap (10)
+					// forced conclusions on models mid-thought and fed the
+					// menu-vocabulary-at-conclude failure. The bound below
+					// is an ENGINE-CRASH GUARD only, sized under the
+					// 200-step sub-flow ceiling (~3 steps per trace lap;
+					// see d48de69 for the run_session version of this
+					// lesson) so a pathological loop parks with a report
+					// instead of dying as a failed sub-flow.
+					{condition: "context.investigation_turn >= 55", transition: "conclude"},
 					{condition: "true", transition:                  "investigate"},
 				]
 			}
@@ -408,11 +428,23 @@ diagnose_issue: #FlowDefinition & {
 				required: ["diagnosis_session_id"]
 				optional: [
 					"investigation_turn", "traced_symbols",
+					// The investigate turn's full response object. When it
+					// carries choice=="conclude" with usable diagnosis
+					// fields, the action records THAT payload and skips its
+					// own CONCLUDE_PROMPT inference — the fallback prompt
+					// now fires only when the model failed to speak the one
+					// vocabulary (no_answer / crash-guard paths).
+					"investigation_response",
 				]
 			}
 			resolver: {
 				type: "rule"
 				rules: [
+					// Inline conclude arrived with NO usable fields — a
+					// correction injection names the missing keys and the
+					// session resumes (uncapped, so the retry is cheap and
+					// in-vocabulary).
+					{condition: "result.payload_incomplete == true", transition: "investigate"},
 					// Diagnosis ready — widen by pattern before closing.
 					{condition: "true", transition: "systemic_scan"},
 				]

@@ -42,7 +42,9 @@ from agent.loader import load_prompt_text
 
 logger = logging.getLogger(__name__)
 
-MAX_INVESTIGATION_TURNS = 8
+# MAX_INVESTIGATION_TURNS removed 2026-08-19 (was 8, and DEAD — the flow's
+# check_budget enforced 10 while the prompt claimed 8). The investigation is
+# now uncapped as judgment; check_budget keeps only an engine-crash guard.
 
 # The marker `_sweep_after_project_ops` records instead of a filename, since an
 # environment fix has no edit target. Kept here because the warning below has to
@@ -961,7 +963,69 @@ async def action_conclude_diagnosis(
     if not isinstance(traced_symbols, list):
         traced_symbols = []
 
-    out = await _conclude_diagnosis(effects, session_id, turn, traced_symbols)
+    # ── Inline conclude payload (2026-08-19: one menu shape per session) ──
+    # The investigate turn's conclude choice carries the diagnosis fields in
+    # the SAME object. When they arrived, record THEM — no second inference,
+    # no second vocabulary. The separate CONCLUDE_PROMPT below survives only
+    # as the fallback for no_answer / crash-guard entries, where the model
+    # never produced a conclude object at all.
+    inline_text = ""
+    raw_resp = str(step_input.context.get("investigation_response", "") or "")
+    if raw_resp:
+        try:
+            from agent.llm_json import parse_llm_json
+
+            obj = parse_llm_json(raw_resp)
+        except Exception:
+            obj = None
+        if isinstance(obj, dict) and str(obj.get("choice", "")) == "conclude":
+            payload = {k: v for k, v in obj.items() if k != "choice"}
+            substantive = any(
+                str(payload.get(k, "") or "").strip()
+                for k in ("target_file", "root_cause", "change_spec")
+            ) or payload.get("recommended_flow") in (
+                "file_ops",
+                "project_ops",
+                "retest",
+            )
+            if substantive:
+                import json as _json
+
+                inline_text = _json.dumps(payload)
+            else:
+                # The model said conclude and delivered nothing. Name the
+                # missing keys IN the session and resume the one menu —
+                # uncapped, so the correction costs one cheap turn instead
+                # of a junk report + an evidence-free downstream edit.
+                from agent.session_injections import queue as queue_injection
+
+                context_updates: dict = {}
+                queue_injection(
+                    context_updates,
+                    step_input.context,
+                    "[Your `conclude` carried no diagnosis fields. Emit it "
+                    'again as ONE object: {"choice": "conclude", '
+                    '"target_file": ..., "target_symbol": ..., '
+                    '"root_cause": ..., "change_spec": ..., '
+                    '"kind": ..., "recommended_flow": ...} — or '
+                    "`trace` again if you are not ready.]",
+                )
+                logger.warning(
+                    "Conclude: inline payload EMPTY — correction injected, "
+                    "resuming the investigate menu"
+                )
+                return StepOutput(
+                    result={"payload_incomplete": True},
+                    observations=(
+                        "conclude choice carried no usable fields — "
+                        "correction injected, session resumed"
+                    ),
+                    context_updates=context_updates,
+                )
+
+    out = await _conclude_diagnosis(
+        effects, session_id, turn, traced_symbols, inline_text=inline_text
+    )
 
     # Persist the should-raise contract onto the goal. The deterministic retest
     # evaluator runs in a LATER, separate dispatch (the functional sweep fires
@@ -1023,6 +1087,7 @@ async def _conclude_diagnosis(
     session_id: str,
     turn: int,
     traced_symbols: list[str] | None = None,
+    inline_text: str = "",
 ) -> StepOutput:
     """Run the conclude inference and publish the structured diagnosis.
 
@@ -1047,24 +1112,34 @@ async def _conclude_diagnosis(
             "(file-qualified).\n\n" + CONCLUDE_PROMPT
         )
 
-    try:
-        # Task-scaled temperature (t*0.7 of the model default) rather than a
-        # flat 0.4 overwrite. A flat low temp lands near the greedy regime that
-        # worsens repetition looping on some models (notably Qwen3-Next); t*
-        # tracks each model's base so the conclude stays deterministic-ish
-        # without bottoming out.
-        # reasoning "high": conclude produces the change_spec that drives the
-        # repair dispatch — the 10h muse arm's 4 junk-target events (empty
-        # target_file → LLM-menu recovery) were conclude outputs. Custom
-        # actions bypass the runtime's reasoning_router (it routes TURN steps
-        # only), so the level rides config_overrides here; head-swap families
-        # splice mid-session, others no-op silently.
-        result = await effects.session_inference(
-            session_id, prompt, {"temperature": "t*0.7", "reasoning": "high"}
-        )
-        diagnosis_text = result.text.strip() if result.text else ""
-    except Exception as e:
-        diagnosis_text = f"Conclude failed: {e}"
+    if inline_text:
+        # One-shape path: the diagnosis arrived ON the investigate turn's
+        # conclude object. Record it verbatim — the composition already
+        # happened in-session with all trace evidence in KV, and running
+        # CONCLUDE_PROMPT anyway would reintroduce the second vocabulary
+        # this path exists to remove. (Cost note: this skips the explicit
+        # reasoning:"high" ride the fallback inference carries — the menu
+        # turn runs at the family default. Measured acceptable: gpt-oss
+        # emitted 0 CoT at conclude-high anyway; watch qwen-class depth.)
+        diagnosis_text = inline_text
+    else:
+        try:
+            # Task-scaled temperature (t*0.7 of the model default) rather
+            # than a flat 0.4 overwrite. A flat low temp lands near the
+            # greedy regime that worsens repetition looping on some models
+            # (notably Qwen3-Next); t* tracks each model's base so the
+            # conclude stays deterministic-ish without bottoming out.
+            # reasoning "high": conclude produces the change_spec that
+            # drives the repair dispatch. Custom actions bypass the
+            # runtime's reasoning_router (it routes TURN steps only), so
+            # the level rides config_overrides here; head-swap families
+            # splice mid-session, others no-op silently.
+            result = await effects.session_inference(
+                session_id, prompt, {"temperature": "t*0.7", "reasoning": "high"}
+            )
+            diagnosis_text = result.text.strip() if result.text else ""
+        except Exception as e:
+            diagnosis_text = f"Conclude failed: {e}"
 
     # Parse the diagnosis JSON and publish structured fields so the
     # dispatcher can route without re-parsing. Phase A (patch redesign):
