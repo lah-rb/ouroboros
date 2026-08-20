@@ -51,6 +51,17 @@ class ClaudeCliProvider:
             "json",
             "--max-turns",
             "1",
+            # Advisory text only — the consult contract (escalate is
+            # read-only, 72d3901) wants a paragraph of direction, never an
+            # investigation. Without this, the model may spend turn 1 on a
+            # tool call, and under --max-turns 1 that IS the failure:
+            # error_max_turns, exit 1, no advice delivered. Observed on the
+            # 2026-08-20 devstral floor rerun — all three boss consults on
+            # a stuck goal died this way while the fix the boss would have
+            # named was a one-line import. Live-verified: with tools
+            # disallowed the same consult answers in one turn.
+            "--disallowedTools",
+            "*",
         ]
         if system:
             cmd += ["--system-prompt", system]
