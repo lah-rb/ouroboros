@@ -140,11 +140,17 @@ def arm_identifier_stems(config_name: str) -> list[str]:
     pass while carrying its own name.
 
     Stems are alphabetic and >= 4 chars so a size or revision suffix ("30b",
-    "a5", "v4") cannot flood every artifact with false hits.
+    "a5", "v4") cannot flood every artifact with false hits. Alphabetic SIZE
+    WORDS get the same treatment for the same reason: devstral-2-SMALL-24b
+    blocked its own floor rerun (2026-08-20) on world.yaml prose "A small
+    set of metal tools" — a size-class label is not identity, and a judge
+    cannot recover a model name from ordinary English. Only generic size
+    words are exempt; every other alphabetic token still blocks.
     """
+    SIZE_WORDS = {"tiny", "mini", "small", "medium", "large"}
     stems = {config_name.strip().lower()}
     for token in re.split(r"[^a-zA-Z]+", config_name):
-        if len(token) >= 4:
+        if len(token) >= 4 and token.lower() not in SIZE_WORDS:
             stems.add(token.lower())
     return sorted(s for s in stems if s)
 
