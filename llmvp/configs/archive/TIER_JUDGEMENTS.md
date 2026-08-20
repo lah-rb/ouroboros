@@ -3937,3 +3937,44 @@ Framework note: the sweep's blind spot on the parser wall is structural —
 charters are authored FROM the data files, so the operator plays with
 id-knowledge a player cannot have. The judge's "knowledge a player has no
 way to obtain" charge applies to our own verification path.
+
+## 2026-08-20 — FLOOR RECALIBRATION: devstral floor rerun loses 0-4 / 1-5 to the sitting Guardian
+
+**Delivery: A(Guardian) 4–0 · Character: A 5–1 · OVERALL: GUARDIAN.** No
+split, no CLOSE flag. Candidate rotated to B. Devstral's single axis is
+B6 imagination (the Gothic Castle, the moonflower garden, the inscribed
+locket — "the only real prose in the packet"). Completability: BOTH
+UNWINNABLE, at different depths — the anchor dies to closed combat
+arithmetic in the throne room; devstral's artifact is UNENTERABLE (the
+title command `new` raises NameError). Record:
+`dev/blind_panel/records/flight_20260820_floor_vs_guardian.md`.
+
+**Why it exists**: the guardian-candidate promotion checklist requires a
+floor recalibration before the anchors move. Answer: **the ladder is
+monotone** — floor << sitting guardian (this flight, 9-1 aggregate) <
+guardian candidate (8-2, 08-19 evening). Devstral on the CURRENT
+framework (collapsed diagnose + write-tests-to-fail) is decisively
+below the 2026-08-03 anchor the candidate just retired.
+
+**Run-side context the blind record corroborates**: devstral diagnosed
+its own fatal defect correctly ~24 consecutive times ("Add 'from models
+import Player'") but named the target symbol BARE where the symbol
+table is qualified (GameEngine.initialize_game), so every repair routed
+to add_symbol and appended the orphan module-level initialize_game the
+judge found "as the same orphan-repair pattern as A". Six boss consults
+fired; the last several DELIVERED (provider fixed in-run, 9ea48a1) and
+named the same one-line import — advice the model had already given
+itself and could not apply. Note the judge found the SAME orphan
+pattern in the GUARDIAN's game.py: the add_symbol crack is not
+devstral-specific; devstral is the first model that could not recover
+from it. The rule-9 inverted test the acceptance gate vetoed in-run is
+the one the judge quotes: it "asserts [the bug] as the expected result
+and monkey-patches around it rather than adding the import."
+
+**Floor-character verdict, per the operator's pre-run bet**: partially
+inverted. The bet was "forced into work it has a difficult time with"
+(write-tests-to-fail). What the run showed is sharper: analysis correct
+and stable, execution address-blind — devstral can SAY the fix but not
+SPELL where it goes, and the acceptance gate correctly refused every
+sham pass (the false-pass channel the old framework left open is now
+closed to it, which is exactly why 10/31 instead of a padded number).
