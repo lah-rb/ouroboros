@@ -176,10 +176,14 @@ def test_claude_cli_happy_path(tmp_path):
     args = Path(bin_path + ".args").read_text()
     assert "--model claude-opus-4-8" in args
     assert "--max-turns 1" in args
-    # Tools must be disallowed: under --max-turns 1, a single tool call IS
-    # error_max_turns (the 2026-08-20 devstral consult failure — three boss
-    # consults died undelivered while the boss's one-line answer was the fix).
-    assert "--disallowedTools *" in args
+    # Tools must be REMOVED FROM VIEW (--tools ""), not merely disallowed:
+    # under --max-turns 1 an attempted tool call IS error_max_turns, and
+    # --disallowedTools still leaves the tools visible for the model to
+    # attempt (the 2026-08-20 devstral consult failure, twice — three boss
+    # consults died undelivered, then the --disallowedTools fix failed live).
+    assert "--tools " in args
+    assert "--disallowedTools" not in args
+    assert '--strict-mcp-config --mcp-config {"mcpServers":{}}' in args
     assert "--system-prompt You are the boss." in args
     assert Path(bin_path + ".stdin").read_text().strip() == "What is the plan?"
 

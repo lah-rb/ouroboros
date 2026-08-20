@@ -53,15 +53,20 @@ class ClaudeCliProvider:
             "1",
             # Advisory text only — the consult contract (escalate is
             # read-only, 72d3901) wants a paragraph of direction, never an
-            # investigation. Without this, the model may spend turn 1 on a
-            # tool call, and under --max-turns 1 that IS the failure:
-            # error_max_turns, exit 1, no advice delivered. Observed on the
-            # 2026-08-20 devstral floor rerun — all three boss consults on
-            # a stuck goal died this way while the fix the boss would have
-            # named was a one-line import. Live-verified: with tools
-            # disallowed the same consult answers in one turn.
-            "--disallowedTools",
-            "*",
+            # investigation. Under --max-turns 1 an ATTEMPTED tool call is
+            # the failure (error_max_turns, exit 1, no advice delivered) —
+            # all three boss consults on the 2026-08-20 devstral stall died
+            # this way. --disallowedTools does NOT fix it: it denies
+            # permission but leaves the tools in the model's view, and the
+            # attempt still consumes the turn (probed 2026-08-20). --tools ""
+            # removes them from the view entirely, and the MCP seal keeps
+            # user-level MCP servers from refilling it; probed 3/3 turn-1
+            # success on a deliberately tool-baiting prompt.
+            "--tools",
+            "",
+            "--strict-mcp-config",
+            "--mcp-config",
+            '{"mcpServers":{}}',
         ]
         if system:
             cmd += ["--system-prompt", system]
