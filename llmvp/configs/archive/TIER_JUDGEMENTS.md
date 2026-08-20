@@ -3978,3 +3978,40 @@ and stable, execution address-blind — devstral can SAY the fix but not
 SPELL where it goes, and the acceptance gate correctly refused every
 sham pass (the false-pass channel the old framework left open is now
 closed to it, which is exactly why 10/31 instead of a padded number).
+
+## 2026-08-20 — FLOOR DISPLACEMENT: the rerun LOSES 2-8 to the sitting floor — anchor stands
+
+**Delivery: B(Floor) 4–0 · Character: B 4–2 · OVERALL: FLOOR.** No split,
+no CLOSE flag. Candidate rotated to A. Same model on both sides —
+devstral-2-small-24b under the current framework (rerun) vs under the
+2026-08-03 framework (anchor). Record:
+`dev/blind_panel/records/flight_20260820_devstral_vs_floor.md`.
+
+The rerun takes exactly its two authored-world axes — B5 ambition (it
+alone attempted the hidden-weakness chain end to end) and B6
+imagination — and loses everything a player can touch. Conformance
+INVERTS the outcome-relevant panel: rerun 35/47 SIGNIFICANTLY-DEVIATED
+(unenterable, no win state in the tree) vs anchor 41/47 NEAR-FULL
+(runs, plays 4 rooms, but 5 of 9 rooms are a disconnected component
+holding the boss, the weakness sword, and 3 of 4 NPCs — and every NPC
+is unspeakable via a dialogue-condition vocabulary mismatch).
+
+**Anchors after the 08-20 pair: FLOOR STANDS, ladder fully ordered:**
+devstral-rerun < floor-20260803 < guardian-20260803 < candidate-20260819.
+The operator's pre-flight read (one category off the guardian → slight
+edge over the floor) did not hold: the old-framework artifact RUNS, and
+running beat authoring 8-2.
+
+**Same-model two-framework reading**: the current framework made
+devstral attempt MORE (weakness chain, title menu, twice the monsters,
+real prose) and closed its false-pass channel — and it could not carry
+the added ambition through its own seams. For the floor model, the
+heavier standards are a tax the model pays in delivery.
+
+**Orphan pattern, third sighting**: the judge independently flags a
+"dedented orphan function at module scope" in BOTH trees
+(initialize_game in the rerun, equip_item in the 08-03 floor) — with
+the guardian's orphan __init__ that is three artifacts, two models,
+three framework eras. The add_symbol bare-name routing crack
+(ast_actions.py Phase D) now has a case file spanning the whole anchor
+shelf.
