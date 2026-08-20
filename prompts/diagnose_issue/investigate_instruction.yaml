@@ -16,17 +16,27 @@ content: |
        "root_cause": "<the defect, and why it produces the observed failure>",
        "change_spec": "<what to change, concretely>",
        "kind": "<code_fix | module_fix | enhancement>",
+       "module_statement": "<kind module_fix ONLY: the literal module-level line(s), exactly as they should appear in the file — else empty>",
        "related_symbols": ["file.py:co_dependent_symbol"],
        "recommended_flow": "<file_ops | project_ops | retest>"}
+
+  A module_fix is a missing or wrong MODULE-LEVEL line (an import, a
+  shebang) — the fix is applied by splicing "module_statement" into the
+  file verbatim, so it must be executable code, and describing it in
+  change_spec instead leaves nothing to splice:
+      ✅ "kind": "module_fix", "module_statement": "from commands import InventoryCommand"
+      ❌ "kind": "module_fix", "module_statement": "",
+         "change_spec": "add an import for InventoryCommand at the top"
+      ❌ "module_statement": "ITEMS = {}\n# then assign ITEMS inside __init__"
+         (guidance smuggled as comments — put it in change_spec)
 
   `conclude` carries the diagnosis IN THE SAME OBJECT — there is no
   separate diagnosis turn. A bare {"choice": "conclude"} is not a
   conclusion. If the code is actually correct and the failing session
   simply never reached the behavior, use recommended_flow "retest" and
-  add "test_guidance": the concrete steps that reach it. For
-  kind "module_fix", add "module_statement": the literal module-level
-  line. If success means an input must now RAISE, add
-  "expected_error": the exception type.
+  add "test_guidance": the concrete steps that reach it. If success
+  means an input must now RAISE, add "expected_error": the exception
+  type.
 
   Placeholder format reference only (do NOT pick this symbol —
   it's not in the project):
