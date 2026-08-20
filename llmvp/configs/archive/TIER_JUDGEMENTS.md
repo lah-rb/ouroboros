@@ -3864,3 +3864,28 @@ The seven unmoved axes are the null result: session-mode gpt-oss character
 (missing verbs, thin combat agency, doc drift) is model-innate; the prompt
 stack neither caused nor cured it. n=1 judge per flight; read flips, not
 margins.
+
+### Second addendum (same day) — baseline corrected to the FIXED 08-15 arm
+
+The addendum above used the 08-15 STUB arm as baseline; operator: that run
+carried the catastrophic escalate-path loophole and is not comparable. The
+clean pre-stack baseline is flight_20260815_guardian_vs_gptoss_fixed (same
+model, same anchor, same 2h wall, session mode, content-brief fix live):
+it lost 4-6 (Delivery 1-3, Character 3-3), winning A2/B6/B9/B10.
+
+Revised attribution vs the clean baseline (today: 3-7, winning A3/B6/B9):
+- B6 and B9 are HELD wins inherited from the 08-15-era fixes, NOT evidence
+  for the recent prompt stack. The earlier addendum over-credited the stack.
+- The rule-2c signature survives sub-axis: junk-red suite ("half fail",
+  wrong imports) -> one CORRECTLY-red test naming the artifact's worst live
+  bug. Same axis outcome, categorically better evidence within it.
+- The three flips (-A2, +A3, -B10) are n=1 single-axis moves with no
+  plausible stack mechanism (the stack touches none of artifact EOF
+  handling, README authoring, or build-phase save code). Defensible
+  residue: throughput — 20/30 -> 18/30 at the same wall, ~30min of it the
+  file_ops evasion loop — consistent with save/load staying unwired (A2).
+- CONCLUSION: at 2h-grinder scale the stack's head-to-head effect is small
+  and wall-dominated. Its demonstrated wins (gate noise halved, unrefutable
+  claims killed, correct-red tests) live in gate behaviour, which this
+  candidate never reached. A gate-inclusive run is the measurement that
+  would show them.
