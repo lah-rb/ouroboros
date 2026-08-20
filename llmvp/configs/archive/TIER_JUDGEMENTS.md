@@ -3885,7 +3885,13 @@ Revised attribution vs the clean baseline (today: 3-7, winning A3/B6/B9):
   residue: throughput — 20/30 -> 18/30 at the same wall, ~30min of it the
   file_ops evasion loop — consistent with save/load staying unwired (A2).
 - CONCLUSION: at 2h-grinder scale the stack's head-to-head effect is small
-  and wall-dominated. Its demonstrated wins (gate noise halved, unrefutable
-  claims killed, correct-red tests) live in gate behaviour, which this
-  candidate never reached. A gate-inclusive run is the measurement that
-  would show them.
+  and wall-dominated. PRECISION (third pass): the stack spans 14 prompt
+  files + SOUL.md across 8 commits, and the run DID exercise its
+  interact-side half heavily — charter_function consequence criteria on
+  ~18 charters, evaluate_rules world-check verdicts on every goal, and
+  author_test rule 2c (the correct-red test) — which is exactly where the
+  two traced effects sit: the red test (win) and the stricter contested
+  verdicts (throughput cost). What was NOT exercised is the gate-side half
+  (summarize/judge_finding/evaluate_ux_session/explorer charter, zero gate
+  runs), where the noise-reduction wins live. Those remain unmeasured for
+  gpt-oss; a gate-inclusive run is the measurement that would show them.
