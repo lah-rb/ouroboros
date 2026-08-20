@@ -1,0 +1,22 @@
+
+   _____                 _                     _             
+  / ____|               | |                   | |            
+ | (___   ___  _ __ ___ | |__   ___ _ __   ___| |_ ___  _ __ 
+  \___ \ / _ \| '_ ` _ \| '_ \ / _ \ '__| / __| __/ _ \| '__|
+  ____) | (_) | | | | | | |_) |  __/ |    \__ \ || (_) | |   
+ |_____/ \___/|_| |_| |_|_.__/ \___|_|    |___/\__\___/|_|   
+                                                           
+
+Welcome to the Ruins of the Ancient Citadel!
+-------------------------------------------------------
+Enter your character's name: 
+=== ROOM ===
+Torch-Lit Armory
+----------------
+Torches flicker, casting dancing shadows over racks of rusted weapons and dented armor.
+Exits: east, north, west
+You see: Sharp Steel Sword, Battered Breastplate
+People here: Grizzled Guard
+======================
+
+> Goodbye!

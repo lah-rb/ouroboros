@@ -1,0 +1,31 @@
+[project]
+name = "text-adventure"
+version = "0.1.0"
+description = "A text adventure game with combat, inventory management, NPC dialogue, and save/load functionality."
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+    {name = "Your Name", email = "you@example.com"},
+]
+
+# Core runtime dependencies
+dependencies = [
+    "PyYAML>=6.0",
+    "rich>=13.0",
+]
+
+# Optional development dependencies (linters, formatters, etc.)
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.1.0",
+    "black>=23.0",
+]
+
+# Console script entry point
+[project.scripts]
+text-adventure = "main:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"

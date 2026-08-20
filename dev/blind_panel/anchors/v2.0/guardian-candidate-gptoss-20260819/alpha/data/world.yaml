@@ -1,0 +1,147 @@
+rooms:
+  - id: courtyard
+    name: Crumbling Courtyard
+    description: "The courtyard lies in ruins, vines claw at the broken stone arches, and the air is thick with dust."
+    exits:
+      north: library
+      east: armory
+      south: garden
+      west: grand_hall
+    items: []
+    npcs: []
+    monster: null
+  - id: library
+    name: Dusty Library
+    description: "Shelves of ancient tomes line the walls, their pages fluttering in a ghostly breeze."
+    exits:
+      south: courtyard
+      east: flooded_level
+      down: crypt
+    items: []
+    npcs: [scholar]
+    monster: null
+  - id: armory
+    name: Torch-Lit Armory
+    description: "Torches flicker, casting dancing shadows over racks of rusted weapons and dented armor."
+    exits:
+      west: courtyard
+      north: garden
+      east: grand_hall
+    items: [steel_sword, battered_breastplate]
+    npcs: [guard]
+    monster: null
+  - id: garden
+    name: Mystical Garden
+    description: "A hidden garden blooms with luminescent flora, the scent of herbs soothing your senses."
+    exits:
+      south: courtyard
+      north: throne_chamber
+    items: [herb_tea, ancient_amulet]
+    npcs: []
+    monster: null
+  - id: grand_hall
+    name: Grand Hall
+    description: "The grand hall's marble floor is cracked, and a towering statue looms ominously."
+    exits:
+      east: throne_chamber
+      west: armory
+      south: courtyard
+    items: []
+    npcs: []
+    monster: cursed_statue
+  - id: throne_chamber
+    name: Throne Chamber
+    description: "At the heart of the citadel, a massive throne sits upon a dais, guarded by an ancient warden."
+    exits:
+      south: garden
+      west: grand_hall
+    items: []
+    npcs: []
+    monster: final_boss
+  - id: flooded_level
+    name: Flooded Lower Level
+    description: "Water drips from the ceiling, and the floor is slick with algae; something scurries in the shadows."
+    exits:
+      west: library
+      north: crypt
+    items: []
+    npcs: []
+    monster: giant_rat
+  - id: crypt
+    name: Hidden Crypt
+    description: "A cold, stone crypt houses restless bones and a faint, eerie glow emanates from a crystal shard."
+    exits:
+      up: library
+      south: flooded_level
+    items: [crystal_shard]
+    npcs: []
+    monster: skeleton
+items:
+  - id: steel_sword
+    name: Sharp Steel Sword
+    type: weapon
+    stats:
+      attack: 10
+    description: "A finely forged steel sword, its edge still gleams despite the ages."
+  - id: battered_breastplate
+    name: Battered Breastplate
+    type: armor
+    stats:
+      defense: 5
+    description: "A dented breastplate that has seen many battles, offering modest protection."
+  - id: herb_tea
+    name: Vial of Restorative Herb Tea
+    type: consumable
+    stats:
+      heal: 30
+    description: "A warm vial of herbal tea that soothes wounds and restores health."
+  - id: crystal_shard
+    name: Gleaming Crystal Shard
+    type: key
+    stats: {}
+    description: "A fragment of a luminous crystal, said to weaken the ancient citadel's guardian."
+  - id: ancient_amulet
+    name: Ancient Amulet
+    type: key
+    stats: {}
+    description: "An old amulet etched with runes that seem to amplify the wearer's attack."
+npcs:
+  - id: scholar
+    name: Weary Scholar
+    dialogue:
+      - trigger: start
+        lines:
+          - "The citadel's heart holds a crystal that can shatter the Warden's resolve."
+          - "Seek the ancient amulet to empower your strike against the guardian."
+  - id: guard
+    name: Grizzled Guard
+    dialogue:
+      - trigger: start
+        lines:
+          - "Help me repair the armory's broken gate, and I'll show you a secret passage."
+          - "The hidden path leads straight to the throne chamber."
+monsters:
+  - id: skeleton
+    name: Restless Skeleton
+    health: 20
+    attack: 5
+    behavior: aggressive
+    drops: []
+  - id: giant_rat
+    name: Feral Giant Rat
+    health: 15
+    attack: 4
+    behavior: aggressive
+    drops: []
+  - id: cursed_statue
+    name: Cursed Statue
+    health: 30
+    attack: 6
+    behavior: defensive
+    drops: []
+  - id: final_boss
+    name: Ancient Citadel Warden
+    health: 100
+    attack: 12
+    behavior: boss
+    drops: []
