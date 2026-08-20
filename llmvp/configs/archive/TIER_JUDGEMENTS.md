@@ -3876,9 +3876,18 @@ it lost 4-6 (Delivery 1-3, Character 3-3), winning A2/B6/B9/B10.
 Revised attribution vs the clean baseline (today: 3-7, winning A3/B6/B9):
 - B6 and B9 are HELD wins inherited from the 08-15-era fixes, NOT evidence
   for the recent prompt stack. The earlier addendum over-credited the stack.
-- The rule-2c signature survives sub-axis: junk-red suite ("half fail",
-  wrong imports) -> one CORRECTLY-red test naming the artifact's worst live
-  bug. Same axis outcome, categorically better evidence within it.
+- The correct-red test survives sub-axis (junk-red suite -> one red test
+  naming the worst live bug), but CoT review (third pass) reassigns its
+  credit: the authoring CoT starts toward pinning observed behaviour
+  ("assert that using a consumable does not heal") and self-corrects via
+  the pre-existing MUST-FAIL contract, with zero rule-2c echoes in either
+  run's test-author thinking. Rule 2c's marginal contribution: unverified.
+  Where dd7af76 IS verbatim-verified is the VERDICT side: 17/27 of the
+  08-19 evaluate turns quote the "intended role / message is not the
+  mechanic / check the world agrees" directive in their own reasoning
+  (0/36 in the 08-15 baseline), and equip-class verdicts went from 4/6 to
+  10/10 consequence-checked — the stricter correct fails that drove the
+  contested-goal repairs.
 - The three flips (-A2, +A3, -B10) are n=1 single-axis moves with no
   plausible stack mechanism (the stack touches none of artifact EOF
   handling, README authoring, or build-phase save code). Defensible
