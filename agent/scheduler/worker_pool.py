@@ -533,4 +533,16 @@ def lanes_for_scraper() -> List[Lane]:
             seats=0,
             idle_backoff_s=300.0,
         ),
+        # Bibliography snowball: mine accepted papers' reference DOIs and
+        # walk the repeatedly-cited backlog into candidates. Network-only,
+        # like recover; long backoff — its work arrives at curation speed
+        # (a few accepted papers an hour), not network speed.
+        Lane(
+            name="biblio",
+            flow="biblio_drain",
+            resource="network",
+            est_kv=0,
+            seats=0,
+            idle_backoff_s=600.0,
+        ),
     ]

@@ -716,7 +716,11 @@ async def append_records(effects: Any, records: list[dict]) -> None:
             k: v
             for k, v in rec.items()
             if k not in EXTRACTION_OWNED_FIELDS
-            or k in ("paper_key", "updated_at", "failure_reason")
+            # language is the second genuinely shared field: catalog
+            # metadata writes it here, the extraction-side Latin-language
+            # vote writes its verdict to the sidecar, and the overlay
+            # rightly prefers the layer that actually READ the document.
+            or k in ("paper_key", "updated_at", "failure_reason", "language")
         }
         for rec in records
     ]
@@ -1262,6 +1266,222 @@ async def action_scholarly_search(step_input: StepInput) -> StepOutput:
             f"(S2 {s2_count}, OpenAlex {openalex_count}, CORE {core_count})"
         ),
         context_updates={"raw_candidates": candidates},
+    )
+
+
+# ── bibliography snowball: curator-approved references ───────────────
+#
+# QUALITY-MINDFUL EXPANSION (operator, 2026-08-21): grow the corpus from
+# the bibliographies of papers the CURATOR ACCEPTED — a citation from a
+# work that passed review is a better relevance signal than any search
+# ranking, and a thesis's curated 300-entry bibliography is exactly the
+# reading list a domain expert would hand us. Two halves, both budgeted:
+#
+#   mine  — extract DOIs from accepted papers' reference sections
+#           (extraction-side: the metadata graph covers only 32 of 229
+#           book-scale docs; the MARKDOWN has what OpenAlex does not)
+#   walk  — promote DOIs cited by >=N accepted papers into candidates,
+#           resolved through the OpenAlex batch filter
+#
+# INTERIM STOP CRITERION (pending the operator discussion): a hard cap on
+# total biblio-sourced candidates (OUROBOROS_BIBLIO_MAX_CANDIDATES,
+# default 2000). The walk declines once reached — expansion never
+# outruns the conversation about how far it should go.
+
+_DOI_IN_TEXT_RE = re.compile(r"10\.\d{4,9}/[^\s\"'<>\])};,]+", re.IGNORECASE)
+
+
+def extract_reference_dois(md: str, cap: int = MAX_REFERENCE_DOIS) -> list[str]:
+    """DOIs from a paper's reference section (falls back to the tail).
+
+    Uses the translation gate's heading locator; when no heading matches,
+    scans only the FINAL THIRD of the document — bibliographies live at
+    the end, and body DOIs (data citations, 'as in doi:...') would
+    otherwise smuggle in references the paper never listed."""
+    from agent.actions.translation_actions import _REFS_HEADING_RE
+
+    m = _REFS_HEADING_RE.search(md or "")
+    refs = md[m.start() :] if m else (md or "")[-max(2000, len(md or "") // 3) :]
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in _DOI_IN_TEXT_RE.findall(refs):
+        doi = raw.rstrip(".;,)]}\"'").lower()
+        # Markdown image/link artifacts and figure paths are not DOIs.
+        if doi.endswith((".png", ".jpg", ".jpeg", ".svg", ".gif")):
+            continue
+        if doi and doi not in seen:
+            seen.add(doi)
+            out.append(doi)
+        if len(out) >= cap:
+            break
+    return out
+
+
+async def action_mine_bibliographies(step_input: StepInput) -> StepOutput:
+    """Mine reference DOIs from curator-ACCEPTED papers' markdown.
+
+    Budgeted walk (params.budget / OUROBOROS_BIBLIO_MINE_PAPERS, default
+    10); each paper mined once (biblio_mined_at). Prefers the English
+    translation when one exists. Merges into reference_dois rather than
+    replacing — the metadata graph's entries stay.
+    """
+    from agent.persistence.models import _now_iso
+
+    effects = step_input.effects
+    raw = os.environ.get("OUROBOROS_BIBLIO_MINE_PAPERS", "").strip()
+    try:
+        budget = int(step_input.params.get("budget") or (raw or 10))
+    except ValueError:
+        budget = 10
+    if budget <= 0:
+        return StepOutput(
+            result={"mined": 0, "reason": "disabled"},
+            observations="biblio mine disabled",
+            context_updates={"biblio_mine_summary": {"mined": 0}},
+        )
+    databank = await read_databank(effects)
+    pend = [
+        r
+        for r in databank.values()
+        if r.get("review_status") == "accepted"
+        and not r.get("biblio_mined_at")
+        and (r.get("md_en_path") or r.get("md_path"))
+    ]
+    if not pend:
+        return StepOutput(
+            result={"mined": 0, "reason": "nothing unmined"},
+            observations="biblio mine idle (nothing unmined)",
+            context_updates={"biblio_mine_summary": {"mined": 0}},
+        )
+    pend.sort(key=lambda r: r.get("paper_key", ""))
+    mined = 0
+    new_dois = 0
+    now = _now_iso()
+    for rec in pend[:budget]:
+        rec = dict(rec)
+        path = rec.get("md_en_path") or rec.get("md_path")
+        fc = await effects.read_file(str(path))
+        text = fc.content if getattr(fc, "exists", False) else ""
+        found = extract_reference_dois(text)
+        merged = list(dict.fromkeys((rec.get("reference_dois") or []) + found))
+        prior = len(rec.get("reference_dois") or [])
+        rec["reference_dois"] = merged[:MAX_REFERENCE_DOIS]
+        rec["biblio_mined_at"] = now
+        new_dois += max(0, len(rec["reference_dois"]) - prior)
+        mined += 1
+        await append_records(effects, [rec])
+    summary = {"mined": mined, "dois_total": new_dois, "remaining": len(pend) - mined}
+    return StepOutput(
+        result=summary,
+        observations=(
+            f"biblio mine: {mined} accepted paper(s), {summary['remaining']} remain"
+        ),
+        context_updates={"biblio_mine_summary": summary},
+    )
+
+
+async def action_biblio_snowball(step_input: StepInput) -> StepOutput:
+    """Promote DOIs cited by >=N ACCEPTED papers into candidates.
+
+    Provenance is stamped (discovery_method / cited_by_accepted) so the
+    cohort's downstream accept-rate is measurable against search-sourced
+    candidates — the number the stop-criteria discussion needs. Declines
+    once the biblio-candidate cap is reached.
+    """
+    effects = step_input.effects
+    min_cites = int(
+        step_input.params.get("min_citations")
+        or os.environ.get("OUROBOROS_BIBLIO_MIN_CITES", "2")
+    )
+    per_round = int(
+        step_input.params.get("per_round")
+        or os.environ.get("OUROBOROS_BIBLIO_PER_ROUND", "40")
+    )
+    cap_total = int(os.environ.get("OUROBOROS_BIBLIO_MAX_CANDIDATES", "2000"))
+
+    def _decline(reason: str) -> StepOutput:
+        summary = {"promoted": 0, "reason": reason}
+        return StepOutput(
+            result=summary,
+            observations=f"biblio snowball idle ({reason})",
+            context_updates={"biblio_summary": summary},
+        )
+
+    databank = await read_databank(effects)
+    already = sum(
+        1 for r in databank.values() if r.get("discovery_method") == "biblio_snowball"
+    )
+    if already >= cap_total:
+        return _decline(
+            f"cap reached ({already}/{cap_total}) — awaiting stop-criteria ruling"
+        )
+    have_dois = {
+        str(r.get("doi") or "").lower() for r in databank.values() if r.get("doi")
+    }
+    counts: dict[str, int] = {}
+    aspects: dict[str, list] = {}
+    for r in databank.values():
+        if r.get("review_status") != "accepted":
+            continue
+        strong = [
+            t.get("aspect")
+            for t in (r.get("tags") or [])
+            if isinstance(t, dict) and t.get("relevance") in ("exact", "close")
+        ]
+        for doi in r.get("reference_dois") or []:
+            d = str(doi).lower()
+            if d in have_dois:
+                continue
+            counts[d] = counts.get(d, 0) + 1
+            aspects.setdefault(d, []).extend(strong[:2])
+    backlog = sorted(
+        (d for d, c in counts.items() if c >= min_cites), key=lambda d: -counts[d]
+    )
+    if not backlog:
+        return _decline(f"no unheld DOI cited {min_cites}+ times by accepted papers")
+    batch = backlog[: min(per_round, cap_total - already)]
+
+    promoted: list[dict] = []
+    for start in range(0, len(batch), _BIBLIO_BATCH):
+        chunk = batch[start : start + _BIBLIO_BATCH]
+        resp = await polite_request(
+            effects,
+            "GET",
+            f"{_OPENALEX_BASE}/works",
+            params={
+                "filter": "doi:" + "|".join(chunk),
+                "per-page": _BIBLIO_BATCH,
+                "select": _OPENALEX_SELECT,
+                "mailto": _contact_email(),
+            },
+        )
+        if resp.status != 200 or not isinstance(resp.json_data, dict):
+            continue
+        for work in resp.json_data.get("results") or []:
+            d = str((work.get("doi") or "")).replace("https://doi.org/", "").lower()
+            asp = aspects.get(d) or []
+            top = max(set(asp), key=asp.count) if asp else ""
+            rec = _normalize_openalex(work, top)
+            if rec.get("doi") and rec["doi"].lower() in have_dois:
+                continue
+            rec["discovery_method"] = "biblio_snowball"
+            rec["cited_by_accepted"] = counts.get(d, 0)
+            promoted.append(rec)
+    if promoted:
+        await append_records(effects, promoted)
+    summary = {
+        "promoted": len(promoted),
+        "backlog": len(backlog),
+        "cap_used": already + len(promoted),
+        "cap_total": cap_total,
+    }
+    return StepOutput(
+        result=summary,
+        observations=(
+            f"biblio snowball: {len(promoted)} candidate(s) from "
+            f"{len(backlog)} eligible (cap {already + len(promoted)}/{cap_total})"
+        ),
+        context_updates={"biblio_summary": summary},
     )
 
 

@@ -25719,6 +25719,105 @@
       "fallback": "reorganize"
     }
   },
+  "biblio_drain": {
+    "flow": "biblio_drain",
+    "version": 1,
+    "description": "Mine reference DOIs from curator-accepted papers' markdown, then\npromote repeatedly-cited unheld works into candidates. Bounded,\nprovenance-stamped, capped pending the stop-criteria discussion.",
+    "context_tier": "session_task",
+    "returns": {
+      "biblio_summary": {
+        "type": "dict",
+        "from": "context.biblio_summary",
+        "optional": true
+      },
+      "biblio_mine_summary": {
+        "type": "dict",
+        "from": "context.biblio_mine_summary",
+        "optional": true
+      }
+    },
+    "projections": {},
+    "input": {
+      "required": [
+        "working_directory"
+      ],
+      "optional": []
+    },
+    "defaults": {
+      "config": {}
+    },
+    "steps": {
+      "mine": {
+        "action": "mine_bibliographies",
+        "description": "Extract reference DOIs from accepted papers' markdown",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "walk"
+            }
+          ]
+        },
+        "publishes": [
+          "biblio_mine_summary"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "walk": {
+        "action": "biblio_snowball",
+        "description": "Promote repeatedly-cited unheld DOIs into candidates",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "done"
+            }
+          ]
+        },
+        "publishes": [
+          "biblio_summary"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "done": {
+        "action": "noop",
+        "description": "Biblio round complete",
+        "context": {
+          "required": [],
+          "optional": [
+            "biblio_summary"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": true,
+        "status": "success"
+      }
+    },
+    "entry": "mine",
+    "overflow": {
+      "strategy": "split",
+      "fallback": "reorganize"
+    }
+  },
   "discover_v2": {
     "flow": "discover_v2",
     "version": 1,
