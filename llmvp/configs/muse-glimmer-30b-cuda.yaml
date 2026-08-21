@@ -59,4 +59,12 @@ model:
 
 resources:
   decode_mode: batched
-  max_concurrent_requests: 4
+  # 4 -> 5 (2026-08-21): the doubled translate lanes proved seats were
+  # the binding constraint again — all 4 busy in 71% of capacity ticks,
+  # occupancy p50 0.69/p90 0.91, and effective decode rose 42% (35.5 ->
+  # 50.3 gen tok/s wall) when the idle seat was spent, at an 11%
+  # per-stream tax. A 5th working seq shares the same unified 65,536-cell
+  # pool (seq_cp static heads cost no new cells); admission's QUEUE
+  # verdict remains the correctness backstop if entitlement outruns
+  # cells. Judge by the same CapacitySample series that earned it.
+  max_concurrent_requests: 5
