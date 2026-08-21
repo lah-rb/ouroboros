@@ -40,8 +40,38 @@ the remaining open step:
 | role | model | artifact | smoke | facts |
 |---|---|---|---|---|
 | GUARDIAN | gpt-oss-120b-a5 | `anchors/v2.0/guardian-gptoss-20260803/` (run `tier_20260801-185254` arm 1) | ✅ compile clean · ASCII title screen · game starts | 120min grinder park at 20/30 goals, 147 cycles (73.5 cyc/h), 0 degen, scan clean. 5 py + world.yaml — chose YAML UNPROMPTED (the v1 opinion, now voluntary). Quirk: ships its own `savegame.json` and auto-loads it at boot (playtest state leaked into the demo). First live validation of the W2 park: `cycles_consumed=147` + `pending_return` persisted at the work→entry boundary. (An earlier facts note called `judge1/` a shipped quirk — WRONG: that is stage.py's per-judge play copy, stripped from the frozen anchor.) |
-| FLOOR | devstral-2-small-24b | `anchors/v2.0/floor-devstral-20260803/` (run `tier_20260801-185254` arm 2) | ✅ compile clean · launches into play · clean quit | 120min grinder park at 21/28 goals, 117 cycles (58.5 cyc/h), 0 degen, scan clean. 5 py + world.yaml — ALSO chose YAML unprompted (2 of 2 fleet arms). NO title screen: one-line welcome straight into the first room — the first v2 checklist miss (item 2) on an anchor |
+| FLOOR *(RETIRED 2026-08-20 — see below)* | devstral-2-small-24b | `anchors/v2.0/floor-devstral-20260803/` (run `tier_20260801-185254` arm 2) | ✅ compile clean · launches into play · clean quit | 120min grinder park at 21/28 goals, 117 cycles (58.5 cyc/h), 0 degen, scan clean. 5 py + world.yaml — ALSO chose YAML unprompted (2 of 2 fleet arms). NO title screen: one-line welcome straight into the first room — the first v2 checklist miss (item 2) on an anchor |
 | FRONTIER | claude-sonnet (one-shot) | `anchors/v2.0/frontier-sonnet-20260803/` — "The Ashen Keep" | ✅ compile clean · title screen · clean quit | 10 files (9 py + README), 60,305 B; world defined in `adventure/world.py` — pure-Python, NO data files: the first v2 signal that the brief now measures the choice instead of prescribing it |
+
+## FLOOR PROMOTION — 2026-08-20 (operator ruling)
+
+**The FLOOR anchor is now `anchors/v2.0/floor-devstral-20260820/`.**
+Same model (devstral-2-small-24b), current framework, SESSION structural:
+a 2h arm plus a 100-min operator-directed continuation after the
+module_statement prompting gap was fixed (c0417a8), 16/31 gate-verified
+goals. It beat the retired 08-03 anchor in a blind flight — Delivery
+1-3 · Character 3-3 · **overall the new anchor, SELF-FLAG: CLOSE** — on
+the two facts the rubric elevates: **WON** (first devstral artifact ever
+to have its game completed under judging) vs UNWINNABLE, and clean 8/8
+placement vs both placement-failure forms at once. Records:
+`records/flight_20260820_continuation_vs_floor.md`, and the mode control
+`records/flight_20260820_batch_vs_floor.md` (the BATCH arm of the same
+model on the same framework LOST to the retired anchor 0-4 / 3-3 —
+**mode, not framework, is what moved this model**).
+
+Operator's reasoning on a CLOSE margin: the axes that moved are
+DESIGN-phase axes and they moved in both of the day's devstral runs;
+keeping a pre-change artifact as the floor would leave the anchor
+dominated on design by the current framework while the execution
+differences merely measure other model axes. Known defects and the
+judge's explicit flip condition are carried in the new anchor's
+PROVENANCE.md — read it before using this anchor in a flight.
+
+**Retired anchor defect found late** (2026-08-20, no earlier flight
+caught it): `floor-devstral-20260803/alpha/.gitignore` line 50 excludes
+`*.yaml`, so the README's own git-clone workflow yields a tree with no
+`world.yaml` and dies at FileNotFoundError. It cost that artifact B10 in
+its final flight.
 
 ## Anchor cross-flights — v2.1 RE-FLIGHTS (2026-08-03, the authoritative pair)
 

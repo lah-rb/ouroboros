@@ -1,0 +1,20 @@
+# Byte-compiled / optimized / DLL files
+__pycache__ /
+
+# Environment
+.venv/
+.env/
+
+# IDE
+.idea/
+.vscode/
+
+# Logs
+*.log
+
+# Data files
+*.json
+*.yaml
+
+# OS generated files
+.DS_Store

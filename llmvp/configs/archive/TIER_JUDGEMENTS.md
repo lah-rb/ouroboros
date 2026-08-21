@@ -4093,3 +4093,35 @@ held for the operator.
 git-clone workflow produces a tree with no world.yaml and dies at
 FileNotFoundError. It cost the anchor B10 in this flight and should be
 noted in any future use of this artifact.
+
+## 2026-08-20 — ANCHOR RULINGS (operator)
+
+**FLOOR: PROMOTED.** `floor-devstral-20260803` → **`floor-devstral-20260820`**
+(the session continuation, 16/31, CLOSE win). Frozen byte-identical with
+PROVENANCE; LADDER.md updated; the retired anchor stays in the tree as
+comparison history. Reasoning on a CLOSE margin, in the operator's terms:
+the axes that moved are DESIGN-phase axes and they moved in BOTH devstral
+runs of the day, so keeping a pre-change artifact as the floor would leave
+the anchor dominated on design by the current framework while execution
+differences merely measure other model axes — a floor that lags the
+framework weakens its own integrity as a reference.
+
+**GUARDIAN: NOT YET PROMOTED — evidence gate set.** The gpt-oss candidate
+(`guardian-candidate-gptoss-20260819`, 8-2) is judged "solidly convincing
+against the original," but the guardian's position is LESS SELF-REFERENTIAL
+than the floor's: it is the rung many different models are measured
+against, so the open question is whether the SITTING guardian has
+atrophied under the framework changes rather than whether the candidate is
+strong. A same-family win cannot answer that.
+
+**THE GATE — two cross-model probes, queued after qwen3.8 completes:**
+  1. `gemma-4-31b` — the closest call ABOVE (ledger: "three named
+     coin-flips" vs the guardian; a second judge was already owed).
+  2. `qwen3-next-coder-80b-a3` — the closest call BELOW (one of the two
+     protocol-mandated second judges, METHODS §6).
+Both get a standard 2h arm on the CURRENT framework, then a blind flight
+against the SITTING guardian. **Decision rule (pre-registered):** if BOTH
+show larger dominance over the sitting guardian than their earlier
+artifacts did, the sitting anchor has atrophied relative to the current
+framework and promotion to the stronger artifact is warranted. Pre-
+registering it here so the reading cannot drift after the flights.
