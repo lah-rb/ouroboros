@@ -431,3 +431,60 @@ def test_the_flow_routes_the_replacement_derive():
         if "acceptance_needs_derive" in r["condition"]
     ]
     assert derive and derive[0]["transition"] == "derive_acceptance"
+
+
+# ── the one-way-ratchet fix (2026-08-21) ──────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_check_driven_reopen_marks_the_check_as_discriminating():
+    # Reopening on a FAILED check records the in-episode proof that the check
+    # can go red. Without this the same check can destroy verified state and
+    # never restore it.
+    g = _goal("g", [_check("broke")], status="complete")
+    m = _mission([g])
+    fx = MockEffects(commands={_wrap("broke"): _cmd(1)})
+
+    await action_regression_sweep(_si(m, fx))
+
+    assert g.status == "incomplete"
+    assert g.regression_check_failed is True
+
+
+@pytest.mark.asyncio
+async def test_ungrounded_check_can_reclose_what_it_reopened():
+    # THE RATCHET. acceptance_grounded is reset whenever a check is disarmed,
+    # so a goal can carry a real, working check with grounded False. Before
+    # this fix such a goal was excluded from the auto-complete direction
+    # entirely: its check could reopen it and never re-close it, leaving an
+    # LLM play-test as the only exit (qwen3.8 completion run — two boss goals
+    # went interact -> tester error -> diagnose while their checks were green).
+    g = _reopened("g", [_check("nowpasses")])
+    g.acceptance_grounded = False
+    g.regression_check_failed = True  # this check went red on the regression
+    m = _mission([g])
+    fx = MockEffects(commands={_wrap("nowpasses"): _cmd(0)})
+
+    out = await action_regression_sweep(_si(m, fx))
+
+    assert g.status == "complete"
+    assert out.result["autocompleted"] == 1
+    assert g.regression_check_failed is False  # episode closed
+
+
+@pytest.mark.asyncio
+async def test_ungrounded_check_that_never_failed_still_cannot_reclose():
+    # The gate still holds for the PRE-EMPTIVE reopen path (a structural goal
+    # reopened ahead of a fix edit, not because a check failed). There the
+    # check has proved nothing, so a bare pass must not certify it — the
+    # vacuous-verification guard stays armed.
+    g = _reopened("g", [_check("passes")])
+    g.acceptance_grounded = False
+    g.regression_check_failed = False
+    m = _mission([g])
+    fx = MockEffects(commands={_wrap("passes"): _cmd(0)})
+
+    out = await action_regression_sweep(_si(m, fx))
+
+    assert g.status == "incomplete"
+    assert out.result["autocompleted"] == 0

@@ -3925,6 +3925,7 @@ async def action_functional_sweep_next(step_input: StepInput) -> StepOutput:
             # auto-complete again after a real re-verification here).
             goal.regression_reopened = False
             goal.regression_autocompleted = False
+            goal.regression_check_failed = False
             # failed_attempts survive completion — the archive sweep
             # relocates them (retry patterns are mining material).
             logger.info("Functional sweep: '%s' completed", goal.description[:50])
@@ -4774,7 +4775,15 @@ async def action_regression_sweep(step_input: StepInput) -> StepOutput:
         for g in mission.goals
         if g.status == "incomplete"
         and getattr(g, "regression_reopened", False)
-        and getattr(g, "acceptance_grounded", False)
+        and (
+            getattr(g, "acceptance_grounded", False)
+            # A check that FAILED on this regression and now passes has proven
+            # red->green discrimination in-episode, which is the property
+            # acceptance_grounded stands in for. Requiring the stale flag here
+            # made the sweep a one-way ratchet: the same check could reopen a
+            # goal but never re-close it, so the only exit was an LLM play-test.
+            or getattr(g, "regression_check_failed", False)
+        )
         for c in (g.acceptance_checks or [])
         if c.get("required", True)
         and isinstance(c.get("command"), str)
@@ -4846,6 +4855,10 @@ async def action_regression_sweep(step_input: StepInput) -> StepOutput:
                 goal.regression_reopened = not getattr(
                     goal, "regression_autocompleted", False
                 )
+                # This reopen is check-driven, so the check just proved it can
+                # go red on a real regression — record that so a subsequent
+                # green can re-close the goal without an LLM dispatch.
+                goal.regression_check_failed = True
                 reopened.add(gid)
                 bad_cmd = next((c["command"] for c, r in rows if not r["passed"]), "")
                 mission.notes.append(
@@ -4875,6 +4888,7 @@ async def action_regression_sweep(step_input: StepInput) -> StepOutput:
                     continue  # still failing -> stays reopened (no-op)
                 goal.status = "complete"  # AUTO-COMPLETE (do NOT re-derive)
                 goal.regression_reopened = False
+                goal.regression_check_failed = False  # episode closed
                 goal.regression_autocompleted = True  # arm the flip-flop guard
                 autocompleted.add(gid)
                 mission.notes.append(

@@ -373,6 +373,18 @@ class GoalRecord(BaseModel):
     # pre-port behavior). acceptance_grounded is the one-shot guard.
     acceptance_checks: list[dict] = Field(default_factory=list)
     acceptance_grounded: bool = False
+    # Set ONLY when the regression sweep reopened this goal because a required
+    # acceptance check actually FAILED — never by the pre-emptive structural
+    # reopen. It is the in-episode proof of discrimination that
+    # acceptance_grounded is otherwise a proxy for: the check demonstrably
+    # went red on the regression, so if it goes green after the repair it has
+    # earned the right to re-close the goal even when grounding was reset.
+    # Without it the sweep is a one-way ratchet — the same check is trusted to
+    # DESTROY verified state and not to RESTORE it, so the goal can only ever
+    # leave the reopened state through an LLM play-test (qwen3.8 completion
+    # run, 2026-08-21: two boss goals whose checks passed within seconds of
+    # the repair still went down interact -> failed on tester error -> diagnose).
+    regression_check_failed: bool = False
     # Regression disarm-on-refute (mirrors shape_refutes, but per-check): times
     # each acceptance check has been REFUTED BY BEHAVIOR — the evaluator returned
     # goal_met=true while this exact required check failed. Keyed by the check's
