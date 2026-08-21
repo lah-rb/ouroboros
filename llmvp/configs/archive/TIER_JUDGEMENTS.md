@@ -4120,8 +4120,23 @@ strong. A same-family win cannot answer that.
   2. `qwen3-next-coder-80b-a3` — the closest call BELOW (one of the two
      protocol-mandated second judges, METHODS §6).
 Both get a standard 2h arm on the CURRENT framework, then a blind flight
-against the SITTING guardian. **Decision rule (pre-registered):** if BOTH
-show larger dominance over the sitting guardian than their earlier
-artifacts did, the sitting anchor has atrophied relative to the current
-framework and promotion to the stronger artifact is warranted. Pre-
-registering it here so the reading cannot drift after the flights.
+against the SITTING guardian.
+
+**THE BASELINE, stated numerically so the comparison cannot drift**
+(v2.0 epoch, five-axis instrument, LADDER.md placement table):
+  * `gemma-4-31b` — GUARDIAN **lost 0–5** (three axes named coin-flips,
+    which is why a second judge was owed); FLOOR lost 3–2.
+  * `qwen3-next-coder-80b-a3` — GUARDIAN **lost 0–5**; FLOOR lost 4–1.
+Both were placed tier 2, LOW, below the then-floor. Note the instrument
+changed (v2.0 five axes → v2.1 ten axes, two panels), so the comparison
+is DIRECTIONAL — did a model that was swept by the sitting guardian now
+beat it — not axis-for-axis arithmetic.
+
+**Decision rule (pre-registered):** if BOTH models, under the current
+framework, now take the sitting guardian — a direction reversal from
+0–5 sweeps — then the sitting anchor has atrophied relative to the
+current framework rather than the candidate merely being strong, and
+promotion to the stronger artifact is warranted. If only ONE reverses,
+that is model-specific improvement and the guardian holds pending more
+evidence. Recorded before the arms run so the reading cannot be fitted
+to the result afterwards.
