@@ -444,3 +444,14 @@ async def test_capacity_trace_is_silent_without_effects_or_snapshot():
     pool.effects = eff
     await pool._emit_capacity_trace(None)  # no snapshot
     assert eff.events == []
+
+
+def test_network_lane_work_verbs_count_as_work():
+    """Live 2026-08-21: biblio's first 8 rounds mined 90 papers and
+    promoted 63 candidates while reporting 0d/8i — 'mined'/'promoted'/
+    'recovered' are the network lanes' work verbs and must count."""
+    assert _did_work({"mined": 10, "dois_total": 200}, {})
+    assert _did_work({"promoted": 40, "backlog": 900}, {})
+    assert _did_work({}, {"recover_summary": {"attempted": 6, "recovered": 2}})
+    # A cap/decline round still reads as idle.
+    assert not _did_work({"promoted": 0, "reason": "cap reached (2000/2000)"}, {})

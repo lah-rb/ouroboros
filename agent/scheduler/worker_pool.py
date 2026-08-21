@@ -477,7 +477,23 @@ def _did_work(result: dict, context: dict) -> bool:
             continue  # it tried and nothing landed
         if blob.get("outcomes"):
             return True
-        for key in ("done", "figures", "chunks", "attempted_papers", "attempted"):
+        # "mined"/"promoted"/"recovered": the network lanes' work verbs.
+        # Live 2026-08-21: the biblio lane's first 8 rounds mined 90
+        # papers and promoted 63 candidates while the report showed
+        # 0d/8i — productive rounds counted idle, backoff throttled a
+        # healthy lane, and the telemetry lied in the pessimistic
+        # direction (the one direction this classifier must not lie in
+        # is the OTHER one; still, a lane that works should count).
+        for key in (
+            "done",
+            "figures",
+            "chunks",
+            "attempted_papers",
+            "attempted",
+            "mined",
+            "promoted",
+            "recovered",
+        ):
             try:
                 if int(blob.get(key) or 0) > 0:
                     return True
