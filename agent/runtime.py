@@ -257,6 +257,9 @@ def _real_out(result: Any, ws_out: int) -> int:
 # model can close itself, and the mission wall clock bounds everything.
 # This number stays only as a runaway backstop, set far above any real
 # session.
+# Hard cap on the observations preview carried in every StepEnd trace event.
+_OBSERVATIONS_PREVIEW_CAP = 600
+
 _SUBFLOW_MAX_STEPS = {"run_session": 4000}
 
 
@@ -651,6 +654,9 @@ async def execute_flow(
                         options_available=options,
                         step_duration_ms=((time.monotonic() - step_start_time) * 1000),
                         resolver_ms=((time.monotonic() - _resolver_start) * 1000),
+                        observations_preview=str(step_output.observations or "")[
+                            :_OBSERVATIONS_PREVIEW_CAP
+                        ],
                     )
                 )
 

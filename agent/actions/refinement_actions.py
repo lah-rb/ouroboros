@@ -1353,6 +1353,24 @@ async def action_apply_quality_gate_results(step_input: StepInput) -> StepOutput
     mode = str(step_input.inputs.get("mode", "completion") or "completion")
     defer_notes = mode == "completion" and bool(fix_tasks)
 
+    # A PASSING gate used to write nothing at all, while a failing one wrote
+    # a note per finding. That asymmetry cost us the record that matters most:
+    # the gate is the LAST verification before an artifact is frozen and
+    # judged, and on the 2026-08-21 qwen3.8 completion its passing conclusion
+    # was unrecoverable — absent from mission.json (notes on fail only),
+    # absent from the trace (step_end carries no observations), and gone from
+    # the server log, which each boot truncates. Bank the verdict.
+    if all_passing and effects:
+        await effects.push_note(
+            content=(
+                "Quality gate PASSED — "
+                + (str(summary.get("summary", "")).strip() or "no summary given")
+            ),
+            category="general",
+            tags=["quality_gate", "gate_pass"],
+            source_flow="quality_gate",
+        )
+
     # If quality gate failed, record issues as notes for the director
     if not all_passing and effects and not defer_notes:
         for ft in fix_tasks or []:

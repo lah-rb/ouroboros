@@ -187,6 +187,15 @@ class StepEnd(TraceEvent):
     # the action returns and before this StepEnd. (An llm_menu resolve also
     # emits its own InferenceCall; this is the resolver's own overhead.)
     resolver_ms: float = 0.0
+    # Bounded preview of the step's observations — the human-readable line an
+    # action writes about what it just decided. It was captured NOWHERE:
+    # step_end had no field for it, InferenceCall.response_content is empty
+    # unless --trace-prompts is set, and the server log is truncated on each
+    # boot. So the quality gate's PASSING conclusion on the 2026-08-21
+    # qwen3.8 run — the last verification before that artifact was frozen for
+    # judging — could not be recovered afterwards at all. Capped hard: this
+    # rides every step of every run, so it is a review aid, not a transcript.
+    observations_preview: str = ""
 
 
 # ── Inference Events ──────────────────────────────────────────────────

@@ -527,3 +527,18 @@ async def test_functional_sweep_rung_does_not_fire_without_the_proof_flag():
     await action_functional_sweep_next(_si(m, fx))
 
     assert g.status == "incomplete"
+
+
+# ── gate verdict is recoverable (2026-08-21) ──────────────────────────
+
+
+def test_step_end_carries_a_bounded_observations_preview():
+    """The quality gate's PASSING conclusion was unrecoverable after the fact:
+    no note (fail-only), no trace field, and a server log truncated per boot.
+    StepEnd now carries the observations, capped so it stays a review aid."""
+    from agent.trace import StepEnd
+    from agent.runtime import _OBSERVATIONS_PREVIEW_CAP
+
+    e = StepEnd(step="summarize", observations_preview="x" * 5000)
+    assert hasattr(e, "observations_preview")
+    assert _OBSERVATIONS_PREVIEW_CAP <= 2000
