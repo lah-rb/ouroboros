@@ -529,6 +529,22 @@ def lanes_for_scraper() -> List[Lane]:
             resource="text_seat",
             est_kv=12_000,
         ),
+        # Second translate lane on the SAME drain: the pool's recent
+        # occupancy (p50 0.37, seats free 94% of ticks, 2026-08-21) says
+        # the seats are under-used while 278 lingual papers queue — lane
+        # SERIALISM, not seat count, was the binding limit. Two lanes of
+        # one drain are safe by construction: _TRANSLATE_CLAIMS is shared
+        # in-process, so they claim different papers; the deferral set
+        # rotates both past wedged papers. This is also the seat-count
+        # experiment run on existing seats — if the doubled lanes push
+        # occupancy p50 back above ~0.9, a fifth engine seat earns its
+        # place at the next server restart.
+        Lane(
+            name="translate2",
+            flow="translate_drain",
+            resource="text_seat",
+            est_kv=12_000,
+        ),
         Lane(
             name="curate",
             flow="curate_drain",

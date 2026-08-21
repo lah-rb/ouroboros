@@ -71,6 +71,7 @@ async def test_a_v2_mission_starts_lanes_and_stops_them_cleanly():
             "ocr",
             "figtext",
             "translate",
+            "translate2",
             "curate",
             "recover",
             "biblio",
