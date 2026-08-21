@@ -4167,3 +4167,18 @@ recorded BEFORE the arms run:**
     guardian holds.
 Recorded before the arms run so the reading cannot be fitted to the
 result afterwards.
+
+**MISSION MODE FOR THE PROBES — `game_challenge_tier_session`, decided
+without the operator present (overnight, 2026-08-20) and recorded as a
+judgement call rather than a default.** `tier run` defaults to the BATCH
+mission, so this is an explicit override. Reasoning: the gate asks
+whether the sitting guardian has atrophied relative to what the current
+framework produces, and the artifact that would replace it is a SESSION
+artifact — so the probes must be built the same way or they answer a
+different question. Mode is held constant across both probes. The known
+cost of this choice: the same day's mode-control flight showed session
+vs batch is worth a whole verdict on devstral, so a batch-favouring
+model (qwen3-next-coder's cleanest-of-epoch run shape was a 6/6 batch
+turn at cycle 1) may be handicapped here. If a probe fails to reverse,
+check its structural mode before reading it as evidence the guardian
+holds.
