@@ -99,6 +99,13 @@ MIN_SPAN_RATE = 0.70
 # issues) ran < 0.05.
 LINGUAL_NONLATIN_MIN = 0.15
 
+# Unverified-but-clean scans (operator policy, 2026-08-22) still need a
+# floor of REAL CONTENT: the incident this guards is a JPEG served as
+# the "PDF" that produced a 276-byte, 1-page markdown scoring a vacuous
+# 1.00/1.00. Two thousand bytes is well under one real OCR'd page and
+# far over any stub.
+UNVERIFIED_MIN_MD_BYTES = 2000
+
 
 def script_nonlatin_frac(profile: dict) -> float:
     """Non-Latin letter fraction from a report's script_profile ({} -> 0)."""
@@ -106,6 +113,16 @@ def script_nonlatin_frac(profile: dict) -> float:
         return float((profile or {}).get("nonlatin") or 0.0)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _md_size(working_dir: str, md_rel) -> int:
+    """On-disk size of a tool-written markdown, 0 when unreadable."""
+    if not (working_dir and md_rel):
+        return 0
+    try:
+        return os.path.getsize(os.path.join(working_dir, "databank", str(md_rel)))
+    except OSError:
+        return 0
 
 
 def markdown_script_profile(text: str) -> dict:
@@ -766,7 +783,22 @@ async def _book_segment_round(
         if os.path.isdir(figdir):
             figures = sum(1 for f in os.listdir(figdir) if f.startswith("fig_"))
 
-        ok = (
+        # UNVERIFIED-BUT-CLEAN SCANS PASS (operator policy, 2026-08-22):
+        # a scanned PDF has no embedded text to verify against, so its
+        # rates are vacuous — but paddle's track record earns trust when
+        # the DEGENERATION checks (the only ones that still measure
+        # anything on a scan) are clean. The curator judges content;
+        # `unverified_text_layer` rides in extraction_quality so the
+        # provenance is never laundered. 144 terminal "failures" (140
+        # strong-tagged) were sitting in this class when the policy
+        # changed.
+        unverified_clean = (
+            agg["verified_pages"] <= 0
+            and agg["pages"] > 0
+            and agg["max_repeat_words"] <= MAX_REPEAT_WORDS
+            and len(assembled) >= UNVERIFIED_MIN_MD_BYTES
+        )
+        ok = unverified_clean or (
             agg["verified_pages"] > 0
             and agg["numeric_match_rate"] >= MIN_NUMERIC_RATE
             and agg["span_pass_rate"] >= MIN_SPAN_RATE
@@ -808,6 +840,8 @@ async def _book_segment_round(
         if ok:
             rec["extraction_status"] = "extracted"
             rec["failure_reason"] = ""
+            if unverified_clean:
+                rec["extraction_quality"]["unverified_text_layer"] = True
         elif agg["verified_pages"] <= 0:
             rec["extraction_status"] = "extract_unverified"
             rec["failure_reason"] = (
@@ -1367,9 +1401,26 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
             # as the "PDF" produced a 1-page, 0-verified, 276-byte
             # markdown that scored 1.00/1.00. Unverifiable output is a
             # claim we refuse, not one we wave through.
-            and rep.get("verified_pages", 0) > 0
-            and rep.get("numeric_match_rate", 0) >= MIN_NUMERIC_RATE
-            and rep.get("span_pass_rate", 0) >= MIN_SPAN_RATE
+            and (
+                (
+                    rep.get("verified_pages", 0) > 0
+                    and rep.get("numeric_match_rate", 0) >= MIN_NUMERIC_RATE
+                    and rep.get("span_pass_rate", 0) >= MIN_SPAN_RATE
+                )
+                # UNVERIFIED-BUT-CLEAN SCAN (operator policy, 2026-08-22):
+                # no text layer means the rates are vacuous, not failed —
+                # paddle's verdict stands when the degeneration guard
+                # below is the only check that still measures anything.
+                # Flag stamped at booking; the curator judges content.
+                or (
+                    rep.get("verified_pages", 0) <= 0
+                    # the segment aggregator zeroes `pages` on merged
+                    # reports; unverified_pages survives aggregation
+                    and (rep.get("pages", 0) > 0 or rep.get("unverified_pages", 0) > 0)
+                    and _md_size(working_dir, rep.get("md_path"))
+                    >= UNVERIFIED_MIN_MD_BYTES
+                )
+            )
             # A looped decode keeps every number and so passes both rates.
             # An older report has no such field; absent reads as 0 = clean,
             # which is the right default for a metric that did not exist.
@@ -1411,6 +1462,8 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
                 "pages": rep.get("pages", 0),
                 "seconds": rep.get("seconds", 0),
             }
+            if rep.get("verified_pages", 0) <= 0:
+                rec["extraction_quality"]["unverified_text_layer"] = True
             extracted += 1
         else:
             # NAME THE GATE THAT ACTUALLY REJECTED. The `ok` test above has

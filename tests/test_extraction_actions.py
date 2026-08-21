@@ -979,3 +979,123 @@ async def test_a_report_without_a_page_count_cannot_loop_forever():
     assert calls["n"] == 1, "no total means treat it as the whole document"
     bank = await read_databank(fx)
     assert bank["odd"]["extraction_status"] in ("extracted", "extract_unverified")
+
+
+# ── unverified-but-clean scans pass to the curator ────────────────────
+
+
+@pytest.mark.asyncio
+async def test_a_clean_scan_with_no_text_layer_books_extracted(tmp_path):
+    """Operator policy 2026-08-22: a scanned PDF's rates are VACUOUS, not
+    failed — nothing checkable means nothing measured either way. When
+    the degeneration guard (the one check that still works on a scan) is
+    clean, paddle's verdict stands and the CURATOR judges content. The
+    provenance flag must ride along — trust is extended, never laundered."""
+    import json as _json
+
+    from agent.actions.extraction_actions import action_extract_pdf_batch
+    from agent.actions.scholarly_actions import read_databank
+    from agent.effects.mock import MockEffects
+    from agent.effects.protocol import CommandResult
+    from agent.models import FlowMeta, StepInput
+
+    (tmp_path / "databank" / "markdown").mkdir(parents=True)
+    (tmp_path / "databank" / "markdown" / "p1.md").write_text(
+        "the measured spectra were recorded with this instrument and "
+        "the results have been tabulated from which regions were chosen " * 40,
+        encoding="utf-8",
+    )
+    (tmp_path / "pdfs").mkdir()
+    (tmp_path / "pdfs" / "p1.pdf").write_bytes(b"%PDF-1.4 x")
+    rec = {
+        "paper_key": "p1",
+        "access_status": "oa_pdf",
+        "pdf_path": "pdfs/p1.pdf",
+        "title": "T",
+    }
+    report = {
+        "paper_key": "p1",
+        "md_path": _json.loads(_json.dumps("markdown/p1.md")),
+        "pages": 8,
+        "total_pages": 8,
+        "verified_pages": 0,  # scan: nothing to verify against
+        "unverified_pages": 8,
+        "numeric_match_rate": 1.0,  # vacuous
+        "span_pass_rate": 1.0,  # vacuous
+        "max_repeat_words": 4,  # the guard that still measures
+        "figures_kept": 2,
+        "script_profile": {"latin": 0.99, "nonlatin": 0.01},
+    }
+    fx = MockEffects(files={"databank/papers.jsonl": _json.dumps(rec) + "\n"})
+
+    async def frc(command, working_dir=None, timeout=30):
+        return CommandResult(
+            return_code=0, stdout=_json.dumps(report) + "\n", stderr="", command="x"
+        )
+
+    fx.run_command = frc
+    await action_extract_pdf_batch(
+        StepInput(
+            context={},
+            params={},
+            inputs={"working_directory": str(tmp_path), "paper_keys": ["p1"]},
+            meta=FlowMeta(flow_name="acquire", step_id="extract"),
+            effects=fx,
+        )
+    )
+    bank = await read_databank(fx)
+    assert bank["p1"]["extraction_status"] == "extracted"
+    assert bank["p1"]["extraction_quality"]["unverified_text_layer"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_degenerate_scan_still_fails(tmp_path):
+    """The trust is conditional: a looped decode on a scan has NO working
+    check left — it must not reach the curator."""
+    import json as _json
+
+    from agent.actions.extraction_actions import action_extract_pdf_batch
+    from agent.actions.scholarly_actions import read_databank
+    from agent.effects.mock import MockEffects
+    from agent.effects.protocol import CommandResult
+    from agent.models import FlowMeta, StepInput
+
+    (tmp_path / "pdfs").mkdir(parents=True)
+    (tmp_path / "pdfs" / "p1.pdf").write_bytes(b"%PDF-1.4 x")
+    rec = {
+        "paper_key": "p1",
+        "access_status": "oa_pdf",
+        "pdf_path": "pdfs/p1.pdf",
+        "title": "T",
+    }
+    report = {
+        "paper_key": "p1",
+        "md_path": "markdown/p1.md",
+        "pages": 8,
+        "total_pages": 8,
+        "verified_pages": 0,
+        "numeric_match_rate": 1.0,
+        "span_pass_rate": 1.0,
+        "max_repeat_words": 900,  # degenerate loop
+        "figures_kept": 0,
+        "script_profile": {"latin": 0.99, "nonlatin": 0.01},
+    }
+    fx = MockEffects(files={"databank/papers.jsonl": _json.dumps(rec) + "\n"})
+
+    async def frc(command, working_dir=None, timeout=30):
+        return CommandResult(
+            return_code=0, stdout=_json.dumps(report) + "\n", stderr="", command="x"
+        )
+
+    fx.run_command = frc
+    await action_extract_pdf_batch(
+        StepInput(
+            context={},
+            params={},
+            inputs={"working_directory": str(tmp_path), "paper_keys": ["p1"]},
+            meta=FlowMeta(flow_name="acquire", step_id="extract"),
+            effects=fx,
+        )
+    )
+    bank = await read_databank(fx)
+    assert bank["p1"]["extraction_status"] != "extracted"
