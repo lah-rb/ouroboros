@@ -494,7 +494,14 @@ def evaluate_phases(mission: Any, phases: tuple[PhaseRule, ...]) -> tuple[str, s
                 or (
                     g.status == "incomplete"
                     and getattr(g, "regression_reopened", False)
-                    and getattr(g, "acceptance_grounded", False)
+                    # Same widening as the sweep's recomplete filter
+                    # (755f27d): a check that went red on this regression
+                    # has proved it discriminates, so a stale grounded=False
+                    # must not keep the wave from firing for it.
+                    and (
+                        getattr(g, "acceptance_grounded", False)
+                        or getattr(g, "regression_check_failed", False)
+                    )
                     and getattr(g, "acceptance_checks", None)
                 )
                 for g in getattr(mission, "goals", []) or []

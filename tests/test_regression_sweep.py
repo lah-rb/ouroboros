@@ -488,3 +488,42 @@ async def test_ungrounded_check_that_never_failed_still_cannot_reclose():
 
     assert g.status == "incomplete"
     assert out.result["autocompleted"] == 0
+
+
+@pytest.mark.asyncio
+async def test_functional_sweep_recertifies_without_llm_dispatch():
+    # The verify-only rung: a check-driven reopened goal whose checks pass
+    # completes with NO dispatch_config (no interact, no diagnose). Pins the
+    # qwen3.8 waste path — the regression sweep only runs when the mission is
+    # regression_dirty, but this loop runs every cycle and gets there first.
+    from agent.actions.mission_actions import action_functional_sweep_next
+
+    g = _reopened("g", [_check("nowpasses")])
+    g.acceptance_grounded = False
+    g.regression_check_failed = True
+    g.reports = []
+    m = _mission([g])
+    fx = MockEffects(commands={_wrap("nowpasses"): _cmd(0)})
+
+    out = await action_functional_sweep_next(_si(m, fx))
+
+    assert g.status == "complete"
+    assert not (out.context_updates or {}).get("dispatch_config")
+
+
+@pytest.mark.asyncio
+async def test_functional_sweep_rung_does_not_fire_without_the_proof_flag():
+    # A goal that was never reopened by a failing check keeps the normal path,
+    # so the rung cannot vacuously certify never-verified work.
+    from agent.actions.mission_actions import action_functional_sweep_next
+
+    g = _reopened("g", [_check("passes")])
+    g.acceptance_grounded = False
+    g.regression_check_failed = False
+    g.reports = []
+    m = _mission([g])
+    fx = MockEffects(commands={_wrap("passes"): _cmd(0)})
+
+    await action_functional_sweep_next(_si(m, fx))
+
+    assert g.status == "incomplete"

@@ -3822,6 +3822,43 @@ async def _sweep_interact_failure(
     )
 
 
+async def _verify_only_recert(goal: Any, effects: Any) -> bool:
+    """Re-run a regression-reopened goal's required checks; complete on pass.
+
+    Zero inference. Returns True when the goal was re-certified. A failure
+    (or a check that errors) returns False and the caller falls through to
+    the normal repair paths with the evidence intact.
+    """
+    checks = [
+        c
+        for c in (goal.acceptance_checks or [])
+        if c.get("required", True)
+        and isinstance(c.get("command"), str)
+        and c["command"].strip()
+    ]
+    if not checks:
+        return False
+    for c in checks:
+        try:
+            res = await effects.run_command(
+                ["/bin/sh", "-c", c["command"]], timeout=_check_timeout(c)
+            )
+            if res.return_code != 0 or getattr(res, "timed_out", False):
+                return False
+        except Exception:  # noqa: BLE001 — a bad check never certifies
+            return False
+    goal.status = "complete"
+    goal.regression_reopened = False
+    goal.regression_check_failed = False
+    goal.regression_autocompleted = True  # arm the flip-flop guard
+    logger.info(
+        "Functional sweep: '%s' re-certified deterministically "
+        "(verify-only rung — checks pass, no LLM dispatch)",
+        goal.description[:50],
+    )
+    return True
+
+
 async def action_functional_sweep_next(step_input: StepInput) -> StepOutput:
     """Find the next incomplete functional goal and determine what it needs.
 
@@ -3889,6 +3926,38 @@ async def action_functional_sweep_next(step_input: StepInput) -> StepOutput:
     made_progress = False
 
     for goal in incomplete:
+        # ── Verify-only rung (functional) ─────────────────────────────
+        # The structural sweep has had this since the 541-fixing-dispatch
+        # incident; functional did not, and the gap is the same shape. A
+        # goal the REGRESSION sweep reopened on a failing check is, by
+        # construction, one that already passed its gate — so if that same
+        # check is green again the goal is done, and dispatching an LLM to
+        # re-prove it is pure waste. Worse than waste, measured: on the
+        # qwen3.8 completion run two boss goals whose pytest checks passed
+        # within seconds of the repair were dispatched to interact anyway,
+        # the play-test failed on TESTER error ("tried to flee without
+        # being in combat... then quit"), and that non-defect routed to
+        # diagnose. Fixing recomplete eligibility (755f27d) was necessary
+        # and not sufficient: the regression sweep only runs when the
+        # mission is regression_dirty, while this loop runs every cycle
+        # and gets there first.
+        #
+        # Deliberately NARROW. Only a check-driven reopen qualifies
+        # (regression_check_failed), which is the in-episode proof the
+        # check discriminates — the same reasoning as 755f27d. A goal that
+        # was never regression-reopened, or was reopened pre-emptively,
+        # still takes the normal path, so this cannot vacuously certify
+        # work that was never verified.
+        if (
+            getattr(goal, "regression_reopened", False)
+            and getattr(goal, "regression_check_failed", False)
+            and (goal.acceptance_checks or [])
+        ):
+            recert = await _verify_only_recert(goal, effects)
+            if recert:
+                made_progress = True
+                continue
+
         # Determine interaction mode from goal metadata
         goal_mode = getattr(goal, "interaction_mode", None) or ""
 
