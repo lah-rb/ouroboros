@@ -139,37 +139,39 @@ def test_a_long_but_varied_playthrough_is_not_stuck():
     assert out.result.get("stuck_detected") is not True
 
 
-def test_turn_budget_closes_a_session_that_will_never_close_itself():
-    from agent.actions.interactive_actions import _SESSION_TURN_BUDGET
-
-    hx = [
-        {"input": f"go {i}", "output": f"Room {i}\n> "}
-        for i in range(_SESSION_TURN_BUDGET)
-    ]
+def test_a_very_long_session_is_not_closed_by_a_turn_count():
+    """The 90-turn budget is GONE (2026-08-21). It closed the quality-gate
+    session on turn 90 of a ~92-turn game — tester holding the weakness item
+    at the last gate — and the gate then truthfully reported the endgame
+    untested. A cap that scales with nothing punishes the biggest worlds
+    most. Only repetition closes a session now."""
+    hx = [{"input": f"go {i}", "output": f"Room {i}\n> "} for i in range(300)]
     out = _run(hx, "go on")
-    assert out.result.get("stuck_detected") is True
-    assert "budget" in out.observations.lower()
-
-
-def test_turn_budget_leaves_a_normal_length_playthrough_alone():
-    """40 turns is a long real session; it must not be truncated."""
-    hx = [{"input": f"go {i}", "output": f"Room {i}\n> "} for i in range(40)]
-    out = _run(hx, "go 40")
     assert out.result.get("stuck_detected") is not True
 
 
-def test_turn_budget_fires_below_the_engine_step_ceiling():
-    """The budget only exists if it can fire: the flow engine crashes any
-    sub-flow at max_steps=200 (runtime.py), a turn costs ~2 steps, and the
-    original budget of 120 (~250 steps) was unreachable dead code — the
-    landing-test gate session died at step 200 with no evaluate turn. The
-    graceful close must trigger with margin for its own close chain."""
-    from agent.actions.interactive_actions import _SESSION_TURN_BUDGET
+def test_repetition_still_closes_a_very_long_session():
+    """Removing the count cap must not remove the real guard: byte-identical
+    repeats still close, at any session length."""
+    from agent.actions.interactive_actions import _STUCK_IDENTICAL_RUNS
 
-    ENGINE_MAX_STEPS = 200  # runtime.py sub-flow budget
-    STEPS_PER_TURN = 2  # plan_interaction + execute_interaction
-    CLOSE_CHAIN_MARGIN = 10  # confirm/close/evaluate tail
-    assert (
-        1 + _SESSION_TURN_BUDGET * STEPS_PER_TURN + CLOSE_CHAIN_MARGIN
-        <= ENGINE_MAX_STEPS
-    )
+    hx = [{"input": f"go {i}", "output": f"Room {i}\n> "} for i in range(300)]
+    hx += [
+        {"input": "look", "output": "The Vault\n> "}
+        for _ in range(_STUCK_IDENTICAL_RUNS)
+    ]
+    out = _run(hx, "look")
+    assert out.result.get("stuck_detected") is True
+
+
+def test_run_session_gets_a_step_ceiling_above_any_real_session():
+    """The turn cap only existed because runtime capped sub-flows at 200
+    steps (~95 turns at 2 steps/turn), so a long session died as
+    MaxStepsExceeded with no evaluate turn. Removing the cap without lifting
+    that ceiling would trade a graceful close for a hard crash five turns
+    later."""
+    from agent.runtime import _subflow_max_steps
+
+    STEPS_PER_TURN = 2
+    assert _subflow_max_steps("run_session") / STEPS_PER_TURN > 500
+    assert _subflow_max_steps("diagnose_issue") == 200

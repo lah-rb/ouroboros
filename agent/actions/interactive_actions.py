@@ -244,7 +244,17 @@ _STUCK_IDENTICAL_RUNS = 4  # 4 identical priors → the 5th send trips
 # turns ≈ 185 steps triggers the GRACEFUL close — evaluated on what it
 # reached — with margin for the close/evaluate chain before the engine
 # backstop.
-_SESSION_TURN_BUDGET = 90
+# REMOVED 2026-08-21 (operator: "trust our degeneration tests to detect a
+# stuck model"). This was a 90-turn graceful-close valve, and it existed
+# only because runtime.py capped every sub-flow at 200 steps (~95 turns at
+# 2 steps/turn) — without the valve a long session died as MaxStepsExceeded
+# with no evaluate turn at all. It closed the 2026-08-21 quality-gate
+# session on turn 90 of a ~92-turn game, tester holding the weakness item
+# at the last gate, and the gate then truthfully reported the endgame as
+# untested. A cap that scales with nothing punishes big worlds most.
+# The ceiling moved instead (runtime._SUBFLOW_MAX_STEPS), and the real
+# guards are unchanged: _STUCK_IDENTICAL_RUNS byte-identical repeats,
+# process_exited, the model's own close, and the mission wall clock.
 
 # A screen-orbit cycle detector (≤3 distinct screens over a 12-turn window,
 # all previously seen → force-close) lived here for one day (58eb83c) and
@@ -542,25 +552,6 @@ async def action_send_interaction(step_input: StepInput) -> StepOutput:
     # the tester is sending it yet again. "At that point it really looks
     # like circling, not productive terminal time." Repeated input whose
     # output changes is progress; the turn budget bounds the rest.
-    # Turn budget — the bound the comment below always assumed existed.
-    if len(session_history) >= _SESSION_TURN_BUDGET:
-        return StepOutput(
-            result={
-                "command_sent": False,
-                "stuck_detected": True,
-                "duplicate_input": "",
-            },
-            observations=(
-                f"Turn budget: session reached {len(session_history)} turns "
-                f"(cap {_SESSION_TURN_BUDGET}) — closing so the charter can be "
-                f"evaluated on what it did reach"
-            ),
-            context_updates={
-                "mcp_session_id": session_id,
-                "session_history": session_history,
-            },
-        )
-
     if len(session_history) >= _STUCK_IDENTICAL_RUNS:
         tail = session_history[-_STUCK_IDENTICAL_RUNS:]
         outputs = {(e.get("output", "") or "").strip() for e in tail}
@@ -774,8 +765,9 @@ async def action_send_interaction(step_input: StepInput) -> StepOutput:
     # the shell_command-keyed reset never saw child_running=True). And a
     # model that relaunches by typing the command at the bare shell via
     # send_input has still relaunched. Farming resets to dodge the guard
-    # costs a real relaunch plus the turns back to a close each time;
-    # _SESSION_TURN_BUDGET bounds that.
+    # costs a real relaunch plus the turns back to a close each time; the
+    # mission wall clock and the stuck detector bound that (the 90-turn
+    # session budget that used to bound it was removed 2026-08-21).
     if (
         entry["child_running"]
         and not prev_child_running
@@ -1110,8 +1102,9 @@ async def action_end_inference_session(step_input: StepInput) -> StepOutput:
 # notice was gone. The guard was disarmed BY the arc it exists to enable.
 # A budget of 2 survives one legitimate exit; the relaunch reset (see the
 # shell_command path) restores protection for each new program run, and
-# _SESSION_TURN_BUDGET bounds any attempt to farm resets — each one costs
-# a real relaunch plus the turns to reach another close.
+# the mission wall clock bounds any attempt to farm resets — each one
+# costs a real relaunch plus the turns to reach another close. (The
+# 90-turn session budget that used to bound this was removed 2026-08-21.)
 # (v1 asked through a second menu with a cap of 2 — see the notice
 # rationale on action_confirm_close_gate for why that design was replaced.)
 _MAX_CLOSE_NOTICES = 2

@@ -235,6 +235,35 @@ def _real_out(result: Any, ws_out: int) -> int:
     return gen if gen else ws_out
 
 
+# Sub-flow step ceilings. 200 is the infinite-loop backstop for ordinary
+# sub-flows, whose real bounds are internal (diagnose's check_budget,
+# escalate's MAX_ESCALATION_TURNS). run_session is different in kind: its
+# step count scales with how much PRODUCT there is to explore, at ~2 steps
+# per turn, so 200 silently capped exploration at ~95 turns.
+#
+# That ceiling was load-bearing in the wrong direction. It forced a
+# 90-turn graceful-close valve in interactive_actions, which closed the
+# 2026-08-21 quality-gate session on turn 90 of a ~92-turn game — the
+# tester was holding the weakness item at the last gate with the throne
+# room visible — and the gate then truthfully reported the endgame
+# "untested", spending probe and repair cycles on a coverage hole that
+# was the framework's, not the model's. It also penalised AMBITION: the
+# bigger the authored world, the likelier the gate could not finish it.
+#
+# The valve is gone (operator, 2026-08-21: "trust our degeneration tests
+# to detect a stuck model"). The real guards are unchanged and are the
+# right ones: the stuck detector closes on _STUCK_IDENTICAL_RUNS
+# byte-identical responses, process_exited closes on a dead child, the
+# model can close itself, and the mission wall clock bounds everything.
+# This number stays only as a runaway backstop, set far above any real
+# session.
+_SUBFLOW_MAX_STEPS = {"run_session": 4000}
+
+
+def _subflow_max_steps(flow_name: str) -> int:
+    return _SUBFLOW_MAX_STEPS.get(flow_name, 200)
+
+
 async def execute_flow(
     flow_def: FlowDefinition,
     inputs: dict[str, Any],
@@ -805,7 +834,7 @@ async def _execute_subflow_action(
             action_registry=action_registry,
             effects=effects,
             flow_registry=flow_registry,
-            max_steps=200,  # Sub-flows get a generous step budget
+            max_steps=_subflow_max_steps(target_flow_name),
         )
     except Exception as e:
         logger.warning("Sub-flow %s failed: %s", target_flow_name, e)
