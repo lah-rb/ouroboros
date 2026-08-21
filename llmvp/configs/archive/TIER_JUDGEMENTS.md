@@ -4050,3 +4050,46 @@ a 3-1 Delivery deficit is a displacement case, not a sweep. If
 promoted, PROVENANCE should carry the judge's flip condition and the
 known unfixed defects (id-only parser, save NameError, no terminal
 states, 4/6 failing shipped tests).
+
+## 2026-08-20 — MODE CONTROL: the BATCH arm LOSES 0-4 / 3-3 to the sitting floor
+
+**Delivery: B(Floor) 4–0 · Character: 3–3 (even, not a split) · OVERALL:
+B (FLOOR).** No CLOSE flag. Candidate rotated to A. Record:
+`dev/blind_panel/records/flight_20260820_batch_vs_floor.md`.
+
+Same model, same current framework, same wall, same prompt fixes as the
+session continuation — **mode was the only variable**, and the anchor is
+itself a batch-era artifact, so this flight isolates framework-era change
+with mode held constant while the continuation flight varied both.
+
+**THE MODE QUESTION IS SETTLED for devstral** (three flights, one day):
+  session continuation (16/31) vs floor → CANDIDATE wins (CLOSE)
+  batch arm            (12/31) vs floor → FLOOR wins 0-4 / 3-3
+The session walk shipped a fully-connected 8/8 world with every entity
+placed; the batch arm shipped a one-way orphan holding the only healing
+item, an unplaced NPC carrying a whole three-state dialogue tree, and an
+unplaced chest — the same placement pathology the batch-era anchor has.
+Session structural is this model's mode. Consistent with muse (session
+= first WON artifact) and with gpt-oss's session loss being a
+content/charter failure rather than a placement one.
+
+**Why the batch candidate lost, per the judge**: "a player cannot obtain
+a single item in A" (handle_take matches ids, `look` prints no item
+list, no surface ever shows a snake_case id); a process-killing
+AttributeError on bare `talk`, which its own help advertises; a valid
+save silently discarded behind a bare except hiding an unimported
+Player; combat that reaches across rooms; monsters that re-encounter
+forever (room id compared against a monster-id set); and NO win or
+defeat state anywhere in the tree. Both artifacts scored 41/47; the
+candidate is SIGNIFICANTLY-DEVIATED and the anchor NEAR-FULL purely on
+terminal states.
+
+**Anchor status unchanged: the 08-03 floor STANDS.** The only live
+displacement case remains the session continuation's CLOSE win, still
+held for the operator.
+
+**New anchor defect on the record** (no prior flight caught it):
+`.gitignore` line 50 excludes `*.yaml`, so the anchor's own documented
+git-clone workflow produces a tree with no world.yaml and dies at
+FileNotFoundError. It cost the anchor B10 in this flight and should be
+noted in any future use of this artifact.
