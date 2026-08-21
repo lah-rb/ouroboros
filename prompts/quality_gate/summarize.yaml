@@ -56,7 +56,7 @@ sections:
     cancelling, a consumable that is never consumed, a save that reports
     success and loses state on load. The message printing is not
     evidence of working; the world afterwards is). If the UX session simply did not
-    exercise a feature, first check the verified-behaviors list below:
+    exercise a feature, first check the SETTLED WORK list above:
     a feature with a verified passing play-test is DONE, and one session
     not re-touring it is not a finding — re-raising it spends a probe
     and a repair cycle re-proving settled work. Only a feature with NO
@@ -113,6 +113,20 @@ sections:
   content: |
     Gate mode: {input.mode}
 
+- id: verified_behaviors
+  when: context.verified_behaviors_block
+  content: |
+    SETTLED WORK — read this BEFORE the evidence below.
+
+    {context.verified_behaviors_block}
+
+    Each of these already passed a dedicated play-test. A UX session
+    that did not revisit one proves nothing about it: report it only if
+    the evidence below shows it failing NOW, and NEVER as "untested".
+    An "untested:" finding naming any behavior on this list is a false
+    finding — it spends a probe and a repair cycle re-proving work that
+    is already done.
+
 - id: validation_results
   when: context.validation_summary
   content: |
@@ -148,16 +162,6 @@ sections:
   content: |
     UX verification session:
     {context.ux_session_assessment}
-
-- id: verified_behaviors
-  when: context.verified_behaviors_block
-  content: |
-    {context.verified_behaviors_block}
-
-    These behaviors already passed a dedicated play-test. Do NOT report
-    them as untested or broken just because this UX session did not
-    revisit them — only report one if the evidence above shows it
-    failing NOW.
 
 - id: files
   when: context.project_file_list

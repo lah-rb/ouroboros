@@ -11878,7 +11878,7 @@
         ],
         "config": {
           "temperature": "t*0.1",
-          "reasoning": "low"
+          "reasoning": "high"
         },
         "resolver": {
           "type": "rule",

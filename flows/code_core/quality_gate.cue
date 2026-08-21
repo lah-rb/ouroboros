@@ -507,8 +507,24 @@ quality_gate: #FlowDefinition & {
 					params: {source: {$ref: "input.quality_overview"}}
 				},
 			]
-			// LOW: compression of collected results — dev/REASONING_DEPTH_POLICY_2026-08-16.md
-			config: reasoning: "low"
+			// HIGH (2026-08-21): this was routed LOW as "compression of
+			// collected results", but it is not compression — it is the
+			// gate's VERDICT turn. It decides pass/fail and files blocking
+			// issues that become goals, so a wrong finding here spends real
+			// probe and repair cycles downstream. That is exactly the
+			// consequence-of-error case the depth policy says to budget
+			// higher (dev/REASONING_DEPTH_POLICY_2026-08-16.md §(f) split:
+			// mechanical check-running low, substantive judgement medium-high;
+			// plus the consequence-gating argument), and the policy's own
+			// counter-evidence (open-weight judges degrading as effort rises)
+			// is why this is a MEASURED change, not a settled one.
+			// Trigger: the qwen3.8 completion run's gate raised two
+			// "untested:" findings against behaviors that were ON its own
+			// verified-behaviors list and had passed play-tests minutes
+			// earlier — two goals, zero reports, pure vacuous re-verification.
+			// The paired change is positional (the settled-work list moved
+			// ahead of the evidence in prompts/quality_gate/summarize.yaml).
+			config: reasoning: "high"
 			config: temperature: "t*0.1"
 			resolver: {
 				type: "rule"
