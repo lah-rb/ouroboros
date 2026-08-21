@@ -4132,11 +4132,38 @@ changed (v2.0 five axes → v2.1 ten axes, two panels), so the comparison
 is DIRECTIONAL — did a model that was swept by the sitting guardian now
 beat it — not axis-for-axis arithmetic.
 
-**Decision rule (pre-registered):** if BOTH models, under the current
-framework, now take the sitting guardian — a direction reversal from
-0–5 sweeps — then the sitting anchor has atrophied relative to the
-current framework rather than the candidate merely being strong, and
-promotion to the stronger artifact is warranted. If only ONE reverses,
-that is model-specific improvement and the guardian holds pending more
-evidence. Recorded before the arms run so the reading cannot be fitted
-to the result afterwards.
+**THE PROBES ARE NOT EQUALLY CLEAN — operator flag, verified in config,
+recorded BEFORE the arms run:**
+
+* `qwen3-next-coder-80b-a3` is the **DECISIVE** probe. Its config is
+  `thinking_available: false`, `thinking: "off"` — a dial-less
+  non-thinking coder. The thinking-turn changes cannot touch it by
+  construction, so its model-side conditions are IDENTICAL between its
+  0–5 baseline artifact and the new arm. Framework is genuinely the
+  only variable.
+* `gemma-4-31b` is **CORROBORATING ONLY — confounded, doubly.** Its
+  0–5 baseline was set by an artifact its own config header describes
+  as "achieved with thinking effectively OFF (the run predates the
+  medium→`<|think|>` [fix])… Expect headroom with thinking ON." Since
+  then it gained (a) the think-activation fix (ec5d54c — `<|think|>`
+  had been served as literal bytes on every gemma run ever) and (b)
+  the router's requested thinking turns. Operator's read: it sat in
+  slow-grinder territory on one thinking turn, muse-like, and will
+  likely settle into contemplator more cleanly now. So a gemma
+  reversal has a model-side explanation available and cannot carry the
+  atrophy claim alone. (`tier.league: contemplator` affects only
+  `extend` eligibility, not the wall — both arms are like-for-like 2h.)
+
+**Decision rule (pre-registered):**
+  * **BOTH reverse** → the sitting anchor has atrophied relative to the
+    current framework; promotion to the stronger artifact is warranted.
+  * **Only `qwen3-next-coder` reverses** → still substantial evidence of
+    atrophy, since that probe is confound-free; promotion warranted on
+    the operator's judgement, with the single-probe basis noted.
+  * **Only `gemma` reverses** → NOT atrophy evidence. The thinking
+    changes are the likelier cause; the guardian holds.
+  * **NEITHER reverses** → the sitting guardian is still a live rung;
+    the candidate's 8–2 reads as same-family framework gain and the
+    guardian holds.
+Recorded before the arms run so the reading cannot be fitted to the
+result afterwards.
