@@ -287,3 +287,53 @@ def test_one_mismatched_repetition_resets_the_orbit_claim():
     hx[3]["output"] = "void, but a door creaks open.\n> "  # state changed once
     out = _run(hx, "python main.py")
     assert out.result.get("stuck_detected") is not True
+
+
+def test_period_twelve_replay_orbit_is_caught():
+    """The 2026-08-22 live case: relaunch, replay an 11-move walkthrough
+    route byte-for-byte against a deterministic fresh boot, hit the same
+    wall, relaunch. Period 12 — far beyond the original 2/3 — caught by
+    the generalized N-period detector at the same byte-identity bar."""
+    from agent.actions.interactive_actions import _STUCK_IDENTICAL_RUNS
+
+    route = [
+        ("python main.py", "SHADOW KINGDOM\n> "),
+        ("1", "New game.\n> "),
+        ("north", "Great Hall.\n> "),
+        ("north", "You can't go that way.\n> "),
+        ("look", "Great Hall.\n> "),
+        ("west", "Armory.\n> "),
+        ("east", "Great Hall.\n> "),
+        ("look", "Great Hall.\n> "),
+        ("south", "Entrance.\n> "),
+        ("north", "Great Hall.\n> "),
+        ("look", "Great Hall.\n> "),
+        ("attack goblin", "There is no goblin here.\n> "),
+    ]
+    hx = _cycle_hist(route, _STUCK_IDENTICAL_RUNS)
+    out = _run(hx, "python main.py")
+    assert out.result.get("stuck_detected") is True
+    assert "period-12" in out.observations
+
+
+def test_long_period_orbit_one_rep_short_does_not_fire():
+    from agent.actions.interactive_actions import _STUCK_IDENTICAL_RUNS
+
+    route = [(f"step{i}", f"Screen {i}\n> ") for i in range(12)]
+    hx = _cycle_hist(route, _STUCK_IDENTICAL_RUNS)[:-1]  # one turn short
+    out = _run(hx, "step0")
+    assert out.result.get("stuck_detected") is not True
+
+
+def test_smallest_period_wins_the_report():
+    """A period-2 orbit is also periodic at 4/6/8 — it must be reported as
+    period-2, so the observation names the true cycle."""
+    from agent.actions.interactive_actions import _STUCK_IDENTICAL_RUNS
+
+    hx = _cycle_hist(
+        [("python main.py", "void\n> "), ("look", "void\n> ")],
+        4 * _STUCK_IDENTICAL_RUNS,
+    )
+    out = _run(hx, "python main.py")
+    assert out.result.get("stuck_detected") is True
+    assert "period-2" in out.observations

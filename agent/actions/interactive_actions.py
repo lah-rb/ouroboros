@@ -216,6 +216,11 @@ async def _save_full_output(effects, output: str, turn) -> str | None:
 # is called stuck. Operator-set (2026-08-07): 5 — genuine circling, not the
 # 2-3 repeats navigation legitimately needs.
 _STUCK_IDENTICAL_RUNS = 4  # 4 identical priors → the 5th send trips
+# Longest orbit period the cycle detector will look for. The live period-12
+# replay orbit sets the floor; headroom above it, but bounded so the
+# per-send sweep stays trivial. A period-N orbit needs
+# N*_STUCK_IDENTICAL_RUNS turns of perfect periodicity before it can fire.
+_ORBIT_MAX_PERIOD = 24
 
 # ── Two bounds the identical-run check cannot provide ─────────────────
 # Measured live 2026-08-16 (muse win-screen charter): a playthrough session
@@ -583,19 +588,29 @@ async def action_send_interaction(step_input: StepInput) -> StepOutput:
                 },
             )
 
-    # ── Short-cycle orbits (A-B-A-B, A-B-C-A-B-C) ─────────────────────
-    # The single-input check above is period-1 only, and a 2-cycle slips it
-    # by construction: an A-B-A-B alternation never yields
-    # _STUCK_IDENTICAL_RUNS consecutive identical entries. Live 2026-08-21
-    # (qwen3-next-coder): {"python main.py", "look"} alternated for 324
-    # turns against a byte-identical broken boot, every guard blind, and
-    # the arm could only be ended by the runner's wall kill. Same bar as
-    # period-1, generalized: every position of the cycle must repeat with
-    # BYTE-IDENTICAL input AND output _STUCK_IDENTICAL_RUNS times, and the
-    # text about to be sent must continue the cycle. Varying output at any
-    # position is progress and never trips (the combat-orbit case that got
-    # the 58eb83c screen detector removed: HP counters change, so it walks).
-    for _period in (2, 3):
+    # ── N-period orbits (A-B-A-B … up to full replay routes) ──────────
+    # The single-input check above is period-1 only, and any longer cycle
+    # slips it by construction: an alternation never yields
+    # _STUCK_IDENTICAL_RUNS consecutive identical entries. Live, twice on
+    # one model (qwen3-next-coder, 2026-08-21/22): a period-2 orbit
+    # ({"python main.py", "look"} against a byte-identical broken boot, 324
+    # turns) and then a PERIOD-12 one — relaunch, replay an entire
+    # 11-move walkthrough route byte-for-byte, hit the same wall, relaunch
+    # (186 turns; only the runner's wall kill ended it). The relaunch
+    # anchors these loops: each reset re-runs a deterministic program from
+    # a fresh boot, so the whole route repeats EXACTLY — which is also why
+    # byte-identity is a fair bar for arbitrarily long periods. Same bar as
+    # period-1, generalized (operator, 2026-08-22): every position of the
+    # cycle must repeat with BYTE-IDENTICAL input AND output
+    # _STUCK_IDENTICAL_RUNS times, and the send being planned must continue
+    # the cycle. Varying output at any position is progress and never trips
+    # (the combat case with moving HP counters that got the 58eb83c screen
+    # detector removed — protected then, protected now). Fires on the
+    # SMALLEST period first, so a 2-cycle is never reported as its own
+    # multiple. Cost is bounded: ~_ORBIT_MAX_PERIOD string-compare sweeps
+    # over at most _ORBIT_MAX_PERIOD*_STUCK_IDENTICAL_RUNS entries.
+    _max_period = min(_ORBIT_MAX_PERIOD, len(session_history) // _STUCK_IDENTICAL_RUNS)
+    for _period in range(2, _max_period + 1):
         _need = _period * _STUCK_IDENTICAL_RUNS
         if len(session_history) < _need:
             continue
