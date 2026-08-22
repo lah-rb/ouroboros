@@ -253,6 +253,73 @@ def near_duplicate_keys(new_keys: list[str], registry: dict, data: dict) -> list
 # ── Key registry ──────────────────────────────────────────────────────
 
 
+# ── canonical vocabulary (operator reform, 2026-08-22) ────────────────
+#
+# The registry grew to 1,522 observed keys, 94% used once. The reform
+# tiers it: `core` (>=10 uses, 54 keys), `family` (753 keys annotated
+# into six semantic families), `bespoke-pool` (764 idiosyncratic
+# quantities kept AS a pool, observed for future overlap). Only
+# UNIT-SAFE spelling variants merge (12 aliases in
+# databank/dataset/key_aliases.json): plural/filler/unit-spelling
+# differences of the SAME unit. Cross-unit (um vs nm) and
+# digit-parameterized keys (ph2/ph3, formula_2) never merge — those
+# digits carry conditions, and a merge would corrupt values.
+
+_KEY_FAMILY_PATTERNS = [
+    (
+        "composition",
+        r"composition|content|concentration|ratio|formula|elemental|stoichi",
+    ),
+    (
+        "instrument",
+        r"laser|voltage|current|power|detector|resolution|exposure|wavelength|source|excitation|spectrometer|diffractometer|grating",
+    ),
+    ("peaks", r"peak|band|shift|line|mode|assign|wavenumber|frequenc|2theta|dspacing"),
+    ("conditions", r"temperature|pressure|time|duration|humidit|atmosphere|ph\b|rate"),
+    (
+        "sample",
+        r"sample|specimen|prep|synthesi|anneal|sinter|deposit|coating|substrate|particle|grain",
+    ),
+    ("structure", r"crystal|lattice|space_group|phase|structure|cell|symmetry"),
+]
+
+
+def key_family(key: str) -> str:
+    """The semantic family a key belongs to, '' when bespoke."""
+    low = key.lower()
+    for fam, pat in _KEY_FAMILY_PATTERNS:
+        if re.search(pat, low):
+            return fam
+    return ""
+
+
+async def load_key_aliases(effects) -> dict:
+    """alias -> canonical spelling, {} when the map is absent."""
+    try:
+        fc = await effects.read_file("databank/dataset/key_aliases.json")
+        if getattr(fc, "exists", False):
+            return json.loads(fc.content)
+    except Exception:  # noqa: BLE001 — canonicalization is best-effort
+        pass
+    return {}
+
+
+def canonicalize_pack_keys(data: dict, aliases: dict) -> dict:
+    """Rename aliased keys to their canonical spellings; merge lists on
+    collision, first-value-wins otherwise."""
+    if not aliases:
+        return data
+    out: dict = {}
+    for k, v in data.items():
+        ck = aliases.get(k, k)
+        if ck in out:
+            if isinstance(out[ck], list) and isinstance(v, list):
+                out[ck] = out[ck] + [x for x in v if x not in out[ck]]
+        else:
+            out[ck] = v
+    return out
+
+
 def update_key_registry(registry: dict, data: dict, paper_key: str) -> dict:
     """Fold an ACCEPTED pack into the registry (returns the same dict).
 
@@ -263,6 +330,7 @@ def update_key_registry(registry: dict, data: dict, paper_key: str) -> dict:
         entry = registry.get(key)
         if entry is None:
             exemplar = json.dumps(value, ensure_ascii=False)
+            fam = key_family(key)
             registry[key] = {
                 "type": _type_name(value),
                 "description": "",
@@ -270,6 +338,10 @@ def update_key_registry(registry: dict, data: dict, paper_key: str) -> dict:
                 "count": 1,
                 "first_paper": paper_key,
                 "similar_to": [],
+                # tier: promoted to "core" by count in later passes; new
+                # keys start as their family or in the observed pool.
+                "tier": "family" if fam else "bespoke-pool",
+                **({"family": fam} if fam else {}),
             }
         else:
             entry["count"] = int(entry.get("count") or 0) + 1
@@ -892,6 +964,8 @@ async def _curate_stateless(effects, paper_key: str, doc: str) -> dict:
         text = await _curate_turn(effects, doc + "\n\n---\n\n" + pack_prompt, 8192)
         parsed = parse_llm_json(text)
         data = parsed if isinstance(parsed, dict) and parsed else None
+        if data is not None:
+            data = canonicalize_pack_keys(data, await load_key_aliases(effects))
         gates = (
             _run_pack_gates(data, doc, registry)
             if data is not None

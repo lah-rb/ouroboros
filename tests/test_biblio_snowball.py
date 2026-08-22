@@ -159,3 +159,38 @@ async def test_the_cap_declines_instead_of_expanding_past_the_ruling(monkeypatch
     out = await action_biblio_snowball(_si(fx))
     assert out.result["promoted"] == 0
     assert "stop-criteria" in out.result["reason"]
+
+
+# ── canonical key vocabulary ──────────────────────────────────────────
+
+
+def test_key_family_and_canonicalization():
+    """Operator reform 2026-08-22: unit-safe aliases collapse spelling
+    variants; families annotate; digits (conditions) never merge."""
+    from agent.actions.curation_actions import canonicalize_pack_keys, key_family
+
+    assert key_family("laser_wavelength_nm") == "instrument"
+    assert key_family("raman_band_assignments") == "peaks"
+    assert key_family("bath_ammonia_volume_ul") == ""  # bespoke
+    aliases = {"laser_fluence_j_per_cm2": "laser_fluence_j_cm2"}
+    data = {
+        "laser_fluence_j_per_cm2": 1.2,
+        "laser_fluence_j_cm2": 3.4,
+        "other": [1],
+    }
+    out = canonicalize_pack_keys(data, aliases)
+    assert "laser_fluence_j_per_cm2" not in out
+    # First-value-wins on a scalar clash (document order), matching the
+    # one-time backfill's semantics — determinism over spelling priority.
+    assert out["laser_fluence_j_cm2"] == 1.2
+    assert out["other"] == [1]
+
+
+def test_new_registry_entries_carry_tier_and_family():
+    from agent.actions.curation_actions import update_key_registry
+
+    reg = {}
+    update_key_registry(reg, {"xrd_peak_intensity": [1], "weird_bespoke_thing": 2}, "p")
+    assert reg["xrd_peak_intensity"]["tier"] == "family"
+    assert reg["xrd_peak_intensity"]["family"] == "peaks"
+    assert reg["weird_bespoke_thing"]["tier"] == "bespoke-pool"
