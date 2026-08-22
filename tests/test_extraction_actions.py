@@ -1099,3 +1099,134 @@ async def test_a_degenerate_scan_still_fails(tmp_path):
     )
     bank = await read_databank(fx)
     assert bank["p1"]["extraction_status"] != "extracted"
+
+
+@pytest.mark.asyncio
+async def test_a_table_dominant_doc_passes_on_numeric_alone(tmp_path):
+    """Operator policy 2026-08-22: span is a PROSE metric; a
+    band-assignment table rendered as <td> markup fails it while holding
+    exactly the numbers the corpus wants (rescue set: 42 papers, numeric
+    p50 0.94). The numeric bar is never waived."""
+    import json as _json
+
+    from agent.actions.extraction_actions import action_extract_pdf_batch
+    from agent.actions.scholarly_actions import read_databank
+    from agent.effects.mock import MockEffects
+    from agent.effects.protocol import CommandResult
+    from agent.models import FlowMeta, StepInput
+
+    (tmp_path / "databank" / "markdown").mkdir(parents=True)
+    (tmp_path / "databank" / "markdown" / "p1.md").write_text(
+        "<table>\n"
+        + "<tr><td>1064</td><td>quartz vC-O</td></tr>\n" * 200
+        + "</table>\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "pdfs").mkdir()
+    (tmp_path / "pdfs" / "p1.pdf").write_bytes(b"%PDF-1.4 x")
+    rec = {
+        "paper_key": "p1",
+        "access_status": "oa_pdf",
+        "pdf_path": "pdfs/p1.pdf",
+        "title": "T",
+    }
+
+    def rpt(span):
+        return {
+            "paper_key": "p1",
+            "md_path": "markdown/p1.md",
+            "pages": 6,
+            "total_pages": 6,
+            "verified_pages": 6,
+            "unverified_pages": 0,
+            "numeric_match_rate": 0.94,
+            "span_pass_rate": span,
+            "max_repeat_words": 5,
+            "figures_kept": 0,
+            "script_profile": {"latin": 0.99, "nonlatin": 0.01},
+        }
+
+    async def frc_factory(fx, span):
+        async def frc(command, working_dir=None, timeout=30):
+            return CommandResult(
+                return_code=0,
+                stdout=_json.dumps(rpt(span)) + "\n",
+                stderr="",
+                command="x",
+            )
+
+        fx.run_command = frc
+
+    fx = MockEffects(files={"databank/papers.jsonl": _json.dumps(rec) + "\n"})
+    await frc_factory(fx, 0.42)
+    await action_extract_pdf_batch(
+        StepInput(
+            context={},
+            params={},
+            inputs={"working_directory": str(tmp_path), "paper_keys": ["p1"]},
+            meta=FlowMeta(flow_name="a", step_id="e"),
+            effects=fx,
+        )
+    )
+    bank = await read_databank(fx)
+    assert bank["p1"]["extraction_status"] == "extracted"
+    assert bank["p1"]["extraction_quality"]["table_dominant"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_prose_doc_with_low_span_still_fails(tmp_path):
+    """The waiver is for tables, not for bad prose: same rates on a
+    prose-shaped markdown must keep failing."""
+    import json as _json
+
+    from agent.actions.extraction_actions import action_extract_pdf_batch
+    from agent.actions.scholarly_actions import read_databank
+    from agent.effects.mock import MockEffects
+    from agent.effects.protocol import CommandResult
+    from agent.models import FlowMeta, StepInput
+
+    (tmp_path / "databank" / "markdown").mkdir(parents=True)
+    (tmp_path / "databank" / "markdown" / "p1.md").write_text(
+        "flowing prose about spectra with no tables at all here. " * 300,
+        encoding="utf-8",
+    )
+    (tmp_path / "pdfs").mkdir()
+    (tmp_path / "pdfs" / "p1.pdf").write_bytes(b"%PDF-1.4 x")
+    rec = {
+        "paper_key": "p1",
+        "access_status": "oa_pdf",
+        "pdf_path": "pdfs/p1.pdf",
+        "title": "T",
+    }
+    report = {
+        "paper_key": "p1",
+        "md_path": "markdown/p1.md",
+        "pages": 6,
+        "total_pages": 6,
+        "verified_pages": 6,
+        "unverified_pages": 0,
+        "numeric_match_rate": 0.94,
+        "span_pass_rate": 0.42,
+        "max_repeat_words": 5,
+        "figures_kept": 0,
+        "script_profile": {"latin": 0.99, "nonlatin": 0.01},
+    }
+    fx = MockEffects(files={"databank/papers.jsonl": _json.dumps(rec) + "\n"})
+
+    async def frc(command, working_dir=None, timeout=30):
+        return CommandResult(
+            return_code=0, stdout=_json.dumps(report) + "\n", stderr="", command="x"
+        )
+
+    fx.run_command = frc
+    await action_extract_pdf_batch(
+        StepInput(
+            context={},
+            params={},
+            inputs={"working_directory": str(tmp_path), "paper_keys": ["p1"]},
+            meta=FlowMeta(flow_name="a", step_id="e"),
+            effects=fx,
+        )
+    )
+    bank = await read_databank(fx)
+    assert bank["p1"]["extraction_status"] != "extracted"

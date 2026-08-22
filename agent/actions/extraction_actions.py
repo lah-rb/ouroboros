@@ -106,6 +106,29 @@ LINGUAL_NONLATIN_MIN = 0.15
 # far over any stub.
 UNVERIFIED_MIN_MD_BYTES = 2000
 
+# TABLE-DOMINANT documents (operator policy, 2026-08-22): the span rate
+# is a PROSE metric — it matches flowing text against the layer — and a
+# band-assignment table rendered as <td> markup fails it while carrying
+# exactly the numbers the corpus wants. Measured over the failed pool:
+# span-only failures hold a median 45% of their bytes in table markup vs
+# 2% for numeric failures, and the 42 rescued papers' numeric rates run
+# p50 0.94. The NUMERIC bar is never waived — numbers are the point.
+# (A math-dense analogue exists — 10 span-only fails with heavy $..$ and
+# no tables — recorded but not yet acted on; the evidence is thinner.)
+TABLE_DOMINANT_MIN_FRAC = 0.30
+
+
+def _table_fraction(text: str) -> float:
+    """Fraction of bytes on table-markup lines (td/tr/table or pipe rows)."""
+    if not text:
+        return 0.0
+    tbl = sum(
+        len(l)
+        for l in text.splitlines()
+        if "<td" in l or "<tr" in l or "<table" in l or l.count("|") >= 4
+    )
+    return tbl / max(1, len(text))
+
 
 def script_nonlatin_frac(profile: dict) -> float:
     """Non-Latin letter fraction from a report's script_profile ({} -> 0)."""
@@ -113,6 +136,27 @@ def script_nonlatin_frac(profile: dict) -> float:
         return float((profile or {}).get("nonlatin") or 0.0)
     except (TypeError, ValueError):
         return 0.0
+
+
+_MD_TEXT_CACHE: dict = {}
+
+
+def _batch_md_text(working_dir: str, rep: dict):
+    """The tool-written markdown for a report, cached per path, None when
+    unreadable. Bounded read — table fraction stabilizes long before 800KB."""
+    md_rel = rep.get("md_path")
+    if not (working_dir and md_rel):
+        return None
+    path = os.path.join(working_dir, "databank", str(md_rel))
+    if path not in _MD_TEXT_CACHE:
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                _MD_TEXT_CACHE[path] = fh.read(800_000)
+        except OSError:
+            _MD_TEXT_CACHE[path] = None
+        if len(_MD_TEXT_CACHE) > 64:
+            _MD_TEXT_CACHE.pop(next(iter(_MD_TEXT_CACHE)))
+    return _MD_TEXT_CACHE[path]
 
 
 def _md_size(working_dir: str, md_rel) -> int:
@@ -798,11 +842,22 @@ async def _book_segment_round(
             and agg["max_repeat_words"] <= MAX_REPEAT_WORDS
             and len(assembled) >= UNVERIFIED_MIN_MD_BYTES
         )
-        ok = unverified_clean or (
+        table_dominant = (
             agg["verified_pages"] > 0
             and agg["numeric_match_rate"] >= MIN_NUMERIC_RATE
-            and agg["span_pass_rate"] >= MIN_SPAN_RATE
+            and agg["span_pass_rate"] < MIN_SPAN_RATE
             and agg["max_repeat_words"] <= MAX_REPEAT_WORDS
+            and _table_fraction(assembled) >= TABLE_DOMINANT_MIN_FRAC
+        )
+        ok = (
+            unverified_clean
+            or table_dominant
+            or (
+                agg["verified_pages"] > 0
+                and agg["numeric_match_rate"] >= MIN_NUMERIC_RATE
+                and agg["span_pass_rate"] >= MIN_SPAN_RATE
+                and agg["max_repeat_words"] <= MAX_REPEAT_WORDS
+            )
         )
         # Latin-script language vote: an otherwise-clean Spanish book is
         # translation work, not corpus text (see _LATIN_STOPWORDS).
@@ -842,6 +897,8 @@ async def _book_segment_round(
             rec["failure_reason"] = ""
             if unverified_clean:
                 rec["extraction_quality"]["unverified_text_layer"] = True
+            if table_dominant:
+                rec["extraction_quality"]["table_dominant"] = True
         elif agg["verified_pages"] <= 0:
             rec["extraction_status"] = "extract_unverified"
             rec["failure_reason"] = (
@@ -1412,6 +1469,16 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
                 # paddle's verdict stands when the degeneration guard
                 # below is the only check that still measures anything.
                 # Flag stamped at booking; the curator judges content.
+                # TABLE-DOMINANT: span is a prose metric and this page
+                # is not prose. The numeric bar still binds.
+                or (
+                    rep.get("verified_pages", 0) > 0
+                    and rep.get("numeric_match_rate", 0) >= MIN_NUMERIC_RATE
+                    and rep.get("span_pass_rate", 0) < MIN_SPAN_RATE
+                    and (_batch_md_text(working_dir, rep) or "") != ""
+                    and _table_fraction(_batch_md_text(working_dir, rep) or "")
+                    >= TABLE_DOMINANT_MIN_FRAC
+                )
                 or (
                     rep.get("verified_pages", 0) <= 0
                     # the segment aggregator zeroes `pages` on merged
@@ -1464,6 +1531,8 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
             }
             if rep.get("verified_pages", 0) <= 0:
                 rec["extraction_quality"]["unverified_text_layer"] = True
+            elif rep.get("span_pass_rate", 0) < MIN_SPAN_RATE:
+                rec["extraction_quality"]["table_dominant"] = True
             extracted += 1
         else:
             # NAME THE GATE THAT ACTUALLY REJECTED. The `ok` test above has
