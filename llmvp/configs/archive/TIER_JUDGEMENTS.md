@@ -4230,3 +4230,59 @@ win path anywhere in either tree** — grep finds no victory language in
 the guardian's, and only `quit`'s "GAME OVER" in the probe's. Two models,
 two framework eras, the same absence. That is the campaign's most
 transferable finding to date and belongs in any future brief revision.
+
+## 2026-08-22 — FRONTIER SCORECARD: qwen3.8's COMPLETED artifact TIES the frontier on Delivery
+
+**Delivery: 2–2 TIE · Character: FRONTIER 5–1 · OVERALL: FRONTIER.** Not
+flagged CLOSE. Out-of-band scorecard, not ladder-bearing; METHODS §5
+family caveat applies (Opus judge, Claude-authored frontier). Record:
+`dev/blind_panel/records/flight_20260822_qwen38_vs_frontier.md`.
+
+**THE BEST LOCAL ARTIFACT THE CAMPAIGN HAS PRODUCED, and not by a
+little.** Firsts, all of them:
+  * **47/47 conformance, zero unmet, NEAR-FULL** — no local artifact had
+    ever swept the checklist. The sitting guardian scores 41/47
+    SIGNIFICANTLY-DEVIATED on the same instrument.
+  * **WON**, victory reached and reproduced.
+  * **11/11 rooms reachable, ZERO unplaced entities** (8/8 items, 4/4
+    monsters, 3/3 NPCs). The campaign's most common decisive defect —
+    seven prior artifacts, including one of our own anchors — absent.
+  * **ZERO tracebacks across the whole robustness battery**, including
+    EOF at every prompt and a corrupted save. The FRONTIER crashed twice
+    (uncaught EOFError at its title prompt, rc=1, and at quit-confirm).
+  * **No seam bug stopped the judge on either side** — the first flight
+    in the campaign where BOTH artifacts pass the placement audit
+    outright.
+
+**It TIED the frontier on Delivery**, taking A3 robustness and A4
+delivered scope (11 rooms vs 9, 8 items vs 7, 3 NPCs vs 2, 6 genuine
+passing tests and a real pyproject/ruff setup vs none). It lost A1 and
+A2 — A2 on the one materially actionable defect in the tree: **monster
+HP is not saved**, so a reload heals a wounded monster (13/18 wolf
+restored to 18).
+
+**It lost Character 5–1, on DESIGN grounds rather than delivery ones.**
+The frontier reached further (save-persistent poison, turn-indexed and
+HP-threshold monster scripts, a boss whose RESISTANCE flips into the
+weakness so the special item is a weapon you must still fight with),
+wrote characters with interiority, and shows enemy HP every combat
+round. qwen's sigil ENDS the encounter rather than shaping it, and its
+combat hides enemy HP unless the player types `look` mid-fight. Its one
+Character win is B9 workability — the engine returns List[str] instead
+of printing, which is WHY it is testable.
+
+**READ THIS AGAINST THE PRE-REGISTERED EXPECTATION** in
+`llmvp/configs/qwen3.8-27b.yaml` ("matches or modestly beats the
+3.6-27B artifact"): settled far on the upside, and the lever was NOT
+the depth dial — the medium→low remap measured WORSE on charter
+authoring, while the append fast path carried the throughput. Run
+shape: mission COMPLETED 44/44 (3 quality-harvested), 109 work cycles
+(the fastest completion any model has managed on this challenge), ~36h
+traced at 96.6% inference-bound, 96.9% prefix reuse, ZERO degenerations
+across ~1,890 calls.
+
+**THE DESIGN GAP IS THE CAMPAIGN'S NEXT LEVER.** Delivery is now at
+parity with a one-shot frontier; character is where the five axes went.
+Combat legibility (show enemy HP) and a weakness that shapes rather
+than ends an encounter are two concrete, cheap changes to the brief or
+the charters that would close most of it.
