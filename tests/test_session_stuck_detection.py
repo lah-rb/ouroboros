@@ -139,48 +139,45 @@ def test_a_long_but_varied_playthrough_is_not_stuck():
     assert out.result.get("stuck_detected") is not True
 
 
-def test_a_long_honest_session_is_not_closed_by_a_turn_count():
-    """The budget is a RUNAWAY BACKSTOP, not a work limit. The old 90 closed
-    a quality-gate session on turn 90 of a ~92-turn game, so any honest
-    playthrough must clear it comfortably."""
-    from agent.actions.interactive_actions import _SESSION_TURN_BUDGET
-
-    assert _SESSION_TURN_BUDGET >= 200  # the ~92-turn world, with headroom
-    hx = [{"input": f"go {i}", "output": f"Room {i}\n> "} for i in range(150)]
+def test_no_turn_count_ever_closes_a_session():
+    """There is NO session turn budget, deliberately (operator, 2026-08-21).
+    A turn count cannot tell an orbit from a large world — the 90-turn cap
+    that used to live here truncated a ~92-turn game two moves from its
+    ending. The wall is the only honest bound, and it is enforced by the
+    tier runner's time-up kill, not from in here."""
+    hx = [{"input": f"go {i}", "output": f"Room {i}\n> "} for i in range(400)]
     out = _run(hx, "go on")
     assert out.result.get("stuck_detected") is not True
 
 
-def test_a_varying_orbit_is_eventually_closed_by_the_backstop():
-    """The case that removing the budget outright missed: an orbit whose
-    output VARIES slips both guards — the degeneration guard sees only
-    inside one generation, and _STUCK_IDENTICAL_RUNS needs byte-identical
-    outputs. qwen3-next-coder ran ONE session to 335 turns with zero goal
-    progress and could not be staged, because the tier backstop only acts
-    at a cycle boundary."""
-    from agent.actions.interactive_actions import _SESSION_TURN_BUDGET
-
+def test_a_varying_orbit_slips_the_in_session_guards():
+    """Documents WHY the bound has to be the wall. A session that varies its
+    output each turn is invisible to both in-session guards: the degeneration
+    guard sees only inside one generation, and the stuck detector needs
+    byte-identical outputs. qwen3-next-coder orbited one session to 335 turns
+    this way. Nothing here can catch it — the runner must."""
     hx = [
-        {"input": f"look {i}", "output": f"Varying output {i}\n> "}
-        for i in range(_SESSION_TURN_BUDGET)
+        {"input": f"look {i}", "output": f"Varying output {i}\n> "} for i in range(300)
     ]
     out = _run(hx, "look again")
-    assert out.result.get("stuck_detected") is True
-    assert "backstop" in out.observations.lower()
+    assert out.result.get("stuck_detected") is not True
 
 
-def test_repetition_still_closes_a_very_long_session():
-    """Removing the count cap must not remove the real guard: byte-identical
-    repeats still close, at any session length."""
-    from agent.actions.interactive_actions import _STUCK_IDENTICAL_RUNS
+def test_tier_runner_kills_an_arm_that_never_parks():
+    """The wall is handed to the AGENT, which parks itself at a cycle
+    boundary — so a wedged cycle outlives it. The runner enforces the wall
+    independently after a grace period; without this the 08-21 arm sat 40
+    minutes past its wall and had to be abandoned by hand."""
+    from pathlib import Path
 
-    hx = [{"input": f"go {i}", "output": f"Room {i}\n> "} for i in range(300)]
-    hx += [
-        {"input": "look", "output": "The Vault\n> "}
-        for _ in range(_STUCK_IDENTICAL_RUNS)
-    ]
-    out = _run(hx, "look")
-    assert out.result.get("stuck_detected") is True
+    from agent.tier.runner import WALL_GRACE_S
+
+    assert 300 <= WALL_GRACE_S <= 1800  # generous enough for an honest cycle
+    src = (
+        Path(__file__).resolve().parents[1] / "agent" / "tier" / "runner.py"
+    ).read_text()
+    assert "TIME-UP KILL" in src
+    assert "wall_killed" in src  # the record says the wall did not stop it
 
 
 def test_run_session_gets_a_step_ceiling_above_any_real_session():

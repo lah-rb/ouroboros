@@ -244,32 +244,24 @@ _STUCK_IDENTICAL_RUNS = 4  # 4 identical priors → the 5th send trips
 # turns ≈ 185 steps triggers the GRACEFUL close — evaluated on what it
 # reached — with margin for the close/evaluate chain before the engine
 # backstop.
-# RUNAWAY BACKSTOP, not a work limit. History, because both mistakes are
-# instructive:
+# NO SESSION TURN BUDGET — deliberate, and re-affirmed after a failure that
+# looked like an argument for one (operator, 2026-08-21).
 #
-#   90 (2026-08-03 → 08-21) was a WORK limit and truncated real work: it
-#   closed a quality-gate session on turn 90 of a ~92-turn game with the
-#   tester holding the weakness item at the last gate, and the gate then
-#   truthfully reported the endgame "untested". A cap that scales with
-#   nothing punishes the biggest worlds most.
+# The 90-turn cap that lived here until 08-21 was a WORK limit and truncated
+# real work: it closed a quality-gate session on turn 90 of a ~92-turn game
+# with the tester holding the weakness item at the last gate, and the gate
+# then truthfully reported the endgame "untested". A cap that scales with
+# nothing punishes the biggest worlds most.
 #
-#   REMOVING it outright (same day) was the opposite error. The guards it
-#   was said to defer to do not cover an orbit: the degeneration guard
-#   catches token-level repetition INSIDE one generation, and
-#   _STUCK_IDENTICAL_RUNS needs BYTE-IDENTICAL outputs — a session that
-#   varies its input each turn slips both. qwen3-next-coder then ran ONE
-#   session to 335 turns with zero goal progress, and because the tier
-#   backstop only takes effect at a cycle boundary, the arm could not be
-#   staged at all: the runner sat 40 minutes past its wall waiting for a
-#   cycle that would never end. Unbounded is not the same as trusting the
-#   guards; it removes the only bound that catches a VARYING orbit.
+# Removing it exposed a real hole — qwen3-next-coder orbited ONE session to
+# 335 turns with zero goal progress and the arm could not be staged — but a
+# turn count is the wrong instrument for it. A turn budget cannot tell an
+# orbit from a large world; only the WALL can, and the wall already exists.
+# The fix belongs in the tier runner's time-up path (hard kill after the
+# grace period), not here. See agent/tier/runner.py.
 #
-# So: high enough that no honest session reaches it (the game world that
-# lost work at 90 needed ~92; the largest healthy session observed is well
-# under 200), low enough to cap a runaway inside one arm's wall. The
-# sub-flow step ceiling was raised to match (runtime._SUBFLOW_MAX_STEPS),
-# so this fires as a graceful close rather than MaxStepsExceeded.
-_SESSION_TURN_BUDGET = 250
+# What still closes a session from in here: _STUCK_IDENTICAL_RUNS
+# byte-identical repeats, process_exited, and the model's own close.
 
 # A screen-orbit cycle detector (≤3 distinct screens over a 12-turn window,
 # all previously seen → force-close) lived here for one day (58eb83c) and
@@ -567,24 +559,6 @@ async def action_send_interaction(step_input: StepInput) -> StepOutput:
     # the tester is sending it yet again. "At that point it really looks
     # like circling, not productive terminal time." Repeated input whose
     # output changes is progress; the turn budget bounds the rest.
-    if len(session_history) >= _SESSION_TURN_BUDGET:
-        return StepOutput(
-            result={
-                "command_sent": False,
-                "stuck_detected": True,
-                "duplicate_input": "",
-            },
-            observations=(
-                f"Turn budget: session reached {len(session_history)} turns "
-                f"(runaway backstop {_SESSION_TURN_BUDGET}) — closing so the "
-                f"charter can be evaluated on what it did reach"
-            ),
-            context_updates={
-                "mcp_session_id": session_id,
-                "session_history": session_history,
-            },
-        )
-
     if len(session_history) >= _STUCK_IDENTICAL_RUNS:
         tail = session_history[-_STUCK_IDENTICAL_RUNS:]
         outputs = {(e.get("output", "") or "").strip() for e in tail}

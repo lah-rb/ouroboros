@@ -367,6 +367,15 @@ BOOT_TIMEOUT_S = 1200  # step-3.7/hy3-class weights load slowly
 TERM_WAIT_S = 240  # polite window before escalating
 KILL_AFTER_S = 240
 POLL_S = 30
+# Independent time-up enforcement. --max-wall-clock is handed to the agent,
+# which parks ITSELF at the next cycle boundary — so an arm whose cycle never
+# ends is never bounded by it at all. Live 2026-08-21: a PTY session orbited
+# to 335 turns with zero goal progress, the cycle never closed, and the runner
+# sat 40 MINUTES past the wall waiting for a park that could not come; the arm
+# had to be abandoned by hand. The grace is generous on purpose — an honest
+# cycle (a long session plus its evaluate turn) must be able to finish and
+# park cleanly, and only a genuinely wedged one should be killed.
+WALL_GRACE_S = 600
 
 # One event, not one line. The shell version grepped `degenerat|long-cycle|
 # repetition guard` and reported 5 for a single abort, because one event writes
@@ -387,7 +396,7 @@ CHAIN_ENDING = ("stop", "force-stop", "pause")
 @dataclass
 class ArmResult:
     config: str
-    status: str  # completed | skipped | unsupported | create_failed
+    status: str  # completed | skipped | wall_killed | unsupported | create_failed
     minutes: int = 0
     files: int = 0
     py_ok: int = 0
@@ -950,8 +959,27 @@ class TierRun:
             )
 
         control = None
+        wall_s = parse_duration(backstop or self.wall)
+        overrun_killed = False
         while proc.poll() is None:
             self._heartbeat(idx, config, work, slog, rlog, started)
+            # Time-up backstop: the agent parks itself at a CYCLE boundary, so
+            # a wedged cycle can outlive its wall indefinitely. Past wall +
+            # grace, take the arm down and stage what it built.
+            if wall_s and (time.time() - started) > wall_s + WALL_GRACE_S:
+                over = int((time.time() - started - wall_s) / 60)
+                self.log(
+                    f"  !! TIME-UP KILL — {over}min past the {backstop} wall "
+                    f"(grace {WALL_GRACE_S // 60}min); the agent never parked, "
+                    f"so the cycle is wedged. Staging what exists."
+                )
+                overrun_killed = True
+                proc.terminate()
+                try:
+                    proc.wait(timeout=60)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                break
             word = self._take_control()
             if word:
                 control = word
@@ -996,6 +1024,16 @@ class TierRun:
 
         res = self._tally(config, work, rlog, int(elapsed_s / 60))
         res.status = "skipped" if control in ("skip", "force-stop") else "completed"
+        if overrun_killed:
+            # The arm is staged (it built what it built) but the record must
+            # say the wall did not stop it cleanly — a reader comparing cyc/h
+            # or goals against a normally-parked arm needs to know this one
+            # was cut out of a wedged cycle.
+            res.status = "wall_killed"
+            res.detail = (
+                f"time-up kill: never parked within "
+                f"{WALL_GRACE_S // 60}min grace past the wall"
+            )
         res.league = league
         res.cycles = cycles_consumed(work)
         rate = (res.cycles / (res.minutes / 60)) if res.minutes else 0.0
