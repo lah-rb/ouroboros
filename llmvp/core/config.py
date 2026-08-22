@@ -60,6 +60,12 @@ class ModelConfig(BaseModel):
     # "none" as well.
     main_gpu: Optional[int] = None
     split_mode: Optional[str] = None  # "none" | "layer" | "row"
+    # Per-device layer proportions for split_mode=layer (llama.cpp
+    # tensor_split). Deterministic placement for the 3060 layer-split
+    # experiment (2026-08-22): the default free-VRAM-proportional split
+    # moves with whatever else is resident at load time, which makes an
+    # OOM ladder unrepeatable.
+    tensor_split: Optional[list] = None
     seed: int
     verbose: bool
 

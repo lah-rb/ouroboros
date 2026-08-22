@@ -547,6 +547,12 @@ class LlamaCppBackend(BaseBackend):
         _split = getattr(self.config.model, "split_mode", None)
         if _split is not None:
             placement["split_mode"] = self._SPLIT_MODES[str(_split).lower()]
+        _tsplit = getattr(self.config.model, "tensor_split", None)
+        if _tsplit:
+            # Deterministic per-device proportions (see config.py): the
+            # free-VRAM-proportional default moves with whatever else is
+            # resident at load, which makes an OOM ladder unrepeatable.
+            placement["tensor_split"] = [float(x) for x in _tsplit]
 
         return Llama(
             model_path=str(self.config.model.path),

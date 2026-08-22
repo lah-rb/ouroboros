@@ -232,6 +232,14 @@ model:
   #     main_gpu: main_gpu alone names a primary device while LAYER split
   #     still spreads across the rest, so the pin would be inert.
   split_mode: none
+
+  # Per-device layer proportions for split_mode: layer (llama.cpp
+  # tensor_split), e.g. [34, 18] to place 34/52 of the layers on device 0
+  # and 18/52 on device 1. Deterministic placement for multi-GPU layer
+  # splits — the free-VRAM-proportional default moves with whatever else
+  # is resident at load time, which makes an OOM ladder unrepeatable.
+  # null = llama.cpp's default proportional split.
+  tensor_split: null
   # [M] Type: int — sampling seed (-1 = random)
   seed: -1
   # [M] Type: bool — llama.cpp verbose logging
