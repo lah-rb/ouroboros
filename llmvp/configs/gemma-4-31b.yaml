@@ -225,5 +225,30 @@ logging:
 # it is to make a SURPRISE legible, so an unexpected score prompts a look at
 # the run before the number enters the ledger.
 tier:
-  league: contemplator  # LOAD-BEARING — agent/tier/runner.py:config_league
+  league: grinder  # LOAD-BEARING — agent/tier/runner.py:config_league
   status: not_yet_run  # history: llmvp/configs/archive/TIER_JUDGEMENTS.md
+# ── LEAGUE RE-MEASURED contemplator -> grinder (operator, 2026-08-22) ──
+# The contemplator label came from the 2026-08-02 arm (13.4 cyc/h, 36
+# thought emissions) and was WRONG for this checkpoint by the time it was
+# applied, then wrong again for a different reason. Two arms one day apart
+# settle it:
+#
+#   08-21, thinking silently OFF (the gate-family low-bake, 6a87aca):
+#     30 cycles / 65 min = 27.7 cyc/h, 12/30 goals, 0 CoT
+#   08-22, thinking RESTORED and telemetry honest (6a87aca + 829fd91):
+#     30 cycles / 64 min = 28.1 cyc/h,  9/30 goals, CoT live —
+#     11 of 118 calls thought (9%), 693 tok/call, mean 80% thought,
+#     16% of all generated output
+#
+# CoT changed the OUTPUT and not the PACE: same cyc/h to the decimal, same
+# wall, three FEWER goals. So the contemplator bound was never buying this
+# model deliberation time — it was just truncating it, twice, at ~65 min
+# into a 2h stage window. It grinds; classify it as a grinder and let the
+# WALL bound it like every other grinder.
+#
+# The routing is confirmed healthy, which is what makes this a capability
+# read rather than an instrumentation artifact: every gate-OPEN step
+# thought 100% of the time (generate_new_symbol 4/4, plan_setup 1/1), and
+# plan_interaction — routed explicit low by house policy — thought on 6 of
+# 38 by the model's own elasticity. The dial works; the model still lands
+# 9/30 on the current brief.
