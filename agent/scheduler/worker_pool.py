@@ -565,6 +565,16 @@ def lanes_for_scraper() -> List[Lane]:
             est_kv=20_000,
             idle_backoff_s=30.0,
         ),
+        # Third curate lane (2026-08-22 03:xx): two lanes ran 59d/59d
+        # zero-idle at ~70 verdicts/h while 4 seats and 92k cells sat
+        # free — the pool still outruns curate submission.
+        Lane(
+            name="curate3",
+            flow="curate_drain",
+            resource="text_seat",
+            est_kv=20_000,
+            idle_backoff_s=30.0,
+        ),
         # OA recovery: pure network I/O (Wayback / CORE / meta-tag routes)
         # — no muse seat, no KV, paced by the shared per-host politeness
         # state. Long idle backoff: each record is walked ONCE (stamped),

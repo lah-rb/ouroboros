@@ -74,6 +74,7 @@ async def test_a_v2_mission_starts_lanes_and_stops_them_cleanly():
             "translate2",
             "curate",
             "curate2",
+            "curate3",
             "recover",
             "biblio",
         }
