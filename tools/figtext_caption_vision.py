@@ -113,8 +113,14 @@ def extract_caption(reply: str) -> str:
     if not m:
         return ""
     cap = reply[m.start() :]
-    # Trim a closing quotation the wrapper opened, and wrapper tails.
-    cap = re.split(r'["\u201d\u00bb]\s*(?:$|[.,]?\s*The image|\s*This )', cap)[0]
+    # The caption sits inside the model's quotation: the FIRST closing
+    # quote ends it, whatever prose follows (live replies append
+    # deliberation like 'The instruction says...' whose question marks
+    # tripped the guard below). Captions containing literal double
+    # quotes are rare enough to spend. A paragraph break also ends an
+    # unquoted caption.
+    cap = re.split(r'["\u201c\u201d\u00bb]', cap)[0]
+    cap = cap.split("\n\n")[0]
     cap = re.sub(r"\s+", " ", cap).strip(" \"'\u201c\u201d")
     if not (15 <= len(cap) <= 1500):
         return ""
