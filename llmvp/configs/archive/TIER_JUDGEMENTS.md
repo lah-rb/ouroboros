@@ -4286,3 +4286,49 @@ parity with a one-shot frontier; character is where the five axes went.
 Combat legibility (show enemy HP) and a weakness that shapes rather
 than ends an encounter are two concrete, cheap changes to the brief or
 the charters that would close most of it.
+
+## 2026-08-22 — GUARDIAN GATE PART 2: gemma also fails to reverse — GATE CLOSED, ANCHOR HOLDS
+
+**Delivery: 2–2 EVEN · Character: GUARDIAN 5–1 · OVERALL: GUARDIAN.**
+No panel split (an even panel has no direction to contradict). Probe
+rotated to A. Record:
+`dev/blind_panel/records/flight_20260822_gemma_vs_guardian.md`.
+
+**BOTH PROBES HAVE NOW LOST. The gate registered 2026-08-20 — before
+either arm ran — is closed from both sides:**
+  * `qwen3-next-coder-80b-a3`, the DECISIVE confound-free probe: lost.
+  * `gemma-4-31b`, corroborating only: lost here.
+**RULING: `guardian-gptoss-20260803` HOLDS.**
+`guardian-candidate-gptoss-20260819` remains a CANDIDATE; the gpt-oss
+8–2 stands as a same-family framework gain, not evidence the anchor
+decayed. Nothing in the ladder moves. FLOOR remains
+`floor-devstral-20260820`.
+
+**THE CONFOUND CUT THE OTHER WAY, WHICH IS THE FINDING.** Gemma entered
+this arm with every advantage the campaign could give it — thinking
+restored (6a87aca; its 0–5 v2.0 baseline was set with the dial silently
+OFF), honest CoT telemetry (829fd91), the class-attribute repair route
+(19d61d2), grinder league so the wall rather than a stale cycle cap
+bounds it — and a RUN that improved 45% (11/30 → 16/31, the `help` goal
+that cost an hour landing first-pass, zero symbol-table fallbacks). It
+still lost, and lost Character 5–1. **Run-shape gains and artifact
+placement are different axes; the framework fixes are real and did not
+move the placement at all.**
+
+Conformance is where the gap is starkest: **gemma 30/47 firing BOTH
+triggers** (17 unmet ≥ 10, AND core-loop item 31 absent) against the
+guardian's 41/47 firing only core-loop. The verbs `go`, `examine`,
+`attack`, `flee` appear NOWHERE in gemma's tree — four of the five its
+own README documents — and its combat loop reads no player input at
+all: the fight scrolls past on room entry with zero decisions in it.
+Its boss is unkillable in principle (150 HP vs a maximum deliverable
+105, the only armour sitting inside the auto-fighting boss room).
+Charged interaction-side: TWO SHIPPED FAILING TESTS, one asserting an
+`examine` command the tree never implements.
+
+**THE SYMMETRY, NOW THREE FLIGHTS DEEP:** six artifacts, four models,
+three framework eras — every one UNWINNABLE with **no win state
+anywhere in its tree**. The judge's line is the one to keep: *"A seam
+bug is what stopped me in B. It is not what stopped me in A — in A
+there was nothing to stop."* This is the single most repeated finding
+of the campaign and belongs at the top of any brief revision.
