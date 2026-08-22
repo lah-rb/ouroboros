@@ -1288,7 +1288,18 @@ async def action_scholarly_search(step_input: StepInput) -> StepOutput:
 # default 2000). The walk declines once reached — expansion never
 # outruns the conversation about how far it should go.
 
-_DOI_IN_TEXT_RE = re.compile(r"10\.\d{4,9}/[^\s\"'<>\])};,]+", re.IGNORECASE)
+# Parens INCLUDED: pre-2000 SICI-format DOIs (10.1002/(SICI)1097-...,
+# 10.1016/S1296-2074(00)01084-X) legitimately contain them, and those
+# are exactly the heavily-cited classics — the first histogram's top
+# entries were all SICI fragments truncated at '('. Trailing unbalanced
+# close-parens are stripped after the match instead.
+_DOI_IN_TEXT_RE = re.compile(r"10\.\d{4,9}/[^\s\"'<>\]};,]+", re.IGNORECASE)
+# SICI-form DOIs (pre-2000 Wiley/era) additionally contain < > ; —
+# characters far too dangerous for the general pattern in markdown, so
+# they get their own scoped match, and their spans are removed from the
+# text before the general pass (else the general pattern re-emits each
+# one's truncated prefix as a phantom second DOI).
+_SICI_DOI_RE = re.compile(r"10\.\d{4,9}/\(sici\)[^\s\"']+", re.IGNORECASE)
 
 
 def extract_reference_dois(md: str, cap: int = MAX_REFERENCE_DOIS) -> list[str]:
@@ -1304,8 +1315,15 @@ def extract_reference_dois(md: str, cap: int = MAX_REFERENCE_DOIS) -> list[str]:
     refs = md[m.start() :] if m else (md or "")[-max(2000, len(md or "") // 3) :]
     out: list[str] = []
     seen: set[str] = set()
-    for raw in _DOI_IN_TEXT_RE.findall(refs):
-        doi = raw.rstrip(".;,)]}\"'").lower()
+    sici = _SICI_DOI_RE.findall(refs)
+    refs = _SICI_DOI_RE.sub(" ", refs)
+    for raw in sici + _DOI_IN_TEXT_RE.findall(refs):
+        doi = raw.rstrip(".;,]}\"'").lower()
+        # Strip a trailing close-paren only when UNBALANCED — Elsevier
+        # PII DOIs end in ')...-X' legitimately, but '(10.xxxx/yyy)'
+        # wrappers leave a stray one.
+        while doi.endswith(")") and doi.count(")") > doi.count("("):
+            doi = doi[:-1]
         # Markdown image/link artifacts and figure paths are not DOIs.
         if doi.endswith((".png", ".jpg", ".jpeg", ".svg", ".gif")):
             continue
