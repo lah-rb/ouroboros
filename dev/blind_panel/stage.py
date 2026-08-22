@@ -140,17 +140,29 @@ def arm_identifier_stems(config_name: str) -> list[str]:
     pass while carrying its own name.
 
     Stems are alphabetic and >= 4 chars so a size or revision suffix ("30b",
-    "a5", "v4") cannot flood every artifact with false hits. Alphabetic SIZE
-    WORDS get the same treatment for the same reason: devstral-2-SMALL-24b
-    blocked its own floor rerun (2026-08-20) on world.yaml prose "A small
-    set of metal tools" — a size-class label is not identity, and a judge
-    cannot recover a model name from ordinary English. Only generic size
-    words are exempt; every other alphabetic token still blocks.
+    "a5", "v4") cannot flood every artifact with false hits. GENERIC WORDS
+    get the same treatment for the same reason: a config name is a vendor
+    string, and the parts of it that are ordinary English identify nothing.
+    Twice in two days a model blocked its own arm on its own prose —
+    devstral-2-SMALL-24b on "A small set of metal tools" (08-20), and
+    qwen3-NEXT-coder-80b-a3 on the word "next" in both world_data.yaml and
+    engine.py (08-21). A judge cannot recover a model name from a word the
+    language hands out for free; the DISTINCTIVE stems (qwen, devstral,
+    gemma, coder, …) still block, which is what actually protects the
+    flight.
     """
-    SIZE_WORDS = {"tiny", "mini", "small", "medium", "large"}
+    GENERIC_WORDS = {
+        # size classes
+        "tiny", "mini", "small", "medium", "large", "huge",
+        # positional / qualifier words that are ordinary English
+        "next", "base", "core", "main", "full", "lite", "plus", "pro",
+        "max", "ultra", "turbo", "fast", "flash", "air", "high", "low",
+        # serving-shape words
+        "chat", "instruct", "code", "text", "vision", "reason", "think",
+    }
     stems = {config_name.strip().lower()}
     for token in re.split(r"[^a-zA-Z]+", config_name):
-        if len(token) >= 4 and token.lower() not in SIZE_WORDS:
+        if len(token) >= 4 and token.lower() not in GENERIC_WORDS:
             stems.add(token.lower())
     return sorted(s for s in stems if s)
 

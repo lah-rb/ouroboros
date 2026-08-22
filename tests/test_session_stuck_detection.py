@@ -139,15 +139,34 @@ def test_a_long_but_varied_playthrough_is_not_stuck():
     assert out.result.get("stuck_detected") is not True
 
 
-def test_a_very_long_session_is_not_closed_by_a_turn_count():
-    """The 90-turn budget is GONE (2026-08-21). It closed the quality-gate
-    session on turn 90 of a ~92-turn game — tester holding the weakness item
-    at the last gate — and the gate then truthfully reported the endgame
-    untested. A cap that scales with nothing punishes the biggest worlds
-    most. Only repetition closes a session now."""
-    hx = [{"input": f"go {i}", "output": f"Room {i}\n> "} for i in range(300)]
+def test_a_long_honest_session_is_not_closed_by_a_turn_count():
+    """The budget is a RUNAWAY BACKSTOP, not a work limit. The old 90 closed
+    a quality-gate session on turn 90 of a ~92-turn game, so any honest
+    playthrough must clear it comfortably."""
+    from agent.actions.interactive_actions import _SESSION_TURN_BUDGET
+
+    assert _SESSION_TURN_BUDGET >= 200  # the ~92-turn world, with headroom
+    hx = [{"input": f"go {i}", "output": f"Room {i}\n> "} for i in range(150)]
     out = _run(hx, "go on")
     assert out.result.get("stuck_detected") is not True
+
+
+def test_a_varying_orbit_is_eventually_closed_by_the_backstop():
+    """The case that removing the budget outright missed: an orbit whose
+    output VARIES slips both guards — the degeneration guard sees only
+    inside one generation, and _STUCK_IDENTICAL_RUNS needs byte-identical
+    outputs. qwen3-next-coder ran ONE session to 335 turns with zero goal
+    progress and could not be staged, because the tier backstop only acts
+    at a cycle boundary."""
+    from agent.actions.interactive_actions import _SESSION_TURN_BUDGET
+
+    hx = [
+        {"input": f"look {i}", "output": f"Varying output {i}\n> "}
+        for i in range(_SESSION_TURN_BUDGET)
+    ]
+    out = _run(hx, "look again")
+    assert out.result.get("stuck_detected") is True
+    assert "backstop" in out.observations.lower()
 
 
 def test_repetition_still_closes_a_very_long_session():
