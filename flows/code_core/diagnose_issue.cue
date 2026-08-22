@@ -232,19 +232,6 @@ diagnose_issue: #FlowDefinition & {
 		investigate: #StepDefinition & {
 			action:      "inference"
 			description: "Trace another symbol or conclude — single compound menu, loops until budget or conclude"
-			// MEDIUM, declared (operator, 2026-08-22). This step decides what
-			// evidence to gather and when the evidence is sufficient — the
-			// substantive half of the whole repair loop, not a mechanical one.
-			// It carried NO declaration, and an undeclared level is not
-			// neutral: on a per_request family resolve_thinking maps
-			// requested=None to the family's LOWEST, so gemma-4-31b ran every
-			// investigate turn with its think gate CLOSED for a full 2h arm
-			// (0 CoT across 14 diagnose sessions; its only thinking came from
-			// the explicitly-routed stateless steps). Silent thinking-off on
-			// the reasoning step is exactly the shape of defect this policy
-			// exists to prevent — see dev/REASONING_DEPTH_POLICY_2026-08-16.md
-			// §(f), substantive judgement medium-high.
-			config: reasoning: "medium"
 			context: {
 				required: ["diagnosis_session_id"]
 				optional: ["investigation_turn", "file_context"]
@@ -296,6 +283,21 @@ diagnose_issue: #FlowDefinition & {
 					default:   "conclude"
 					no_answer: "conclude"
 				}
+				// MEDIUM (operator, 2026-08-22). This step decides what evidence
+				// to gather and when the evidence is sufficient — the substantive
+				// half of the repair loop, not a mechanical menu pick. It carried
+				// NO declaration, and an undeclared level is NOT neutral: on a
+				// per_request family resolve_thinking maps requested=None to the
+				// family's LOWEST, so gemma-4-31b ran every investigate turn with
+				// its think gate CLOSED for a full 2h arm (0 CoT across 14
+				// diagnose sessions). See dev/REASONING_DEPTH_POLICY_2026-08-16.md
+				// §(f), substantive judgement medium-high.
+				//
+				// MUST live in the TURN block, not the step. For a turn step the
+				// runtime reads turn.config; a step-level `config:` compiles fine
+				// and is never read — which is how the first attempt at this fix
+				// (19d61d2) shipped inert and had to be caught in a live arm.
+				config: reasoning:   "medium"
 				config: temperature: "t*0.3"
 				retries: 3
 			}
