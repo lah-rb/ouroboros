@@ -70,7 +70,12 @@ class Lane:
 # Measured N* per resource comes from the throughput sweep; until it runs
 # these are the conservative shapes already proven in production.
 DEFAULT_LANE_MAX_INFLIGHT: Dict[str, int] = {
-    "text_seat": 2,
+    # 2 -> 5 (2026-08-22): the cap predates the 6-seat split engine; at 2
+    # the curate pair saturated it and curate3 AND both translate lanes
+    # sat blocked all night — the cap, not the pool, was the ceiling.
+    # 5 leaves one seat for the acquire flow's catalog turns; the
+    # engine's admission remains the correctness backstop.
+    "text_seat": 5,
     "vision_ctx": 1,
     "paddle": 1,
     "network": 1,
