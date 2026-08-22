@@ -4182,3 +4182,51 @@ model (qwen3-next-coder's cleanest-of-epoch run shape was a 6/6 batch
 turn at cycle 1) may be handicapped here. If a probe fails to reverse,
 check its structural mode before reading it as evidence the guardian
 holds.
+
+## 2026-08-22 — GUARDIAN GATE RESOLVED: the decisive probe LOSES; the anchor HOLDS
+
+**Delivery: A(Guardian) 3–1 · Character: 3–3 TIED (not a split) ·
+OVERALL: GUARDIAN.** No CLOSE flag. Probe rotated to B. Record:
+`dev/blind_panel/records/flight_20260822_qwencoder_vs_guardian.md`.
+
+**The pre-registered rule decides this, as written on 2026-08-20 before
+either arm ran.** `qwen3-next-coder-80b-a3` was named the DECISIVE probe
+because it is dial-less (`thinking_available: false`) and therefore the
+only one of the two immune to the requested-thinking confound. It did NOT
+reverse its v2.0 0–5 sweep — it lost again, on a wider Delivery margin
+than the character panel could offset. The rule's remaining branch is
+explicit: **a gemma-only reversal is NOT atrophy evidence.** So the gate
+is closed regardless of gemma's pending arm.
+
+**RULING: the sitting guardian `guardian-gptoss-20260803` HOLDS.** The
+gpt-oss candidate's 8–2 stands as a same-family framework gain, not
+proof the anchor decayed. `guardian-candidate-gptoss-20260819` stays a
+CANDIDATE; promotion is not warranted on this evidence.
+
+**What the operator's other hypothesis gains instead:** the challenge has
+grown with the framework (20 → 36 goals, two-phase bosses, dialogue
+state), and a no-think coder that posted "the epoch's cleanest shape" on
+the older brief may now sit below the line the current brief draws. This
+reads as a PLACEMENT result, not a broken run — and the probe's own
+run-shape supports it: escalation interceded essentially never across ~6h
+(one forced boss consult total), because the gate counts failed ATTEMPTS
+per goal while this model fails by WANDERING inside a single session,
+which an attempt counter cannot see.
+
+**The probe's artifact — a total cross-file identifier seam.** 7 of 8
+rooms reachable, but 1 of 6 items, 1 of 5 monsters, 1 of 2 NPCs and
+**0 of 1 boss**: `rooms.yaml` references ids present in no registry while
+the registry's real entities — including the boss `malgath_the_hollow`
+and the weakness item `void_shard` — are placed in NO room at all. Both
+placement failure forms at once, plus a stranded `altar_chamber` whose
+back-link exists and whose way in never did. Two archetype seams stopped
+the judge: a parser taking `tokens[1]` so the game refuses every name it
+prints, and `process_combat_turn()`'s narration string discarded by its
+only caller (so `quit` printed "You defeated Goblin Scout!" and did not
+quit).
+
+**THE SYMMETRY WORTH KEEPING:** both artifacts are UNWINNABLE with **no
+win path anywhere in either tree** — grep finds no victory language in
+the guardian's, and only `quit`'s "GAME OVER" in the probe's. Two models,
+two framework eras, the same absence. That is the campaign's most
+transferable finding to date and belongs in any future brief revision.
