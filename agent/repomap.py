@@ -308,11 +308,29 @@ def _extract_python_tree_sitter(
 
         elif (
             node.type == "expression_statement"
-            and parent_class is None
             and node.parent
-            and node.parent.type == "module"
+            and (
+                (parent_class is None and node.parent.type == "module")
+                # CLASS-BODY assignment (2026-08-22). Previously only
+                # module-level assignments were emitted, so a class attribute
+                # was invisible to the symbol table — and therefore to every
+                # repair route: patch needs a symbol to rewrite, and add_symbol
+                # is for symbols that do not exist yet. A diagnosis naming one
+                # was correct and UNACTIONABLE at the same time.
+                #
+                # Measured: gemma-4-31b spent an hour of a 2h arm on
+                # `Parser.ACTION_MAP` — 24 diagnoses, four forced boss
+                # consults, seven byte-identical investigations that DID read
+                # the map every lap — while every file_ops attempt logged
+                # `related_symbols not in symbol_table` and left it
+                # `unresolved`. The edit only landed when patch happened to
+                # rewrite a CONTAINING symbol that carried the dict along.
+                # Same failure family as 88c's module-level variables, one
+                # scope deeper.
+                or (parent_class is not None and node.parent.type == "block")
+            )
         ):
-            # Top-level variable assignment
+            # Variable assignment — module level, or a class attribute
             first_child = node.children[0] if node.children else None
             if first_child and first_child.type == "assignment":
                 left = first_child.child_by_field_name("left")
@@ -344,9 +362,16 @@ def _extract_python_tree_sitter(
                             start_byte=node.start_byte,
                             end_byte=node.end_byte,
                             signature=sig,
+                            # parent makes it addressable as `Class.ATTR`,
+                            # the form a diagnosis actually names.
+                            parent=parent_class,
                         )
                     )
-                    defined_names.add(name)
+                    # Only module-level names shadow at module scope; a class
+                    # attribute must NOT enter defined_names or an unrelated
+                    # module-level reference to the same word resolves to it.
+                    if parent_class is None:
+                        defined_names.add(name)
 
         # Recurse into children
         for child in node.children:

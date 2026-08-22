@@ -3884,6 +3884,9 @@
       "investigate": {
         "action": "inference",
         "description": "Trace another symbol or conclude \u2014 single compound menu, loops until budget or conclude",
+        "config": {
+          "reasoning": "medium"
+        },
         "context": {
           "required": [
             "diagnosis_session_id"
@@ -3948,7 +3951,6 @@
           },
           "retries": 3
         },
-        "config": {},
         "publishes": [
           "investigation_response"
         ],
