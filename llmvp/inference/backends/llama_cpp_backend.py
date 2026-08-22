@@ -396,6 +396,24 @@ class LlamaCppBackend(BaseBackend):
             and bool(getattr(_model_cfg, "reasoning_head_swap", False))
             and (_fam == "harmony" or bool(_level_map))
         )
+        # GATE-LEVEL families (gemma, hy3, ...): thinking is switched by the
+        # PER-TURN generation-prompt gate (gate_levels), not by which system
+        # head a session baked — and for gemma the head carries the
+        # activation token itself, so a session that bakes the low head at
+        # turn 0 loses <|think|> for its whole life. Measured 2026-08-21
+        # (gemma-4-31b gate arm): plan_interaction routes explicit low, it is
+        # turn 0 of every session, and the arm produced 0 CoT emissions in
+        # 117 calls where the 08-02 pre-head-swap arm thought 36 times. For
+        # these families the session-level head machinery must stand down:
+        # the default head keeps the activation and the gate forecloses the
+        # low TURNS. Stateless completions keep per-request installs — a
+        # whole-prompt build renders the official bytes for its own level.
+        _gate_levels: list = []
+        try:
+            _gate_levels = list(_get_renderer(_fam).s.thinking.gate_levels or [])
+        except Exception:  # noqa: BLE001 — no renderer/spec = not gated
+            _gate_levels = []
+        self._reasoning_gate_family = bool(_gate_levels)
         self._h_reasoning_swaps = 0
         self._h_refresh_deferred = 0
         # JIT pool scaling
@@ -2119,6 +2137,11 @@ class LlamaCppBackend(BaseBackend):
         HEAD-SWAP. Whole-seq replace (like _resident_restore_static), so it is sound
         only at request/turn START (nothing above the head yet); the session
         manager calls it at turn 0. Returns True if a head was installed."""
+        if self._reasoning_gate_family:
+            # Gate family: the per-turn gate is the actuator; the session
+            # keeps the default (activation) head. See __init__ note —
+            # baking the low head here cost gemma every CoT of a tier arm.
+            return False
         _served = self._clamp_reasoning_level(
             level, self._reasoning_default_level, self._reasoning_pin_levels
         )
@@ -2232,6 +2255,10 @@ class LlamaCppBackend(BaseBackend):
         level word tokenizes identically), so the body positions stay aligned —
         verified per call; a mismatch refuses the splice (turn proceeds on the
         current level). Returns True if the splice happened."""
+        if self._reasoning_gate_family:
+            # Gate family: same stand-down as _install_reasoning_head — a
+            # low splice would strip the activation token mid-session.
+            return False
         _served = self._clamp_reasoning_level(
             level, self._reasoning_default_level, self._reasoning_pin_levels
         )
