@@ -131,3 +131,81 @@ class TestStripEdges:
 
     def test_plain_answer_passes_through(self):
         assert self._strip("Just an answer.") == "Just an answer."
+
+
+class TestInvChannelFSM:
+    """Gemma in the FSM proper (2026-08-21) — the NONE override is gone.
+
+    The inverted channel form (<|channel>thought ... <channel|>) is the same
+    opener/name/body/closer grammar as Harmony with the pipes on the inner
+    side. The 2026-08-03 exile to a _strip_delimiter rsplit made gemma the
+    one family the FSM didn't model: extraction worked but the CoT was never
+    labelled T, so reasoningTokens read 0 forever. Transitions are gated on
+    the full contiguous marker compounds, so the bare-'<' corruption class
+    (the B+tree `start <= key < end` truncation) cannot re-enter.
+    """
+
+    def _phases(self, raw):
+        from core.fsm_labeller import fsm_extract_phases
+
+        return fsm_extract_phases(raw, family="gemma")
+
+    def test_cot_form_splits_thinking_from_content(self):
+        ph = self._phases(
+            "<|channel>thought\nNine remain, buy 18, so 27.<channel|>"
+            "The farmer has 27 sheep."
+        )
+        assert ph.get("C", "").strip() == "The farmer has 27 sheep."
+        assert "Nine remain" in ph.get("T", "")
+
+    def test_preclosed_empty_channel_is_pure_content(self):
+        ph = self._phases("<|channel>thought\n<channel|>Direct answer.")
+        assert ph.get("C", "").strip() == "Direct answer."
+        assert ph.get("T", "").strip() == ""
+
+    def test_unclosed_channel_yields_no_content_but_keeps_the_cot(self):
+        # Truncated mid-CoT: no answer to extract — but unlike the old
+        # rsplit bypass, the thinking is RETAINED for telemetry/review.
+        ph = self._phases("<|channel>thought\nstill thinking when the budget died")
+        assert ph.get("C", "").strip() == ""
+        assert "still thinking" in ph.get("T", "")
+
+    def test_no_channel_stream_is_pure_content(self):
+        ph = self._phases("A direct answer with no channel at all.")
+        assert ph.get("C", "").strip() == "A direct answer with no channel at all."
+
+    def test_bare_angle_comparisons_in_code_survive(self):
+        # THE corruption class that exiled gemma from the FSM: bare '<'/'>'
+        # in generated code must never be eaten by marker recognition.
+        code = "def f(start,end,key):\n    return start <= key < end and key > 0"
+        ph = self._phases(f"<|channel>thought\nplan<channel|>{code}")
+        assert ph.get("C", "").strip() == code
+
+    def test_word_channel_after_lt_stays_content(self):
+        # `x < channel` is a comparison, not a closer — the featurizer
+        # requires exact contiguity plus a '|>' lookahead.
+        raw = "if x < channel and y > 2: pass"
+        ph = self._phases(raw)
+        assert ph.get("C", "").strip() == raw
+
+    def test_strip_delimiter_rides_the_generic_path(self):
+        # The bypass is gone: _strip_delimiter must produce the same content
+        # via the FSM, and forward the CoT to the tracker (reasoningTokens'
+        # source) instead of dropping it.
+        from unittest.mock import patch
+
+        import core.inference as ci
+
+        with (
+            patch.object(ci, "_get_fsm_family", return_value="gemma"),
+            patch.object(ci, "_get_delimiter", return_value="<channel|>"),
+        ):
+            out = ci._strip_delimiter(
+                "<|channel>thought\nsome reasoning<channel|>The answer."
+            )
+        assert out == "The answer."
+        from core.generation_tracker import get_tracker
+
+        assert "some reasoning" in (get_tracker().get_thinking() or {}).get(
+            "content", ""
+        )

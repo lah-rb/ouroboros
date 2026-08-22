@@ -96,25 +96,22 @@ _ALWAYS_STRUCTURAL_CATS = {
 
 class _ThinkShape(str, Enum):
     CHANNEL = "channel"  # harmony: <|channel|>name<|message|>
+    INV_CHANNEL = "inv_channel"  # gemma: <|channel>thought ... <channel|>
     ANGLE = "angle"  # chatml/olmo/laguna: <think></think>
     BRACKET = "bracket"  # tekken/mistral: [THINK][/THINK]
     NONE = "none"  # pure content from the first token
 
 
 # family -> (shape, reason). ONLY for real spec/FSM disagreements.
-_SHAPE_OVERRIDES: dict[str, tuple["_ThinkShape", str]] = {
-    # gemma declares style: inline_tags with <|channel>thought / <channel|>,
-    # but the ANGLE machinery expects <word>-shaped tags and shreds gemma's
-    # inverted channel markers into content residue (probed 2026-08-03).
-    # Extraction for gemma is owned by _strip_delimiter's dedicated
-    # rsplit-on-<channel|> path, which handles BOTH trained forms: the
-    # pre-closed empty channel (thinking off) and a CoT-filled preamble
-    # (thinking on, restored by the renderer inverse-family fix). Kept NONE
-    # so the FSM never mangles the markers. KNOWN GAP: gemma CoT is stripped
-    # but not labelled T, so reasoning-token telemetry reads 0 for this
-    # family until proper channel labelling lands.
-    "gemma": (_ThinkShape.NONE, "channel extraction owned by _strip_delimiter"),
-}
+# (gemma lived here as NONE from 2026-08-03 to 2026-08-21 — the generic
+# ANGLE machinery shredded its inverted markers, so extraction was exiled
+# to _strip_delimiter's rsplit and reasoning telemetry read 0 for the one
+# family the FSM didn't model. The INV_CHANNEL shape now derives from the
+# spec like every other family: same opener/name/body/closer grammar as
+# Harmony with the pipes on the inner side, transitions gated on the full
+# contiguous marker compounds so bare '<'/'>' in generated code can never
+# trigger them.)
+_SHAPE_OVERRIDES: dict[str, tuple["_ThinkShape", str]] = {}
 
 
 # Family names the FSM is called with that have NO format spec of their own.
@@ -154,6 +151,8 @@ def _shape_for(family: str) -> "_ThinkShape":
     if style == "none":
         return _ThinkShape.NONE
     open_tag = getattr(spec.thinking, "open_tag", "") or ""
+    if open_tag.startswith("<|channel>"):
+        return _ThinkShape.INV_CHANNEL
     return _ThinkShape.BRACKET if open_tag.startswith("[") else _ThinkShape.ANGLE
 
 
@@ -401,9 +400,14 @@ def label_atoms(
         phase = _chatml_start_phase(atoms)
     elif shape is _ThinkShape.BRACKET:
         phase = _bracket_think_start_phase(atoms)
+    elif shape is _ThinkShape.INV_CHANNEL:
+        # Gemma: generation is content from the first token UNLESS the model
+        # opens its thought channel — the opener compound flips to THINKING
+        # retroactively (transition below).
+        phase = Phase.CONTENT
     elif shape is _ThinkShape.NONE:
-        # Gemma has no thinking markers — generation is pure content from
-        # the first token (like the no-think Tekken/Mistral case).
+        # No thinking markers — generation is pure content from the first
+        # token (like the no-think Tekken/Mistral case).
         phase = Phase.CONTENT
     else:
         # Unknown family — default to DELIM and rely on family-specific
@@ -479,6 +483,31 @@ def label_atoms(
 
         # ── Structural atoms always emit D, regardless of phase ──
         is_structural = cat in structural_cats
+
+        # ── Inverted channel (gemma): the full compounds are the only
+        # triggers. Opener <| channel > NAME → THINKING (the bare '>' that
+        # the compound consumed is retro-labelled D); closer < channel |>
+        # → CONTENT (the bare '<' likewise). The featurizer only emits
+        # MARKER_CHANNEL for the closer's word on exact contiguity with a
+        # '|>' lookahead, so code like `x < channel` never reaches here.
+        if shape is _ThinkShape.INV_CHANNEL:
+            if (
+                cat == ObsCategory.CHAN_ANALYSIS
+                and i >= 3
+                and atoms[i - 1].category == ObsCategory.ANGLE_CLOSE
+                and atoms[i - 2].category == ObsCategory.MARKER_CHANNEL
+                and atoms[i - 3].category == ObsCategory.ANGLE_PIPE_OPEN
+            ):
+                _relabel(len(result) - 1, "D")  # the '>' of <|channel>
+                phase = Phase.THINKING
+            elif (
+                cat == ObsCategory.ANGLE_PIPE_CLOSE
+                and i >= 2
+                and atoms[i - 1].category == ObsCategory.MARKER_CHANNEL
+                and atoms[i - 2].category == ObsCategory.ANGLE_OPEN
+            ):
+                _relabel(len(result) - 2, "D")  # the '<' of <channel|>
+                phase = Phase.CONTENT
 
         # ── Harmony: channel-name hints upcoming phase ──────────
         if cat == ObsCategory.CHAN_FINAL:

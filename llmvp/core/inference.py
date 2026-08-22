@@ -227,28 +227,11 @@ def _strip_delimiter(text: str) -> str:
         Cleaned response text (content phase only). Empty string if no
         content phase was detected.
     """
-    # Gemma-4 emits a channel reasoning preamble (<|channel>thought ... <channel|>)
-    # that the atom-based FSM does not model. The real content reliably follows
-    # the last <channel|>, so split on it directly. (Full Gemma-4 channel/tool
-    # support is a follow-up; this just strips the preamble from extracted text.)
-    if _get_fsm_family() == "gemma":
-        marker = "<channel|>"
-        if marker in text:
-            return text.rsplit(marker, 1)[-1].strip()
-        if text.lstrip().startswith("<|channel>thought"):
-            # Unclosed thought channel: generation truncated mid-CoT (seen
-            # live 2026-08-03 — a hard prompt spent the whole budget
-            # thinking). The old fallback returned the raw CoT AS content;
-            # downstream that masquerades as an answer. Mirror the session
-            # path's truncated-think convention: no close, no content.
-            log.warning(
-                "gemma thought channel never closed (%d chars) — "
-                "generation truncated mid-CoT; returning empty content",
-                len(text),
-            )
-            return ""
-        return text.strip()
-
+    # (The gemma rsplit bypass that lived here 2026-08-03→08-21 is gone: the
+    # FSM now models the inverted channel form (_ThinkShape.INV_CHANNEL), so
+    # gemma rides the generic path below like every other family — which is
+    # also what forwards its CoT to the tracker and makes reasoningTokens
+    # real for this family for the first time.)
     delim = _get_delimiter()
     if not delim:
         # No delimiter pattern configured for this family — nothing to

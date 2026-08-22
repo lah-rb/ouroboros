@@ -159,8 +159,9 @@ def _at_recipient_head(atoms: list["Atom"]) -> bool:
 
 def _channel_vocab(
     family: str | None,
-) -> tuple[dict[str, ObsCategory], str, str, set[str]]:
-    """(channel names, recipient word, recipient separator, close words).
+) -> tuple[dict[str, ObsCategory], str, str, set[str], bool]:
+    """(channel names, recipient word, recipient separator, close words,
+    inverted-channel flag).
 
     DERIVED from ``formats/<family>.yaml``, never hardcoded. The channel
     *shape* was already derived (see fsm_labeller._ThinkShape); the channel
@@ -175,14 +176,25 @@ def _channel_vocab(
     """
     names = dict(_CHANNEL_NAMES)
     if not family:
-        return names, "", "", set()
+        return names, "", "", set(), False
     try:
         from formats.registry import load_schema
 
         s = load_schema(family)
     except Exception:  # noqa: BLE001 — extraction must survive a bad family
-        return names, "", "", set()
+        return names, "", "", set(), False
     think = s.thinking
+    # INVERTED channel form (gemma-4): <|channel>NAME ... <channel|> — the
+    # same opener/name/body/closer grammar as Harmony with the pipe on the
+    # inner side of each marker. Derive the channel name from the declared
+    # open_tag so the vocabulary stays spec-owned (the Muse lesson above).
+    inv_channel = False
+    _ot = (think.open_tag or "") if getattr(think, "open_tag", None) else ""
+    if think.style == "inline_tags" and _ot.startswith("<|channel>"):
+        inv_channel = True
+        _nm = _ot.split(">", 1)[1].strip().lower()
+        if _nm:
+            names[_nm] = ObsCategory.CHAN_ANALYSIS
     if think.channel_name:
         names[think.channel_name.lower()] = ObsCategory.CHAN_ANALYSIS
     if think.content_channel:
@@ -199,7 +211,7 @@ def _channel_vocab(
         for name in ("thinking_close", "msg_close", "gen_stop", "history_close")
     }
     closes.discard("")
-    return names, word, sep, closes - set(_MARKER_WORDS)
+    return names, word, sep, closes - set(_MARKER_WORDS), inv_channel
 
 
 # ── Tokenization regex ────────────────────────────────────────────────
@@ -263,7 +275,7 @@ def featurize(text: str, family: str | None = None) -> list[Atom]:
     Returns:
         List of Atom objects, each with a text span and observation category.
     """
-    chan_names, recip_word, recip_sep, close_words = _channel_vocab(family)
+    chan_names, recip_word, recip_sep, close_words, inv_channel = _channel_vocab(family)
     atoms: list[Atom] = []
     # Track which delimiter opened the current marker context.
     # The trigger matters because Mistral's bracket-delimited markers
@@ -319,6 +331,15 @@ def featurize(text: str, family: str | None = None) -> list[Atom]:
             marker_context = "angle"  # <think> style
         elif kind == "angle_close":
             cat = ObsCategory.ANGLE_CLOSE
+            # Inverted-channel opener (gemma): '>' completing <|channel> puts
+            # the stream one word before the channel name, exactly like
+            # Harmony's '|>' completing <|channel|>.
+            if (
+                inv_channel
+                and atoms
+                and atoms[-1].category == ObsCategory.MARKER_CHANNEL
+            ):
+                after_channel_marker = True
             marker_context = None
         elif kind == "slash":
             cat = ObsCategory.SLASH
@@ -383,6 +404,22 @@ def featurize(text: str, family: str | None = None) -> list[Atom]:
                 elif lower in chan_names:
                     cat = chan_names[lower]
             elif marker_context == "angle":
+                # Inverted-channel CLOSER (gemma): '<' + 'channel' + '|>'.
+                # Recognised ONLY as the exact contiguous trigram — the '<'
+                # must touch the word (no `x < channel`) and the very next
+                # characters must be '|>' (checked by lookahead) — so bare
+                # comparisons in generated code stay content. This is the
+                # same caution as the bare-'<' rule below; see the
+                # module-top corruption note.
+                if (
+                    inv_channel
+                    and lower == "channel"
+                    and atoms
+                    and atoms[-1].category == ObsCategory.ANGLE_OPEN
+                    and atoms[-1].offset + atoms[-1].length == offset
+                    and text[offset + length : offset + length + 2] == "|>"
+                ):
+                    cat = ObsCategory.MARKER_CHANNEL
                 # Bare '<' / '</': the ONLY marker that legitimately uses a bare
                 # angle bracket is the ChatML inline tag <think>/</think>. The
                 # Harmony pipe-markers (start/end/message/return/channel/call/

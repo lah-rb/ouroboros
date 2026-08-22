@@ -1144,11 +1144,11 @@ class TestRecipientChannelFamily:
     def test_vocabulary_is_derived_from_the_spec_not_hardcoded(self):
         from core.featurizer import _channel_vocab, _recipient_form
 
-        names, word, sep, closes = _channel_vocab("muse-glimmer")
+        names, word, sep, closes, _inv = _channel_vocab("muse-glimmer")
         assert (word, sep) == ("to", "=")
         assert {"eom", "eot"} <= closes
         assert names["self"].value == "C_AN" and names["user"].value == "C_FI"
         # Harmony's channel token carries <|, so it has no recipient form.
         assert _recipient_form("<|channel|>") == ("", "")
-        _, hword, hsep, _ = _channel_vocab("harmony")
+        _, hword, hsep, _, _ = _channel_vocab("harmony")
         assert (hword, hsep) == ("", "")
