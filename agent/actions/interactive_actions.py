@@ -583,6 +583,54 @@ async def action_send_interaction(step_input: StepInput) -> StepOutput:
                 },
             )
 
+    # ── Short-cycle orbits (A-B-A-B, A-B-C-A-B-C) ─────────────────────
+    # The single-input check above is period-1 only, and a 2-cycle slips it
+    # by construction: an A-B-A-B alternation never yields
+    # _STUCK_IDENTICAL_RUNS consecutive identical entries. Live 2026-08-21
+    # (qwen3-next-coder): {"python main.py", "look"} alternated for 324
+    # turns against a byte-identical broken boot, every guard blind, and
+    # the arm could only be ended by the runner's wall kill. Same bar as
+    # period-1, generalized: every position of the cycle must repeat with
+    # BYTE-IDENTICAL input AND output _STUCK_IDENTICAL_RUNS times, and the
+    # text about to be sent must continue the cycle. Varying output at any
+    # position is progress and never trips (the combat-orbit case that got
+    # the 58eb83c screen detector removed: HP counters change, so it walks).
+    for _period in (2, 3):
+        _need = _period * _STUCK_IDENTICAL_RUNS
+        if len(session_history) < _need:
+            continue
+        _tail = session_history[-_need:]
+        _pairs = [
+            (
+                (e.get("input", "") or "").strip(),
+                (e.get("output", "") or "").strip(),
+            )
+            for e in _tail
+        ]
+        _periodic = all(
+            _pairs[i] == _pairs[i + _period] for i in range(_need - _period)
+        )
+        _continues = text.strip() == _pairs[-_period][0]
+        _distinct_inputs = len({p_[0] for p_ in _pairs[:_period]}) > 1
+        if _periodic and _continues and _distinct_inputs and text.strip():
+            _cycle = " -> ".join(p_[0][:30] for p_ in _pairs[:_period])
+            return StepOutput(
+                result={
+                    "command_sent": False,
+                    "stuck_detected": True,
+                    "duplicate_input": text.strip(),
+                },
+                observations=(
+                    f"Stuck: period-{_period} orbit [{_cycle}] repeated "
+                    f"{_STUCK_IDENTICAL_RUNS} times with byte-identical "
+                    f"outputs — no state change"
+                ),
+                context_updates={
+                    "mcp_session_id": session_id,
+                    "session_history": session_history,
+                },
+            )
+
     # ── Send via MCP ───────────────────────────────────────────
     # Shell commands need a longer settle — the child process may take
     # time to start producing output (e.g., Python interpreter init).

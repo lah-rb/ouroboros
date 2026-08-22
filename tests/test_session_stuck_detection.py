@@ -111,14 +111,31 @@ def _cycle_hx(n, screens=("Foggy Shore\n> ", "Salt Marsh\n> ")):
     ]
 
 
-def test_alternating_orbit_is_NOT_force_closed():
-    """The screen-orbit cycle detector was REMOVED by operator verdict
-    (2026-08-17): it force-closed a quality-gate session mid-brief on a
-    `>`-only combat orbit, bypassing confirm_close. An A-B-A-B walk is
-    the model's to break out of (or the turn budget's to bound) — it must
-    NOT be force-closed mid-session. This test pins the removal."""
-    out = _run(_cycle_hx(30), "north")
+def test_alternating_orbit_below_the_bar_is_NOT_force_closed():
+    """History, both directions. The 58eb83c screen detector (removed by
+    operator verdict 2026-08-17) closed on `≤`3 distinct screens over a
+    12-turn window — loose enough to kill a combat orbit the model might
+    walk out of. The 2026-08-21 verdict reinstated cycle detection but at
+    the byte-identity bar: every position of the cycle repeated
+    _STUCK_IDENTICAL_RUNS times, input AND output exact. This pin keeps
+    the 08-17 protection at the boundary: one repetition short of the
+    bar must NOT close."""
+    from agent.actions.interactive_actions import _STUCK_IDENTICAL_RUNS
+
+    hx = _cycle_hx(2 * _STUCK_IDENTICAL_RUNS - 1)
+    out = _run(hx, "north")
     assert out.result.get("stuck_detected") is not True
+
+
+def test_alternating_orbit_at_the_bar_IS_closed():
+    """And at the bar, it closes (operator, 2026-08-21): a byte-identical
+    A-B orbit repeated _STUCK_IDENTICAL_RUNS times is circling — the live
+    qwen3-next-coder case ran this shape 324 turns."""
+    from agent.actions.interactive_actions import _STUCK_IDENTICAL_RUNS
+
+    hx = _cycle_hx(2 * _STUCK_IDENTICAL_RUNS)
+    out = _run(hx, "north")
+    assert out.result.get("stuck_detected") is True
 
 
 def test_walking_back_through_known_rooms_toward_something_new_keeps_going():
@@ -191,3 +208,82 @@ def test_run_session_gets_a_step_ceiling_above_any_real_session():
     STEPS_PER_TURN = 2
     assert _subflow_max_steps("run_session") / STEPS_PER_TURN > 500
     assert _subflow_max_steps("diagnose_issue") == 200
+
+
+# ── short-cycle orbits (2026-08-21, the qwen3-next-coder 324-turn loop) ──
+
+
+def _cycle_hist(pairs, reps):
+    hx = []
+    for _ in range(reps):
+        for inp, out in pairs:
+            hx.append({"input": inp, "output": out})
+    return hx
+
+
+def test_ab_orbit_with_identical_outputs_is_caught():
+    """The live case: relaunch/look alternating against a byte-identical
+    broken boot. Period-1 is structurally blind to it (never 4 consecutive
+    identical entries); the cycle check trips on the send that would
+    continue the orbit."""
+    from agent.actions.interactive_actions import _STUCK_IDENTICAL_RUNS
+
+    hx = _cycle_hist(
+        [
+            ("python main.py", "You find yourself in an empty void.\n> "),
+            ("look", "You find yourself in an empty void.\n> "),
+        ],
+        _STUCK_IDENTICAL_RUNS,
+    )
+    out = _run(hx, "python main.py")
+    assert out.result.get("stuck_detected") is True
+    assert "period-2" in out.observations
+
+
+def test_abc_orbit_is_caught():
+    from agent.actions.interactive_actions import _STUCK_IDENTICAL_RUNS
+
+    hx = _cycle_hist(
+        [("north", "Hall.\n> "), ("south", "Cave.\n> "), ("look", "Cave.\n> ")],
+        _STUCK_IDENTICAL_RUNS,
+    )
+    out = _run(hx, "north")
+    assert out.result.get("stuck_detected") is True
+    assert "period-3" in out.observations
+
+
+def test_orbit_with_varying_output_is_progress_not_stuck():
+    """The combat case that got the 58eb83c screen detector removed: the
+    same inputs cycling while output CHANGES (HP counters) is a fight, not
+    an orbit — byte-identity per position is the bar."""
+    from agent.actions.interactive_actions import _STUCK_IDENTICAL_RUNS
+
+    hx = []
+    for i in range(_STUCK_IDENTICAL_RUNS):
+        hx.append({"input": "attack", "output": f"You hit. Wolf HP {20 - i}.\n> "})
+        hx.append({"input": "look", "output": f"A wolf. HP {20 - i}.\n> "})
+    out = _run(hx, "attack")
+    assert out.result.get("stuck_detected") is not True
+
+
+def test_a_send_that_breaks_the_cycle_is_not_stuck():
+    from agent.actions.interactive_actions import _STUCK_IDENTICAL_RUNS
+
+    hx = _cycle_hist(
+        [("python main.py", "void\n> "), ("look", "void\n> ")],
+        _STUCK_IDENTICAL_RUNS,
+    )
+    out = _run(hx, "help")  # a NEW action — the model broke out on its own
+    assert out.result.get("stuck_detected") is not True
+
+
+def test_one_mismatched_repetition_resets_the_orbit_claim():
+    from agent.actions.interactive_actions import _STUCK_IDENTICAL_RUNS
+
+    hx = _cycle_hist(
+        [("python main.py", "void\n> "), ("look", "void\n> ")],
+        _STUCK_IDENTICAL_RUNS,
+    )
+    hx[3]["output"] = "void, but a door creaks open.\n> "  # state changed once
+    out = _run(hx, "python main.py")
+    assert out.result.get("stuck_detected") is not True
