@@ -113,6 +113,16 @@ _BAND_ROW = re.compile(r"^\s*\|")
 _STAR_ANCHOR = re.compile(r"★+(\s*tier\s*\d+)?", re.I)
 
 
+_PACKET_STRIP_DIRS = {
+    "__pycache__",
+    ".ruff_cache",
+    ".pytest_cache",
+    ".git",
+    ".venv",
+    ".agent",
+}
+
+
 def _scrub_star_anchors(text: str) -> str:
     """Remove ★/tier anchors from PROSE, keeping the band table intact."""
     return "\n".join(
@@ -309,6 +319,17 @@ def main() -> int:
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir(parents=True)
     shutil.copytree(art, out / "artifact")
+    # Build residue never reaches a judge. stage.py has stripped these since
+    # its STRIP_DIRS existed; this path did not, and a packet built straight
+    # from an ANCHOR directory (anchors are frozen, not staged) carried them
+    # through. Live 2026-08-22: the frontier anchor's parser.cpython-312.pyc
+    # has its absolute build path baked in — ".../anchors/v2.0/
+    # frontier-sonnet-20260803/adventure/parser.py" — naming the anchor's
+    # ROLE and its MODEL in one string, inside a file the identifier scan
+    # reads but a reviewer never opens.
+    for _junk in list((out / "artifact").rglob("*")):
+        if _junk.is_dir() and _junk.name in _PACKET_STRIP_DIRS:
+            shutil.rmtree(_junk, ignore_errors=True)
     scrubbed = _scrub_workdir_paths(out / "artifact")
     if scrubbed:
         print(f"  workdir paths : neutralised in {', '.join(sorted(scrubbed))}")
