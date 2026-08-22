@@ -75,7 +75,7 @@ DEFAULT_LANE_MAX_INFLIGHT: Dict[str, int] = {
     # sat blocked all night — the cap, not the pool, was the ceiling.
     # 5 leaves one seat for the acquire flow's catalog turns; the
     # engine's admission remains the correctness backstop.
-    "text_seat": 5,
+    "text_seat": 7,  # tracks the 8-seat engine (one seat spare for catalog turns)
     "vision_ctx": 1,
     "paddle": 1,
     "network": 1,
@@ -575,6 +575,13 @@ def lanes_for_scraper() -> List[Lane]:
         # free — the pool still outruns curate submission.
         Lane(
             name="curate3",
+            flow="curate_drain",
+            resource="text_seat",
+            est_kv=20_000,
+            idle_backoff_s=30.0,
+        ),
+        Lane(
+            name="curate4",
             flow="curate_drain",
             resource="text_seat",
             est_kv=20_000,

@@ -50,15 +50,12 @@ model:
   # the VISION context's compute buffer: vision shares the split weights,
   # so its KV and compute FOLLOW THE SPLIT onto the 3060 (the first two
   # rungs charged vision entirely to the 3090). [39,13] rebalances.
-  tensor_split: [39, 13]
-  n_ctx: 147456
-  # The base's model_max_context (131072, the PER-STREAM trained ceiling)
-  # also clamps the SHARED POOL via min() in config.effective — a
-  # conflation: the pool is cells, not positions, and no stream
-  # approaches the trained window (operator note, 2026-08-22). Raised to
-  # match the pool so the physically-allocated 147,456 cells are all
-  # usable; per-stream lengths remain bounded by admission budgets.
-  model_max_context: 147456
+  # [39,13]@147456 BOOTED clean but CRASHED under live load: runtime
+  # allocations (lazy vision-context KV 576 MiB, then a 1.26 GB graph
+  # reservation) outgrew the 3060's ~1.3 GB idle slack — boot slack is
+  # not runtime slack. [40,12]@131072 leaves ~2.3 GB for dynamics.
+  tensor_split: [40, 12]
+  n_ctx: 131072
   probe_verified_weights_bytes: 19653957984
   probe_verified_n_ctx: 91136
   # The base declares vision_n_ctx 131072 — an M1 sizing (7 GB of lazy KV
@@ -96,4 +93,8 @@ resources:
   # 5 -> 6 with the ~3x cell pool: the 5th seat proved out within hours
   # (occupancy p50 0.69 -> saturated 71% of ticks); the grown pool feeds
   # a 6th. Admission's QUEUE verdict remains the backstop.
-  max_concurrent_requests: 6
+  # 6 -> 8 (2026-08-22 curation-finale): the final split leg ran 6
+  # streams with seats exhausted 88% of ticks while cells sat at median
+  # 35k free — seats, not cells, bound. Two more seats for the review
+  # drain; the engine QUEUE verdict absorbs cell collisions.
+  max_concurrent_requests: 8
