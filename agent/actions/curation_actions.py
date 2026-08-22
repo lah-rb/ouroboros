@@ -1691,6 +1691,25 @@ async def action_curate_book_result(step_input):
     rec["review_issues"] = review.get("issues") or []
     rec["deny_category"] = review.get("deny_category") or ""
     rec["tag_review_agreement"] = tag_review_agreement(rec)
+    # A DENIAL CLEARS ANY PACK. Live 2026-08-20: two borderline papers
+    # were accepted+packed, then re-reviewed ~2 min later by a round that
+    # had loaded the databank before the first booking landed; the flip
+    # to denied carried the stale pack_status along and two denied
+    # papers sat "packed" for two days — headed straight for the
+    # training corpus. Whatever the verdict race, a record that says
+    # denied must never simultaneously say packed.
+    if rec["review_status"] == "denied" and rec.get("pack_status"):
+        ds = rec.get("dataset_path") or ""
+        rec["pack_status"] = ""
+        rec["dataset_path"] = ""
+        rec["pack_quality"] = None
+        if ds:
+            try:
+                dp = os.path.join(str(getattr(effects, "working_directory", "")), ds)
+                if os.path.isfile(dp):
+                    os.remove(dp)
+            except OSError:
+                logger.warning("could not remove stale pack artifact %s", ds)
 
     outcome = rec["review_status"]
     if rec["review_status"] == "accepted":
