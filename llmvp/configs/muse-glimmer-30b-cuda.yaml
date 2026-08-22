@@ -35,7 +35,30 @@ model:
   # (−0.42 GiB). NOT 91k: probe_verified_n_ctx was a TEXT-ONLY probe; at 91k
   # the resident vision KV + its 1.18 GiB compute buffer no longer fit and
   # figtext dies. Verified at boot + canaries, 2026-08-17.
-  n_ctx: 65536
+  # ── 3060 LAYER-SPLIT (operator-directed overnight, 2026-08-22) ──────
+  # Paddle down + OCR lane disabled: the 3060 hosts 18/52 muse layers.
+  # Geometry (GGUF headers): 1 KB/token/layer KV, 0.32 GB weights/layer.
+  # n_ctx is the SHARED CELL POOL, not a per-stream position budget — it
+  # may exceed the trained 131,072 because no single stream approaches
+  # it (operator note). Ladder: 196608 -> 180224 -> 163840 -> 147456;
+  # this line records the rung that PROBED CLEAN.
+  split_mode: layer
+  # Rung 196608@[34,18] OOM'd on the 3060: the compute buffer is ~2 GB
+  # per device (measured, not the ~1 estimated). Re-solved both device
+  # inequalities: [37,15] @ 163840 leaves ~1.1 GB slack on EACH card.
+  # Rung 163840@[37,15] also OOM'd on dev1 — the failing 1,335 MiB is
+  # the VISION context's compute buffer: vision shares the split weights,
+  # so its KV and compute FOLLOW THE SPLIT onto the 3060 (the first two
+  # rungs charged vision entirely to the 3090). [39,13] rebalances.
+  tensor_split: [39, 13]
+  n_ctx: 147456
+  # The base's model_max_context (131072, the PER-STREAM trained ceiling)
+  # also clamps the SHARED POOL via min() in config.effective — a
+  # conflation: the pool is cells, not positions, and no stream
+  # approaches the trained window (operator note, 2026-08-22). Raised to
+  # match the pool so the physically-allocated 147,456 cells are all
+  # usable; per-stream lengths remain bounded by admission budgets.
+  model_max_context: 147456
   probe_verified_weights_bytes: 19653957984
   probe_verified_n_ctx: 91136
   # The base declares vision_n_ctx 131072 — an M1 sizing (7 GB of lazy KV
@@ -47,7 +70,10 @@ model:
   # answer + split-panel image tokens; book pages ride paddle, not muse).
   # Halved from 16384 (2026-08-17) to fund the batched cell's growth to
   # 65536 for the curate drain.
-  vision_n_ctx: 8192
+  # Vision grows 8192 -> 24576 with the freed 3090 VRAM (the 8192 cap
+  # existed only because the un-split 3090 could not hold more beside
+  # the 65k text pool).
+  vision_n_ctx: 16384
   # PROJECTOR ON THE 3060. GPU0 holds weights + the batched cell and has
   # ~2.9 GiB slack; the vision graph needs its KV (0.85 GiB) AND a compute
   # buffer (measured 1.18 GiB at reserve, 2026-08-16) — adding the ~1.3 GiB
@@ -67,4 +93,7 @@ resources:
   # pool (seq_cp static heads cost no new cells); admission's QUEUE
   # verdict remains the correctness backstop if entitlement outruns
   # cells. Judge by the same CapacitySample series that earned it.
-  max_concurrent_requests: 5
+  # 5 -> 6 with the ~3x cell pool: the 5th seat proved out within hours
+  # (occupancy p50 0.69 -> saturated 71% of ticks); the grown pool feeds
+  # a 6th. Admission's QUEUE verdict remains the backstop.
+  max_concurrent_requests: 6
