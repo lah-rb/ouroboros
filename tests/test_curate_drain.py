@@ -251,3 +251,47 @@ async def test_drain_budget_curates_multiple_papers_serially(monkeypatch):
     assert bank["a"]["review_status"] == "accepted"
     assert bank["b"]["review_status"] == "denied"
     assert not _CURATE_CLAIMS
+
+
+@pytest.mark.asyncio
+async def test_thin_bin_aspects_are_selected_before_bigger_thick_bin_papers():
+    """Coverage priority outranks size; size still orders within a tier."""
+    _clear_state()
+    fx = MockEffects(
+        files=_bank_files(
+            [
+                _rec("tiny_xrd", source_aspects=["XRD phase identification"]),
+                _rec("big_libs", source_aspects=["LIBS mineral spectra"]),
+                _rec("mid_libs", source_aspects=["emission_spectroscopy"]),
+            ],
+            {"tiny_xrd": "x" * 50, "big_libs": "y" * 900, "mid_libs": "z" * 300},
+        )
+    )
+    bank = await read_databank(fx)
+    try:
+        # Both LIBS papers precede the much smaller XRD one...
+        key1, _ = await select_curate_paper(fx, bank, 1000)
+        key2, _ = await select_curate_paper(fx, bank, 1000)
+        assert {key1, key2} == {"big_libs", "mid_libs"}
+        # ...and within the priority tier, smallest still goes first.
+        assert key1 == "mid_libs"
+        key3, _ = await select_curate_paper(fx, bank, 1000)
+        assert key3 == "tiny_xrd"
+    finally:
+        release_curate_keys([key1, key2, key3])
+
+
+@pytest.mark.asyncio
+async def test_priority_is_finite_and_untagged_papers_still_run():
+    _clear_state()
+    fx = MockEffects(
+        files=_bank_files(
+            [_rec("plain"), _rec("libs", source_aspects=["LIBS mineral spectra"])],
+            {"plain": "x" * 100, "libs": "y" * 100},
+        )
+    )
+    bank = await read_databank(fx)
+    first, _ = await select_curate_paper(fx, bank, 1000)
+    second, _ = await select_curate_paper(fx, bank, 1000)
+    assert first == "libs" and second == "plain"
+    release_curate_keys([first, second])

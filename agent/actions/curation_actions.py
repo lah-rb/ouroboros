@@ -851,16 +851,56 @@ async def _curate_doc_budget_chars(effects) -> int:
     return int(doc_tokens * _CURATE_CHARS_PER_TOKEN)
 
 
+# ── coverage priority ────────────────────────────────────────────────
+#
+# THE THIN BINS, measured over the 995 packed papers (2026-08-23):
+# LIBS appears in 6% of the accepted corpus and Raman/FTIR-on-heritage
+# in 31%, against XRD 50% and microscopy 58%. Both thin bins are the
+# best-represented aspects in the PENDING pool (172 LIBS, 112 heritage
+# of 546) — i.e. the marginal pending paper closes a real gap while the
+# average one deepens a bin that is already thick.
+#
+# Two aspect-naming generations coexist on records (the goal-phrase form
+# and a later snake_case form); both map here, because a record written
+# under either must sort the same.
+_PRIORITY_ASPECTS = frozenset(
+    {
+        "libs mineral spectra",
+        "emission_spectroscopy",
+        "raman ftir cultural heritage",
+        "vibrational_spectroscopy",
+    }
+)
+
+
+def _aspect_priority(record: dict) -> int:
+    """0 = closes a thin coverage bin, 1 = everything else.
+
+    Deliberately NOT starvation-free, unlike the lane fairness rule: the
+    priority pool is finite and drains, after which every paper is tier 1
+    again. Retune by re-measuring bin coverage, not by taste.
+    """
+    aspects = record.get("source_aspects")
+    if not isinstance(aspects, list):
+        return 1
+    for a in aspects:
+        if str(a).strip().lower() in _PRIORITY_ASPECTS:
+            return 0
+    return 1
+
+
 async def select_curate_paper(
     effects, databank: dict, budget_chars: int
 ) -> tuple[str, str]:
-    """Claim the smallest unclaimed curation-pending paper that fits.
+    """Claim the smallest fitting pending paper, thin-bin aspects first.
 
-    Smallest-first is the coverage policy: the drain eats the corpus from
-    the short end, and papers over the seat budget are simply left for
-    dedicated curator dispatches (or a bigger cell) — never truncated.
+    Ordered by (coverage priority, doc chars, key). Smallest-first within
+    a tier remains the throughput policy — the drain eats each tier from
+    the short end — and papers over the budget are still left rather than
+    truncated (the compression ladder in `_build_doc_for` is what gets
+    most of them under it).
     """
-    sized: list[tuple[int, str]] = []
+    sized: list[tuple[int, int, str]] = []
     for key, rec in databank.items():
         if key in _CURATE_CLAIMS or not _curation_pending(rec):
             continue
@@ -870,10 +910,10 @@ async def select_curate_paper(
             chars = len(doc)
             _CURATE_DOC_CACHE[key] = chars
         if 0 < chars <= budget_chars:
-            sized.append((chars, key))
+            sized.append((_aspect_priority(rec), chars, key))
     if not sized:
         return "", ""
-    _, key = min(sized)
+    _, _, key = min(sized)
     doc = await _build_doc_for(effects, key, budget_chars)
     if len(doc) > budget_chars:  # doc changed since caching (e.g. new en.md)
         _CURATE_DOC_CACHE[key] = len(doc)
