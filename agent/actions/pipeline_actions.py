@@ -1321,7 +1321,17 @@ async def action_check_dependency_coverage(step_input: StepInput) -> StepOutput:
     # ── Format for prompt injection ───────────────────────────────
     import_lines = []
     for filepath, imports in import_map.items():
-        import_lines.append(f"--- {filepath} ---")
+        # Test-tree files get a visible label so the coverage checker can
+        # apply the dev-dependency rule (see quality_gate/check_deps):
+        # a package imported ONLY by tests belongs in a dev dependency
+        # group, never in the runtime `dependencies` list. Without the
+        # label, an authored test's `import pytest` reads as a project
+        # import and the "fix" poisons the manifest (deepseek 2026-08-22:
+        # a text-adventure game shipped requiring pytest at install time).
+        _parts = filepath.replace("\\", "/").split("/")
+        _is_test = "tests" in _parts[:-1] or _parts[-1].startswith("test_")
+        _label = " (TEST FILE — dev dependency scope)" if _is_test else ""
+        import_lines.append(f"--- {filepath}{_label} ---")
         for imp in imports:
             import_lines.append(f"  {imp}")
     imports_text = "\n".join(import_lines)
@@ -1713,7 +1723,13 @@ async def action_parse_dep_check_result(step_input: StepInput) -> StepOutput:
         )
 
     missing = result_data.get("missing_dependencies", [])
-    if not missing:
+    # Dev-scoped misses (packages imported only by test files — the gatherer
+    # labels those and the prompt routes them here) still fail the gate, but
+    # the filed fix names a DEV dependency group. Runtime `dependencies` is
+    # an install-time contract with every consumer of the artifact; pytest
+    # does not belong in it because a test imports it.
+    missing_dev = result_data.get("missing_dev_dependencies", [])
+    if not missing and not missing_dev:
         return StepOutput(
             result={"deps_ok": True},
             observations="All dependencies are declared in the manifest",
@@ -1724,7 +1740,16 @@ async def action_parse_dep_check_result(step_input: StepInput) -> StepOutput:
     details = result_data.get("details", [])
     install_cmd = result_data.get("install_command", "")
 
-    issue_lines = [f"Missing dependencies: {', '.join(missing)}"]
+    issue_lines = []
+    if missing:
+        issue_lines.append(f"Missing dependencies: {', '.join(missing)}")
+    if missing_dev:
+        issue_lines.append(
+            f"Missing DEV dependencies (test-only imports): "
+            f"{', '.join(missing_dev)} — declare in a dev dependency group "
+            f"(e.g. [dependency-groups] dev / uv add --dev), NOT in the "
+            f"runtime dependencies list"
+        )
     for d in details[:10]:
         issue_lines.append(
             f"  {d.get('file', '?')}: imports '{d.get('import', '?')}' "
@@ -1736,7 +1761,7 @@ async def action_parse_dep_check_result(step_input: StepInput) -> StepOutput:
     return StepOutput(
         result={
             "deps_ok": False,
-            "missing_count": len(missing),
+            "missing_count": len(missing) + len(missing_dev),
         },
         observations="\n".join(issue_lines),
         context_updates={
@@ -1750,9 +1775,14 @@ async def action_parse_dep_check_result(step_input: StepInput) -> StepOutput:
             # is what lets it file a SPECIFIC goal ("declare pyyaml") instead
             # of a generic "the gate failed".
             "gate_failure_reason": (
-                f"undeclared dependencies — {', '.join(missing[:6])} "
-                f"{'are' if len(missing) != 1 else 'is'} imported but not in "
-                f"the manifest" + (f"; fix: {install_cmd}" if install_cmd else "")
+                "undeclared dependencies — "
+                + ", ".join(
+                    [*missing[:6]]
+                    + [f"{m} (dev group — test-only)" for m in missing_dev[:6]]
+                )
+                + (" are" if len(missing) + len(missing_dev) != 1 else " is")
+                + " imported but not in the manifest"
+                + (f"; fix: {install_cmd}" if install_cmd else "")
             ),
         },
     )
@@ -2425,12 +2455,45 @@ async def action_reconcile_acceptance(step_input: StepInput) -> StepOutput:
                     prescribed_fix=(
                         "Read the test and decide which side is wrong: correct "
                         "the code, or correct the test. It has been demoted to "
-                        "advisory (it no longer vetoes completion) and left in "
-                        "place so it can be read."
+                        "advisory (it no longer vetoes completion) and moved to "
+                        ".agent/quarantine/ so it stays readable without "
+                        "shipping in the artifact."
                     ),
                     source_flow="reconcile_acceptance",
                 )
             )
+            # RELOCATE, don't just demote. A quarantined test left in tests/
+            # is harness residue wearing project clothes: it keeps `pytest
+            # tests/` red in the deliverable, and downstream scanners treat
+            # its imports as project imports — the 2026-08-22 deepseek run's
+            # quality gate saw `import pytest` in an abandoned test and
+            # "fixed" it by adding pytest to the game's RUNTIME dependencies.
+            # .agent/ is already excluded from staging, scans, and judging,
+            # and the pending warning above names the new location.
+            _qpath = str((getattr(goal, "authored_test", None) or {}).get("path") or "")
+            if _qpath:
+                try:
+                    await effects.makedirs(".agent/quarantine", exist_ok=True)
+                    _mv = await effects.run_command(
+                        [
+                            "mv",
+                            _qpath,
+                            f".agent/quarantine/{_qpath.rsplit('/', 1)[-1]}",
+                        ]
+                    )
+                    if getattr(_mv, "return_code", 1) != 0:
+                        logger.warning(
+                            "reconcile: could not relocate quarantined test "
+                            "%s (left in place): %s",
+                            _qpath,
+                            str(getattr(_mv, "stderr", ""))[:200],
+                        )
+                except Exception as _e:  # noqa: BLE001 — relocation is best-effort
+                    logger.warning(
+                        "reconcile: quarantine relocation failed for %s: %s",
+                        _qpath,
+                        _e,
+                    )
             logger.warning(
                 "reconcile: QUARANTINED authored test on '%s' after %d "
                 "behaviour contradictions",

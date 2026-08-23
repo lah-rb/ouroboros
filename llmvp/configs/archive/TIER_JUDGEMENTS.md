@@ -4332,3 +4332,132 @@ anywhere in its tree**. The judge's line is the one to keep: *"A seam
 bug is what stopped me in B. It is not what stopped me in A — in A
 there was nothing to stop."* This is the single most repeated finding
 of the campaign and belongs at the top of any brief revision.
+
+## 2026-08-22 — INTAKE: NVIDIA Nemotron 3.5 Lightning 30B-A3B → TIER 3, ARCHIVED (no flight)
+
+**Ladder unmoved.** No blind flight was run and none could have been: the
+artifact does not launch, so there was nothing for a judge to play. This is a
+placement on an objective failure, not a comparative verdict.
+
+**Run**: `tier_20260822-155240` · structural phase only · terminated
+`status='completed'` after 10 cycles in ~25 min of a 90 min wall. First arm of a
+new format family (`llmvp/formats/nemotron.yaml`, `nemotron_h_moe` hybrid
+Mamba-2 + MoE, binary `enable_thinking`).
+
+**Pre-registered expectation** (config, written before the run): *"clears the
+design gate and reaches the functional block, but lands in the lower half of the
+grinder league… If it lands BELOW the design gate, check the FORMAT before the
+model."*
+
+**Result against it — half right, and the half it got wrong is the interesting
+one.** It cleared the design gate comfortably: eight rooms, a two-phase boss
+whose moonstone weakness is gated on the phase, NPC dialogue keyed to boss
+state. The format was not at fault; extraction worked, and the design is real.
+What it could not do is hold a seam across files.
+
+**Decisive defect — the program cannot start:**
+
+```
+main.py:25     GameEngine.from_world(WORLD_MAP, starting_room_id="entrance")
+engine.py:443  def from_world(world_map, start_id="entrance")
+TypeError: from_world() got an unexpected keyword argument 'starting_room_id'
+```
+
+The factory renames the parameter on the way to the constructor; the caller
+reached for the constructor's name. The structural sweep visited **both** files
+after the mismatch existed and did not flag it — correctly, since the phase is
+scoped to syntax/import/lint + data parse-validity
+(`flows/code_core/build_structure.cue:8`), and a keyword-argument name is not a
+symbol the seam gate resolves. **Charge to the model, not the gate.** The
+`completed` status is honest for the phase's actual contract.
+
+**Second seam, more telling:** `world.yaml` describes a *different* eight-room
+world than `rooms.py` had already implemented — `tavern / poison_lab /
+treasure_vault / study` against `entrance / corridor / lab / vault / arena` —
+and no module loads it. The model authored the data file from the design brief
+without reading its own prior implementation of the same world. That is a
+cross-file-memory failure rather than a coding one, and it is a new shape for
+this campaign: the usual seam bug is a mismatched *identifier* between two files
+that agree on the world, not two files that describe *different worlds*.
+
+**Also measured:**
+- 4 unfenced FILE-marker recoveries in ~25 min — a consistent protocol trait of
+  this family, not noise. Pin the fenced form before any rescored arm.
+- One long-cycle degeneration abort mid-`world.yaml` (152 distinct 32B n-grams,
+  ratio 0.019, aborted at 4096 tokens), recovered on retry.
+
+**Why this failure shape matters beyond the placement.** This campaign's losses
+are overwhelmingly wall-bound — models run out of time, not ability. Nemotron
+finished in 28% of its wall and failed anyway. It is the rarer
+capability-bound loss, and the expectation above named it in advance: 3B active
+parameters against a brief that now demands two-phase bosses, dialogue state,
+and cross-file identifier discipline.
+
+**Open item this run surfaced (framework, not model):** the seam gate blames the
+*importer* when a dependency fails to parse. Three attempts were spent against
+`engine.py` because `parser.py` had a model-authored `SyntaxError` and its
+symbols therefore read as "called but never defined." The escalation path found
+the real file on its own — `read_file` → `read_file` → `run_command` to
+reproduce → back to the broken file — which is now the second time in two days
+that escalation's ability to *execute* has rescued a detection the structural
+path could only mis-target. A free `ast.parse` ordering pass would have put the
+broken file first.
+
+## 2026-08-23 — FRONTIER SCORECARD: deepseek-v4-flash COMPLETED artifact loses 0-4 / 0-6
+
+**Delivery: FRONTIER 4–0 · Character: FRONTIER 6–0 · OVERALL: FRONTIER.** No
+panel split, no CLOSE flag. Out-of-band, not ladder-bearing; METHODS §5 family
+caveat applies. Record: `dev/blind_panel/records/flight_20260823_deepseek_vs_frontier.md`.
+
+**Candidate**: the campaign's THIRD COMPLETED artifact — 28/28 goals, 62 cycles
+(27 + 35 across a pause/resume), ~17h, `mission status: completed` through its
+own final gate. Run OUTSIDE the tier harness (`ouroboros.py start`, unbounded)
+so the league governors never applied. Candidate on **B** (coin flip).
+
+**A good artifact that lost every axis.** 46/47 NEAR-FULL, WON twice, 8 rooms
+authored / 8 reachable, **zero unplaced entities** — the campaign's most common
+decisive defect absent in both forms, which only two prior artifacts managed.
+The judge needed no source reading to win it. Sole unmet item: #26 (distinct
+monster behaviours) — `Monster` is a stats-only dataclass.
+
+**All three decisive defects are SEAM-class, not capability:**
+1. **The printed name is untypeable.** `parser.py` strips `of` as a stop word;
+   `world.py` prints `Handful of Berries`. `take Handful of Berries` →
+   "You don't see that here." The judge guessed `berries`. This is the
+   campaign's signature defect and it has now appeared in yet another arm.
+2. **The boss weakness is declared, promised, and never read.** Documented in
+   `world.py`, carried on `models.py` (`weakness_item`, `phase_2_health`),
+   written into BOTH NPCs' dialogue — and `engine.py`'s resolver never reads
+   it. **The judge won with the starting sword, never taking the medallion**;
+   phase 2 is not fiercer (attack=12 in both).
+3. **Hidden Grove is reachable and EMPTY** — no item, NPC, monster or feature.
+   It exists to be the eighth room, produced by a quality-gate goal that
+   demanded a room COUNT. **Counting rooms does not count content.**
+
+Also shipping: `flee` permanently deletes non-boss monsters; the unlocked door
+does not persist across save/load; `load` on a malformed save dies with an
+uncaught exception; empty input silently prints the whole help block;
+`make test` runs zero tests while `requirements.txt` denies the pytest the
+shipped tests import.
+
+**Narrowest axis — B9, judge-flagged as the only one that could flip.** The
+candidate's module boundaries (`models`/`world`/`parser`/`engine`) are
+GENUINELY BETTER factored than the frontier's 651-line `game.py` god-object.
+It lost on the modification probe (3 touchpoints vs 2), on having no extension
+point for monster behaviour, and on a test target that verifies nothing.
+
+**Two campaign-level findings this flight produced:**
+
+*Goal decomposition granularity is a measurable model trait.* This arm planned
+**18** goals against a fleet range of 27–40 (median ~31); qwen3.8 spent seven
+goals on combat where this spent one. Coverage was complete but coarse, and the
+quality gate then harvested ten more as **defect reports** — finer findings,
+never finer decomposition. A capability that happens to work is never
+enumerated at all, so the record shows what was FIXED, not what was CHECKED.
+
+*A goal marked complete is not a verified mechanic.* The operator-side
+verification during this run confirmed goal 17 (two-phase boss + weakness)
+green on the framework's word; the judge disproved it by winning without the
+medallion. Likewise a room-graph audit reported "8 reachable, zero unplaced" —
+true, and blind to one of those rooms being hollow. **Reachability and
+placement do not measure content, and goal state does not measure behaviour.**

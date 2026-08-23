@@ -1355,3 +1355,45 @@ def test_deepseek4_ternary_depth_dial(monkeypatch):
     # directive off by one character is off-distribution).
     assert "—" in high, "max directive lost its em-dash"
     assert med != high, "medium and high must not collapse to one directive"
+
+
+class TestNemotronRendering:
+    """Byte-parity with the official nemotron_h_moe template (2026-08-22).
+
+    The family exists for ONE byte-level difference from qwen: the disabled
+    branch is '<think></think>' with no inner blank line and no trailing
+    newlines. A dial that renders off-template is a dial the model ignores —
+    the defect class that cost gemma a full tier arm — so both branches are
+    pinned here against the strings read out of the GGUF.
+    """
+
+    OFFICIAL_ENABLED = "<|im_start|>assistant\n<think>\n"
+    OFFICIAL_DISABLED = "<|im_start|>assistant\n<think></think>"
+
+    def _r(self):
+        from formats.registry import get_renderer
+
+        return get_renderer("nemotron")
+
+    def test_enabled_branch_is_byte_exact(self):
+        r = self._r()
+        for lvl in ("medium", "high"):
+            assert r.render_generation_prompt(reasoning=lvl) == self.OFFICIAL_ENABLED
+
+    def test_disabled_branch_is_byte_exact_and_not_qwens(self):
+        r = self._r()
+        got = r.render_generation_prompt(reasoning="low")
+        assert got == self.OFFICIAL_DISABLED
+        # The specific way this could regress: inheriting qwen's literal.
+        assert got != "<|im_start|>assistant\n<think>\n\n</think>\n\n"
+
+    def test_no_reasoning_effort_line(self):
+        """The template is dial-less (binary enable_thinking). A 'Reasoning:'
+        line would be step-3.7's mechanic, off-template here."""
+        r = self._r()
+        segs = r.render_system_segments(persona="P", reasoning="high", tools="")
+        assert "Reasoning:" not in "".join(t for t, _ in segs)
+
+    def test_turn_boundary_matches_the_template_loop(self):
+        r = self._r()
+        assert r.render_user("hello") == "<|im_start|>user\nhello<|im_end|>\n"

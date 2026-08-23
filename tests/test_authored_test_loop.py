@@ -1716,3 +1716,46 @@ def test_the_brief_covers_the_comment_versus_code_family():
     assert "A COMMENT IS NOT A STEP" in AUTHOR_PROMPT
     assert "did I actually write that call?" in AUTHOR_PROMPT
     assert "QUANTITY" in AUTHOR_PROMPT  # read the real value, do not estimate
+
+
+@pytest.mark.asyncio
+async def test_quarantine_relocates_the_file_out_of_the_deliverable():
+    """Quarantine must MOVE the test to .agent/quarantine/, not leave it in
+    tests/. A demoted-but-present file keeps `pytest tests/` red in the
+    shipped tree, and downstream scanners read its imports as project
+    imports — the deepseek 2026-08-22 quality gate saw the abandoned test's
+    `import pytest` and 'fixed' it by adding pytest to the game's RUNTIME
+    dependencies. .agent/ is outside staging and scans; the warning names
+    the new location so the dispute stays readable."""
+    from agent.effects.protocol import CommandResult
+
+    check = {
+        "command": TEST_CMD,
+        "name": "authored regression test",
+        "required": True,
+        "source": "authored",
+    }
+    goal = _goal(
+        acceptance_checks=[check],
+        authored_test={"path": TEST_PATH, "command": TEST_CMD},
+    )
+    m = _mission(goal)
+    dest = f".agent/quarantine/{TEST_PATH.rsplit('/', 1)[-1]}"
+    fx = MockEffects(
+        mission=m,
+        commands={
+            f"mv {TEST_PATH} {dest}": CommandResult(
+                return_code=0, stdout="", stderr="", command="mv"
+            )
+        },
+    )
+
+    for _ in range(_AUTHORED_QUARANTINE_K):
+        await action_reconcile_acceptance(_reconcile_si(m, fx, TEST_CMD))
+
+    moves = [c for c in fx.calls_to("run_command") if c.args["command"][0] == "mv"]
+    assert moves, "quarantine must issue the relocation"
+    assert moves[0].args["command"] == ["mv", TEST_PATH, dest]
+    assert any(d.args["path"] == ".agent/quarantine" for d in fx.calls_to("makedirs"))
+    warn = [w for w in m.pending_warnings if w.kind == "authored_test_contradicted"]
+    assert ".agent/quarantine" in warn[0].prescribed_fix

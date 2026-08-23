@@ -61,6 +61,78 @@
 #   probe already generated 3/3 at 178k/188k/198k/203k — so the YaRN stretch
 #   (3x from the 65,536 original) is exercised, not assumed.
 
+# ── POWER DRAW: ~2/3 OF A SMALL DENSE MODEL (operator, 2026-08-22) ───
+# Observed during the completion run: this model pulls roughly TWO THIRDS
+# the wattage of the small DENSE models in the fleet, despite carrying the
+# largest weights we serve (104.2 GB).
+#
+# Not a paradox — weights are a MEMORY cost, and watts are a COMPUTE cost.
+# A dense model multiplies every parameter for every token and saturates the
+# GPU doing it. This one is sparse three ways at once: MoE routes each token
+# through a small fraction of the experts, the 128-token sliding window keeps
+# attention narrow, and the 512-way sparse indexer skips most of what remains.
+# Fewer FLOPs per token means a cooler, quieter machine that happens to be
+# holding 104 GB resident.
+#
+# WHY IT MATTERS BEYOND THE ELECTRICITY BILL: it reframes what "slow" means
+# here. ~19 tok/s at 2/3 wattage is not a saturated machine crawling — it is
+# an UNDER-UTILISED one. The decode rate is bound by sequential dependency at
+# low arithmetic intensity, not by thermal or compute headroom, which is
+# exactly the profile where BATCHING wins big: concurrent streams would fill
+# idle compute rather than contend for it. Batched is deferred here only
+# because it requires swa_full, which would forfeit the 12x the per-layer KV
+# compression buys (see decode_mode_note below) — but the wattage says the
+# headroom for it is real, and a batched path that dodged the swa_full
+# requirement would be worth more on THIS model than on any dense one.
+#
+# NOT INSTRUMENTED. This is an operator reading, not a logged figure; nothing
+# in the harness samples wattage. If it becomes load-bearing, measure it
+# (`sudo powermetrics --samplers gpu_power`) against a dense arm on the same
+# mission rather than trusting the recollection.
+
+# ── SESSION-DEPTH PREFILL DECAY IS THIS MODEL'S NORMAL PROFILE ───────
+# MEASURED 2026-08-23 on the completion run, one 71-turn PTY session
+# (8fc07807f7d94865), per-turn cost against that session's own history:
+#
+#     history    prefill          decode
+#      ~4k       150 tok/s        19.1 tok/s
+#     ~36k        55 tok/s        17.6 tok/s
+#     ~70k        37 tok/s        15.0 tok/s
+#    ~117k        26 tok/s        14.2 tok/s
+#
+# EXPECTED. Do not "fix" it, and do not read it as a leak, as staleness,
+# or as KV thrash — all three were proposed and all three are wrong:
+#
+#   * NOT replay. The append fast path IS engaging. Re-prefilling 117k at
+#     the bulk rate would cost ~585s; the observed turn costs 88s for a
+#     2,330-token suffix. Only the suffix is evaluated.
+#   * NOT concurrency. `max_concurrent_requests: 1` was added on that
+#     theory and REVERTED — the decay reproduced identically under it.
+#     Leg 2 looked healed only because its sessions were YOUNG.
+#   * NOT process rot. The in-process context refresh fired 6x across the
+#     run without moving the curve (that machinery treats output souring,
+#     a different failure).
+#
+# MECHANISM: one depth-LINEAR attention term on top of both phases. The
+# 128-token sliding window keeps most layers depth-constant, but the
+# sparse indexer must SCAN every cached position to pick its 512 — cheap
+# per position, linear in depth. Both phases absorb the same ~0.2-0.3us
+# per cached token per new token; decode's ~53ms/tok base hides it (-29%)
+# while prefill's ~6.7ms/tok base does not (-5.6x). The prefill/decode
+# asymmetry is a BASE-RATE artifact, not two different problems.
+#
+# CONSEQUENCE: a session's total cost is QUADRATIC in its own length.
+# It RESETS per session — a fresh session opens at ~150-270 tok/s every
+# time. So the lever is session DEPTH, never a config knob: roll the
+# PTY-driving inference session every N turns with a compact recap (game
+# state lives in the PTY process, so only conversational memory is lost).
+# That is a framework change and is not attempted here. The swa_full +
+# resident-windowing alternative buys the same thing and forfeits the 12x
+# per-layer KV compression — rejected at intake, still rejected.
+#
+# This curve is also what the four `exceeds context window` failures are:
+# the same growth reaching n_ctx, not a separate defect.
+
 app:
   host: "0.0.0.0"
   port: 8008
@@ -149,6 +221,50 @@ logging:
   directory: ./logs
 
 # ── TIER (doc-only) ──────────────────────────────────────────────────
+#
+# ── COMPLETION RUN + FRONTIER FLIGHT (2026-08-23) ────────────────────
+# COMPLETED its own final gate: 28/28 goals, 62 cycles (27 + 35 across a
+# pause/resume), ~17h wall. Third COMPLETED artifact the campaign has
+# produced. Runs: completion_deepseek-v4-flash_20260822-175345 +
+# _20260823-000222. NOT a tier arm — run outside the harness so the only
+# stop condition was the mission's own gate.
+#
+# FRONTIER FLIGHT: **Delivery 0-4 · Character 0-6 · OVERALL FRONTIER.**
+# No panel split, no CLOSE flag. Out-of-band scorecard, NOT ladder-bearing
+# (METHODS §5 family caveat: Opus judge, Claude-authored frontier).
+# Record: dev/blind_panel/records/flight_20260823_deepseek_vs_frontier.md
+#
+# THE ARTIFACT IS GOOD AND LOST ANYWAY — that is the useful part. 46/47
+# conformance NEAR-FULL, WON twice, 8 rooms authored / 8 reachable, ZERO
+# unplaced entities (the campaign's most common decisive defect, absent in
+# both its forms), and the judge needed no source reading to win it.
+#
+# The three defects that decided it are all SEAM-class, not capability:
+#   1. `parser.py` strips `of` as a stop word while `world.py` prints
+#      "Handful of Berries" — the item cannot be taken by the name the game
+#      itself displays. The campaign's signature defect, found again.
+#   2. The boss weakness is declared in world.py's docstring, carried on
+#      models.py (`weakness_item`, `phase_2_health`), promised by BOTH NPCs
+#      — and never read by engine.py's combat resolver. The judge won with
+#      the STARTING SWORD, never picking up the medallion; phase 2 is not
+#      fiercer (attack=12 both phases).
+#   3. Hidden Grove is reachable and completely EMPTY — it exists to be the
+#      eighth room, the direct product of a quality-gate goal that demanded
+#      a room COUNT. Counting rooms does not count content.
+# Only unmet checklist item: #26, distinct monster behaviours — `Monster`
+# is a stats-only dataclass, one shared `_combat_round()`.
+#
+# Narrowest axis (judge-flagged as the one that could flip): B9 workability.
+# This model's module boundaries (models/world/parser/engine) are GENUINELY
+# BETTER than the frontier's 651-line game.py god-object; it lost the axis
+# on the modification probe and on `make test` running zero tests.
+#
+# GOAL DECOMPOSITION IS THIS MODEL'S OUTLIER TRAIT: 18 planned goals against
+# a fleet range of 27-40 (median ~31). Coverage was complete but COARSE —
+# combat is one goal where qwen3.8 spent seven. The quality gate then
+# harvested 10 more as DEFECT REPORTS. Finer findings, never finer
+# decomposition; a capability that happens to work is never enumerated.
+#
 tier:
   league: contemplator  # LOAD-BEARING — agent/tier/runner.py:config_league
-  status: not_yet_run  # history: llmvp/configs/archive/TIER_JUDGEMENTS.md
+  status: completed_out_of_band  # history: llmvp/configs/archive/TIER_JUDGEMENTS.md

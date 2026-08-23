@@ -37,6 +37,12 @@ sections:
       "import sklearn" requires "scikit-learn".
     - For the install_command, use the appropriate tool for the project
       (pip install, uv add, npm install, cargo add, etc.).
+    - Files labelled "(TEST FILE — dev dependency scope)": a package imported
+      ONLY by test files is a DEV dependency, never a runtime one. Report it
+      under "missing_dev_dependencies" with a dev-scoped install command
+      (uv add --dev / pip install in a dev group / npm install --save-dev),
+      and never under "missing_dependencies". A package imported by BOTH a
+      test file and a non-test file is a runtime dependency.
 
   cache: true
 - id: output_format
@@ -45,6 +51,7 @@ sections:
     ```json
     {
       "missing_dependencies": ["pyyaml", "requests"],
+      "missing_dev_dependencies": [],
       "details": [
         {"import": "yaml", "package": "pyyaml", "file": "loader.py"},
         {"import": "requests", "package": "requests", "file": "api.py"}
@@ -53,10 +60,23 @@ sections:
     }
     ```
 
+    ✅ CORRECT — a test-only import goes to the dev list:
+    ```json
+    {
+      "missing_dependencies": [],
+      "missing_dev_dependencies": ["pytest"],
+      "details": [
+        {"import": "pytest", "package": "pytest", "file": "tests/test_engine.py"}
+      ],
+      "install_command": "uv add --dev pytest"
+    }
+    ```
+
     ✅ CORRECT — all deps covered:
     ```json
     {
       "missing_dependencies": [],
+      "missing_dev_dependencies": [],
       "details": [],
       "install_command": ""
     }

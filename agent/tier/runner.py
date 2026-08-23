@@ -423,12 +423,28 @@ class TierRun:
     top_phase: str = "quality"
     budget_h: float = 11.0
     leave_server_up: bool = False
+    # Per-run OVERRIDES of the contemplator protocol governors (None = use
+    # the TIER_RUBRIC v2 §2 defaults above). An arm that sets either is
+    # deliberately OFF-PROTOCOL and is not cycle-comparable to arms that
+    # ran under the standard 30/4h contract — the batch header says so out
+    # loud, and STATE.json records it, so a later reader cannot mistake a
+    # long arm for a normal one.
+    contemplator_cycles: Optional[int] = None
+    contemplator_wall: Optional[str] = None
     base: Path = field(default_factory=Path)
     results: list[ArmResult] = field(default_factory=list)
     # Set when this run continues a paused one: {"config", "work", "consumed_s"}.
     # The first arm is then RESUMED (mission resume, remaining wall) rather than
     # created, and its working directory must survive.
     resume_from: Optional[dict] = None
+
+    @property
+    def cyc_cap(self) -> int:
+        return self.contemplator_cycles or CONTEMPLATOR_CYCLES
+
+    @property
+    def safety_wall(self) -> str:
+        return self.contemplator_wall or CONTEMPLATOR_SAFETY_WALL
 
     # Arms this base has EVER run, adopted from a prior STATE.json on
     # re-entry. `arms` narrows to the remaining queue on a resume, and
@@ -546,6 +562,10 @@ class TierRun:
             "arms": self.full_arms,
             "mission": self.mission,
             "wall": self.wall,
+            # Recorded even when None so a reader can tell "ran under the
+            # protocol" from "no field written by an older build".
+            "contemplator_cycles": self.contemplator_cycles,
+            "contemplator_wall": self.contemplator_wall,
             "results": [r.__dict__ for r in self.results],
             **kw,
         }
@@ -906,8 +926,8 @@ class TierRun:
             )
 
         if league == "contemplator":
-            backstop = CONTEMPLATOR_SAFETY_WALL
-            remaining_cycles = max(1, CONTEMPLATOR_CYCLES - cycles_consumed(work))
+            backstop = self.safety_wall
+            remaining_cycles = max(1, self.cyc_cap - cycles_consumed(work))
         else:
             backstop = self.wall
             remaining_cycles = None
@@ -917,7 +937,7 @@ class TierRun:
                 f"  resuming at {int(consumed/60)}min consumed — "
                 f"{int(remaining/60)}min of the {backstop} backstop left"
                 + (
-                    f", {remaining_cycles}/{CONTEMPLATOR_CYCLES} cycles left"
+                    f", {remaining_cycles}/{self.cyc_cap} cycles left"
                     if remaining_cycles is not None
                     else ""
                 )
@@ -926,7 +946,7 @@ class TierRun:
             self.log(
                 "  mission running"
                 + (
-                    f" (league={league}, cap {CONTEMPLATOR_CYCLES} cycles, "
+                    f" (league={league}, cap {self.cyc_cap} cycles, "
                     f"safety wall {backstop})"
                     if league == "contemplator"
                     else f" (league={league}, wall {backstop})"
@@ -1042,12 +1062,16 @@ class TierRun:
             f"py_ok={res.py_ok} py_fail={res.py_fail} degen={res.degenerations} "
             f"| {res.cycles} cyc ({rate:.1f} cyc/h) | {res.goals}"
         )
-        if league == "contemplator" and res.cycles < CONTEMPLATOR_CYCLES:
+        if (
+            league == "contemplator"
+            and res.cycles < self.cyc_cap
+            and res.status != "completed"
+        ):
             # The 4h safety wall bound this arm, not its cycle budget — so
             # there is unspent budget an extend can finish. Say it here, at
             # the moment it happens, with the command already written.
             self.log(
-                f"  !! SHORT FINISH — {res.cycles}/{CONTEMPLATOR_CYCLES} cycles; "
+                f"  !! SHORT FINISH — {res.cycles}/{self.cyc_cap} cycles; "
                 f"the safety wall bound this arm, not its cycle budget"
             )
             self.log(
@@ -1177,6 +1201,18 @@ class TierRun:
             f"=== tier batch · {len(self.arms)} arms · {self.wall} each "
             f"· budget {self.budget_h}h ==="
         )
+        if self.contemplator_cycles or self.contemplator_wall:
+            # Loud on purpose. A contemplator arm run off the 30-cycle /
+            # 4h contract is not cycle-comparable to the arms already in
+            # TIER_JUDGEMENTS, and the batch log is where a later reader
+            # looks first.
+            self.log(
+                f"    !! OFF-PROTOCOL contemplator governors — "
+                f"cap {self.cyc_cap} cycles, safety wall {self.safety_wall} "
+                f"(protocol: {CONTEMPLATOR_CYCLES} / "
+                f"{CONTEMPLATOR_SAFETY_WALL}) — NOT cycle-comparable to "
+                f"standard arms"
+            )
         # THE PHASE CEILING IS PROVENANCE. An arm stopped at `structural` did
         # not attempt the phases that exercise what it built, so its artifact is
         # not comparable with one run to `quality` — and the batch log recorded
@@ -1256,14 +1292,14 @@ class TierRun:
         short = [
             r
             for r in self.results
-            if r.league == "contemplator" and 0 < r.cycles < CONTEMPLATOR_CYCLES
+            if r.league == "contemplator" and 0 < r.cycles < self.cyc_cap
         ]
         if short:
             self.log(
                 f"\n=== SHORT FINISHES ({len(short)}) — cycle budget left unspent ==="
             )
             for r in short:
-                self.log(f"  {r.config:<30} {r.cycles}/{CONTEMPLATOR_CYCLES} cycles")
+                self.log(f"  {r.config:<30} {r.cycles}/{self.cyc_cap} cycles")
                 self.log(
                     f"     ouroboros.py tier extend --run {self.base.name} "
                     f"--arm {r.config}"

@@ -351,3 +351,68 @@ async def test_the_reopened_goal_dispatches_real_work_so_the_cycle_can_end():
     out = await action_quality_sweep_next(_si({"mission": m}))
     assert out.result.get("needs_fix") is True
     assert out.context_updates["dispatch_config"]["flow"] == "diagnose_issue"
+
+
+@pytest.mark.asyncio
+async def test_a_test_only_import_is_filed_as_a_dev_dependency():
+    """A package imported ONLY by test files must be routed to the dev
+    dependency group, never runtime `dependencies`.
+
+    FOUND LIVE (deepseek-v4-flash completion run, 2026-08-22): a quarantined
+    authored test's `import pytest` was flagged as an undeclared dependency
+    and the filed fix was `uv add pytest` — a text-adventure game shipped
+    hard-requiring pytest at install time. The gate still fails (undeclared
+    is undeclared), but the reason must say DEV GROUP so the repair lands in
+    the right place.
+    """
+    out = await action_parse_dep_check_result(
+        StepInput(
+            context={
+                "inference_response": json.dumps(
+                    {
+                        "missing_dependencies": [],
+                        "missing_dev_dependencies": ["pytest"],
+                        "details": [
+                            {
+                                "file": "tests/test_engine.py",
+                                "import": "pytest",
+                                "package": "pytest",
+                            }
+                        ],
+                        "install_command": "uv add --dev pytest",
+                    }
+                )
+            },
+            params={},
+            meta=FlowMeta(flow_name="quality_gate", step_id="parse_dep_result"),
+            effects=MockEffects(),
+        )
+    )
+    assert out.result["deps_ok"] is False
+    reason = out.context_updates["gate_failure_reason"]
+    assert "pytest" in reason
+    assert "dev group" in reason
+    assert "uv add --dev pytest" in reason
+
+
+@pytest.mark.asyncio
+async def test_a_clean_dev_report_still_passes():
+    """Empty runtime AND empty dev lists → deps_ok, exactly as before."""
+    out = await action_parse_dep_check_result(
+        StepInput(
+            context={
+                "inference_response": json.dumps(
+                    {
+                        "missing_dependencies": [],
+                        "missing_dev_dependencies": [],
+                        "details": [],
+                        "install_command": "",
+                    }
+                )
+            },
+            params={},
+            meta=FlowMeta(flow_name="quality_gate", step_id="parse_dep_result"),
+            effects=MockEffects(),
+        )
+    )
+    assert out.result["deps_ok"] is True

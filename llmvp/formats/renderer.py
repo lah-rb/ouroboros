@@ -377,7 +377,22 @@ class FormatRenderer:
         elif gate:
             # Gated family: the EFFECTIVE level decides (Step-3.7 measured
             # mechanics; gemma/hy3/qwen/laguna/glm4 official branches).
-            thinking_enabled = effective in gate
+            # RANK-ORDERED, not membership: the canonical ladder outgrew the
+            # gate lists. Every gate family declares ["medium","high"], and a
+            # literal `in` test made xhigh — the STRONGEST request — render
+            # the thinking-DISABLED form on all six of them (measured
+            # 2026-08-22: deepseek/gemma design steps at xhigh produced zero
+            # CoT while their high/medium steps thought fine; the inversion
+            # was silent because a closed gate and a quiet model look
+            # identical in the log). A level ABOVE the gate's floor opens
+            # the gate; only levels below it close. Unknown level strings
+            # keep the old membership behavior rather than guessing a rank.
+            _rank = {"none": 0, "low": 1, "medium": 2, "high": 3, "xhigh": 4}
+            _gate_ranks = [_rank[g] for g in gate if g in _rank]
+            if effective in _rank and _gate_ranks:
+                thinking_enabled = _rank[effective] >= min(_gate_ranks)
+            else:
+                thinking_enabled = effective in gate
         else:
             # Ungated family (olmo, and channel/tekken styles fall through
             # harmlessly): no per-level form exists — only the policy's

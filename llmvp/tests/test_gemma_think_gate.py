@@ -209,3 +209,67 @@ class TestInvChannelFSM:
         assert "some reasoning" in (get_tracker().get_thinking() or {}).get(
             "content", ""
         )
+
+
+class TestGateRankOrdering:
+    """The gate is rank-ordered, not a membership test (2026-08-22).
+
+    Every gate family declares gate_levels ["medium","high"] (chatml adds
+    "low"), and the canonical ladder later grew xhigh above them. A literal
+    `effective in gate` test therefore rendered the STRONGEST request as
+    the thinking-DISABLED form on all six gate families at once — measured
+    live: deepseek's and gemma's xhigh design steps produced zero CoT while
+    their high/medium steps thought normally. A level above the gate's
+    floor opens it; only levels below the floor close it.
+    """
+
+    GATE_FAMILIES = ("deepseek4", "gemma", "qwen", "hunyuan3", "laguna", "glm4")
+
+    def _cfg(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        cfg = SimpleNamespace(
+            model=SimpleNamespace(
+                thinking="per_request", thinking_available=True, thinking_mode=None
+            )
+        )
+        return patch("core.config.get_config", return_value=cfg)
+
+    def test_xhigh_renders_exactly_the_high_form_everywhere(self):
+        with self._cfg():
+            for fam in self.GATE_FAMILIES:
+                clear_cache()
+                r = get_renderer(fam)
+                assert r.render_generation_prompt(
+                    reasoning="xhigh"
+                ) == r.render_generation_prompt(reasoning="high"), fam
+
+    def test_low_and_none_still_close_the_gate_everywhere(self):
+        with self._cfg():
+            for fam in self.GATE_FAMILIES:
+                clear_cache()
+                r = get_renderer(fam)
+                low = r.render_generation_prompt(reasoning="low")
+                assert r.render_generation_prompt(reasoning=None) == low, fam
+                # xhigh must NOT collapse onto the closed form — that was
+                # the bug: strongest request, weakest behavior.
+                assert r.render_generation_prompt(reasoning="xhigh") != low, fam
+
+    def test_low_in_gate_still_opens_at_low(self):
+        # A step-3.7-style family listing canonical low IN its gate keeps
+        # low open under ranking (floor = low). chatml is the live example.
+        with self._cfg():
+            clear_cache()
+            r = get_renderer("chatml")
+            assert "<think>" in r.render_generation_prompt(reasoning="low")
+
+    def test_unknown_level_keeps_membership_semantics(self):
+        # A string outside the canonical ladder must not be guessed into a
+        # rank; it falls back to the literal membership test (closed unless
+        # a family literally lists it).
+        with self._cfg():
+            clear_cache()
+            r = get_renderer("gemma")
+            closed = r.render_generation_prompt(reasoning="low")
+            assert r.render_generation_prompt(reasoning="banana") == closed

@@ -966,6 +966,22 @@ def main() -> None:
         default=11.0,
         help="Stop STARTING new arms past this many hours",
     )
+    # Contemplator arms are governed by a 30-cycle cap and a 4h safety wall
+    # (TIER_RUBRIC v2 §2), NOT by --wall — which is why passing --wall to a
+    # contemplator silently does nothing. These raise those governors for a
+    # deliberate completion run; the batch header and STATE.json both mark
+    # such an arm OFF-PROTOCOL and not cycle-comparable.
+    tier_run.add_argument(
+        "--contemplator-cycles",
+        type=int,
+        default=None,
+        help="Override the 30-cycle contemplator cap (off-protocol)",
+    )
+    tier_run.add_argument(
+        "--contemplator-wall",
+        default=None,
+        help="Override the 4h contemplator safety wall (off-protocol)",
+    )
     # The server comes down when the chain ends. A batch is scheduled work, not
     # a service window — leaving ~75-98GB wired for nobody is the wrong resting
     # state. active_config is restored either way.

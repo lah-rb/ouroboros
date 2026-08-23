@@ -1,0 +1,106 @@
+# Nemotron 3.5 (nemotron_h_moe) — split from `qwen` (2026-08-22)
+#
+# WHY A SEPARATE FAMILY, when this is ChatML and qwen.yaml is ChatML. Every
+# token, role and gate matches qwen exactly. ONE byte-level difference makes
+# it a different family, and it is the one that decides whether thinking is
+# OFF or merely looks off:
+#
+#   qwen     disabled branch: '<think>\n\n</think>\n\n'
+#   nemotron disabled branch: '<think></think>'      (no inner newlines,
+#                                                     no trailing newlines)
+#
+# Putting nemotron's literal in qwen.yaml would corrupt every 3.5/3.6 render;
+# putting qwen's in a nemotron config renders an off-template disabled turn,
+# which is precisely the class of defect that cost gemma an entire tier arm
+# (a dial that renders wrong is a dial the model ignores). Same reasoning as
+# the qwen38 split.
+#
+# ALSO NOT chatml.yaml, which was the obvious-looking home: chatml declares
+# NO prefill_closed_literal (its disabled branch is a bare assistant turn,
+# nothing like this template's) and its system block carries step-3.7's
+# "Reasoning: <level>" line, a mechanic this template has never seen.
+#
+# READ FROM THE EMBEDDED TEMPLATE, not from a neighbour (reference.yaml §3):
+#   enabled : '<|im_start|>assistant\n<think>\n'
+#   disabled: '<|im_start|>assistant\n<think></think>'
+#   turns   : '<|im_start|>' + role + '\n' + content + '<|im_end|>\n'
+#   thinking is BINARY — `enable_thinking` (default True). There is no
+#   effort/budget dial anywhere in the template, so no Reasoning line and
+#   no third depth. Confirmed against the model card.
+#
+# MULTI-TURN CONVENTION (reference.yaml §3c): the template's
+# `truncate_history_thinking` branch REWRITES prior assistant turns to
+# '<think></think>' + the answer — i.e. history keeps the answer and drops
+# the reasoning. So a resident session SHOULD strip prior reasoning
+# (resident_strip_reasoning: true) — the opposite of qwen3.8, whose template
+# preserves all turns' thinking by default.
+#
+# Model card: https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16
+# Sampling profile below is the card's, and it publishes ONE profile for all
+# task shapes (temp 1.0 / top_p 0.95) — unusually hot. No agentic variant was
+# offered, so none was rejected; recorded per §2 so the choice is defensible.
+
+family: nemotron
+display_name: "Nemotron 3.5 (hybrid Mamba-2 MoE)"
+
+tokens:
+  msg_open: "<|im_start|>"
+  msg_content: "\n"
+  # Inter-turn boundary is '<|im_end|>\n' (newline AFTER the close), matching
+  # the template's turn loop. gen_stop stays the bare token — it is a stop
+  # SEQUENCE, not a boundary.
+  msg_close: "<|im_end|>\n"
+  gen_stop: "<|im_end|>"
+  history_close: "<|im_end|>\n"
+
+roles:
+  system: "system"
+  user: "user"
+  assistant: "assistant"
+
+thinking:
+  style: inline_tags
+  open_tag: "<think>"
+  close_tag: "</think>"
+  # Byte-exact disabled branch. NOT qwen's — no inner blank line, no trailing
+  # newlines. The composed flags cannot produce this shape, which is why the
+  # literal exists.
+  prefill_closed_literal: "<think></think>"
+  # Binary family: canonical low = suppressed (the literal above);
+  # medium/high = the opener. Same shape as qwen 3.5/3.6.
+  gate_levels: ["medium", "high"]
+
+system_block:
+  identity: "You are a helpful assistant."
+  reasoning_default: ""
+  # NO Reasoning-effort line — the template has no depth dial (see header).
+  reasoning_prefix: ""
+  channel_directive: ""
+  template: "{identity}\n{persona}"
+
+traits:
+  fold_system_into_first_user: false
+  supports_developer_role: false
+
+generation:
+  # The card's single published profile. Temp 1.0 is HOT for an agent loop;
+  # the config's temperature_floor is where any per-run clamp belongs, not
+  # here — this block is what the vendor documented.
+  temperature: 1.0
+  top_p: 0.95
+  top_k: 0
+  min_p: 0.0
+  repeat_penalty: 1.0
+
+turn_transition:
+  needs_close: true
+  # Bare token deliberately (NOT '<|im_end|>\n'): the session path tokenizes
+  # this as plain text, where '>\n' merges into a different token and caused
+  # the measured runaway — see chatml.yaml's note.
+  after_generation: "<|im_end|>"
+
+reasoning:
+  levels:
+    low: "low"
+    medium: "medium"
+    high: "high"

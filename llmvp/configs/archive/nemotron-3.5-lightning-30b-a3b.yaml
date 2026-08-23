@@ -1,0 +1,193 @@
+# ── NVIDIA Nemotron 3.5 Lightning 30B-A3B (APEX i-quality) — onboarded 2026-08-22
+#
+# Onboarded per llmvp/configs/reference.yaml. What each step actually returned,
+# so a later reader can tell measurement from assumption:
+#
+# 1. GGUF HEADERS (dev/gguf_geometry.py, no boot required):
+#      arch=nemotron_h_moe · 53 layers · n_head 32 · n_kv_head 2 (per-layer max,
+#      INTERLEAVED-SWA) · embd 2688 · head_dim 128 · experts 128 (6 used)
+#      trained ctx 1,048,576 · rope_freq_base 1e4 · bos=1 eos=11 add_bos=False
+#      weights 23.1 GB decimal · KV 53 KiB/token (formula OVER-predicts on
+#      interleaved-SWA, per the tool's own note — treat as a ceiling estimate).
+#      KV is the number that bounds this model: at 131072 the formula says
+#      ~7.1 GB KV / 30.2 GB total; at 262144, ~14.2 / 37.3. The 1M trained
+#      window is NOT reachable here (~57 GB KV by formula) and the vendor says
+#      as much — a single H100 is memory-bound to 256K.
+#
+# 2. MODEL CARD (searched before the first boot, per §2's warning):
+#      https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16
+#      ONE published sampling profile for every task shape: temp 1.0 / top_p
+#      0.95. No agentic variant was offered, so none was rejected — recorded
+#      because §2 asks for the profile chosen AND the one refused.
+#      Architecture: "interleaved Mamba-2 and MoE layers, along with select
+#      Attention layers" — a hybrid, same class as qwen3-next/qwen3.8.
+#      Thinking is BINARY (`enable_thinking`, default True). No effort dial.
+#      llama.cpp support is upstream and healthy (ggml-org publishes GGUFs);
+#      no version floor documented, unlike muse-glimmer's b10353.
+#      MTP layers exist and can act as a built-in draft model — NOT enabled
+#      here. That is the qwen3.8 nextn lesson: primitives existing is not a
+#      working draft loop, and Metal speculative has been net-negative before.
+#
+# 3. FAMILY: new — llmvp/formats/nemotron.yaml. It is ChatML and qwen.yaml is
+#      ChatML, but the disabled branch differs by bytes ('<think></think>' vs
+#      qwen's '<think>\n\n</think>\n\n'), and an off-template dial is a dial the
+#      model ignores. Golden-pinned by TestNemotronRendering (test_config.py)
+#      against the strings read out of this GGUF.
+#
+# 3c. MULTI-TURN CONVENTION: the template's `truncate_history_thinking` branch
+#      rewrites prior assistant turns to '<think></think>' + answer — history
+#      keeps answers, drops reasoning. So resident_strip_reasoning is TRUE
+#      here, the OPPOSITE of qwen3.8 (whose template preserves all turns).
+#
+# ── OWED PROBES (not yet run; nothing below claims to be measured) ───
+#   a) CONTEXT CEILING — `api/main.py --probe-context <this config>`. n_ctx
+#      below is a CONSERVATIVE START, not a probe result, and there is no
+#      probe_verified_* block precisely because none has been earned.
+#   b) EXTRACTION on a real completion (§3b): non-empty C *and* non-empty T,
+#      plus a post-answer seal check. Rendering parity is proven; extraction
+#      is NOT, and those fail independently — the muse-glimmer lesson.
+#   c) DECODE RATE: LM Studio reported ~88 tok/s (operator). Unverified on
+#      this serving path; read/token has not predicted decode here before.
+#   d) SESSION STRATEGY VERDICT (§5): watch the boot line for
+#      memory_can_shift. Hybrid-recurrent is not automatically disqualifying
+#      — qwen3-next grants resident, the GDN qwens refuse — so this is a
+#      read-the-verdict item, not a prediction.
+app:
+  host: "0.0.0.0"
+  port: 8008
+  log_level: "info"
+  cors_origins: ["*"]
+  backend_timeout: 180
+
+graphql:
+  max_query_depth: 10
+  max_tokens: 131072
+  max_aliases: 50
+  introspection_enabled: true
+
+model:
+  name: "nemotron-3.5-lightning-30b-a3b"
+  family: "nemotron"
+  path: /Users/lah-rb/.lmstudio/models/Myric/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-APEX-GGUF/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-APEX-i-quality.gguf
+  # CONSERVATIVE START, not a measurement. 53 KiB/token is among the heaviest
+  # in the fleet (gpt-oss is ~2 KiB/tok/layer, gemma 32 KiB), so the ceiling
+  # here is KV-bound, not weights-bound. Raise only via --probe-context.
+  n_ctx: 131072
+  n_gpu_layers: -1
+  seed: -1
+  verbose: false
+  # Interleaved-SWA per the headers: any pinned prefix needs the full KV kept
+  # for the sliding-window layers, or the pinned span corrupts at the window
+  # boundary (the gpt-oss finding, llama_decode -3).
+  swa_full: true
+  # ── THINKING ──────────────────────────────────────────────────────
+  # Binary family. per_request lets the reasoning router drive it: canonical
+  # low renders the official suppressed branch, medium/high the opener —
+  # which is exactly the house policy shape (explicit low on mechanical
+  # steps, higher on verdict steps).
+  thinking_available: true
+  thinking: "per_request"
+  # See §3c above — this template drops prior reasoning from history.
+  resident_strip_reasoning: true
+  # MTP present in the arch, deliberately unused. See OWED PROBES.
+  speculative: false
+
+prompt:
+  persona_file: "./knowledge/SOUL.md"
+
+generation:
+  max_tokens_default: 32768
+  # The card's ONE profile. temp 1.0 is hot for an agent loop and this is a
+  # hybrid substrate (the family with the paragraph-orbit history), so the
+  # floors below bound the damage without departing from the vendor envelope
+  # — the glm lesson was inventing a setting from nowhere, not honouring one.
+  temperature_default: 1.0
+  temperature_floor: 0.7
+  session_temp_floor: 0.7
+  top_p: 0.95
+  top_k: 0
+  min_p: 0.0
+  presence_penalty: 0.0
+  repeat_penalty: 1.0
+  penalty_last_n: 2048
+  degen_retry_enabled: true
+  degen_retry_temperature: 1.0
+  degen_retry_presence_penalty: 1.5
+  streaming_default: true
+
+knowledge:
+  tokens_bin: "./data/nemotron-3.5-lightning-30b-a3b.tokens.bin"
+  token_limit: 32768
+
+resources:
+  cpu_threads: 15
+  max_concurrent_requests: 1
+  jit_concurrency_limit: null
+
+tools:
+  enabled: false
+  max_iterations: 3
+
+logging:
+  enabled: true
+  directory: "./logs"
+
+# ── TIER EXPECTATION (doc-only) ──────────────────────────────────────
+# PRE-REGISTERED under TIER_RUBRIC v2.1 §6: written before the run, never
+# revised afterwards. Its job is to make a SURPRISE legible.
+#
+# EXPECTATION: clears the design gate and reaches the functional block, but
+# lands in the lower half of the grinder league. Reasons to expect that
+# rather than more: NVIDIA's previous offering could not get past the design
+# gate at all (operator), and 3B active parameters is small for the
+# architecture work this brief now demands — two-phase bosses, dialogue
+# state, cross-file identifier discipline. Reasons it could beat the
+# expectation: ~88 tok/s decode is near the top of the fleet, and this
+# campaign's losses are overwhelmingly wall-bound rather than
+# capability-bound, so a fast model gets more repair laps per arm than its
+# parameter count suggests. If it lands BELOW the design gate, check the
+# FORMAT before the model — a new family's first arm is the likeliest place
+# for a rendering or extraction defect to masquerade as incompetence.
+#
+# ── OUTCOME (2026-08-22, run tier_20260822-155240) ───────────────────
+# TIER 3 / ARCHIVED. Placed below the floor anchor WITHOUT a blind flight,
+# because the artifact could not be played: no judge could have scored it.
+#
+# The expectation above was half right. It DID clear the design gate --
+# eight rooms, a two-phase boss whose moonstone weakness is gated on the
+# phase, NPC dialogue keyed to boss state. That is a real design, and it is
+# the reason this is a tier-3 rather than a bounce. What it could not do is
+# hold a seam.
+#
+# Decisive: the game does not launch. main.py:25 calls
+# `GameEngine.from_world(WORLD_MAP, starting_room_id="entrance")` against
+# engine.py:443 `def from_world(world_map, start_id="entrance")` -- the
+# factory renames the parameter on the way to the constructor and the
+# caller reached for the constructor's name. TypeError on the first call of
+# the program. The structural sweep visited BOTH files after the mismatch
+# existed and did not see it; correctly so, since the phase is scoped to
+# syntax/import/lint + data parse-validity (flows/code_core/
+# build_structure.cue:8) and a keyword-argument name is not a symbol the
+# seam gate resolves. Charge this to the model, not the gate.
+#
+# Second seam, and the more telling one: world.yaml describes a DIFFERENT
+# eight-room world than rooms.py already implemented (tavern/poison_lab/
+# treasure_vault/study vs entrance/corridor/lab/vault/arena), and no module
+# loads it. The model authored the data file from the design brief without
+# reading the Python that had already built the same world -- a
+# cross-file-memory failure, not a coding one.
+#
+# Also measured: 4 unfenced FILE-marker recoveries in ~25 min (consistent
+# protocol trait, not noise -- pin the fenced form before any rescored
+# arm), and one long-cycle degeneration abort mid-world.yaml (152 distinct
+# 32B n-grams, ratio 0.019), recovered on retry.
+#
+# Speed was never the problem and the wall was never reached: it terminated
+# `completed` after 10 cycles in ~25 min of a 90 min wall. This is the
+# rarer failure shape for this campaign -- capability-bound, not
+# wall-bound, which is exactly what the expectation said to watch for.
+#
+# Full record: llmvp/configs/archive/TIER_JUDGEMENTS.md
+tier:
+  league: grinder  # LOAD-BEARING — agent/tier/runner.py:config_league
+  status: archived  # placed BELOW THE FLOOR anchor; see the note above

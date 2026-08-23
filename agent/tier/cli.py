@@ -194,6 +194,18 @@ def _resume(args) -> None:
                 getattr(args, "top_phase", None) or "quality",
                 "--budget-h",
                 str(getattr(args, "budget_h", None) or 11.0),
+            ]
+            + (
+                ["--contemplator-cycles", str(data["contemplator_cycles"])]
+                if data.get("contemplator_cycles")
+                else []
+            )
+            + (
+                ["--contemplator-wall", str(data["contemplator_wall"])]
+                if data.get("contemplator_wall")
+                else []
+            )
+            + [
                 "--resume-consumed-s",
                 str(arm["consumed_s"]),
                 "--resume-prior-elapsed-s",
@@ -276,6 +288,8 @@ def _run(args) -> None:
             top_phase=args.top_phase,
             budget_h=args.budget_h,
             leave_server_up=args.leave_server_up,
+            contemplator_cycles=getattr(args, "contemplator_cycles", None),
+            contemplator_wall=getattr(args, "contemplator_wall", None),
             base=Path(args.base),
             resume_from=resume,
         )
@@ -296,6 +310,8 @@ def _run(args) -> None:
             top_phase=args.top_phase,
             budget_h=args.budget_h,
             leave_server_up=args.leave_server_up,
+            contemplator_cycles=getattr(args, "contemplator_cycles", None),
+            contemplator_wall=getattr(args, "contemplator_wall", None),
             base=base,
         )
         raise SystemExit(run.execute())
@@ -322,6 +338,16 @@ def _run(args) -> None:
                 "--budget-h",
                 str(args.budget_h),
             ]
+            + (
+                ["--contemplator-cycles", str(args.contemplator_cycles)]
+                if getattr(args, "contemplator_cycles", None)
+                else []
+            )
+            + (
+                ["--contemplator-wall", str(args.contemplator_wall)]
+                if getattr(args, "contemplator_wall", None)
+                else []
+            )
             + (["--leave-server-up"] if args.leave_server_up else []),
             cwd=Path(__file__).resolve().parents[2],
             stdout=fh,

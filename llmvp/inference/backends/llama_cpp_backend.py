@@ -2357,6 +2357,21 @@ class LlamaCppBackend(BaseBackend):
         if not level or level == self._reasoning_default_level:
             return prompt_tokens
         if not (self._reasoning_head_swap and getattr(self, "_resident_active", False)):
+            if self._reasoning_gate_family:
+                # NOT ignored: on gate-level families the level already
+                # reached the renderer's per-turn think gate inside the
+                # prompt build (build_full_prompt), and the head-swap is
+                # merely the wrong actuator to also apply it. Warning here
+                # cried wolf on every request — and a false "ignored" is as
+                # costly as a silent no-op: it sent the 2026-08-22 deepseek
+                # CoT audit chasing a phantom for the exact defect class the
+                # warning exists to expose.
+                log.debug(
+                    "completion reasoning=%s applied via genprompt gate "
+                    "(head-swap not in play)",
+                    level,
+                )
+                return prompt_tokens
             # WARNING, not debug: a requested level silently not applying is the
             # exact no-op class that hid the muse dial for two probes
             # (2026-08-16) — say WHICH gate refused.
