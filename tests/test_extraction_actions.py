@@ -493,7 +493,7 @@ async def test_batch_without_page_metadata_is_unaffected():
 
 
 @pytest.mark.asyncio
-async def test_a_long_document_is_segmented_rather_than_referred():
+async def test_a_long_document_is_segmented_rather_than_referred(tmp_path):
     """Superseded contract, kept as a marker of WHY it changed.
 
     A book used to be referred to a human queue (extract_oversize) because
@@ -519,7 +519,14 @@ async def test_a_long_document_is_segmented_rather_than_referred():
     fx._commands[tool] = CommandResult(
         return_code=0, stdout=json.dumps(payload), stderr="", command="x"
     )
-    await action_extract_pdf_batch(_si(inputs=_batch_inputs(["book"]), effects=fx))
+    # ISOLATED working dir, not the shared /tmp/x: the mock report names
+    # its part file markdown/book.md — the same path _assemble_segments
+    # writes the assembled document to — so under a persistent dir every
+    # run re-reads the previous run's output as a part and DOUBLES it.
+    # Found 2026-08-23 at 24 GB, reading at 100% CPU for 20+ minutes.
+    inputs = dict(_batch_inputs(["book"]))
+    inputs["working_directory"] = str(tmp_path)
+    await action_extract_pdf_batch(_si(inputs=inputs, effects=fx))
     from agent.actions.scholarly_actions import read_databank
 
     bank = await read_databank(fx)

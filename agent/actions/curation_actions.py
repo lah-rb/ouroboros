@@ -866,7 +866,7 @@ async def select_curate_paper(
             continue
         chars = _CURATE_DOC_CACHE.get(key)
         if chars is None:
-            doc = await _build_doc_for(effects, key)
+            doc = await _build_doc_for(effects, key, budget_chars)
             chars = len(doc)
             _CURATE_DOC_CACHE[key] = chars
         if 0 < chars <= budget_chars:
@@ -874,7 +874,7 @@ async def select_curate_paper(
     if not sized:
         return "", ""
     _, key = min(sized)
-    doc = await _build_doc_for(effects, key)
+    doc = await _build_doc_for(effects, key, budget_chars)
     if len(doc) > budget_chars:  # doc changed since caching (e.g. new en.md)
         _CURATE_DOC_CACHE[key] = len(doc)
         return "", ""
@@ -1365,7 +1365,29 @@ async def _render_prompt(template_id: str, context: dict) -> str:
     )
 
 
-async def _build_doc_for(effects, paper_key: str) -> str:
+# Which compression rung each paper's doc was built at, for the booking
+# stamp (review_doc_form). In-process, like the claims sets: review,
+# pack and gate all run in the one mission process, so the form chosen
+# at selection is the form every later rebuild of that key sees.
+_DOC_FORMS: dict[str, str] = {}
+
+
+async def _build_doc_for(
+    effects, paper_key: str, budget_chars: int | None = None
+) -> str:
+    """The curator doc, compressed only as far as the budget requires.
+
+    With no budget the doc is raw (legacy callers). With one, the doc
+    walks doc_compression.LADDER — raw first, then the lossless table
+    conversion, then two squeeze depths — and takes the FIRST rung that
+    fits. Blind-checked at 95% verdict agreement with both misses
+    conservative (see doc_compression module docstring); the ladder
+    exists precisely because the misses clustered at needless depth.
+    Figtext is never compressed — the <img> anchors survive every rung,
+    so grounding and figure claims work unchanged.
+    """
+    from agent.actions.doc_compression import LADDER, compress_rung
+
     # Prefer the gated English translation when the translation drain has
     # produced one (translation preserves numbers and <img> paths verbatim,
     # so figtext anchoring and the grounding gate work unchanged).
@@ -1374,7 +1396,29 @@ async def _build_doc_for(effects, paper_key: str) -> str:
         fc = await effects.read_file(f"databank/markdown/{paper_key}.md")
     md = fc.content if getattr(fc, "exists", False) else ""
     figtext = await _load_figtext(effects, paper_key)
-    return build_curator_doc(md, figtext)
+    if budget_chars is None:
+        budget_chars = await _curate_doc_budget_chars(effects)
+    doc = build_curator_doc(md, figtext)
+    if budget_chars <= 0 or len(doc) <= budget_chars:
+        _DOC_FORMS[paper_key] = "raw"
+        return doc
+    import asyncio
+
+    loop = asyncio.get_running_loop()
+    for rung in LADDER[1:]:
+        # Executor, not inline: the ladder is regex-heavy CPU work and the
+        # first selection scan walks ~500 oversized docs — run inline it
+        # blocks every lane on the one loop (and the monitor's stale-decode
+        # recovery would read the stall as a server wedge).
+        compressed = await loop.run_in_executor(None, compress_rung, md, rung)
+        doc = build_curator_doc(compressed, figtext)
+        if len(doc) <= budget_chars:
+            _DOC_FORMS[paper_key] = rung
+            return doc
+    # Still over: return the deepest form; selection skips it (> budget)
+    # exactly as it skipped the raw doc before — genuinely parked.
+    _DOC_FORMS[paper_key] = "full-over"
+    return doc
 
 
 async def action_curate_ingest_review(step_input):
@@ -1761,6 +1805,12 @@ async def action_curate_book_result(step_input):
     databank = await read_databank(effects)
     rec = dict(databank.get(paper_key) or {"paper_key": paper_key})
     rec["review_status"] = review.get("status") or "review_failed"
+    # Which compression rung the reviewed doc was built at ("raw" for
+    # the untouched form) — provenance for the serializer and for any
+    # later audit of compressed-doc verdicts.
+    rec["review_doc_form"] = _DOC_FORMS.pop(paper_key, "") or rec.get(
+        "review_doc_form", ""
+    )
     rec["review_summary"] = review.get("summary") or ""
     rec["review_issues"] = review.get("issues") or []
     rec["deny_category"] = review.get("deny_category") or ""
