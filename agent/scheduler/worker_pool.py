@@ -527,13 +527,23 @@ def lanes_for_scraper() -> List[Lane]:
             est_kv=0,
             seats=0,
         ),
-        # Both of these hold a text seat and real KV.
-        Lane(
-            name="translate",
-            flow="translate_drain",
-            resource="text_seat",
-            est_kv=12_000,
-        ),
+        # ── TRANSLATE LANES CLOSED (2026-08-22 overnight, operator) ──
+        # Two findings closed them: (1) the curator reviews originals
+        # fine — _build_doc_for falls back to the source md, and all 22
+        # untranslated non-en denials were substantive content verdicts,
+        # so translation adds NO review value; (2) 5 of 27 verdicted
+        # translations were spent on papers the curator then denied.
+        # Translation is training-form work and belongs AFTER acceptance
+        # (~halves the remaining translate load: 296 pending non-en x
+        # ~accept-rate instead of all of them). Re-open as a post-accept
+        # gated lane when the review drain closes. The .parts.jsonl
+        # banking keeps every in-flight chunk durable meanwhile.
+        # Lane(
+        #     name="translate",
+        #     flow="translate_drain",
+        #     resource="text_seat",
+        #     est_kv=12_000,
+        # ),
         # Second translate lane on the SAME drain: the pool's recent
         # occupancy (p50 0.37, seats free 94% of ticks, 2026-08-21) says
         # the seats are under-used while 278 lingual papers queue — lane
@@ -544,12 +554,12 @@ def lanes_for_scraper() -> List[Lane]:
         # experiment run on existing seats — if the doubled lanes push
         # occupancy p50 back above ~0.9, a fifth engine seat earns its
         # place at the next server restart.
-        Lane(
-            name="translate2",
-            flow="translate_drain",
-            resource="text_seat",
-            est_kv=12_000,
-        ),
+        # Lane(
+        #     name="translate2",
+        #     flow="translate_drain",
+        #     resource="text_seat",
+        #     est_kv=12_000,
+        # ),
         Lane(
             name="curate",
             flow="curate_drain",

@@ -67,11 +67,12 @@ async def test_a_v2_mission_starts_lanes_and_stops_them_cleanly():
     fx = _Fx("scraper_v2")
     async with worker_pool_for(fx, flows_dir="flows") as pool:
         assert pool is not None
+        # Translate lanes closed 2026-08-22 (translation moves post-
+        # acceptance; see lanes_for_scraper). The set assertion pins the
+        # LIVE lane roster so a lane can't vanish silently.
         assert {ln.name for ln in pool.lanes} == {
             "ocr",
             "figtext",
-            "translate",
-            "translate2",
             "curate",
             "curate2",
             "curate3",
