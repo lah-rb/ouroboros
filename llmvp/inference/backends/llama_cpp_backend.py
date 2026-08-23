@@ -930,6 +930,30 @@ class LlamaCppBackend(BaseBackend):
         try:
             yield inst
         finally:
+            # CLEAR THE CONTEXT BEFORE THE NEXT OWNER TAKES IT. A vision
+            # request is one image and one answer — there is no prefix worth
+            # carrying over — but the handler's token ledger and KV persist on
+            # the instance, and for a DEEPSTACK projector (qwen3vl_merger,
+            # clip.vision.is_deepstack_layers) the position accounting drifts
+            # across the image-embedding splice. Measured 2026-08-23 on
+            # qwen3.8-27b: request 1 answered, requests 2+ died with
+            # `find_slot: non-consecutive token position` ->
+            # `mtmd_helper_eval_chunk_single: Media evaluation failed with
+            # error code -1`, permanently, for the life of the process. Muse
+            # tolerates the carry-over, which is why this went unseen: every
+            # caller so far served one family.
+            #
+            # reset() alone is NOT enough — it zeroes the counter and leaves
+            # the KV cells (same lesson as the session restart path), so the
+            # memory is cleared explicitly where the binding exposes it.
+            try:
+                inst.reset()
+                _ctx = getattr(inst, "_ctx", None)
+                _clear = getattr(_ctx, "memory_clear", None)
+                if callable(_clear):
+                    _clear(True)
+            except Exception:  # noqa: BLE001 — never lose an instance to cleanup
+                log.debug("vision context clear failed", exc_info=True)
             self._vision_pool.put_nowait(inst)
 
     async def get_vision_instance(self) -> Any:

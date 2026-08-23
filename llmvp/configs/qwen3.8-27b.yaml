@@ -78,6 +78,11 @@ app:
   log_level: "info"
   cors_origins: ["*"]
   backend_timeout: 180
+  # REQUIRED for /v1/vision — the whole /v1 router is mounted only when this
+  # is true (graphql_api.py: `if config.app.openai_shim`). Without it the
+  # vision block above is inert and every request 404s with the model loaded
+  # and the projector already reserved (measured 2026-08-23).
+  openai_shim: true
 
 graphql:
   max_query_depth: 10
@@ -130,6 +135,22 @@ model:
   resident_strip_reasoning: false
   # MTP present and bound, but unmeasured through our backend. See OWED PROBES.
   speculative: false
+
+  # ── VISION (wired 2026-08-23) ──────────────────────────────────────
+  # The vision tower (qwen3_5_vision) and mmproj-F16.gguf have shipped beside
+  # these weights since intake and were never wired — the intake note said
+  # vision was "the /v1/vision path's business" and then nobody gave that path
+  # anything to serve. LAZY: nothing is allocated until the first vision
+  # request, and the text path never touches it.
+  #
+  # vision_n_ctx is held at 32768 rather than the text ceiling: a figure
+  # transcription is one image and one answer, and the vision context holds
+  # its own KV for the process lifetime once built.
+  mmproj_path: /Users/lah-rb/.lmstudio/models/unsloth/Qwen3.8-27B-GGUF/mmproj-F16.gguf
+  vision_n_ctx: 8192
+  vision_image_roots:
+    - "~/ouroboros-runs"
+    - "~/corpora"
 
 prompt:
   persona_file: "./knowledge/SOUL.md"
