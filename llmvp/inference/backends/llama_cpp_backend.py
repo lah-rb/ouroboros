@@ -580,6 +580,12 @@ class LlamaCppBackend(BaseBackend):
         _split = getattr(self.config.model, "split_mode", None)
         if _split is not None:
             placement["split_mode"] = self._SPLIT_MODES[str(_split).lower()]
+        _tsplit = getattr(self.config.model, "tensor_split", None)
+        if _tsplit:
+            # Deterministic per-device proportions (see config.py): the
+            # free-VRAM-proportional default moves with whatever else is
+            # resident at load, which makes an OOM ladder unrepeatable.
+            placement["tensor_split"] = [float(x) for x in _tsplit]
 
         return Llama(
             model_path=str(self.config.model.path),
@@ -806,8 +812,6 @@ class LlamaCppBackend(BaseBackend):
         built with ``copy.copy(primary)``, which does not reset ``chat_handler``
         — it would be aliased into every slot with a single-owner ``close()``.
         """
-        import copy
-
         from llama_cpp import internals
 
         from inference.vision_handlers import load_handler_class
@@ -815,7 +819,17 @@ class LlamaCppBackend(BaseBackend):
         mcfg = self.config.model
         n_ctx = int(getattr(mcfg, "vision_n_ctx", 8192) or 8192)
 
-        inst = copy.copy(primary)
+        # SHALLOW CLONE, explicitly — NOT copy.copy. On builds where Llama
+        # defines __setstate__, copy.copy routes through the pickle reduce
+        # protocol and RELOADS THE MODEL FROM DISK before we ever overwrite
+        # the context: a second 19.6 GB weight upload that failed instantly
+        # on the 24 GB card (muse vision 500s, 2026-08-16) and silently
+        # doubled paddle's footprint per vision context. Unified-memory
+        # mmap made the same reload invisible on the M1. Everything this
+        # instance must own is overwritten right below; everything else —
+        # the model above all — is deliberately shared.
+        inst = object.__new__(type(primary))
+        inst.__dict__.update(primary.__dict__)
         inst._stack = contextlib.ExitStack()
 
         # Own params: our own window AND a single sequence.
@@ -854,13 +868,51 @@ class LlamaCppBackend(BaseBackend):
         # CHAT_FORMAT class attribute and REJECT the kwarg with a TypeError —
         # their __init__ is (force_reasoning, add_vision_id, **kwargs) over a
         # base of (mmproj_path, verbose, use_gpu, image_min/max_tokens).
+        # PLACEMENT. The handler's signature carries only use_gpu — a bool, no
+        # device index — so by default mtmd allocates on device 0 whatever
+        # main_gpu says. But clip.cpp consults MTMD_BACKEND_DEVICE via getenv
+        # at every mtmd_init_from_file and resolves it with
+        # ggml_backend_init_by_name, so exporting it around construction is
+        # per-model projector placement: paddle's projector can sit on CUDA1
+        # beside its weights while muse keeps the default. use_gpu false keeps
+        # the projector in host RAM. resident_models.footprint_by_device
+        # charges whichever device this selects.
         handler_kwargs: dict = {
             "mmproj_path": str(mcfg.mmproj_path),
             "verbose": False,
+            "use_gpu": bool(getattr(mcfg, "vision_projector_gpu", True)),
         }
         if handler_cls.__name__ == "GenericMTMDChatHandler":
             handler_kwargs["chat_format"] = None
-        inst.chat_handler = handler_cls(**handler_kwargs)
+        proj_dev = getattr(mcfg, "vision_projector_device", None)
+        if proj_dev and handler_kwargs["use_gpu"]:
+            prior = os.environ.get("MTMD_BACKEND_DEVICE")
+            os.environ["MTMD_BACKEND_DEVICE"] = str(proj_dev)
+            try:
+                inst.chat_handler = handler_cls(**handler_kwargs)
+                # EAGER, AND INSIDE THE ENV SCOPE, because construction does
+                # not touch mtmd at all: _init_mtmd_context runs on the FIRST
+                # VISION REQUEST (it needs the Llama object), long after a
+                # construction-scoped env var is restored. The first version
+                # of this scoped only the constructor, and the projector
+                # landed on device 0 anyway — caught by per-process nvidia-smi
+                # attribution (+1.3 GB on CUDA0), not by any error. The init
+                # is guarded (`if self.mtmd_ctx is not None: return`), so the
+                # request-path call becomes a no-op. Eager also matches the
+                # governor, which charges the projector at admission rather
+                # than at first use.
+                init = getattr(inst.chat_handler, "_init_mtmd_context", None)
+                if callable(init):
+                    init(inst)
+            finally:
+                # Restore, never leak: the env var is process-wide and the
+                # NEXT model's projector must not inherit this one's device.
+                if prior is None:
+                    os.environ.pop("MTMD_BACKEND_DEVICE", None)
+                else:
+                    os.environ["MTMD_BACKEND_DEVICE"] = prior
+        else:
+            inst.chat_handler = handler_cls(**handler_kwargs)
         log.info(
             "👁  Vision instance ready — handler=%s n_ctx=%d mmproj=%s",
             handler_cls.__name__,
@@ -1026,8 +1078,44 @@ class LlamaCppBackend(BaseBackend):
                     else "default"
                 )
             llm_inst._persona = persona
-            static_tokens = get_static_tokens(persona)
+            # Resolve against THIS backend's config, not the global active
+            # one: a secondary model (e.g. paddle OCR beside muse) must
+            # never be warmed with the active model's static head — that
+            # fed muse's BOS 200000 into paddle's 103,424-token vocab and
+            # flagged its context on every boot (2026-08-15). A secondary
+            # whose family cannot build a head (no format spec — OCR-only
+            # models) warms clean: empty is the correct head for it.
+            try:
+                static_tokens = get_static_tokens(persona, config=self.config)
+            except Exception as head_exc:  # noqa: BLE001
+                log.warning(
+                    "⚠️ No static head for this config [%s] (%s) — warming "
+                    "with a clean state",
+                    persona,
+                    head_exc,
+                )
+                static_tokens = []
             n_tokens = len(static_tokens)
+
+            # Eval-site vocab cross-check: the model itself is the ground
+            # truth. A mismatched head decodes into llama.cpp's fatal
+            # out-of-vocab error and flags the context; catch it here and
+            # degrade to a clean no-static warm-up instead.
+            try:
+                model_n_vocab = int(llm_inst.n_vocab())
+            except Exception:  # noqa: BLE001
+                model_n_vocab = 0
+            if static_tokens and model_n_vocab and max(static_tokens) >= model_n_vocab:
+                log.error(
+                    "❌ Static head [%s] holds id %d >= model n_vocab %d — "
+                    "foreign-vocab bin; warming without a static prefix "
+                    "(rebuild it via preprocessing for this config)",
+                    persona,
+                    max(static_tokens),
+                    model_n_vocab,
+                )
+                static_tokens = []
+                n_tokens = 0
 
             started = time.perf_counter()
 
@@ -1203,7 +1291,7 @@ class LlamaCppBackend(BaseBackend):
 
         heads: Dict[str, PersonaHead] = {}
         for persona, head_seq in seq_map.persona_seqs.items():
-            tokens = list(get_static_tokens(persona))
+            tokens = list(get_static_tokens(persona, config=self.config))
             started = time.perf_counter()
             ctx.memory_seq_rm(SEQ_WORKING, 0, -1)
             primary.reset()
@@ -1892,6 +1980,19 @@ class LlamaCppBackend(BaseBackend):
         from inference.batched_engine import StreamPhase
 
         try:
+            # LIVE = admitted streams AND queued admissions. A request the
+            # engine parked in _waiting (QUEUE verdict — not enough free
+            # cells) holds its pre-acquired seat but has no StreamState yet,
+            # so a snapshot of _streams alone calls its seat orphaned. That
+            # false positive IS the seq-wedge (2026-08-19, X=1764/Y=9595):
+            # the reaper reclaimed a parked large request's seat, its
+            # clear_seat landed between the admitted stream's prefill
+            # chunks, and the KV lost 7,830 positions mid-flight. Queue
+            # waits under contention run minutes — far past two sweep
+            # strikes — and only LARGE prompts queue, which is why every
+            # capture involved a large-prompt handoff. Both sets are read
+            # inside one control op: the decode thread owns _streams and
+            # _waiting, so this is the only race-free vantage.
             live = await asyncio.wrap_future(
                 engine.control(
                     lambda: {
@@ -1899,6 +2000,7 @@ class LlamaCppBackend(BaseBackend):
                         for s in engine._streams.values()
                         if s.phase is not StreamPhase.DONE
                     }
+                    | {id(r.slot) for r in engine._waiting if r.slot is not None}
                 )
             )
         except Exception:  # noqa: BLE001 — engine busy/parked, try next sweep
@@ -3841,14 +3943,25 @@ class LlamaCppBackend(BaseBackend):
                 log.warning("mmproj not readable for preflight (%s): %s", mmproj, exc)
             v_ctx = int(getattr(self.config.model, "vision_n_ctx", 8192) or 8192)
             text_ctx = int(getattr(self.config.model, "n_ctx", 0) or 0)
+            # TIMES THE POOL WIDTH. _build_vision_pool builds vision_pool_size
+            # private contexts, not one, and this counted a single context —
+            # so a config asking for 4 was preflighted at a quarter of its
+            # cost. Live: paddle at vision_pool_size 4 x vision_n_ctx 32768
+            # preflighted "1.49GB OK" and then OOMed the process while
+            # building the pool it had just approved.
+            v_width = max(
+                1, int(getattr(self.config.model, "vision_pool_size", 1) or 1)
+            )
             if kv_bytes and text_ctx:
-                vision_bytes += int(kv_bytes * (v_ctx / float(text_ctx)))
+                vision_bytes += int(kv_bytes * (v_ctx / float(text_ctx))) * v_width
 
         total_gb = (kv_bytes + weights_bytes + vision_bytes) / 1e9
         if vision_bytes:
             log.info(
-                "👁  Vision adds %.2fGB to the preflight (projector + %d-token ctx)",
+                "👁  Vision adds %.2fGB to the preflight "
+                "(projector + %d x %d-token ctx)",
                 vision_bytes / 1e9,
+                max(1, int(getattr(self.config.model, "vision_pool_size", 1) or 1)),
                 int(getattr(self.config.model, "vision_n_ctx", 8192) or 8192),
             )
 

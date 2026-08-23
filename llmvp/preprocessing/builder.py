@@ -40,9 +40,23 @@ def _resolve_persona(config, persona: str):
     return config.prompt.persona_file, config.knowledge.tokens_bin
 
 
-def write_token_file(token_ids: list[int], out_path: Path) -> None:
-    """Write token IDs as little-endian uint32 to ``out_path``."""
+# tokens.bin provenance header (v1, 16 bytes): 8-byte magic, u32 n_vocab of
+# the tokenizer that WROTE the ids (0 = unknown), u32 id count. Before this
+# header the file was raw ids trusted by filename alone — a bin built by one
+# model's tokenizer could be fed to another model across configs or machines
+# with nothing to catch it until llama.cpp's own out-of-vocab error flagged
+# the context (the 2026-08-15 paddle warm-up incident).
+TOKENS_BIN_MAGIC = b"LLMVPTOK"
+TOKENS_BIN_HEADER_LEN = 16
+
+
+def write_token_file(token_ids: list[int], out_path: Path, n_vocab: int = 0) -> None:
+    """Write token IDs as little-endian uint32 to ``out_path``, prefixed by
+    the provenance header. ``n_vocab`` is the writing tokenizer's vocab size
+    (0 when it cannot be determined)."""
     with open(out_path, "wb") as f:
+        f.write(TOKENS_BIN_MAGIC)
+        f.write(struct.pack("<II", int(n_vocab), len(token_ids)))
         for tid in token_ids:
             f.write(struct.pack("<I", tid))
 
@@ -100,6 +114,13 @@ def cache_is_stale(config, persona: str = "default") -> bool:
     _, tokens_bin = _resolve_persona(config, persona)
     out = Path(tokens_bin).expanduser().resolve()
     if not out.is_file():
+        return True
+    try:
+        with open(out, "rb") as f:
+            if f.read(len(TOKENS_BIN_MAGIC)) != TOKENS_BIN_MAGIC:
+                # Legacy headerless bin — no provenance to trust; rebuild.
+                return True
+    except OSError:
         return True
     cache_mtime = out.stat().st_mtime
     for src in static_input_paths(config, persona):
@@ -178,7 +199,10 @@ def build_static_tokens(
     emit(f"📝 Static prefix: {len(join_segments(static_segments))} chars")
 
     # BOS behavior is authoritative from the GGUF metadata, not config.
-    tokenizer = create_tokenizer()
+    # Tokenize with the BUILT config's tokenizer, never the active one: a
+    # secondary model's rebuild under a different active model must not
+    # stamp the active model's ids into this config's bin.
+    tokenizer = create_tokenizer(config)
     metadata = read_metadata(tokenizer)
     log_metadata(metadata)
     log_metadata_vs_config(metadata)
@@ -186,6 +210,18 @@ def build_static_tokens(
     needs_bos = metadata.add_bos
     emit(f"🧩 Tokenizing (add_bos={needs_bos}, source=GGUF metadata) …")
     return tokenize_segments(tokenizer, static_segments, add_bos=needs_bos)
+
+
+def _tokenizer_n_vocab(tokenizer) -> int:
+    """Vocab size of a tokenizer across interfaces (0 if unknown)."""
+    try:
+        if hasattr(tokenizer, "n_vocab"):
+            return int(tokenizer.n_vocab())
+        if hasattr(tokenizer, "vocab_size"):
+            return int(tokenizer.vocab_size)
+    except Exception:
+        pass
+    return 0
 
 
 def build_and_write(config, *, emit: Emit = _silent, persona: str = "default") -> Path:
@@ -201,6 +237,9 @@ def build_and_write(config, *, emit: Emit = _silent, persona: str = "default") -
             f"{config.knowledge.token_limit:,}-token budget."
         )
     out.parent.mkdir(parents=True, exist_ok=True)
-    write_token_file(token_ids, out)
-    emit(f"✅ Got {len(token_ids)} tokens — wrote {out}")
+    from inference.tokenizer import create_tokenizer
+
+    n_vocab = _tokenizer_n_vocab(create_tokenizer(config))
+    write_token_file(token_ids, out, n_vocab=n_vocab)
+    emit(f"✅ Got {len(token_ids)} tokens (n_vocab={n_vocab}) — wrote {out}")
     return out

@@ -29,6 +29,17 @@ sections:
       Queries already run (do NOT repeat these):
       {input.seed_queries}
 
+  - id: already_tried
+    when: context.prior_queries
+    content: |
+      Queries ALREADY SENT for this aspect, with how many hits each returned:
+      {context.prior_queries}
+
+      Do not re-send any of these. Treat the hit counts as evidence: a
+      phrasing that returned many hits found a productive vein worth
+      approaching from a different angle, and one that returned few is a
+      direction not worth re-phrasing.
+
   - id: instruction
     content: |
       Emit a handful of NEW queries likely to surface papers the prior queries

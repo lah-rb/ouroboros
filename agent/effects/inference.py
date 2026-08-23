@@ -551,6 +551,61 @@ class InferenceEffect:
         except Exception:  # noqa: BLE001 — downgrade to "not reported"
             return {}
 
+    async def token_count(
+        self, texts: list[str], model: str = "", timeout: float = 15.0
+    ) -> list[int]:
+        """Exact token counts from the SERVING model's own tokenizer.
+
+        Returns [] on any failure — an empty result means "size it the old
+        way", so a caller degrades to its estimate instead of blocking on
+        a sizing hint. Batched because the question is usually asked about
+        a whole fan-out at once.
+        """
+        query = (
+            "query TokenCount($texts:[String!]!,$model:String!)"
+            "{ tokenCount(texts:$texts, model:$model)"
+            "{ counts total nVocab error } }"
+        )
+        try:
+            client = await self._get_client()
+            response = await client.post(
+                self._endpoint,
+                json={
+                    "query": query,
+                    "variables": {"texts": list(texts), "model": model},
+                },
+                timeout=timeout,
+            )
+            response.raise_for_status()
+            data = response.json()
+            if "errors" in data:
+                return []
+            tc = (data.get("data") or {}).get("tokenCount") or {}
+            if tc.get("error"):
+                logger.debug("token_count server error: %s", tc["error"])
+                return []
+            counts = tc.get("counts") or []
+            return [int(c) for c in counts]
+        except Exception as e:  # noqa: BLE001 — a sizing hint never fails a caller
+            logger.debug("token_count failed: %s", e)
+            return []
+
+    async def raw_graphql(self, query: str, timeout: float = 10.0) -> dict:
+        """POST a query and return the decoded envelope verbatim.
+
+        Unlike pool_health this does NOT swallow `errors`: a caller that
+        needs to tell "the server refused this field" (a version gap worth
+        degrading over) from "the server is unreachable" (a transient worth
+        retrying) cannot do it from an empty dict. Raises on transport
+        failure for the same reason.
+        """
+        client = await self._get_client()
+        response = await client.post(
+            self._endpoint, json={"query": query}, timeout=timeout
+        )
+        response.raise_for_status()
+        return response.json()
+
     async def fetch_thinking(self, request_id: str = "") -> str:
         """Fetch chain-of-thought content from the last inference call.
 

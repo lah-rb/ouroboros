@@ -497,6 +497,83 @@ def _declared_consumers(flow_def: dict) -> set[str]:
     return consumed
 
 
+# Actions that write the mission DOCUMENT wholesale (save_mission /
+# push_event callers, curated from the census). A parallel branch runs
+# behind ChildEffects where these RAISE at runtime; lint is the early
+# signal. mission_apply / push_note (op-rewritten) are branch-safe and
+# deliberately absent. Update when a new action gains a save_mission call.
+MISSION_MUTATING_ACTIONS = frozenset(
+    {
+        "derive_research_goals",
+        "parse_and_store_research_plan",
+        "catalog_sweep_next",
+        "discovery_sweep_next",
+        "harvest_research_findings",
+        "derive_extraction_goals",
+        "pdf_extract_sweep_next",
+        "reopen_extraction_goals",
+        "update_mission",
+        "record_dispatch",
+    }
+)
+
+
+def check_parallel_branches(flows: dict) -> list[LintResult]:
+    """Parallel steps: branch flows must exist; branch flows containing
+    mission-mutating actions get a WARNING (the ChildEffects proxy is the
+    runtime enforcement — this is the compile-time early signal)."""
+    results: list[LintResult] = []
+    for flow_name, flow_def in _iter_flows(flows):
+        for step_name, step_def in (flow_def.get("steps") or {}).items():
+            if step_def.get("action") != "parallel":
+                continue
+            for branch in step_def.get("branches") or []:
+                target = branch.get("flow", "")
+                target_def = flows.get(target)
+                if target_def is None:
+                    results.append(
+                        LintResult(
+                            level="ERROR",
+                            flow=flow_name,
+                            step=step_name,
+                            check="parallel_branches",
+                            message=f"parallel branch flow {target!r} not found",
+                        )
+                    )
+                    continue
+                for b_step, b_def in (target_def.get("steps") or {}).items():
+                    if b_def.get("action") in MISSION_MUTATING_ACTIONS:
+                        results.append(
+                            LintResult(
+                                level="WARNING",
+                                flow=flow_name,
+                                step=step_name,
+                                check="parallel_branches",
+                                message=(
+                                    f"branch {target!r} step {b_step!r} uses "
+                                    f"mission-mutating action "
+                                    f"{b_def.get('action')!r} — it will RAISE "
+                                    f"under ChildEffects at runtime"
+                                ),
+                            )
+                        )
+                    if b_def.get("tail_call"):
+                        results.append(
+                            LintResult(
+                                level="ERROR",
+                                flow=flow_name,
+                                step=step_name,
+                                check="parallel_branches",
+                                message=(
+                                    f"branch {target!r} step {b_step!r} "
+                                    f"tail-calls — branches must end terminal; "
+                                    f"the parent owns the return"
+                                ),
+                            )
+                        )
+    return results
+
+
 def check_publish_consume_chains(flows: dict) -> list[LintResult]:
     """Verify required context keys have an upstream publisher.
 
@@ -1752,6 +1829,9 @@ def lint(
 
     # Strategy 3: Publish/consume chains
     results.extend(check_publish_consume_chains(flows))
+    # Parallel-branch ownership contract (branch flows exist, end terminal,
+    # avoid mission-mutating actions)
+    results.extend(check_parallel_branches(flows))
     results.extend(check_precompute_context_declared(flows))
 
     # Strategy 3c: Dead publishes (the design_gate_feedback class), and

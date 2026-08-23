@@ -7,7 +7,7 @@
 #
 # Run:
 #   uv run ouroboros.py mission create --mission_config extract_hea
-#   uv run ouroboros.py start --working-dir /Users/lah-rb/corpora/ouroboros-hea
+#   uv run ouroboros.py start --working-dir ~/corpora/ouroboros-hea
 # version: 1
 
 objective: >
@@ -16,7 +16,7 @@ objective: >
   producing the input artifacts for the dataset-coalescing stage.
 
 flow_set: extractor
-working_dir: "/Users/lah-rb/corpora/ouroboros-hea"
+working_dir: "~/corpora/ouroboros-hea"
 effects_profile: local
 llmvp_endpoint: "http://localhost:8008/graphql"
 

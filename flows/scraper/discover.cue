@@ -1,9 +1,11 @@
-// discover.cue — One Discovery Round for One Aspect (v1)
+// discover.cue — One Discovery Round for One Aspect (v2: parallel wrapper)
 //
-// Refine the aspect's queries (seed queries as the no-answer fallback),
-// search Semantic Scholar + OpenAlex, dedup into the databank by DOI,
-// and report back. The controller's sweep decides when the aspect has
-// enough candidates (coverage target or round cap).
+// The round's work lives in discover_work.cue (moved verbatim at the
+// parallel-step landing); this wrapper runs it BESIDE ocr_drain so paddle
+// chews the OCR backlog through the discovery window instead of idling
+// between acquire dispatches. research_control's tail_call interface is
+// unchanged, and the wrapper still owns the return to research_control —
+// parallel branches cannot tail-call.
 
 package ouroboros
 
@@ -30,94 +32,57 @@ discover: #FlowDefinition & {
 
 	steps: {
 
-		refine_queries: #StepDefinition & {
-			action:      "inference"
-			description: "Refine scholarly queries for the aspect"
-			prompt_template: {
-				template: "scraper/refine_queries"
-				context_keys: []
-				input_keys: [
-					"aspect_name", "aspect_description", "seed_queries",
-					"coverage_target", "have_count", "corpus_languages",
-				]
-			}
-			// LOW: query strings; breadth beats deliberation — dev/REASONING_DEPTH_POLICY_2026-08-16.md
-			config: reasoning: "low"
-			config: temperature: "t*0.5"
-			resolver: {
-				type: "rule"
-				rules: [
-					// no usable output -> search falls back to seed_queries
-					{condition: "result.tokens_generated > 0", transition: "extract_queries"},
-					{condition: "true", transition: "search"},
-				]
-			}
-			publishes: ["inference_response"]
-		}
-
-		extract_queries: #StepDefinition & {
-			action:      "extract_search_queries"
-			description: "Parse refined queries into a structured list"
-			context: required: ["inference_response"]
-			params: {
-				max_queries: 4
-				// Scales the cap: without this the English queries fill every
-				// slot and the native-language ones are truncated away.
-				corpus_languages: {$ref: "input.corpus_languages", default: []}
-			}
-			resolver: {
-				type: "rule"
-				rules: [
-					{condition: "true", transition: "search"},
-				]
-			}
-			publishes: ["search_queries"]
-		}
-
-		search: #StepDefinition & {
-			action:      "scholarly_search"
-			description: "Query Semantic Scholar + OpenAlex"
-			context: optional: ["search_queries"]
-			params: {
-				aspect_name:  {$ref: "input.aspect_name"}
-				seed_queries: {$ref: "input.seed_queries", default: []}
-			}
-			resolver: {
-				type: "rule"
-				rules: [
-					{condition: "true", transition: "snowball"},
-				]
-			}
-			publishes: ["raw_candidates"]
-		}
-
-		// The corpus cites far more than it holds — 8,812 referenced works
-		// against 39 collected on the first run. A work this aspect's own
-		// papers reach for twice is a better relevance signal than a query,
-		// and it appends to raw_candidates so merge dedups it as usual.
-		snowball: #StepDefinition & {
-			action:      "snowball_expand"
-			description: "Expand repeatedly-cited but uncollected references"
-			context: optional: ["raw_candidates"]
-			params: {
-				aspect_name:   {$ref: "input.aspect_name"}
-				min_citations: 2
-				max_expand:    50
-			}
-			resolver: {
-				type: "rule"
-				rules: [
-					{condition: "true", transition: "merge"},
-				]
-			}
-			publishes: ["raw_candidates"]
-		}
-
-		merge: #StepDefinition & {
-			action:      "merge_candidates"
-			description: "Dedup candidates into the databank; build the report"
-			context: required: ["raw_candidates"]
-			params: aspect_name: {$ref: "input.aspect_name"}
+		// ONE STEP, FIVE BRANCHES. discover_work does the round (network-
+		// bound); ocr_drain claims + extracts a backlog slice on paddle;
+		// figtext_drain describes undescribed figures on muse's vision
+		// contexts; translate_drain moves one lingual paper onto muse's
+		// otherwise-idle TEXT seats; curate_drain closes review+pack on one
+		// seat-sized paper — five resources, one window. A failed drain
+		// never sinks the round (branch isolation), and the single-owner
+		// publish passes discover_work's directive_report through under its
+		// own name.
+		run_round: #StepDefinition & {
+			action:      "parallel"
+			description: "Discovery round + OCR/figtext/translate/curate drains, concurrently"
+			max_parallel: 5
+			branches: [
+				{
+					flow: "discover_work"
+					input_map: {
+						aspect_name:        {$ref: "input.aspect_name"}
+						aspect_description: {$ref: "input.aspect_description", default: ""}
+						seed_queries:       {$ref: "input.seed_queries", default: []}
+						coverage_target:    {$ref: "input.coverage_target", default: 10}
+						have_count:         {$ref: "input.have_count", default: 0}
+						corpus_languages:   {$ref: "input.corpus_languages", default: []}
+						flow_directive:     {$ref: "input.flow_directive", default: ""}
+					}
+				},
+				{
+					flow: "ocr_drain"
+					input_map: {
+						working_directory: {$ref: "input.working_directory"}
+					}
+				},
+				{
+					flow: "figtext_drain"
+					input_map: {
+						working_directory: {$ref: "input.working_directory"}
+					}
+				},
+				{
+					flow: "translate_drain"
+					input_map: {
+						working_directory: {$ref: "input.working_directory"}
+					}
+				},
+				{
+					flow: "curate_drain"
+					input_map: {
+						working_directory: {$ref: "input.working_directory"}
+					}
+				},
+			]
 			resolver: {
 				type: "rule"
 				rules: [
@@ -146,5 +111,5 @@ discover: #FlowDefinition & {
 		}
 	}
 
-	entry: "refine_queries"
+	entry: "run_round"
 }

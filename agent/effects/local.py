@@ -119,6 +119,10 @@ class LocalEffects:
         # httpx.MockTransport without monkeypatching.
         self._http_client = None
         self._http_transport = http_transport
+        # Per-path append locks: append_file serializes concurrent appenders
+        # to the same file so interleaved coroutines (overlap lanes, future
+        # parallel flow branches) can never tear or drop lines.
+        self._append_locks: dict[str, asyncio.Lock] = {}
         # Trace buffer — flushed to JSONL at cycle boundaries
         self._trace_buffer: list[TraceEvent] = []
         self._health_sample_calls = 0
@@ -333,6 +337,51 @@ class LocalEffects:
             return WriteResult(success=False, path=path, error=str(e))
         except Exception as e:
             self._log_entry("write_file", f"path={path!r}", f"error: {e}", start)
+            return WriteResult(success=False, path=path, error=str(e))
+
+    async def append_file(self, path: str, content: str) -> WriteResult:
+        """Append content to a file — true O_APPEND, serialized per path.
+
+        Replaces the read-whole-file-then-write_file idiom, whose
+        read-modify-write window dropped concurrent appenders' lines (the
+        databank JSONLs were only safe because booking happened to be
+        serial). The lock closes the asyncio interleave; append mode makes
+        the write itself atomic for this process's single-writer model. If
+        the existing file doesn't end in a newline, one is inserted so a
+        line-oriented record can never concatenate onto a partial last line.
+        """
+        start = time.monotonic()
+        try:
+            resolved = self._resolve_path(path)
+            lock = self._append_locks.setdefault(resolved, asyncio.Lock())
+            async with lock:
+                os.makedirs(os.path.dirname(resolved), exist_ok=True)
+                needs_newline = False
+                try:
+                    with open(resolved, "rb") as f:
+                        f.seek(-1, os.SEEK_END)
+                        needs_newline = f.read(1) != b"\n"
+                except (OSError, ValueError):
+                    # Missing or empty file — nothing to heal.
+                    pass
+                payload = ("\n" if needs_newline else "") + content
+                with open(resolved, "a", encoding="utf-8") as f:
+                    f.write(payload)
+
+            bytes_written = len(payload.encode("utf-8"))
+            self._log_entry(
+                "append_file",
+                f"path={path!r}, {bytes_written} bytes",
+                "success",
+                start,
+            )
+            return WriteResult(success=True, path=path, bytes_written=bytes_written)
+
+        except PathTraversalError as e:
+            self._log_entry("append_file", f"path={path!r}", f"BLOCKED: {e}", start)
+            return WriteResult(success=False, path=path, error=str(e))
+        except Exception as e:
+            self._log_entry("append_file", f"path={path!r}", f"error: {e}", start)
             return WriteResult(success=False, path=path, error=str(e))
 
     # Directories to skip during recursive walks — virtual environments,
@@ -1250,6 +1299,59 @@ class LocalEffects:
             )
         return self._inference
 
+    async def token_count(self, texts: list[str], model: str = "") -> list[int]:
+        """Exact token counts from the serving model's own tokenizer.
+
+        [] means "the server would not say" — callers fall back to their
+        character estimate rather than blocking on a sizing hint.
+        """
+        try:
+            return await self._get_inference().token_count(texts, model)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("token_count failed: %s", e)
+            return []
+
+    def _get_capacity(self):
+        """Lazy-initialize the capacity feed.
+
+        A SIBLING of the inference client, not a method on it: that client
+        is request-scoped machinery (one watchdog per call), while the feed
+        is a process-lifetime subscription. Callers reach it through
+        `capacity_snapshot()` so no action ever imports the client.
+        """
+        if getattr(self, "_capacity", None) is None:
+            from agent.effects.capacity import CapacityFeed
+
+            inference = self._get_inference()
+            self._capacity = CapacityFeed(
+                self._llmvp_endpoint,
+                pool_health_fn=inference.pool_health,
+                post_fn=inference.raw_graphql,
+            )
+        return self._capacity
+
+    async def capacity_snapshot(self):
+        """Freshest serving capacity, or None when there is no usable
+        signal (unreachable, too old, or never started). None means "use
+        your conservative default" — never "the server is full"."""
+        try:
+            return self._get_capacity().snapshot()
+        except Exception as e:  # noqa: BLE001 — capacity never breaks a caller
+            logger.debug("capacity_snapshot failed: %s", e)
+            return None
+
+    def capacity_start(self) -> None:
+        """Begin the subscription. Idempotent; safe without a server."""
+        try:
+            self._get_capacity().start()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("capacity feed did not start: %s", e)
+
+    async def capacity_stop(self) -> None:
+        feed = getattr(self, "_capacity", None)
+        if feed is not None:
+            await feed.stop()
+
     async def run_inference(
         self,
         prompt: str,
@@ -1700,6 +1802,19 @@ class LocalEffects:
         self._log_entry("save_mission", f"id={state.id}", str(success), start)
         ledger_add_ms(self._ledger, "persistence", (time.monotonic() - start) * 1000)
         return success
+
+    async def mission_apply(self, ops: list):
+        start = time.monotonic()
+        pm = self._get_persistence()
+        state = pm.apply_ops(list(ops))
+        self._log_entry(
+            "mission_apply",
+            f"{len(ops)} op(s): {','.join(o.op for o in ops)[:80]}",
+            "ok" if state is not None else "no mission",
+            start,
+        )
+        ledger_add_ms(self._ledger, "persistence", (time.monotonic() - start) * 1000)
+        return state
 
     async def read_events(self) -> list:
         start = time.monotonic()

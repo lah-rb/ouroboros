@@ -52,7 +52,14 @@ def world(tmp_path, monkeypatch):
 def _stamp(path: Path, mtime: float) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists():
-        path.write_bytes(b"\x00\x00\x00\x00")
+        if path.suffix == ".bin":
+            # A tokens.bin fixture needs the provenance header — a
+            # headerless bin is stale by definition since the header landed.
+            from preprocessing.builder import write_token_file
+
+            write_token_file([0], path, n_vocab=1)
+        else:
+            path.write_bytes(b"\x00\x00\x00\x00")
     import os
 
     os.utime(path, (mtime, mtime))

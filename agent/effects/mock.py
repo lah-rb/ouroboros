@@ -157,6 +157,20 @@ class MockEffects:
         )
         return result
 
+    async def append_file(self, path: str, content: str) -> WriteResult:
+        """Append to the mock filesystem (newline-healing like LocalEffects)."""
+        existing = self._files.get(path, "")
+        if existing and not existing.endswith("\n"):
+            existing += "\n"
+        self._files[path] = existing + content
+        result = WriteResult(
+            success=True, path=path, bytes_written=len(content.encode("utf-8"))
+        )
+        self._record(
+            "append_file", {"path": path, "content_length": len(content)}, result
+        )
+        return result
+
     async def list_directory(
         self, path: str = ".", recursive: bool = False
     ) -> DirListing:
@@ -392,6 +406,15 @@ class MockEffects:
         health = dict(self._pool_health)
         self._record("inference_pool_health", {}, health)
         return health
+
+    async def token_count(self, texts: list[str], model: str = "") -> list[int]:
+        """Canned exact token counts, or [] meaning "the server would not
+        say" — which is the branch callers must degrade through, so it is
+        the DEFAULT here rather than a fabricated number."""
+        counts = getattr(self, "_token_counts", None)
+        result = list(counts) if counts else []
+        self._record("token_count", {"n": len(texts), "model": model}, result)
+        return result
 
     # ── Memoryful inference sessions ──────────────────────────────
 
@@ -640,6 +663,17 @@ class MockEffects:
         self._state["mission"] = state
         self._record("save_mission", {"id": getattr(state, "id", "?")}, True)
         return True
+
+    async def mission_apply(self, ops: list) -> Any:
+        """Interpret MissionOps on the in-memory mission — shares the
+        engine-down interpreter with the real manager for parity."""
+        from agent.persistence.manager import PersistenceManager
+
+        mission = self._state.get("mission")
+        if mission is not None:
+            PersistenceManager._apply_ops_direct(mission, list(ops))
+        self._record("mission_apply", {"ops": [o.op for o in ops]}, mission)
+        return mission
 
     async def read_events(self) -> list:
         result = self._state.get("events", [])

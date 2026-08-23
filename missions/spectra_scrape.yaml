@@ -20,7 +20,7 @@
 #   export OUROBOROS_CONTACT_EMAIL=<a real address — the polite API pools
 #     throttle the default, which is detectable as a placeholder>
 #   uv run ouroboros.py mission create --mission_config spectra_scrape
-#   uv run ouroboros.py start --working-dir /Users/lah-rb/corpora/ouroboros-spectra
+#   uv run ouroboros.py start --working-dir ~/corpora/ouroboros-spectra
 # version: 1
 
 objective: >
@@ -71,7 +71,7 @@ flow_set: scraper
 corpus_target: 5000
 
 # Durable home — /tmp is wiped on reboot and took a corpus with it once.
-working_dir: "/Users/lah-rb/corpora/ouroboros-spectra"
+working_dir: "~/corpora/ouroboros-spectra"
 effects_profile: local
 llmvp_endpoint: "http://localhost:8008/graphql"
 
@@ -82,5 +82,5 @@ run_until: completed
 max_wall_clock: 8h
 
 pre_create:
-  - "mkdir -p /Users/lah-rb/corpora/ouroboros-spectra"
+  - "mkdir -p ~/corpora/ouroboros-spectra"
   - "uv run ouroboros.py cue-compile"

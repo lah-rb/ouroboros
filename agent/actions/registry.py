@@ -313,10 +313,14 @@ def build_action_registry() -> ActionRegistry:
         action_catalog_batch_next,
         action_download_papers,
         action_navigate_landing_page,
+        action_recover_oa_locations,
+        action_mine_bibliographies,
+        action_biblio_snowball,
         action_fetch_references,
         action_merge_candidates,
         action_resolve_oa_pdf,
         action_scholarly_search,
+        action_load_query_history,
         action_snowball_expand,
     )
     from agent.actions.research_plan_actions import (
@@ -458,11 +462,23 @@ def build_action_registry() -> ActionRegistry:
     registry.register("check_profile_oracle", action_check_profile_oracle)
     registry.register("pdf_extract_sweep_next", action_pdf_extract_sweep_next)
     registry.register("extract_pdf_batch", action_extract_pdf_batch)
+    from agent.actions.extraction_actions import action_ocr_drain_batch
+
+    registry.register("ocr_drain_batch", action_ocr_drain_batch)
     registry.register("check_extraction_complete", action_check_extraction_complete)
     registry.register("reopen_extraction_goal", action_reopen_extraction_goal)
     registry.register("derive_curation_goals", action_derive_curation_goals)
     registry.register("fig_review_sweep_next", action_fig_review_sweep_next)
     registry.register("fig_review_batch", action_fig_review_batch)
+    from agent.actions.curation_actions import action_figtext_drain_batch
+
+    registry.register("figtext_drain_batch", action_figtext_drain_batch)
+    from agent.actions.translation_actions import action_translate_drain_batch
+
+    registry.register("translate_drain_batch", action_translate_drain_batch)
+    from agent.actions.curation_actions import action_curate_drain_batch
+
+    registry.register("curate_drain_batch", action_curate_drain_batch)
     registry.register("curate_sweep_next", action_curate_sweep_next)
     registry.register("curate_ingest_review", action_curate_ingest_review)
     registry.register("curate_pack_data", action_curate_pack_data)
@@ -514,12 +530,16 @@ def build_action_registry() -> ActionRegistry:
 
     # ── Scraper flow set ───────────────────────────────────────────
     registry.register("scholarly_search", action_scholarly_search)
+    registry.register("load_query_history", action_load_query_history)
     registry.register("snowball_expand", action_snowball_expand)
     registry.register("merge_candidates", action_merge_candidates)
     registry.register("catalog_batch_next", action_catalog_batch_next)
     registry.register("resolve_oa_pdf", action_resolve_oa_pdf)
     registry.register("download_papers", action_download_papers)
     registry.register("navigate_landing_page", action_navigate_landing_page)
+    registry.register("recover_oa_locations", action_recover_oa_locations)
+    registry.register("mine_bibliographies", action_mine_bibliographies)
+    registry.register("biblio_snowball", action_biblio_snowball)
     registry.register("fetch_references", action_fetch_references)
     # Concurrent wrapper over the three above, gathered with an OCR lane.
     # They stay registered and independently usable — this only changes how

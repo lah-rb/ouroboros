@@ -105,6 +105,10 @@ async def test_discovery_dispatches_until_target_then_completes():
     assert dc["flow"] == "discover" and dc["aspect_name"] == "gb"
     assert dc["have_count"] == 0
 
+    goal = next(g for g in m.goals if g.type == "discovery")
+    goal.reports.append(
+        DirectiveReport(flow="discover", status="success", summary="r1")
+    )
     fx2 = MockEffects(
         files=_bank(
             [
@@ -228,15 +232,19 @@ async def test_corpus_target_zero_leaves_planner_targets_alone():
 
 @pytest.mark.asyncio
 async def test_catalog_sweep_prioritizes_retag_and_caps_batch():
+    from agent.actions.scholarly_actions import CATALOG_BATCH_SIZE
+
     m = _mission([AspectSpec(name="gb")])
     await action_derive_research_goals(_si(m))
-    records = [{"paper_key": f"c{i}", "status": "candidate"} for i in range(6)] + [
-        {"paper_key": "r1", "status": "needs_retag"}
-    ]
+    # One more candidate than the cap, so the cap is what bounds the batch.
+    records = [
+        {"paper_key": f"c{i}", "status": "candidate"}
+        for i in range(CATALOG_BATCH_SIZE + 1)
+    ] + [{"paper_key": "r1", "status": "needs_retag"}]
     fx = MockEffects(files=_bank(records))
     out = await action_catalog_sweep_next(_si(m, effects=fx))
     keys = out.context_updates["dispatch_config"]["paper_keys"]
-    assert len(keys) == 5
+    assert len(keys) == CATALOG_BATCH_SIZE
     assert keys[0] == "r1"  # retag first
 
 
@@ -286,3 +294,54 @@ async def test_harvest_reopens_goals_and_marks_retag_with_note_freshen():
     assert bank["p1"]["status"] == "needs_retag"
     # Notes freshened from disk before save (lost-update guard).
     assert any(n.content == "gate note" for n in m.notes)
+
+
+@pytest.mark.asyncio
+async def test_reopened_goal_runs_a_round_before_recompleting():
+    """The gate reopens on TAGGED coverage; the sweep targets RAW
+    candidates — a reopened goal (reports emptied) whose candidates
+    already exceed target must dispatch at least one round, not
+    re-complete with '0 round(s)' (live: a 200-cycle gate loop)."""
+    from agent.actions.research_plan_actions import action_discovery_sweep_next
+    from agent.persistence.models import DirectiveReport
+
+    m = _mission([AspectSpec(name="gb")])
+    await action_derive_research_goals(_si(m))
+    goal = next(g for g in m.goals if g.type == "discovery")
+    aspect = m.research_plan.aspects[0]
+    aspect.coverage_target = 5
+    # Candidates already exceed the target (raw-candidate metric).
+    records = [
+        {"paper_key": f"c{i}", "status": "cataloged", "source_aspects": ["gb"]}
+        for i in range(8)
+    ]
+    fx = MockEffects(files=_bank(records))
+    # Reopened state: complete -> incomplete with reports emptied.
+    goal.status = "incomplete"
+    goal.reports = []
+    out = await action_discovery_sweep_next(_si(m, effects=fx))
+    assert out.result.get("needs_discover") is True  # one round runs
+    # After a round has been booked, the target may complete the goal.
+    goal.reports = [DirectiveReport(flow="discover", status="success", summary="r1")]
+    out2 = await action_discovery_sweep_next(_si(m, effects=fx))
+    assert out2.result.get("needs_discover") is not True
+    assert goal.status == "complete"
+
+
+@pytest.mark.asyncio
+async def test_coverage_reopen_also_reopens_corpus_catalog():
+    """Coverage is measured in TAGGED papers; new candidates are untagged
+    until cataloged. A coverage reopen that leaves the corpus goal complete
+    strands the candidates in a worklist no phase drains."""
+    m = _mission([AspectSpec(name="gb")])
+    await action_derive_research_goals(_si(m))
+    for g in m.goals:
+        g.status = "complete"
+    issue = {"class": "coverage", "aspect": "gb", "have": 3, "want": 10}
+    out = await action_harvest_research_findings(
+        _si(m, gate_results={"blocking_issues": [issue]})
+    )
+    disc = next(g for g in m.goals if g.type == "discovery")
+    corpus = next(g for g in m.goals if g.finding_signature == CORPUS_GOAL_SIGNATURE)
+    assert disc.status == "incomplete"
+    assert corpus.status == "incomplete"

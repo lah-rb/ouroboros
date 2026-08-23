@@ -60,6 +60,12 @@ class ModelConfig(BaseModel):
     # "none" as well.
     main_gpu: Optional[int] = None
     split_mode: Optional[str] = None  # "none" | "layer" | "row"
+    # Per-device layer proportions for split_mode=layer (llama.cpp
+    # tensor_split). Deterministic placement for the 3060 layer-split
+    # experiment (2026-08-22): the default free-VRAM-proportional split
+    # moves with whatever else is resident at load time, which makes an
+    # OOM ladder unrepeatable.
+    tensor_split: Optional[list] = None
     seed: int
     verbose: bool
 
@@ -385,6 +391,24 @@ class ModelConfig(BaseModel):
     # (mtmd_init_from_file binds the MODEL), so the cost is KV only:
     # vision_n_ctx x kv_bytes_per_token x width.
     vision_pool_size: int = 1
+    # Offload the mtmd projector to the GPU. TRUE IS NOT "the model's GPU":
+    # the handler's signature is (mmproj_path, verbose, use_gpu, ...) with no
+    # device index anywhere, so mtmd allocates on the DEFAULT device — device
+    # 0 — no matter what main_gpu says. On a multi-GPU host that means a model
+    # pinned to card 1 still puts its projector on card 0, and the memory
+    # governor charges it there (resident_models.footprint_by_device).
+    #
+    # Set false to keep the projector in host RAM instead, which is the escape
+    # hatch when device 0 is full: it costs image-encode speed, not fidelity.
+    vision_projector_gpu: bool = True
+    # ggml backend NAME ("CUDA1", "Metal") to put the projector on, overriding
+    # the default-device behaviour above. This exists because clip.cpp reads
+    # MTMD_BACKEND_DEVICE via getenv at every mtmd_init_from_file — the one
+    # placement control the C API offers — and the backend exports it around
+    # handler construction, giving per-MODEL projector placement from config.
+    # None = mtmd's default (first GPU device). Ignored when
+    # vision_projector_gpu is false.
+    vision_projector_device: Optional[str] = None
     # Reject an image larger than this rather than letting mtmd OOM. 32MB.
     vision_max_image_bytes: int = 33_554_432
     # Directories a vision request may read image PATHS from. Empty = paths are

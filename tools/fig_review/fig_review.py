@@ -321,12 +321,26 @@ def review_paper(
     markdown_dir: str,
     out_dir: str,
     send_model: bool = True,
+    max_figures: int = 0,
 ) -> dict:
+    """Describe a paper's figures, RESUMABLY.
+
+    An existing {key}.json banks prior rounds' readings: figures already
+    present (with non-empty figtext) are kept, only the missing ones are
+    described, and at most ``max_figures`` (0 = unlimited) in this call.
+    The report carries figs_total/described/remaining so the caller can
+    book partial progress instead of skipping big papers entirely — the
+    per-round budget capped the drain at 12-figure papers while 693
+    papers (~22k figures) sat structurally unreachable.
+    """
     t0 = time.time()
     report = {
         "paper_key": key,
         "figtext_path": "",
         "figs": 0,
+        "figs_total": 0,
+        "described": 0,
+        "remaining": 0,
         "seconds": 0.0,
         "error": "",
     }
@@ -337,25 +351,45 @@ def review_paper(
         figs = sorted(
             f
             for f in (os.listdir(fig_dir) if os.path.isdir(fig_dir) else [])
-            if f.endswith(".png")
+            # "._*" = macOS AppleDouble resource forks (USB/cross-machine
+            # stowaways): not images, and feeding one to the vision endpoint
+            # is a guaranteed 500. Skip them wherever they appear.
+            if f.endswith(".png") and not f.startswith("._")
         )
-        entries = []
+        out_path = os.path.join(out_dir, f"{key}.json")
         served = os.path.basename(model.rstrip("/")) if model else "unknown"
-        for fig in figs:
+        banked: dict[str, dict] = {}
+        if os.path.isfile(out_path):
+            try:
+                prior = json.load(open(out_path))
+                for e in prior.get("figs", []):
+                    # Keep only readings for figures still on disk with a
+                    # non-empty figtext — a renamed/re-extracted figure set
+                    # invalidates its stale readings naturally.
+                    if e.get("fig") in figs and str(e.get("figtext") or "").strip():
+                        banked[e["fig"]] = e
+                if banked and prior.get("model"):
+                    served = prior["model"]
+            except (json.JSONDecodeError, OSError):
+                banked = {}
+        todo = [f for f in figs if f not in banked]
+        if max_figures > 0:
+            todo = todo[:max_figures]
+        described_now = 0
+        for fig in todo:
             caption = caption_context(md, key, fig)
             figtext, served = _chat_figure(
                 endpoint, model, os.path.join(fig_dir, fig), caption, send_model
             )
-            entries.append(
-                {
-                    "fig": fig,
-                    "caption": caption,
-                    "figtext": figtext,
-                    "numeric_overlap_rate": round(numeric_overlap(figtext, md), 4),
-                }
-            )
+            banked[fig] = {
+                "fig": fig,
+                "caption": caption,
+                "figtext": figtext,
+                "numeric_overlap_rate": round(numeric_overlap(figtext, md), 4),
+            }
+            described_now += 1
+        entries = [banked[f] for f in figs if f in banked]
         os.makedirs(out_dir, exist_ok=True)
-        out_path = os.path.join(out_dir, f"{key}.json")
         with open(out_path, "w") as f:
             json.dump(
                 # The model the SERVER reports, not the one we asked for —
@@ -367,7 +401,10 @@ def review_paper(
                 indent=1,
             )
         report["figtext_path"] = out_path
-        report["figs"] = len(entries)
+        report["figs"] = described_now
+        report["figs_total"] = len(figs)
+        report["described"] = len(entries)
+        report["remaining"] = len(figs) - len(entries)
     except Exception as e:  # noqa: BLE001 - report, don't crash the batch
         report["error"] = f"{type(e).__name__}: {e}"
     report["seconds"] = round(time.time() - t0, 1)
@@ -393,6 +430,13 @@ def main() -> int:
         "--llmvp-url", default=_LLMVP_URL, help="LLMVP base URL (--vl-backend llmvp)"
     )
     ap.add_argument("--port", type=int, default=0, help="reuse a running mlx server")
+    ap.add_argument(
+        "--max-figures",
+        type=int,
+        default=0,
+        help="describe at most N figures across this call (0 = unlimited); "
+        "already-described figures in --out-dir are kept and skipped",
+    )
     args = ap.parse_args()
 
     server = None
@@ -428,6 +472,10 @@ def main() -> int:
         endpoint, send_model = f"http://127.0.0.1:{port}/v1/chat/completions", True
 
     try:
+        # --max-figures is a POOL across the whole call: each paper draws
+        # from what the previous ones left, so a batch never exceeds one
+        # round's figure budget regardless of how the keys split it.
+        pool = args.max_figures
         for key in args.keys:
             report = review_paper(
                 endpoint,
@@ -437,7 +485,10 @@ def main() -> int:
                 args.markdown_dir,
                 args.out_dir,
                 send_model,
+                max_figures=pool if args.max_figures > 0 else 0,
             )
+            if args.max_figures > 0:
+                pool = max(0, pool - int(report.get("figs") or 0))
             print(json.dumps(report, ensure_ascii=False), flush=True)
     finally:
         if server is not None:

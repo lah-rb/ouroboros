@@ -43,6 +43,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from typing import Any
 
 from agent.models import StepInput, StepOutput
@@ -52,10 +53,20 @@ logger = logging.getLogger(__name__)
 DATABANK_PATH = "databank/papers.jsonl"
 # Extractor-owned sidecar — see read_databank for why it is separate.
 EXTRACTION_PATH = "databank/extraction.jsonl"
+# Append-only ledger of queries actually SENT to the search APIs. Not a
+# cache and not state — an audit trail, so a later pass can be told what
+# has already been tried instead of rediscovering it. See
+# `record_search_queries` for why this is not folded into papers.jsonl.
+QUERY_LEDGER_PATH = "databank/search_queries.jsonl"
 PDF_DIR = "pdfs"
 RELEVANCE_TIERS = ("exact", "close", "adjacent")
 MAX_REFERENCE_DOIS = 200
-CATALOG_BATCH_SIZE = 5
+# Papers per catalog dispatch. Raised 5 -> 8 with the acquire tag lane
+# (2026-08-15): tagging streams in sub-batches on open seats instead of one
+# monolithic post-acquire turn, so the dispatch size is an acquisition
+# fan-out knob now, not a tag-quality one. The research gate's grounding
+# check monitors tag quality independently.
+CATALOG_BATCH_SIZE = int(os.environ.get("OUROBOROS_CATALOG_BATCH", "8"))
 
 # Publisher hosts MEASURED to refuse a polite crawler: Cloudflare 403, unmoved
 # by the browser User-Agent we already send or by following redirects. Used to
@@ -444,6 +455,7 @@ async def polite_request(
     *,
     params: dict | None = None,
     headers: dict | None = None,
+    json_body=None,
     timeout: float = 30.0,
 ):
     """http_request with per-host min-interval + mission budget.
@@ -468,7 +480,12 @@ async def polite_request(
 
     await _pacer().reserve(url)
     result = await effects.http_request(
-        method, url, params=params, headers=headers, timeout=timeout
+        method,
+        url,
+        params=params,
+        headers=headers,
+        json_body=json_body,
+        timeout=timeout,
     )
     if result.status == 429:
         # Shared-pool contention (live-observed on S2's unauthenticated
@@ -482,7 +499,12 @@ async def polite_request(
         await asyncio.sleep(delay)
         await _pacer().reserve(url)
         result = await effects.http_request(
-            method, url, params=params, headers=headers, timeout=timeout
+            method,
+            url,
+            params=params,
+            headers=headers,
+            json_body=json_body,
+            timeout=timeout,
         )
     if result.status and result.status != 429:
         await _pacer().note_ok(url)
@@ -617,18 +639,92 @@ async def read_databank(effects: Any) -> dict[str, dict]:
     return records
 
 
+# The extraction sidecar's field ownership, ENFORCED AT THE WRITERS.
+#
+# read_databank overlays extraction.jsonl over papers.jsonl per key
+# ({**base, **ext}), and within each file the LAST record replaces the
+# previous one wholesale. Both writers used to accept whatever dict a
+# caller passed — and callers naturally pass records that came from
+# read_databank's MERGED view, silently freezing the other stage's fields
+# into the wrong file. Live cost (2026-08-16): rebook scripts and the
+# translation booking wrote full merged records into extraction.jsonl,
+# whose stale scraper-side copies then SHADOWED every later papers.jsonl
+# booking for ~40 papers — figtext_done bookings vanished on read and the
+# figtext drain re-described the same paper forever. Filtering here makes
+# the contract structural: no caller can cross the ownership line again.
+EXTRACTION_OWNED_FIELDS = frozenset(
+    {
+        "paper_key",
+        "updated_at",
+        "extraction_status",
+        "failure_reason",
+        "md_path",
+        "md_en_path",
+        "figure_count",
+        "extraction_method",
+        "extraction_quality",
+        "script_profile",
+        "translated",
+        "translation_quality",
+        "translate_attempts",
+        "book_progress",
+        # Segment cursor for resumable extraction. WITHOUT THIS ENTRY the
+        # field is silently filtered out on write, every resume starts at
+        # page zero, and the durability it exists for is quietly absent —
+        # the failure mode is invisible because nothing errors.
+        "extract_progress",
+        # The Latin-language vote's verdict. Catalog metadata also writes
+        # a language on the papers side, but for the 168-paper blind-spot
+        # cohort it was empty or wrong ("en" on Spanish text) — extraction
+        # is the layer that actually READ the document, so its verdict is
+        # the one translation should trust. Only set when detected, so an
+        # absent key never shadows a real catalog value on overlay.
+        "language",
+    }
+)
+
+
 async def append_extraction_records(effects: Any, records: list[dict]) -> None:
     """Append extractor-owned fields to the sidecar, never to papers.jsonl.
 
     Keeps the extractor off the scraper's file so the two can run at the
     same time without losing each other's appends (see read_databank).
+    Records are FILTERED to EXTRACTION_OWNED_FIELDS: a merged record from
+    read_databank can be passed safely without freezing scraper-side
+    fields into the sidecar, where they would shadow the scraper's file.
     """
-    await _append_jsonl(effects, EXTRACTION_PATH, records)
+    filtered = [
+        {k: v for k, v in rec.items() if k in EXTRACTION_OWNED_FIELDS}
+        for rec in records
+    ]
+    await _append_jsonl(effects, EXTRACTION_PATH, filtered)
 
 
 async def append_records(effects: Any, records: list[dict]) -> None:
-    """Append records as JSONL lines (last-wins semantics on read)."""
-    await _append_jsonl(effects, DATABANK_PATH, records)
+    """Append scraper records as JSONL lines (last-wins on read).
+
+    Extraction-owned fields are DROPPED (except the shared key/timestamp):
+    they live in the sidecar, which overlays this file — carrying stale
+    copies here is at best noise and at worst a future shadowing bug in
+    the other direction."""
+    # failure_reason is the one genuinely shared field: acquisition books
+    # download failures to THIS file, extraction books its own to the
+    # sidecar (whose overlay wins when both are set — pre-existing
+    # semantics, preserved).
+    filtered = [
+        {
+            k: v
+            for k, v in rec.items()
+            if k not in EXTRACTION_OWNED_FIELDS
+            # language is the second genuinely shared field: catalog
+            # metadata writes it here, the extraction-side Latin-language
+            # vote writes its verdict to the sidecar, and the overlay
+            # rightly prefers the layer that actually READ the document.
+            or k in ("paper_key", "updated_at", "failure_reason", "language")
+        }
+        for rec in records
+    ]
+    await _append_jsonl(effects, DATABANK_PATH, filtered)
 
 
 async def _append_jsonl(effects: Any, path: str, records: list[dict]) -> None:
@@ -636,17 +732,120 @@ async def _append_jsonl(effects: Any, path: str, records: list[dict]) -> None:
         return
     from agent.persistence.models import _now_iso
 
-    fc = await effects.read_file(path)
-    existing = fc.content if getattr(fc, "exists", False) else ""
-    if existing and not existing.endswith("\n"):
-        existing += "\n"
     lines = []
     for rec in records:
         rec = dict(rec)
         rec.setdefault("paper_key", paper_key(rec))
         rec["updated_at"] = _now_iso()
         lines.append(json.dumps(rec, ensure_ascii=False))
-    await effects.write_file(path, existing + "\n".join(lines) + "\n")
+    payload = "\n".join(lines) + "\n"
+
+    appender = getattr(effects, "append_file", None)
+    if appender is not None:
+        # True append (O_APPEND + per-path lock): concurrent bookers can
+        # never drop each other's records. The old read-whole-file-then-
+        # write_file idiom had a read-modify-write window that was safe only
+        # while every booking happened to be serial.
+        await appender(path, payload)
+        return
+    # Duck-typed test doubles without append_file: legacy read-modify-write.
+    fc = await effects.read_file(path)
+    existing = fc.content if getattr(fc, "exists", False) else ""
+    if existing and not existing.endswith("\n"):
+        existing += "\n"
+    await effects.write_file(path, existing + payload)
+
+
+# ── search-query ledger ───────────────────────────────────────────────
+#
+# WHY A SEPARATE FILE. The queries are not a property of any paper, so
+# they have no home in papers.jsonl, and the one place they DID appear —
+# the `Extracted N search queries: [...]` observation string — is not
+# persisted anywhere: traces record step metadata without payloads, and
+# goal reports record counts. Ninety-five discovery rounds across six
+# aspects therefore left no record of a single term that was tried.
+#
+# That is fine while a mission runs once. It stops being fine the moment
+# a SECOND pass opens new goals over the same corpus, because the model
+# refining queries cannot avoid ground it has already covered — the
+# refine prompt has always had a "do NOT repeat these" section, and we
+# had nothing to put in it beyond the original static seeds.
+
+
+async def record_search_queries(effects: Any, aspect: str, entries: list[dict]) -> None:
+    """Append one ledger row per query actually sent.
+
+    Never raises: discovery must not fail because an audit write failed.
+    A missing row costs a future duplicate query; a raised exception here
+    would cost the round's candidates.
+    """
+    if not entries:
+        return
+    from agent.persistence.models import _now_iso
+
+    now = _now_iso()
+    lines = []
+    for e in entries:
+        lines.append(
+            json.dumps(
+                {
+                    "aspect": aspect,
+                    "query": e.get("query", ""),
+                    "hits": int(e.get("hits") or 0),
+                    "source": e.get("source", "refined"),
+                    "ts": now,
+                },
+                ensure_ascii=False,
+            )
+        )
+    payload = "\n".join(lines) + "\n"
+    try:
+        appender = getattr(effects, "append_file", None)
+        if appender is not None:
+            await appender(QUERY_LEDGER_PATH, payload)
+            return
+        fc = await effects.read_file(QUERY_LEDGER_PATH)
+        existing = fc.content if getattr(fc, "exists", False) else ""
+        if existing and not existing.endswith("\n"):
+            existing += "\n"
+        await effects.write_file(QUERY_LEDGER_PATH, existing + payload)
+    except Exception:  # noqa: BLE001 — an audit trail never breaks the run
+        logger.warning("could not append to the query ledger", exc_info=True)
+
+
+async def read_search_queries(effects: Any, aspect: str = "") -> list[dict]:
+    """Ledger rows, oldest first; all aspects when `aspect` is empty."""
+    try:
+        fc = await effects.read_file(QUERY_LEDGER_PATH)
+    except Exception:  # noqa: BLE001
+        return []
+    if not getattr(fc, "exists", False):
+        return []
+    rows: list[dict] = []
+    for line in fc.content.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if aspect and row.get("aspect") != aspect:
+            continue
+        rows.append(row)
+    return rows
+
+
+def _dedup_preserving_order(queries: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for q in queries:
+        k = " ".join(str(q).lower().split())
+        if not k or k in seen:
+            continue
+        seen.add(k)
+        out.append(str(q).strip())
+    return out
 
 
 # ── API normalization ─────────────────────────────────────────────────
@@ -963,7 +1162,11 @@ async def action_scholarly_search(step_input: StepInput) -> StepOutput:
 
     candidates: list[dict] = []
     s2_count = openalex_count = core_count = 0
+    # Per-query yield, for the ledger. Counted as a delta on `candidates`
+    # so it stays correct however many APIs the loop body grows to call.
+    ledger_rows: list[dict] = []
     for query in queries:
+        _hits_before = len(candidates)
         s2 = await polite_request(
             effects,
             "GET",
@@ -1035,6 +1238,20 @@ async def action_scholarly_search(step_input: StepInput) -> StepOutput:
                 core.error or core.status,
                 "" if _core_key() else " (no API key — keyless CORE 429s early)",
             )
+        ledger_rows.append(
+            {
+                "query": query,
+                "hits": len(candidates) - _hits_before,
+                # Whether the model refined this one or it fell back to the
+                # aspect's static seeds — a second pass wants to know which
+                # terms were CHOSEN and which were merely inherited.
+                "source": (
+                    "refined" if step_input.context.get("search_queries") else "seed"
+                ),
+            }
+        )
+
+    await record_search_queries(effects, aspect_name, ledger_rows)
 
     return StepOutput(
         result={
@@ -1049,6 +1266,407 @@ async def action_scholarly_search(step_input: StepInput) -> StepOutput:
             f"(S2 {s2_count}, OpenAlex {openalex_count}, CORE {core_count})"
         ),
         context_updates={"raw_candidates": candidates},
+    )
+
+
+# ── bibliography snowball: curator-approved references ───────────────
+#
+# QUALITY-MINDFUL EXPANSION (operator, 2026-08-21): grow the corpus from
+# the bibliographies of papers the CURATOR ACCEPTED — a citation from a
+# work that passed review is a better relevance signal than any search
+# ranking, and a thesis's curated 300-entry bibliography is exactly the
+# reading list a domain expert would hand us. Two halves, both budgeted:
+#
+#   mine  — extract DOIs from accepted papers' reference sections
+#           (extraction-side: the metadata graph covers only 32 of 229
+#           book-scale docs; the MARKDOWN has what OpenAlex does not)
+#   walk  — promote DOIs cited by >=N accepted papers into candidates,
+#           resolved through the OpenAlex batch filter
+#
+# INTERIM STOP CRITERION (pending the operator discussion): a hard cap on
+# total biblio-sourced candidates (OUROBOROS_BIBLIO_MAX_CANDIDATES,
+# default 2000). The walk declines once reached — expansion never
+# outruns the conversation about how far it should go.
+
+# Parens INCLUDED: pre-2000 SICI-format DOIs (10.1002/(SICI)1097-...,
+# 10.1016/S1296-2074(00)01084-X) legitimately contain them, and those
+# are exactly the heavily-cited classics — the first histogram's top
+# entries were all SICI fragments truncated at '('. Trailing unbalanced
+# close-parens are stripped after the match instead.
+_DOI_IN_TEXT_RE = re.compile(r"10\.\d{4,9}/[^\s\"'<>\]};,]+", re.IGNORECASE)
+# SICI-form DOIs (pre-2000 Wiley/era) additionally contain < > ; —
+# characters far too dangerous for the general pattern in markdown, so
+# they get their own scoped match, and their spans are removed from the
+# text before the general pass (else the general pattern re-emits each
+# one's truncated prefix as a phantom second DOI).
+_SICI_DOI_RE = re.compile(r"10\.\d{4,9}/\(sici\)[^\s\"']+", re.IGNORECASE)
+
+
+def extract_reference_dois(md: str, cap: int = MAX_REFERENCE_DOIS) -> list[str]:
+    """DOIs from a paper's reference section (falls back to the tail).
+
+    Uses the translation gate's heading locator; when no heading matches,
+    scans only the FINAL THIRD of the document — bibliographies live at
+    the end, and body DOIs (data citations, 'as in doi:...') would
+    otherwise smuggle in references the paper never listed."""
+    from agent.actions.translation_actions import _REFS_HEADING_RE
+
+    m = _REFS_HEADING_RE.search(md or "")
+    refs = md[m.start() :] if m else (md or "")[-max(2000, len(md or "") // 3) :]
+    out: list[str] = []
+    seen: set[str] = set()
+    sici = _SICI_DOI_RE.findall(refs)
+    refs = _SICI_DOI_RE.sub(" ", refs)
+    for raw in sici + _DOI_IN_TEXT_RE.findall(refs):
+        doi = raw.rstrip(".;,]}\"'").lower()
+        # Strip a trailing close-paren only when UNBALANCED — Elsevier
+        # PII DOIs end in ')...-X' legitimately, but '(10.xxxx/yyy)'
+        # wrappers leave a stray one.
+        while doi.endswith(")") and doi.count(")") > doi.count("("):
+            doi = doi[:-1]
+        # Markdown image/link artifacts and figure paths are not DOIs.
+        if doi.endswith((".png", ".jpg", ".jpeg", ".svg", ".gif")):
+            continue
+        if doi and doi not in seen:
+            seen.add(doi)
+            out.append(doi)
+        if len(out) >= cap:
+            break
+    return out
+
+
+# ── denied reviews as a citation source ──────────────────────────────
+#
+# A review article is worthless as TRAINING text — no original
+# measurements, which is exactly why the curator denies it — but its
+# bibliography is a domain expert's curated survey of our subject.
+# Measured 2026-08-23 over the 12 denied reviews that already had
+# references extracted: 891 unique DOIs, 865 of them absent from the
+# databank — 97% novel at 72 novel DOIs/paper, against 87% and 26/paper
+# for the accepted papers the snowball feeds on today. 102 denied
+# reviews are on hand, none mined; the projection is ~7.3k novel DOIs
+# (order of magnitude — extrapolated from 12, and a novel DOI is only
+# ~31% likely to be OA-retrievable).
+#
+# OFF BY DEFAULT. With OUROBOROS_BIBLIO_MINE_REVIEWS unset every
+# function here behaves exactly as it did before this was added.
+_REVIEW_DENIAL_RE = re.compile(
+    r"\breview (article|paper|chapter)\b|is a review|survey of|overview of"
+    r"|book review|position (article|paper)|state.of.the.art|literature review",
+    re.I,
+)
+
+
+def mine_reviews_enabled() -> bool:
+    return os.environ.get("OUROBOROS_BIBLIO_MINE_REVIEWS", "").strip() not in (
+        "",
+        "0",
+        "false",
+        "no",
+    )
+
+
+def is_review_denial(record: dict) -> bool:
+    """A paper the curator denied because it is a review/survey.
+
+    Reads the curator's OWN words (summary + issues) rather than a
+    separate classifier: the denial text is what the shape analysis was
+    validated against, and a record whose text never says "review" is
+    not one, whatever its title claims.
+    """
+    if record.get("review_status") != "denied":
+        return False
+    blob = (
+        str(record.get("review_summary") or "")
+        + " "
+        + " ".join(str(i) for i in (record.get("review_issues") or []))
+    )
+    return bool(_REVIEW_DENIAL_RE.search(blob))
+
+
+async def action_mine_bibliographies(step_input: StepInput) -> StepOutput:
+    """Mine reference DOIs from curator-ACCEPTED papers' markdown.
+
+    Budgeted walk (params.budget / OUROBOROS_BIBLIO_MINE_PAPERS, default
+    10); each paper mined once (biblio_mined_at). Prefers the English
+    translation when one exists. Merges into reference_dois rather than
+    replacing — the metadata graph's entries stay.
+    """
+    from agent.persistence.models import _now_iso
+
+    effects = step_input.effects
+    raw = os.environ.get("OUROBOROS_BIBLIO_MINE_PAPERS", "").strip()
+    try:
+        budget = int(step_input.params.get("budget") or (raw or 10))
+    except ValueError:
+        budget = 10
+    if budget <= 0:
+        return StepOutput(
+            result={"mined": 0, "reason": "disabled"},
+            observations="biblio mine disabled",
+            context_updates={"biblio_mine_summary": {"mined": 0}},
+        )
+    databank = await read_databank(effects)
+    want_reviews = mine_reviews_enabled()
+    pend = [
+        r
+        for r in databank.values()
+        if (
+            r.get("review_status") == "accepted"
+            or (want_reviews and is_review_denial(r))
+        )
+        and not r.get("biblio_mined_at")
+        and (r.get("md_en_path") or r.get("md_path"))
+    ]
+    # Accepted papers first: they feed the training corpus AND the
+    # snowball, so a starved round must never spend its budget entirely
+    # on records that only ever contribute citations.
+    pend.sort(key=lambda r: (r.get("review_status") != "accepted",))
+    if not pend:
+        return StepOutput(
+            result={"mined": 0, "reason": "nothing unmined"},
+            observations="biblio mine idle (nothing unmined)",
+            context_updates={"biblio_mine_summary": {"mined": 0}},
+        )
+    pend.sort(
+        key=lambda r: (r.get("review_status") != "accepted", r.get("paper_key", ""))
+    )
+    mined = 0
+    new_dois = 0
+    reviews_mined = 0
+    now = _now_iso()
+    for rec in pend[:budget]:
+        rec = dict(rec)
+        if rec.get("review_status") != "accepted":
+            reviews_mined += 1
+        path = rec.get("md_en_path") or rec.get("md_path")
+        fc = await effects.read_file(str(path))
+        text = fc.content if getattr(fc, "exists", False) else ""
+        found = extract_reference_dois(text)
+        merged = list(dict.fromkeys((rec.get("reference_dois") or []) + found))
+        prior = len(rec.get("reference_dois") or [])
+        rec["reference_dois"] = merged[:MAX_REFERENCE_DOIS]
+        rec["biblio_mined_at"] = now
+        new_dois += max(0, len(rec["reference_dois"]) - prior)
+        mined += 1
+        await append_records(effects, [rec])
+    summary = {
+        "mined": mined,
+        "dois_total": new_dois,
+        "remaining": len(pend) - mined,
+        "reviews_mined": reviews_mined,
+    }
+    return StepOutput(
+        result=summary,
+        observations=(
+            f"biblio mine: {mined} paper(s) "
+            f"({reviews_mined} denied review(s)), {summary['remaining']} remain"
+        ),
+        context_updates={"biblio_mine_summary": summary},
+    )
+
+
+async def action_biblio_snowball(step_input: StepInput) -> StepOutput:
+    """Promote DOIs cited by >=N ACCEPTED papers into candidates.
+
+    Provenance is stamped (discovery_method / cited_by_accepted) so the
+    cohort's downstream accept-rate is measurable against search-sourced
+    candidates — the number the stop-criteria discussion needs. Declines
+    once the biblio-candidate cap is reached.
+    """
+    effects = step_input.effects
+    min_cites = int(
+        step_input.params.get("min_citations")
+        or os.environ.get("OUROBOROS_BIBLIO_MIN_CITES", "2")
+    )
+    per_round = int(
+        step_input.params.get("per_round")
+        or os.environ.get("OUROBOROS_BIBLIO_PER_ROUND", "40")
+    )
+    cap_total = int(os.environ.get("OUROBOROS_BIBLIO_MAX_CANDIDATES", "2000"))
+
+    def _decline(reason: str) -> StepOutput:
+        summary = {"promoted": 0, "reason": reason}
+        return StepOutput(
+            result=summary,
+            observations=f"biblio snowball idle ({reason})",
+            context_updates={"biblio_summary": summary},
+        )
+
+    databank = await read_databank(effects)
+    already = sum(
+        1 for r in databank.values() if r.get("discovery_method") == "biblio_snowball"
+    )
+    if already >= cap_total:
+        return _decline(
+            f"cap reached ({already}/{cap_total}) — awaiting stop-criteria ruling"
+        )
+    have_dois = {
+        str(r.get("doi") or "").lower() for r in databank.values() if r.get("doi")
+    }
+    # REVIEW CITATIONS ARE COUNTED SEPARATELY, and the bar for them is a
+    # LIVE POLICY QUESTION — measure before trusting a default.
+    #
+    # Repeat-citation is a brutal filter at this corpus depth: of 13,087
+    # novel DOIs cited by accepted papers, only 106 (0.8%) are cited
+    # twice. Among the 12 mined reviews' 865 novel DOIs, exactly ONE is
+    # cited twice and none three times (2026-08-23). Extrapolating the
+    # collision rate to all 107 reviews gives order-80 DOIs at >=2 and
+    # low single digits at >=3 — i.e. a bar of 3 makes this feature
+    # almost inert, which is why it is NOT the default.
+    #
+    # The deeper point: consensus is the wrong model for a review. A
+    # research paper cites what it built on; a review bibliography IS a
+    # domain expert's curated survey, so a single appearance is already
+    # an endorsement — the reason the yield is 97% novel at 72 DOIs a
+    # paper. Setting this to 1 switches the policy from "several reviews
+    # agree" to "one expert survey vouched for it", with the existing
+    # candidate cap and per_round pacing as the throttle instead of the
+    # multiplicity gate. That is the operator's call at stoke time; 2
+    # (the accepted-paper bar, no stricter) is the conservative default.
+    review_min = int(
+        step_input.params.get("review_min_citations")
+        or os.environ.get("OUROBOROS_BIBLIO_REVIEW_MIN_CITES", "2")
+    )
+    counts: dict[str, int] = {}
+    review_counts: dict[str, int] = {}
+    aspects: dict[str, list] = {}
+    for r in databank.values():
+        accepted = r.get("review_status") == "accepted"
+        from_review = mine_reviews_enabled() and is_review_denial(r)
+        if not accepted and not from_review:
+            continue
+        strong = [
+            t.get("aspect")
+            for t in (r.get("tags") or [])
+            if isinstance(t, dict) and t.get("relevance") in ("exact", "close")
+        ]
+        for doi in r.get("reference_dois") or []:
+            d = str(doi).lower()
+            if d in have_dois:
+                continue
+            if accepted:
+                counts[d] = counts.get(d, 0) + 1
+            else:
+                review_counts[d] = review_counts.get(d, 0) + 1
+            aspects.setdefault(d, []).extend(strong[:2])
+
+    def _total(d: str) -> int:
+        return counts.get(d, 0) + review_counts.get(d, 0)
+
+    qualified = {
+        d
+        for d in set(counts) | set(review_counts)
+        if counts.get(d, 0) >= min_cites or _total(d) >= review_min
+    }
+    backlog = sorted(qualified, key=lambda d: (-_total(d), -counts.get(d, 0), d))
+    if not backlog:
+        return _decline(
+            f"no unheld DOI cited {min_cites}+ times by accepted papers"
+            + (f" or {review_min}+ counting reviews" if review_counts else "")
+        )
+    batch = backlog[: min(per_round, cap_total - already)]
+
+    promoted: list[dict] = []
+    for start in range(0, len(batch), _BIBLIO_BATCH):
+        chunk = batch[start : start + _BIBLIO_BATCH]
+        resp = await polite_request(
+            effects,
+            "GET",
+            f"{_OPENALEX_BASE}/works",
+            params={
+                "filter": "doi:" + "|".join(chunk),
+                "per-page": _BIBLIO_BATCH,
+                "select": _OPENALEX_SELECT,
+                "mailto": _contact_email(),
+            },
+        )
+        if resp.status != 200 or not isinstance(resp.json_data, dict):
+            continue
+        for work in resp.json_data.get("results") or []:
+            d = str((work.get("doi") or "")).replace("https://doi.org/", "").lower()
+            asp = aspects.get(d) or []
+            top = max(set(asp), key=asp.count) if asp else ""
+            rec = _normalize_openalex(work, top)
+            if rec.get("doi") and rec["doi"].lower() in have_dois:
+                continue
+            rec["discovery_method"] = "biblio_snowball"
+            rec["cited_by_accepted"] = counts.get(d, 0)
+            # Stamped even when zero: the cohort's downstream accept-rate
+            # is the number that decides whether review-sourced discovery
+            # earns its place, and it can only be measured if the
+            # provenance is on the record from the start.
+            rec["cited_by_reviews"] = review_counts.get(d, 0)
+            promoted.append(rec)
+    if promoted:
+        await append_records(effects, promoted)
+    summary = {
+        "promoted": len(promoted),
+        "backlog": len(backlog),
+        "cap_used": already + len(promoted),
+        "cap_total": cap_total,
+    }
+    return StepOutput(
+        result=summary,
+        observations=(
+            f"biblio snowball: {len(promoted)} candidate(s) from "
+            f"{len(backlog)} eligible (cap {already + len(promoted)}/{cap_total})"
+        ),
+        context_updates={"biblio_summary": summary},
+    )
+
+
+async def action_load_query_history(step_input: StepInput) -> StepOutput:
+    """Publish the aspect's already-tried queries, for the refine prompt.
+
+    The refine template has always carried a "do NOT repeat these" section;
+    until the ledger existed the only thing available to fill it was the
+    aspect's static seed list, so by round three the model was re-proposing
+    terms it had already spent rounds on with no way to know.
+
+    HITS ARE INCLUDED DELIBERATELY. A bare exclusion list tells the model
+    only where not to go. The yield tells it which *directions* paid, so it
+    can vary a phrasing that worked instead of only avoiding one that ran.
+
+    Newest first and capped: the cap protects the prompt budget, and newest
+    first means that when it does bite, what survives is the recent frontier
+    rather than the opening rounds.
+    """
+    effects = step_input.effects
+    aspect_name = str(step_input.params.get("aspect_name") or "")
+    max_shown = int(step_input.params.get("max_shown") or 80)
+
+    rows = await read_search_queries(effects, aspect_name)
+    if not rows:
+        return StepOutput(
+            result={"prior_query_count": 0},
+            observations="No prior queries recorded for this aspect",
+            context_updates={"prior_queries": ""},
+        )
+
+    # Last write wins per distinct query, so a term tried twice is listed
+    # once with its most recent yield.
+    best: dict[str, dict] = {}
+    for row in rows:
+        key = " ".join(str(row.get("query") or "").lower().split())
+        if key:
+            best[key] = row
+    ordered = list(best.values())[::-1][:max_shown]
+
+    lines = [
+        f"- {row.get('query')} ({int(row.get('hits') or 0)} hits)" for row in ordered
+    ]
+    block = "\n".join(lines)
+    if len(best) > max_shown:
+        block += f"\n(+{len(best) - max_shown} older queries not listed)"
+
+    return StepOutput(
+        result={"prior_query_count": len(best), "shown": len(ordered)},
+        observations=(
+            f"Loaded {len(ordered)} of {len(best)} prior queries for "
+            f"{aspect_name or 'no aspect'}"
+        ),
+        context_updates={"prior_queries": block},
     )
 
 
@@ -1595,6 +2213,250 @@ async def action_download_papers(step_input: StepInput) -> StepOutput:
     )
 
 
+# ── OA recovery: archive + aggregator + meta-tag routes ──────────────
+#
+# The oa_unresolved pool (2,244 papers at build time, 2026-08-20) is NOT
+# retryable by re-fetching: 44% are publisher bot-walls (403) where a
+# retry is the same request to the same wall, and 37% are landing pages
+# whose declared PDF target refuses automated clients too. Live probes:
+#
+#   Wayback availability   PROVEN  (a 404'd Dovepress PDF -> live snapshot)
+#   citation_pdf_url meta  works where the landing page itself serves us
+#   CORE v3 by DOI (keyed) API works; full text lags for RECENT articles
+#   MDPI direct            Akamai on landing AND pdf; OAI-PMH metadata-only
+#
+# So recovery = ASK SOMEONE ELSE (the Internet Archive, CORE's aggregated
+# copies) or READ THE PAGE'S OWN DECLARATION (citation_pdf_url), never
+# beat on the wall. Every candidate still goes through http_download's
+# is-a-document checks and the polite per-host pacer.
+
+_WAYBACK_API = "https://archive.org/wayback/available"
+_WAYBACK_CDX = "https://web.archive.org/cdx/search/cdx"
+_CORE_SEARCH_POST = "https://api.core.ac.uk/v3/search/works"
+# name-then-content and content-then-name attribute orders both occur.
+_META_PDF_RE = re.compile(
+    r'<meta[^>]+?(?:name|property)=["\']citation_pdf_url["\'][^>]*?'
+    r'content=["\']([^"\']+)'
+    r'|<meta[^>]+?content=["\']([^"\']+)["\'][^>]*?'
+    r'(?:name|property)=["\']citation_pdf_url',
+    re.IGNORECASE,
+)
+
+
+def _meta_pdf_url(html: str, base_url: str) -> str:
+    """The page's own machine-declared PDF location, or ''.
+
+    Cross-host targets are ALLOWED here, unlike LLM navigation: this is
+    the publisher's structured self-declaration (Google Scholar indexing
+    contract), not a model's guess — MDPI declares mdpi-res.com, Springer
+    declares link.springer.com assets. http_download's document check
+    remains the arbiter of what we accept.
+    """
+    m = _META_PDF_RE.search(html or "")
+    if not m:
+        return ""
+    from urllib.parse import urljoin
+
+    return urljoin(base_url, (m.group(1) or m.group(2) or "").strip())
+
+
+async def _wayback_snapshot(effects: Any, url: str) -> str:
+    """Newest archived PDF capture of `url`, or ''.
+
+    CDX, not the availability API. The first sweep (2026-08-20) ran 427
+    availability-based attempts to ZERO recoveries, for two reasons the
+    post-mortem separated cleanly:
+
+      * The availability API silently answered "nothing" for ~81% of
+        walked papers — including one KNOWN-GOOD case (a 404'd Dovepress
+        PDF probed by hand hours earlier) — and its empty answer is
+        indistinguishable from "no snapshot".
+      * Its `closest` snapshot is whatever was captured, which for
+        walled publishers is the WALL: archived interstitials
+        (text/html rejects), a figure JPEG where the source URL was a
+        wrong asset, and archive-side 403 playback exclusions.
+
+    CDX fixes both: it is the archive's real index, and
+    `mimetype:application/pdf&statuscode:200` asks only for captures
+    that ARE the document. Newest capture wins (latest version of the
+    file); `id_` in the replay URL requests raw bytes rather than the
+    toolbar-wrapped page.
+    """
+    r = await polite_request(
+        effects,
+        "GET",
+        _WAYBACK_CDX,
+        params={
+            "url": url,
+            "output": "json",
+            "filter": ["statuscode:200", "mimetype:application/pdf"],
+            "fl": "timestamp,original",
+            "limit": "8",
+        },
+    )
+    rows = r.json_data if r.status == 200 else None
+    if not isinstance(rows, list) or len(rows) < 2:
+        return ""
+    ts, original = rows[-1][0], rows[-1][1]  # newest capture
+    return f"https://web.archive.org/web/{ts}id_/{original}"
+
+
+async def _core_fulltext_urls(effects: Any, doi: str) -> list[str]:
+    """CORE's aggregated copies for a DOI: downloadUrl + source URLs.
+
+    POST, not GET — the GET form of /search/works 500s (probed live
+    2026-08-20); the JSON-body POST returns the record. Recent articles
+    often index with no cached full text yet — an empty answer is lag,
+    not absence, which is why recovery stamps are dated (see the action).
+    """
+    if not doi:
+        return []
+    r = await polite_request(
+        effects,
+        "POST",
+        _CORE_SEARCH_POST,
+        headers=_core_headers(),
+        json_body={"q": f'doi:"{doi}"', "limit": 1},
+    )
+    if r.status != 200 or not isinstance(r.json_data, dict):
+        return []
+    hits = r.json_data.get("results") or []
+    if not hits:
+        return []
+    h = hits[0]
+    urls = []
+    if h.get("downloadUrl"):
+        urls.append(str(h["downloadUrl"]))
+    for u in h.get("sourceFulltextUrls") or []:
+        urls.append(str(u))
+    return urls
+
+
+async def action_recover_oa_locations(step_input: StepInput) -> StepOutput:
+    """Recover oa_unresolved papers through archive/aggregator routes.
+
+    Drain-shaped (budgeted, claim-free, declines with a reason): walks
+    unrecovered oa_unresolved records — strong-tagged first, then
+    deterministic — and tries, per record:
+
+      1. Wayback snapshots of the stored OA locations
+      2. the landing page's citation_pdf_url declaration (when the page
+         itself serves us), plus Wayback of THAT target on a direct miss
+      3. CORE's aggregated copy by DOI (keyed POST)
+
+    A success flips the record to oa_pdf with pdf_path set, so the OCR
+    lane picks it up with no further wiring. Each record is stamped
+    `oa_recover_attempted_at` — one pass per record per e-poch; re-arming
+    a miss is deliberate operator action (aggregators lag months for
+    recent articles, so a later pass IS worth it — but on a calendar,
+    not a loop).
+
+    Params/env: budget (OUROBOROS_OA_RECOVER_PAPERS, default 6; 0 disables).
+    """
+    from agent.persistence.models import _now_iso
+
+    effects = step_input.effects
+    raw = os.environ.get("OUROBOROS_OA_RECOVER_PAPERS", "").strip()
+    try:
+        budget = int(step_input.params.get("budget") or (raw or 6))
+    except ValueError:
+        budget = 6
+
+    def _decline(reason: str) -> StepOutput:
+        summary = {"attempted": 0, "recovered": 0, "reason": reason}
+        return StepOutput(
+            result=summary,
+            observations=f"oa recovery idle ({reason})",
+            context_updates={"recover_summary": summary},
+        )
+
+    if budget <= 0:
+        return _decline("disabled (budget 0)")
+    databank = await read_databank(effects)
+    pend = [
+        r
+        for r in databank.values()
+        if r.get("access_status") == "oa_unresolved"
+        and not r.get("oa_recover_attempted_at")
+        and (r.get("oa_pdf_urls") or r.get("oa_pdf_url"))
+    ]
+    if not pend:
+        return _decline("nothing unrecovered pending")
+
+    def _prio(r: dict):
+        strong = any(
+            isinstance(t, dict) and t.get("relevance") in ("exact", "close")
+            for t in (r.get("tags") or [])
+        )
+        return (0 if strong else 1, r.get("paper_key", ""))
+
+    pend.sort(key=_prio)
+    attempted = recovered = 0
+    outcomes: list[dict] = []
+    for rec in pend[:budget]:
+        rec = dict(rec)
+        attempted += 1
+        rec["oa_recover_attempted_at"] = _now_iso()
+        stored = list(
+            rec.get("oa_pdf_urls")
+            or ([rec["oa_pdf_url"]] if rec.get("oa_pdf_url") else [])
+        )
+
+        candidates: list[tuple[str, str]] = []
+        for u in stored[:2]:
+            snap = await _wayback_snapshot(effects, u)
+            if snap:
+                candidates.append(("wayback", snap))
+        page = await polite_request(effects, "GET", stored[0]) if stored else None
+        if page is not None and page.status == 200 and page.text:
+            meta = _meta_pdf_url(page.text, stored[0])
+            if meta and meta not in stored:
+                candidates.append(("meta", meta))
+                snap = await _wayback_snapshot(effects, meta)
+                if snap:
+                    candidates.append(("meta-wayback", snap))
+        for u in await _core_fulltext_urls(effects, str(rec.get("doi") or "")):
+            candidates.append(("core", u))
+
+        tried = set(rec.get("oa_attempted") or [])
+        seen: set[str] = set()
+        for how, u in candidates:
+            if not u or u in tried or u in seen:
+                continue
+            seen.add(u)
+            key = rec.get("paper_key") or paper_key(rec)
+            path = f"{PDF_DIR}/{key}.pdf"
+            dl = await effects.http_download(u, path)
+            rec.setdefault("oa_attempted", []).append(u)
+            if dl.success:
+                rec["pdf_path"] = path
+                rec["oa_pdf_url"] = u
+                rec["access_status"] = "oa_pdf"
+                rec["failure_reason"] = ""
+                recovered += 1
+                outcomes.append({"paper_key": key, "via": how})
+                break
+        # Book PER RECORD: a recovered PDF must survive whatever stops the
+        # round, and a stamped miss must not be re-walked next round.
+        await append_records(effects, [rec])
+
+    summary = {
+        "attempted": attempted,
+        "recovered": recovered,
+        "outcomes": outcomes,
+        "remaining": max(0, len(pend) - attempted),
+    }
+    return StepOutput(
+        result=summary,
+        observations=(
+            f"oa recovery: {recovered}/{attempted} recovered "
+            f"({', '.join(o['via'] for o in outcomes) or 'none'}); "
+            f"{summary['remaining']} still unwalked"
+        ),
+        context_updates={"recover_summary": summary},
+    )
+
+
 # ── LLM landing-page navigation ───────────────────────────────────────
 #
 # WHAT THIS IS FOR, AND WHAT IT IS NOT. 41% of unresolved papers failed with
@@ -1930,35 +2792,42 @@ async def action_fetch_references(step_input: StepInput) -> StepOutput:
     )
 
 
-async def action_apply_paper_tags(step_input: StepInput) -> StepOutput:
-    """Parse the batch tag JSON; validate; persist cataloged records.
+def validate_and_stamp_tags(
+    batch: list, inference_text: str, valid_aspects: set
+) -> tuple[int, int]:
+    """Parse a tag response and stamp valid tags onto the batch IN MEMORY.
 
     Tag JSON: {paper_key: [{aspect, relevance, justification}]}.
-    Aspect names validate against mission.research_plan; relevance
-    against the exact/close/adjacent enum (invalid entries dropped,
-    counted). Papers with parsed tags become "cataloged"; papers the
-    model skipped stay at their current status and re-enter a later
-    batch. Builds the acquire_catalog directive_report.
+    Aspect names validate against ``valid_aspects``; relevance against
+    the exact/close/adjacent enum (invalid entries dropped, counted).
+    Papers with parsed tags become "cataloged"; papers the response
+    skipped keep their current status untouched — already-cataloged
+    records (e.g., stamped by the acquire tag lane) are therefore never
+    clobbered by a later response that omits them.
 
-    Context: catalog_batch, inference_response, mission
-    Result: cataloged, tag_parse_failed, dropped_tags
-    Publishes: directive_report
+    No I/O: booking stays with the caller (the serial post-hoc booking
+    invariant — this function is shared by the apply_tags step and the
+    acquire step's concurrent tag lane).
+
+    Returns (cataloged, dropped_tags).
     """
     from agent.llm_json import parse_llm_json
 
-    effects = step_input.effects
-    batch = list(step_input.context.get("catalog_batch") or [])
-    mission = step_input.context.get("mission")
-    plan = getattr(mission, "research_plan", None) if mission else None
-    valid_aspects = {a.name for a in (plan.aspects if plan else [])}
-
-    parsed = parse_llm_json(str(step_input.context.get("inference_response", "")))
+    parsed = parse_llm_json(str(inference_text or ""))
     tag_map = parsed if isinstance(parsed, dict) else {}
+    # DOT-TOLERANT LOOKUP. DOI-derived keys can end in a literal dot
+    # (doi_10.6092_..._2266.) and the model reliably emits them WITHOUT it
+    # — trailing periods read as punctuation. Live: one such paper was
+    # re-offered 140+ dispatches, skipped every time, and blocked the
+    # catalog phase from ever completing. Normalize both sides.
+    norm_map = {str(k).rstrip("."): v for k, v in tag_map.items()}
 
     cataloged = dropped = 0
     for rec in batch:
         key = rec.get("paper_key") or paper_key(rec)
         raw_tags = tag_map.get(key)
+        if raw_tags is None:
+            raw_tags = norm_map.get(str(key).rstrip("."))
         if not isinstance(raw_tags, list):
             continue
         tags = []
@@ -1983,6 +2852,56 @@ async def action_apply_paper_tags(step_input: StepInput) -> StepOutput:
         rec["tags"] = tags
         rec["status"] = "cataloged"
         cataloged += 1
+    return cataloged, dropped
+
+
+def mission_valid_aspects(mission) -> set:
+    """Aspect-name whitelist from a mission's research plan (empty = any)."""
+    plan = getattr(mission, "research_plan", None) if mission else None
+    return {a.name for a in (plan.aspects if plan else [])}
+
+
+async def action_apply_paper_tags(step_input: StepInput) -> StepOutput:
+    """Validate the batch tag JSON via validate_and_stamp_tags; persist.
+
+    Papers already stamped "cataloged" (the acquire tag lane) pass
+    through unchanged and are booked here — this action remains the
+    single databank booking point for the batch. Builds the
+    acquire_catalog directive_report.
+
+    Context: catalog_batch, inference_response, mission
+    Result: cataloged, tag_parse_failed, dropped_tags
+    Publishes: directive_report
+    """
+    effects = step_input.effects
+    batch = list(step_input.context.get("catalog_batch") or [])
+    mission = step_input.context.get("mission")
+    valid_aspects = mission_valid_aspects(mission)
+
+    _, dropped = validate_and_stamp_tags(
+        batch, str(step_input.context.get("inference_response", "")), valid_aspects
+    )
+    # BOUNDED RE-OFFERS. "Skipped papers stay in the worklist" assumed
+    # transient skips; a record the model can never tag (or whose key never
+    # matches) would otherwise be re-dispatched forever. Three strikes →
+    # force-catalog with empty tags: it simply matches no aspect, which is
+    # an honest outcome, and the sweep can finally complete.
+    for rec in batch:
+        if rec.get("status") == "cataloged":
+            continue
+        attempts = int(rec.get("tag_attempts") or 0) + 1
+        rec["tag_attempts"] = attempts
+        if attempts >= 3:
+            rec["status"] = "cataloged"
+            rec["tags"] = []
+            rec["failure_reason"] = (
+                f"tagging: skipped by the model {attempts}x — force-cataloged "
+                "with no aspect tags"
+            )
+    # Counted from batch state, not summed from the stamp call: records the
+    # acquire tag lane already cataloged aren't in this response, and a
+    # record both stamped must not count twice.
+    cataloged = sum(1 for r in batch if r.get("status") == "cataloged")
 
     await append_records(effects, batch)
 

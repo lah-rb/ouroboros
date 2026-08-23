@@ -235,10 +235,20 @@ def health_flags() -> dict:
 
 
 def server_pids() -> list[int]:
+    """PIDs of rung SERVERS — never the probe's own.
+
+    The probe is itself `api/main.py --probe-context`, so a bare
+    `pgrep -f api/main.py` always matches the caller. That had two effects,
+    one fatal and one silent: stop_server SIGTERMed the probe mid-rung (exit
+    144, twice, on the first CUDA run of this tooling), and the
+    died-during-load break in the boot wait could never fire because the
+    list was never empty. Self-exclusion fixes both.
+    """
     out = subprocess.run(
         ["pgrep", "-f", "api/main.py"], capture_output=True, text=True
     ).stdout.split()
-    return [int(p) for p in out if p.isdigit()]
+    me = os.getpid()
+    return [int(p) for p in out if p.isdigit() and int(p) != me]
 
 
 def stop_server(log) -> None:

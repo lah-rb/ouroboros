@@ -304,6 +304,14 @@ model:
   #     main_gpu: main_gpu alone names a primary device while LAYER split
   #     still spreads across the rest, so the pin would be inert.
   split_mode: none
+
+  # Per-device layer proportions for split_mode: layer (llama.cpp
+  # tensor_split), e.g. [34, 18] to place 34/52 of the layers on device 0
+  # and 18/52 on device 1. Deterministic placement for multi-GPU layer
+  # splits — the free-VRAM-proportional default moves with whatever else
+  # is resident at load time, which makes an OOM ladder unrepeatable.
+  # null = llama.cpp's default proportional split.
+  tensor_split: null
   # [M] Type: int — sampling seed (-1 = random)
   seed: -1
   # [M] Type: bool — llama.cpp verbose logging
@@ -476,6 +484,28 @@ model:
   # only: vision_n_ctx x kv_bytes_per_token x width. Paddle at 32768 is
   # 0.56 GB per context. Default: 1
   vision_pool_size: 1
+  # [O] Type: bool — offload the mtmd projector to the GPU.
+  # TRUE DOES NOT MEAN "the model's GPU". The handler's signature is
+  # (mmproj_path, verbose, use_gpu, image_min_tokens, image_max_tokens, ...)
+  # with no device index anywhere, so mtmd allocates on the DEFAULT device —
+  # device 0 — however main_gpu is set. On a multi-GPU host a model pinned to
+  # card 1 still puts its projector on card 0, and the memory governor charges
+  # it there (resident_models.footprint_by_device). Live 2026-08-15: paddle
+  # pinned to CUDA1 put its 840.90 MiB projector on CUDA0 beside muse and the
+  # cudaMalloc failure killed the server.
+  # Set false to keep the projector in host RAM instead — the escape hatch
+  # when device 0 is full. It costs image-encode speed, not fidelity.
+  # Irrelevant on unified memory, where there is one device. Default: true
+  vision_projector_gpu: true
+  # [O] Type: str|null — ggml backend NAME to put the projector on ("CUDA1",
+  # "Metal"), overriding the default-device behaviour above. clip.cpp reads
+  # MTMD_BACKEND_DEVICE via getenv at every mtmd_init_from_file and resolves
+  # it with ggml_backend_init_by_name; the backend exports the variable around
+  # handler construction, so this is per-MODEL projector placement. A name
+  # this host does not have falls back to the default GPU device (clip warns),
+  # and the governor charges device 0 to match. Ignored when
+  # vision_projector_gpu is false. Default: null
+  vision_projector_device: null
   # [O] Type: int — reject an image larger than this rather than letting mtmd
   # OOM. Default: 33554432 (32MB)
   vision_max_image_bytes: 33554432

@@ -502,6 +502,9 @@ class BatchedEngine:
         self.h_final_channel_stops = 0
         self.h_decode_failures = 0
         self.h_latch_heals = 0
+        # Occupied-seat clears refused — each one is a PREVENTED seq-wedge;
+        # a nonzero count means some caller's seat bookkeeping went stale.
+        self.h_clear_refusals = 0
 
     # -- lifecycle -------------------------------------------------------
 
@@ -597,11 +600,17 @@ class BatchedEngine:
             self._wake.notify_all()
         if not self._drained.wait(timeout=timeout):
             raise TimeoutError("decode thread did not reach a step boundary")
+        # THE REBUILD WINDOW. A paused engine still shows free cells, and a
+        # scheduler reading only those would dispatch into a context that is
+        # being rebuilt. The decode thread is parked at a step boundary here,
+        # so reading engine state from this caller is race-free.
+        self._publish_capacity()
 
     def resume(self) -> None:
         with self._wake:
             self._paused = False
             self._wake.notify_all()
+        self._publish_capacity()
 
     # -- decode thread ----------------------------------------------------
 
@@ -862,6 +871,7 @@ class BatchedEngine:
             effective_max,
             " (buffered)" if buffer_mode else "",
         )
+        self._publish_capacity()  # occupancy grew
 
     # -- the step loop -------------------------------------------------------
 
@@ -1045,6 +1055,7 @@ class BatchedEngine:
         s.phase = StreamPhase.DONE
         s.end_reason = reason or (str(error) if error else "completed")
         self._streams.pop(s.stream_id, None)
+        self._publish_capacity()  # occupancy shrank — the seat is claimable
 
         # Telemetry contract (read by core/inference + session_manager).
         slot = s.slot
@@ -1222,6 +1233,41 @@ class BatchedEngine:
         slot._last_completion_tokens = None
 
     def clear_seat(self, slot: SeqSlot) -> None:
+        """Strip a seat's KV for reuse — REFUSED while the seat is occupied.
+
+        A clear that lands on a seat with a live stream removes KV cells
+        out from under an in-flight prefill/decode: the stream's next
+        chunk claims position N while the cache ends at the static
+        boundary, ggml asserts Y = X + 1, and the shared context wedges
+        (the 2026-08-19 capture: a reaper false-positive cleared a seat
+        1.4s after _drain_waiting re-admitted onto it). The caller's
+        bookkeeping said the seat was free; the engine's says otherwise —
+        and on the decode thread the engine's view is the truth. Refusing
+        costs nothing: every legitimate clear happens after retire has
+        popped the stream and before the next admit.
+        """
+        occupant = next(
+            (
+                s
+                for s in self._streams.values()
+                if s.slot is slot and s.phase is not StreamPhase.DONE
+            ),
+            None,
+        )
+        if occupant is None:
+            occupant = next((r for r in self._waiting if r.slot is slot), None)
+        if occupant is not None:
+            self.h_clear_refusals += 1
+            logger.warning(
+                "🛑 clear_seat REFUSED: seq %d has a live occupant "
+                "(%s) — a stale release or reaper false-positive tried to "
+                "strip an occupied seat (refusal #%d)",
+                slot.seq,
+                getattr(occupant, "stream_id", None)
+                or getattr(occupant, "request_id", "queued request"),
+                self.h_clear_refusals,
+            )
+            return
         self._llama._ctx.memory_seq_rm(slot.seq, 0, -1)
         slot.n_tokens = 0
         slot.static_len = 0
@@ -1436,13 +1482,88 @@ class BatchedEngine:
 
     # -- health -----------------------------------------------------------
 
+    def _pool_n_ctx(self) -> int:
+        """The shared cell size, from a CACHED int — never a live context
+        dereference (see inference/capacity.py rule 2)."""
+        return int(getattr(self._llama, "_n_ctx", 0) or 0)
+
+    def capacity_fields(self) -> dict:
+        """Every number a scheduler needs, as plain ints.
+
+        MUST be called on the decode thread (or with it parked): it walks
+        `self._streams` and `self._seats`, which the decode thread mutates.
+        """
+        n_ctx = self._pool_n_ctx()
+        live = self._live_occupancy()
+        pinned = self._pinned_occupancy()
+        active = sum(
+            1 for s in self._streams.values() if s.phase is not StreamPhase.DONE
+        )
+        # SEATS FROM STREAM OCCUPANCY, not the backend's checkout queue.
+        # Those two answer different questions: the queue says "may I hold
+        # an instance", occupancy says "is a sequence actually decoding".
+        # A scheduler asking whether work can START now wants the latter,
+        # and it is the one this thread can read without a lock.
+        busy_seqs = {
+            s.slot.seq
+            for s in self._streams.values()
+            if s.phase is not StreamPhase.DONE and s.slot is not None
+        }
+        seats_total = len(self._seats)
+        return {
+            "serving": not self._paused and self._fatal is None,
+            "decode_mode": "batched",
+            "seats_total": seats_total,
+            "seats_checked_out": len(busy_seqs),
+            "seats_free": max(0, seats_total - len(busy_seqs)),
+            "n_ctx_seq": max((int(seat._n_ctx) for seat in self._seats), default=0),
+            "kv_pool_tokens": n_ctx,
+            "free_cells": self._free_cells(n_ctx),
+            "live_occupancy": live,
+            "pinned_occupancy": pinned,
+            "pool_slack": _POOL_SLACK,
+            "min_admit_budget": _MIN_ADMIT_BUDGET,
+            "static_prefix_tokens": max(
+                (int(seat.static_len) for seat in self._seats), default=0
+            ),
+            "active_streams": active,
+            "waiting": len(self._waiting),
+            "prefill_budget": self._live_prefill_budget,
+            "engine_steps": self._h_steps,
+            "kv_pressure_events": self._h_kv_pressure_events,
+            "kv_forced_windows": self._h_forced_windows,
+            "kv_evictions": self._h_evictions,
+            "decode_failures": self.h_decode_failures,
+            "engine_fatal": str(self._fatal) if self._fatal else None,
+        }
+
+    def _publish_capacity(self) -> None:
+        """Occupancy changed — tell anyone watching.
+
+        Telemetry must never break decode: this is the same bare-except
+        contract as the report_completion call in _retire. A publish that
+        raises costs a snapshot, never a generation.
+        """
+        try:
+            from inference.capacity import BUS
+
+            BUS.publish(self.capacity_fields())
+        except Exception:  # noqa: BLE001 — see docstring
+            pass
+
     def health(self) -> dict:
         active = sum(
             1 for s in self._streams.values() if s.phase is not StreamPhase.DONE
         )
+        n_ctx = self._pool_n_ctx()
         return {
             "decode_mode": "batched",
             "active_streams": active,
+            "waiting": len(self._waiting),
+            "free_cells": self._free_cells(n_ctx),
+            "live_occupancy": self._live_occupancy(),
+            "pinned_occupancy": self._pinned_occupancy(),
+            "kv_pool_tokens": n_ctx,
             "engine_steps": self._h_steps,
             "prefill_budget": self._live_prefill_budget,
             "kv_pressure_events": self._h_kv_pressure_events,
@@ -1450,6 +1571,7 @@ class BatchedEngine:
             "kv_evictions": self._h_evictions,
             "decode_failures": self.h_decode_failures,
             "latch_heals": self.h_latch_heals,
+            "clear_refusals": self.h_clear_refusals,
             "engine_fatal": str(self._fatal) if self._fatal else None,
         }
 

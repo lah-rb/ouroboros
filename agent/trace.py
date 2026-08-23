@@ -118,6 +118,9 @@ class TraceEvent:
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
     mission_id: str = ""
+    # Parallel-branch attribution: "" outside a parallel step; the branch
+    # flow's name inside one (stamped by effects/child.ChildEffects).
+    branch: str = ""
     cycle: int = 0
     flow: str = ""
 
@@ -426,6 +429,51 @@ class HealthSample(TraceEvent):
 
     event_type: str = "health_sample"
     health: dict = field(default_factory=dict)
+
+
+@dataclass
+class CapacitySample(TraceEvent):
+    """Pool-level capacity at one lane-report tick.
+
+    HealthSample covers the CACHE register; this covers the ADMISSION
+    register, and the two answer different questions. The question this
+    exists for is "why is a lane idle" — and the honest answer is usually
+    not the one the seat count suggests.
+
+    Measured 2026-08-19 on the live v2 run: seats_total=4, seats_free=2,
+    free_cells=0, live_occupancy=67,045 against a 65,536 pool. Two streams
+    had ENTITLED more than the whole pool, so two seats sat idle with
+    nothing wrong with them. Without this event that state is invisible —
+    the lane report went to the log as one line and was never persisted,
+    so no post-run analysis could distinguish "no work pending" from
+    "refused admission every time".
+
+    `occupancy_ratio` is stored rather than derived because free_cells
+    clamps at 0: once entitlement exceeds the pool the overshoot is
+    exactly the number that matters and exactly the one the clamp
+    destroys.
+    """
+
+    event_type: str = "capacity_sample"
+    seats_total: int = 0
+    seats_free: int = 0
+    kv_pool_tokens: int = 0
+    free_cells: int = 0
+    live_occupancy: int = 0
+    pinned_occupancy: int = 0
+    pool_slack: int = 0
+    active_streams: int = 0
+    waiting: int = 0
+    serving: bool = True
+    source: str = ""  # "ws" | "poll" | "legacy" | "none"
+    seq: int = 0
+    # Entitled cells / pool. >1.0 means oversubscribed by entitlement,
+    # which is the state that idles seats while nothing is wrong.
+    occupancy_ratio: float = 0.0
+    # lane name -> "{done}d/{idle}i/{failed}f[/{inflight} live]"
+    lanes: dict = field(default_factory=dict)
+    # The most recent admission refusal, verbatim from the capacity model.
+    last_refusal: str = ""
 
 
 @dataclass

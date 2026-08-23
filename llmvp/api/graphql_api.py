@@ -173,6 +173,205 @@ class HealthStatus:
     decode_failures: int = 0
     unhealed_decode_failures: int = 0
     unservable: bool = False
+    # Serving capacity — what a scheduler needs to decide whether work
+    # FITS right now. Optional so a client written against a newer schema
+    # degrades to the flat fields above rather than erroring.
+    capacity: Optional["Capacity"] = None
+
+
+@strawberry.type
+class Capacity:
+    """What the server can accept, at one instant.
+
+    ONE TYPE, TWO DELIVERIES: this is what `Subscription.capacity` pushes
+    and what `health { capacity }` returns, so the push and poll paths
+    cannot drift into disagreeing about the same server.
+
+    Every field is defaulted: a partially-initialized backend, or one
+    whose engine is not batched, must still validate rather than fail the
+    whole health query.
+
+    SEATS AND CELLS ARE DIFFERENT LIMITS and a scheduler needs both.
+    `seats_free` is concurrency (how many streams may run); `free_cells`
+    is context (how much KV a new stream can claim). Work that fits one
+    and not the other cannot be admitted. Note `free_cells` reflects
+    ENTITLEMENT — the engine charges each live stream its full granted
+    budget, not its current position — which is why an idle-looking
+    server can still refuse a large request.
+    """
+
+    seq: int = 0
+    model: str = ""
+    # False while a context rebuild has the decode thread parked. A parked
+    # engine still reports free cells; dispatching into it is the bug this
+    # flag exists to prevent.
+    serving: bool = True
+    decode_mode: str = ""
+
+    seats_total: int = 0
+    seats_free: int = 0
+    seats_checked_out: int = 0
+
+    kv_pool_tokens: int = 0
+    free_cells: int = 0
+    live_occupancy: int = 0
+    pinned_occupancy: int = 0
+    pool_slack: int = 0
+    min_admit_budget: int = 0
+    n_ctx_seq: int = 0
+    # The resident static prefix. Measured ~94% free (a static token costs
+    # ~6% of a private one), so a client sizing a request should discount
+    # it rather than counting it against free_cells.
+    static_prefix_tokens: int = 0
+
+    active_streams: int = 0
+    waiting: int = 0
+    prefill_budget: int = 0
+    engine_steps: int = 0
+    kv_pressure_events: int = 0
+    kv_forced_windows: int = 0
+    kv_evictions: int = 0
+    decode_failures: int = 0
+    engine_fatal: Optional[str] = None
+
+
+@strawberry.type
+class TokenCount:
+    """Exact token counts for texts, from the model's OWN tokenizer.
+
+    WHY THIS IS A SERVER FIELD. Only the server knows how a model
+    tokenizes: muse carries a 202,048-token vocabulary, paddle 103,424,
+    and a client counting characters cannot bridge that (the standing
+    estimate, chars x 13/40, is a fitted constant with no model in it).
+    Sizing work against a guess means either over-reserving context — the
+    pool is charged by ENTITLEMENT, so an over-estimate is capacity nobody
+    can use — or under-reserving and being queued.
+
+    Cheap by construction: tokenizing is a CPU string-to-ids pass with no
+    prefill, no decode, and no GPU work, so a caller may ask before every
+    dispatch. `model` selects a resident secondary; empty means the active
+    model. `n_vocab` is returned so a caller can tell WHICH tokenizer
+    answered — a count from the wrong model is worse than no count, and
+    that exact confusion (muse's BOS fed through paddle's vocab) is on
+    record.
+    """
+
+    counts: List[int] = strawberry.field(default_factory=list)
+    total: int = 0
+    model: str = ""
+    n_vocab: int = 0
+    error: str = ""
+
+
+# A text far larger than any real prompt is a mistake or an attack, not a
+# sizing question. Tokenizing is cheap per byte but not free, and this
+# runs on the serving loop.
+_MAX_TOKENIZE_CHARS = 4_000_000
+
+
+def _token_count(texts: List[str], model: str = "") -> TokenCount:
+    """Count tokens for each text. Never raises — a sizing hint that can
+    fail a caller is worse than one that degrades to an estimate."""
+    try:
+        total_chars = sum(len(t or "") for t in texts)
+        if total_chars > _MAX_TOKENIZE_CHARS:
+            return TokenCount(
+                error=f"payload too large ({total_chars} chars)", model=model
+            )
+        cfg = get_config()
+        if model:
+            from core import resident_models
+
+            entry = resident_models.get_resident(model)
+            if entry is None:
+                return TokenCount(error=f"unknown model {model!r}", model=model)
+            cfg = getattr(entry, "config", cfg)
+
+        from inference.tokenizer import get_cached_tokenizer, tokenize_text
+
+        tok = get_cached_tokenizer(cfg)
+        counts = [len(tokenize_text(tok, t or "", add_bos=False)) for t in texts]
+        n_vocab = 0
+        try:
+            n_vocab = int(tok.n_vocab())
+        except Exception:  # noqa: BLE001 — provenance is a nicety, not the answer
+            n_vocab = 0
+        return TokenCount(
+            counts=counts,
+            total=sum(counts),
+            model=model or str(getattr(cfg, "name", "") or ""),
+            n_vocab=n_vocab,
+        )
+    except Exception as e:  # noqa: BLE001
+        log.warning("token_count failed: %s", e)
+        return TokenCount(error=f"{type(e).__name__}: {e}"[:200], model=model)
+
+
+def _health_capacity(status: dict) -> Optional["Capacity"]:
+    """The poll half of the capacity contract.
+
+    Prefers the engine's last published snapshot (the same object the
+    subscription pushes, so the two paths cannot disagree), then overlays
+    the backend's AUTHORITATIVE seat availability — `available_instances`
+    is the queue a request must actually win to run, while the engine's
+    view is derived from stream occupancy. Returns None when the backend
+    predates the bus, which leaves the flat health fields as the client's
+    fallback rather than inventing zeros that read as "server full".
+    """
+    try:
+        from inference.capacity import BUS
+
+        snap = BUS.latest()
+    except Exception:  # noqa: BLE001 — health must never fail on telemetry
+        return None
+    if snap is None:
+        return None
+    cap = _capacity_from_snapshot(snap)
+    avail = status.get("available_instances")
+    if isinstance(avail, int):
+        cap.seats_free = avail
+    pool = status.get("pool_size")
+    if isinstance(pool, int) and pool:
+        cap.seats_total = pool
+    checked = status.get("checked_out")
+    if isinstance(checked, int):
+        cap.seats_checked_out = checked
+    return cap
+
+
+def _capacity_from_snapshot(snap) -> "Capacity":
+    """Map a CapacitySnapshot onto the GraphQL type.
+
+    Field-by-field rather than **asdict: the dataclass carries
+    seats_by_persona (a dict, which has no scalar GraphQL mapping) and
+    adding a field there must not silently change the wire schema.
+    """
+    return Capacity(
+        seq=snap.seq,
+        model=snap.model,
+        serving=snap.serving,
+        decode_mode=snap.decode_mode,
+        seats_total=snap.seats_total,
+        seats_free=snap.seats_free,
+        seats_checked_out=snap.seats_checked_out,
+        kv_pool_tokens=snap.kv_pool_tokens,
+        free_cells=snap.free_cells,
+        live_occupancy=snap.live_occupancy,
+        pinned_occupancy=snap.pinned_occupancy,
+        pool_slack=snap.pool_slack,
+        min_admit_budget=snap.min_admit_budget,
+        n_ctx_seq=snap.n_ctx_seq,
+        static_prefix_tokens=snap.static_prefix_tokens,
+        active_streams=snap.active_streams,
+        waiting=snap.waiting,
+        prefill_budget=snap.prefill_budget,
+        engine_steps=snap.engine_steps,
+        kv_pressure_events=snap.kv_pressure_events,
+        kv_forced_windows=snap.kv_forced_windows,
+        kv_evictions=snap.kv_evictions,
+        decode_failures=snap.decode_failures,
+        engine_fatal=snap.engine_fatal,
+    )
 
 
 @strawberry.type
@@ -618,6 +817,19 @@ class Query:
     """GraphQL Query resolvers."""
 
     @strawberry.field
+    def token_count(self, texts: List[str], model: str = "") -> TokenCount:
+        """Exact token counts, so callers can size work instead of guessing.
+
+        The intended use is admission sizing: tokenize, add a margin for
+        the chat template the renderer will wrap around the text, and
+        reserve THAT rather than a character-derived estimate. Costs a
+        CPU pass and no GPU time, so it is affordable before every
+        dispatch — and it is the same question a swarm asks N times when
+        it sizes a fan-out, which is why it takes a list.
+        """
+        return _token_count(list(texts or []), model)
+
+    @strawberry.field
     def health(self) -> HealthStatus:
         """Health check endpoint.
 
@@ -692,6 +904,7 @@ class Query:
             engine_active_streams=(status.get("batched_engine") or {}).get(
                 "active_streams"
             ),
+            capacity=_health_capacity(status),
             **{
                 k: trend_status.get(k)
                 for k in (
@@ -1332,6 +1545,45 @@ class Mutation:
 @strawberry.type
 class Subscription:
     """GraphQL Subscription resolvers for streaming."""
+
+    @strawberry.subscription
+    async def capacity(self) -> AsyncGenerator["Capacity", None]:
+        """Push serving capacity whenever it changes.
+
+        WHY A SUBSCRIPTION AND NOT A POLL. Capacity changes on stream
+        admit and retire — events the server knows exactly and a client
+        can only guess at. A poller either runs hot (wasting a request per
+        interval to learn nothing) or runs cold (dispatching against a
+        stale picture). Neither error is necessary when the server can
+        simply say.
+
+        The first yield is the CURRENT snapshot, not the next change: a
+        scheduler connecting to an idle server must learn its capacity
+        immediately rather than blocking until something happens.
+
+        Unregisters in `finally`. session_events does not, and a client
+        that reconnects in a loop would otherwise accumulate mailboxes
+        until the bus refuses new ones.
+        """
+        import asyncio as _asyncio
+
+        from inference.capacity import BUS
+
+        loop = _asyncio.get_running_loop()
+        BUS.bind_loop(loop)
+        mb = BUS.subscribe(loop)
+        if mb is None:
+            # At the subscriber cap — say so by closing rather than
+            # hanging a client that would wait forever for a first frame.
+            return
+        try:
+            snap = BUS.latest()
+            if snap is not None:
+                yield _capacity_from_snapshot(snap)
+            while True:
+                yield _capacity_from_snapshot(await mb.get())
+        finally:
+            BUS.unsubscribe(mb)
 
     @strawberry.subscription
     async def stream_completion(

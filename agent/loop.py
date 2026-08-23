@@ -584,23 +584,47 @@ async def run_agent(
             try:
                 _m = await effects.load_mission()
                 if _m is not None and getattr(_m, "status", "") == "active":
-                    _m.status = "paused"
                     # The park lands at the work→entry boundary, BEFORE the
-                    # entry flow books the finished flow's report. Persist the
-                    # tail-call inputs so resume can replay them and the report
-                    # books exactly as if the process had continued.
+                    # entry flow books the finished flow's report. pending_return
+                    # persists the tail-call inputs so resume can replay them
+                    # and the report books exactly as if the process continued.
+                    # cycles_consumed: lifetime work-cycle accounting for the
+                    # league protocol (in-process counter resets per run_agent).
+                    #
+                    # Op-based park (mission-ops pilot): status/pending_return
+                    # are idempotent sets, cycles_consumed is a real counter
+                    # increment — the op shapes exactly. Do NOT pre-mutate the
+                    # in-memory object alongside mission_apply: increments are
+                    # not idempotent and would double-apply through effects
+                    # whose store shares the object (MockEffects).
                     try:
-                        _m.pending_return = dict(outcome.inputs or {})
+                        _pending = dict(outcome.inputs or {})
                     except Exception:  # noqa: BLE001 — additive, best-effort
-                        pass
-                    # Lifetime work-cycle accounting for the league protocol:
-                    # the in-process counter resets every run_agent, so the
-                    # contemplator cap (30 cycles) needs a persisted total the
-                    # tier runner can subtract from on resume.
-                    _m.cycles_consumed = (
-                        int(getattr(_m, "cycles_consumed", 0) or 0) + cycle
-                    )
-                    await effects.save_mission(_m)
+                        _pending = {}
+                    _mission_apply = getattr(effects, "mission_apply", None)
+                    _parked = None
+                    if _mission_apply is not None:
+                        from agent.persistence.models import (
+                            CounterIncOp,
+                            FieldSetOp,
+                            MissionStatusOp,
+                        )
+
+                        _parked = await _mission_apply(
+                            [
+                                MissionStatusOp(status="paused"),
+                                FieldSetOp(key="pending_return", value=_pending),
+                                CounterIncOp(field="cycles_consumed", n=cycle),
+                            ]
+                        )
+                    if _parked is None:
+                        # Effects double without mission_apply — legacy path.
+                        _m.status = "paused"
+                        _m.pending_return = _pending
+                        _m.cycles_consumed = (
+                            int(getattr(_m, "cycles_consumed", 0) or 0) + cycle
+                        )
+                        await effects.save_mission(_m)
                     logger.info(
                         "Budget exhausted (%d cycles, %.0fs) — parked mission "
                         "%s as paused",

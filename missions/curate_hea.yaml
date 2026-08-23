@@ -9,7 +9,7 @@
 #
 # Run:
 #   uv run ouroboros.py mission create --mission_config curate_hea
-#   uv run ouroboros.py start --working-dir /Users/lah-rb/corpora/ouroboros-hea
+#   uv run ouroboros.py start --working-dir ~/corpora/ouroboros-hea
 # version: 1
 
 objective: >
@@ -19,7 +19,7 @@ objective: >
   grounding gates, producing corpus.json for the application stage.
 
 flow_set: curator
-working_dir: "/Users/lah-rb/corpora/ouroboros-hea"
+working_dir: "~/corpora/ouroboros-hea"
 effects_profile: local
 llmvp_endpoint: "http://localhost:8008/graphql"
 

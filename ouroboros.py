@@ -28,13 +28,30 @@ from agent.persistence.models import (
 )
 
 
+def _resolve_working_dir(raw: str | None) -> str:
+    """Absolute working directory from a CLI flag or YAML value, `~` and all.
+
+    `~` is expanded HERE because os.path.realpath does not do it, and a
+    mission YAML is the one place the tilde reaches Python unexpanded — an
+    interactive shell expands `--working-dir ~/corpora/x` before argv, but
+    a quoted `working_dir: "~/corpora/x"` in YAML arrives literally and
+    would resolve to a directory named `~` under the repo.
+
+    That tilde is the point: it is what lets a COMMITTED mission file name
+    a corpus without naming a machine. The alternative is the absolute path
+    that shipped `/Users/lah-rb/corpora/ouroboros-spectra` to a Linux box
+    and cost 99 papers (see manager._rebind_working_directory).
+    """
+    return os.path.realpath(os.path.expanduser(raw or os.getcwd()))
+
+
 def _load_mission_or_exit(args: argparse.Namespace):
     """Open the mission at --working-dir (or cwd); exit 1 when none exists.
 
     The shared front door for every mission-management subcommand —
     previously seven near-identical open blocks.
     """
-    working_dir = os.path.realpath(args.working_dir or os.getcwd())
+    working_dir = _resolve_working_dir(args.working_dir)
     pm = PersistenceManager(working_dir)
     mission = pm.load_mission()
     if mission is None:
@@ -98,7 +115,7 @@ def cmd_mission_create(args: argparse.Namespace) -> None:
         or (yaml_config.working_dir if yaml_config else None)
         or os.getcwd()
     )
-    working_dir = os.path.realpath(working_dir_raw)
+    working_dir = _resolve_working_dir(working_dir_raw)
 
     if not os.path.isdir(working_dir):
         print(f"Error: Working directory does not exist: {working_dir}")
@@ -532,7 +549,7 @@ def cmd_lint(args: argparse.Namespace) -> None:
 
 def cmd_start(args: argparse.Namespace) -> None:
     """Start the agent on an active mission."""
-    working_dir = os.path.realpath(args.working_dir or os.getcwd())
+    working_dir = _resolve_working_dir(args.working_dir)
     pm = PersistenceManager(working_dir)
 
     mission = pm.load_mission()

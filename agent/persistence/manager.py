@@ -35,6 +35,14 @@ logger = logging.getLogger(__name__)
 
 AGENT_DIR = ".agent"
 MISSION_FILE = "mission.json"
+# CRDT journal beside the JSON view: mission.loro is the Loro snapshot,
+# mission.loro.stat records the (mtime_ns, size) of the mission.json the
+# snapshot last materialized. mission.json stays the canonical READ path —
+# external writers (ouroboros.py message/pause from another process) write
+# it directly, and a stat mismatch tells us to re-bootstrap the doc from
+# the view rather than trust a stale journal.
+MISSION_DOC_FILE = "mission.loro"
+MISSION_DOC_STAT_FILE = "mission.loro.stat"
 EVENTS_FILE = "events.json"
 CONFIG_FILE = "config.json"
 HISTORY_DIR = "history"
@@ -62,6 +70,14 @@ class PersistenceManager:
         self._agent_dir = os.path.join(self._working_dir, AGENT_DIR)
         # load_mission parse cache: ((mtime_ns, size), MissionState).
         self._mission_cache: tuple[tuple[int, int], MissionState] | None = None
+        # In-memory CRDT doc handle (persistence/mission_doc.py); rebuilt
+        # lazily and re-bootstrapped whenever mission.json changed under us.
+        # _doc_synced_stat is the view stat THIS handle was last synced to —
+        # distinct from the on-disk sidecar, which vouches only for the
+        # snapshot file (another process can journal a save, making the
+        # sidecar current while our in-memory doc is stale).
+        self._mission_doc = None
+        self._doc_synced_stat: list | None = None
 
     @property
     def agent_dir(self) -> str:
@@ -152,11 +168,46 @@ class PersistenceManager:
             # Schema is unstable during development — no version gating.
             # Pydantic defaults handle missing fields gracefully.
             state = MissionState.model_validate(data)
+            self._rebind_working_directory(state)
             if key is not None:
                 self._mission_cache = (key, state)
             return state
         except Exception as e:
             raise PersistenceError(f"Failed to load mission: {e}") from e
+
+    def _rebind_working_directory(self, state: MissionState) -> None:
+        """Point config.working_directory at where the mission ACTUALLY lives.
+
+        The stored path is a memory of the machine that wrote it; this
+        manager's own directory is the one the file was just read from, so
+        the latter is authoritative and the former is at best a duplicate.
+
+        A corpus carried between machines makes them disagree. Nothing
+        crashes when they do: effects resolve their own paths and every
+        read/write through this class keeps working, so the mission runs,
+        acquires, plans and reports fine. The damage is confined to the
+        actions that build an ABSOLUTE path out of the stored string and
+        hand it to a subprocess — they address a directory that does not
+        exist on this machine.
+
+        Live cost of learning that: a spectra mission moved from macOS to
+        Linux kept `/Users/lah-rb/corpora/...`, and the OCR lane dispatched
+        99 papers' worth of extraction at paths with no files behind them.
+        Every one crashed, emitted no report line, and was booked
+        `extract_failed` — a data-loss event dressed as 99 quality failures.
+        The stale path was invisible in every status view.
+        """
+        cfg = getattr(state, "config", None)
+        stored = getattr(cfg, "working_directory", "") if cfg else ""
+        if not stored or os.path.realpath(stored) == self._working_dir:
+            return
+        logger.warning(
+            "Mission working_directory %r does not match the directory it was "
+            "loaded from; rebinding to %r",
+            stored,
+            self._working_dir,
+        )
+        cfg.working_directory = self._working_dir
 
     def save_mission(self, state: MissionState) -> bool:
         """Save mission state to .agent/mission.json atomically.
@@ -178,11 +229,187 @@ class PersistenceManager:
                 self._mission_cache = ((st.st_mtime_ns, st.st_size), state)
             except OSError:
                 self._mission_cache = None
+            # Journal the owner write into the CRDT doc (delta-encoded via
+            # replace_from — unchanged fields emit no ops). Best-effort: the
+            # JSON view is already durable, and a journal failure must not
+            # fail a save.
+            self._journal_owner_write(state)
             logger.debug("Saved mission state: %s", state.id)
             return True
         except Exception as e:
             logger.error("Failed to save mission: %s", e)
             return False
+
+    # ── CRDT doc journal ──────────────────────────────────────────
+
+    def _doc_paths(self) -> tuple[str, str]:
+        return (
+            self._file_path(MISSION_DOC_FILE),
+            self._file_path(MISSION_DOC_STAT_FILE),
+        )
+
+    def _view_stat(self) -> list | None:
+        try:
+            st = os.stat(self._file_path(MISSION_FILE))
+            return [st.st_mtime_ns, st.st_size]
+        except OSError:
+            return None
+
+    def _doc_in_sync(self) -> bool:
+        """True when mission.loro was materialized from the CURRENT
+        mission.json — i.e., no external writer touched the view since."""
+        _, stat_path = self._doc_paths()
+        try:
+            with open(stat_path, "r", encoding="utf-8") as f:
+                recorded = json.load(f)
+        except (OSError, ValueError):
+            return False
+        return recorded == self._view_stat()
+
+    def _get_doc(self, state: MissionState):
+        """The mission's CRDT doc, loaded from mission.loro when it is in
+        sync with the view, else re-bootstrapped from ``state``. Returns
+        None when the loro engine is unavailable (callers degrade)."""
+        try:
+            from agent.persistence.mission_doc import LoroMissionDoc
+        except Exception as e:  # engine import failure — degrade loudly once
+            logger.warning("mission doc engine unavailable: %s", e)
+            return None
+        doc_path, _ = self._doc_paths()
+        view_stat = self._view_stat()
+        if (
+            self._mission_doc is not None
+            and self._doc_synced_stat is not None
+            and self._doc_synced_stat == view_stat
+        ):
+            return self._mission_doc
+        if os.path.isfile(doc_path) and self._doc_in_sync():
+            try:
+                with open(doc_path, "rb") as f:
+                    self._mission_doc = LoroMissionDoc.from_snapshot(f.read())
+                self._doc_synced_stat = view_stat
+                return self._mission_doc
+            except Exception as e:
+                logger.warning(
+                    "mission.loro unreadable (%s) — re-bootstrapping from view", e
+                )
+        self._mission_doc = LoroMissionDoc.bootstrap(state)
+        self._doc_synced_stat = view_stat
+        return self._mission_doc
+
+    def _persist_doc(self, doc) -> None:
+        """Snapshot + stat sidecar, atomically. Called AFTER the JSON view
+        write so the recorded stat is the view this snapshot matches."""
+        doc_path, stat_path = self._doc_paths()
+        self._atomic_write_bytes(doc_path, doc.export_snapshot())
+        self._atomic_write(stat_path, json.dumps(self._view_stat()))
+        self._doc_synced_stat = self._view_stat()
+
+    def _journal_owner_write(self, state: MissionState) -> None:
+        try:
+            doc = self._get_doc(state)
+            if doc is None:
+                return
+            doc.replace_from(state)
+            self._persist_doc(doc)
+        except Exception as e:  # never fail a save over the journal
+            logger.warning("mission doc journal failed (owner write): %s", e)
+
+    def _atomic_write_bytes(self, path: str, data: bytes) -> None:
+        dir_path = os.path.dirname(path)
+        os.makedirs(dir_path, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(dir=dir_path, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+            os.rename(tmp_path, path)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+
+    def apply_ops(self, ops: list) -> MissionState | None:
+        """Apply typed MissionOps (see models.MissionOp) — the migrated
+        alternative to load-mutate-save. Applies to the CRDT doc, then
+        materializes the JSON view from it; falls back to interpreting the
+        ops directly on the pydantic object if the engine is unavailable,
+        so a binding failure degrades to today's semantics instead of
+        blocking the mission. Returns the resulting state (None = no
+        mission)."""
+        state = self.load_mission()
+        if state is None:
+            logger.warning("apply_ops with no mission — dropped %d op(s)", len(ops))
+            return None
+        from agent.persistence.models import FieldSetOp
+
+        ops = list(ops) + [
+            FieldSetOp(key="updated_at", value=datetime.now(timezone.utc).isoformat())
+        ]
+        doc = self._get_doc(state)
+        if doc is not None:
+            try:
+                doc.apply(ops)
+                view = doc.to_mission_state()
+                self._rebind_working_directory(view)
+                self._atomic_write(
+                    self._file_path(MISSION_FILE), view.model_dump_json(indent=2)
+                )
+                try:
+                    st = os.stat(self._file_path(MISSION_FILE))
+                    self._mission_cache = ((st.st_mtime_ns, st.st_size), view)
+                except OSError:
+                    self._mission_cache = None
+                self._persist_doc(doc)
+                return view
+            except Exception as e:
+                logger.warning(
+                    "mission doc apply failed (%s) — falling back to direct "
+                    "interpretation",
+                    e,
+                )
+        self._apply_ops_direct(state, ops)
+        self.save_mission(state)
+        return state
+
+    @staticmethod
+    def _apply_ops_direct(state: MissionState, ops: list) -> None:
+        """Pure-pydantic op interpretation — the engine-down fallback.
+        Must agree with LoroMissionDoc.apply semantics."""
+        from agent.persistence.models import (
+            DispatchRecord,
+            NoteRecord,
+            WarningRecord,
+            WorkspaceLedgerEntry,
+        )
+
+        _entry_types = {
+            "note_append": ("notes", NoteRecord),
+            "dispatch_append": ("dispatch_history", DispatchRecord),
+            "ledger_append": ("workspace_ledger", WorkspaceLedgerEntry),
+            "warning_append": ("pending_warnings", WarningRecord),
+        }
+        for op in ops:
+            kind = op.op
+            if kind in _entry_types:
+                field, model = _entry_types[kind]
+                getattr(state, field).append(model.model_validate(op.entry))
+            elif kind == "counter_inc":
+                setattr(state, op.field, int(getattr(state, op.field, 0)) + op.n)
+            elif kind == "goal_status":
+                for g in state.goals:
+                    if g.id == op.goal_id:
+                        g.status = op.status
+                        break
+                else:
+                    logger.warning("goal_status: unknown goal %r", op.goal_id)
+            elif kind == "mission_status":
+                state.status = op.status
+            elif kind == "field_set":
+                setattr(state, op.key, op.value)
+            elif kind == "plan_replace":
+                setattr(state, op.section, op.value)
 
     def mission_exists(self) -> bool:
         """Check if a mission.json file exists."""

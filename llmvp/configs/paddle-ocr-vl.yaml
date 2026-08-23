@@ -44,9 +44,22 @@
 # `User: <|IMAGE_START|><|IMAGE_PLACEHOLDER|><|IMAGE_END|>{text}\nAssistant:\n`.
 #
 # ── Budget ───────────────────────────────────────────────────────────
-# weights 498 MB (Q8_0) + projector 882 MB + KV. Tiny beside muse's 18.3 GB,
-# which is what makes holding both hot uncontroversial: the governor prices
-# this pair at ~27 GB against a ~105 GB budget.
+# weights 498 MB (Q8_0) + projector 882 MB + KV.
+#
+# THESE NUMBERS ARE PER DEVICE NOW, and on a discrete host that is the whole
+# story. Measured 2026-08-15 on the 3090/3060 rig:
+#
+#   CUDA0  23.56 GiB total — muse holds 21.22 GiB of text (weights 18.30 +
+#          projector 1.30 + n_ctx 32768 KV 1.62) and DECLARES a further
+#          6.50 GiB of lazy vision KV it cannot afford there.
+#   CUDA1  11.63 GiB total — empty, which is why this model is pinned to it.
+#
+# So CUDA0 has no room for an 882 MB projector, and mtmd offers no device
+# index — only use_gpu, plus the MTMD_BACKEND_DEVICE getenv that clip.cpp
+# resolves by backend name. vision_projector_device: "CUDA1" uses that to put
+# the projector beside the weights on the 3060 — the difference between this
+# model loading and the server dying (it OOMed CUDA0 twice before the
+# governor could see the charge, and the CPU fallback cost 2.3x wall).
 #
 # n_ctx is small ON PURPOSE — the text pool is never used, so paying KV for it
 # would be pure waste. vision_n_ctx is what OCR actually consumes, and 32768 is
@@ -75,10 +88,22 @@ model:
   n_ctx: 4096
   # Vision: the window OCR crops actually land in.
   vision_n_ctx: 32768
-  # Matches the subprocess path's --vl-parallel 4, its measured saturation
-  # point. 4 x 32768 x 18432 B/tok = 2.25 GB of KV, on top of 1.36 GB of
-  # weights + projector.
-  vision_pool_size: 4
+  # 2, not the subprocess path's 4. That 4 was its measured saturation point
+  # on the M1 and was carried here untested; 4 x 32768 KV is 2.25 GB and it
+  # was never admitted — the pool that OOMed the server was this one. Two
+  # concurrent crops is the width the batched bench actually supports:
+  # vision+vision serialized at S=0.093 (dev/batched_modality_mix.py), i.e.
+  # the second crop is ~free. Raise it once the governor can prove the KV
+  # fits on CUDA1 and a bench shows 4 still pays.
+  vision_pool_size: 2
+  # The projector cannot follow main_gpu — mtmd takes use_gpu, not a device —
+  # so left alone it lands on CUDA0 where muse already sits (that OOM killed
+  # the server twice). clip.cpp's MTMD_BACKEND_DEVICE escape hatch names a
+  # backend directly, so the projector joins the weights on the 3060. The CPU
+  # fallback was measured first and costs 2.3x wall (121.1 s vs 52.1 s on a
+  # 10-page paper) — placement, not offload, is the fix.
+  vision_projector_gpu: true
+  vision_projector_device: "CUDA1"
   vision_image_roots:
     - "~/corpora"
     - "~/ouroboros-runs"
@@ -100,12 +125,29 @@ generation:
   # OCR answers are page/region transcriptions — bounded, and a runaway on a
   # dense figure costs the whole batch's wall time.
   max_tokens_default: 4096
-  temperature_default: 0.1
+  # THESE DEFAULTS ARE ALMOST NEVER CONSULTED, and knowing why is the whole
+  # story of the "degenerate decode" class. paddlex pins `temperature: 0` in
+  # every request it sends a llama-cpp-server backend (predictor.py:503), and
+  # an explicit request value outranks any server default — so OCR decode was
+  # GREEDY everywhere, on both machines, through both serving paths, whatever
+  # this block said. Greedy orbits on loop-prone pages: microc.2018.01.004
+  # repeated "both" 3,003 times BYTE-IDENTICALLY on the M1 and on the CUDA
+  # rig. (llama-server read that page clean at the same greedy settings only
+  # because its template-built prompt differs from the mtmd handler's —
+  # luck, not robustness.)
+  #
+  # The effective control is therefore the CLIENT: extract_batch passes
+  # --vl-temperature 0.8 / --vl-top-p 0.95 per predict() call — the lab's own
+  # documented stochastic alternative to its greedy default. Validated
+  # 2026-08-15: microc rep 3003 -> 20 with numeric/span 0.985/0.988, two
+  # known-good papers within noise of their greedy rates. This default
+  # matches, for any caller that sends nothing.
+  temperature_default: 0.8
   top_p: 0.95
-  top_k: 0
-  min_p: 0.00
+  top_k: 40
+  min_p: 0.05
   presence_penalty: 0.0
-  repeat_penalty: 1.05
+  repeat_penalty: 1.0
   streaming_default: false
 
 knowledge:

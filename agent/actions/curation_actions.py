@@ -45,6 +45,7 @@ from agent.paths import repo_root as _repo_root
 
 import difflib
 import json
+import os
 import logging
 import re
 
@@ -252,6 +253,73 @@ def near_duplicate_keys(new_keys: list[str], registry: dict, data: dict) -> list
 # ── Key registry ──────────────────────────────────────────────────────
 
 
+# ── canonical vocabulary (operator reform, 2026-08-22) ────────────────
+#
+# The registry grew to 1,522 observed keys, 94% used once. The reform
+# tiers it: `core` (>=10 uses, 54 keys), `family` (753 keys annotated
+# into six semantic families), `bespoke-pool` (764 idiosyncratic
+# quantities kept AS a pool, observed for future overlap). Only
+# UNIT-SAFE spelling variants merge (12 aliases in
+# databank/dataset/key_aliases.json): plural/filler/unit-spelling
+# differences of the SAME unit. Cross-unit (um vs nm) and
+# digit-parameterized keys (ph2/ph3, formula_2) never merge — those
+# digits carry conditions, and a merge would corrupt values.
+
+_KEY_FAMILY_PATTERNS = [
+    (
+        "composition",
+        r"composition|content|concentration|ratio|formula|elemental|stoichi",
+    ),
+    (
+        "instrument",
+        r"laser|voltage|current|power|detector|resolution|exposure|wavelength|source|excitation|spectrometer|diffractometer|grating",
+    ),
+    ("peaks", r"peak|band|shift|line|mode|assign|wavenumber|frequenc|2theta|dspacing"),
+    ("conditions", r"temperature|pressure|time|duration|humidit|atmosphere|ph\b|rate"),
+    (
+        "sample",
+        r"sample|specimen|prep|synthesi|anneal|sinter|deposit|coating|substrate|particle|grain",
+    ),
+    ("structure", r"crystal|lattice|space_group|phase|structure|cell|symmetry"),
+]
+
+
+def key_family(key: str) -> str:
+    """The semantic family a key belongs to, '' when bespoke."""
+    low = key.lower()
+    for fam, pat in _KEY_FAMILY_PATTERNS:
+        if re.search(pat, low):
+            return fam
+    return ""
+
+
+async def load_key_aliases(effects) -> dict:
+    """alias -> canonical spelling, {} when the map is absent."""
+    try:
+        fc = await effects.read_file("databank/dataset/key_aliases.json")
+        if getattr(fc, "exists", False):
+            return json.loads(fc.content)
+    except Exception:  # noqa: BLE001 — canonicalization is best-effort
+        pass
+    return {}
+
+
+def canonicalize_pack_keys(data: dict, aliases: dict) -> dict:
+    """Rename aliased keys to their canonical spellings; merge lists on
+    collision, first-value-wins otherwise."""
+    if not aliases:
+        return data
+    out: dict = {}
+    for k, v in data.items():
+        ck = aliases.get(k, k)
+        if ck in out:
+            if isinstance(out[ck], list) and isinstance(v, list):
+                out[ck] = out[ck] + [x for x in v if x not in out[ck]]
+        else:
+            out[ck] = v
+    return out
+
+
 def update_key_registry(registry: dict, data: dict, paper_key: str) -> dict:
     """Fold an ACCEPTED pack into the registry (returns the same dict).
 
@@ -262,6 +330,7 @@ def update_key_registry(registry: dict, data: dict, paper_key: str) -> dict:
         entry = registry.get(key)
         if entry is None:
             exemplar = json.dumps(value, ensure_ascii=False)
+            fam = key_family(key)
             registry[key] = {
                 "type": _type_name(value),
                 "description": "",
@@ -269,6 +338,10 @@ def update_key_registry(registry: dict, data: dict, paper_key: str) -> dict:
                 "count": 1,
                 "first_paper": paper_key,
                 "similar_to": [],
+                # tier: promoted to "core" by count in later passes; new
+                # keys start as their family or in the observed pool.
+                "tier": "family" if fam else "bespoke-pool",
+                **({"family": fam} if fam else {}),
             }
         else:
             entry["count"] = int(entry.get("count") or 0) + 1
@@ -545,11 +618,13 @@ def _fig_batch(databank: dict) -> list[str]:
     """The next batch, budgeted by FIGURES rather than papers.
 
     A paper-count batch was safe against an 8B MLX model at a few seconds a
-    figure. It is not safe against the endpoint: muse reads a figure in ~37s
-    (measured 2026-08-12, 4 figures in 147.9s), and this corpus has papers
-    with 54, 53 and 40 figures. Three of those in one dispatch is ~90 minutes
-    against a 3600s timeout — the batch would die mid-flight and every paper
-    in it would book figtext_failed, having done the work.
+    figure. It is not safe against the endpoint: muse reads a figure in ~16s
+    on this rig (measured 2026-08-16, afc65ec, once the vision projector moved
+    to CUDA1; it was ~37s on the M1, and that stale constant over-budgeted
+    figure batches by more than 2x). This corpus has papers with 54, 53 and 40
+    figures — three of those in one dispatch still approaches the 3600s
+    timeout, and the batch would die mid-flight with every paper in it booking
+    figtext_failed, having done the work.
 
     So the unit of work is the figure, which is what actually costs time.
     FIG_BATCH_SIZE still caps the paper count (a batch of many tiny papers
@@ -566,6 +641,489 @@ def _fig_batch(databank: dict) -> list[str]:
         batch.append(key)
         figures += n
     return batch
+
+
+# ── figtext drain (parallel-branch consumer) ──────────────────────────
+#
+# Same claim discipline as the OCR drain (extraction_actions._OCR_CLAIMS):
+# figtext_status is only booked AFTER the tool runs, so a drain branch and
+# a curator fig_review dispatch selecting concurrently would read the same
+# figures twice. In-process set; the multi-process claim is the same
+# follow-on flock story. At the endpoint's measured ~37 s/figure the drain
+# budget is FIGURES (default 6 ≈ ~4 min — one discovery round), and unlike
+# _fig_batch a paper OVER the budget is SKIPPED here, not dispatched alone:
+# an 86-minute figure-heavy paper belongs to a dedicated curator dispatch,
+# never to a branch riding a discovery round.
+_FIGTEXT_CLAIMS: set[str] = set()
+
+
+def _figtext_drain_budget() -> int:
+    raw = os.environ.get("OUROBOROS_FIGTEXT_FIGS", "").strip()
+    try:
+        return max(0, int(raw)) if raw else 6
+    except ValueError:
+        return 6
+
+
+def _figs_remaining(record: dict) -> int:
+    """Undescribed figures on this record, from booked partial progress."""
+    total = int(record.get("figure_count") or 0)
+    prog = str(record.get("figtext_progress") or "")
+    if "/" in prog:
+        try:
+            return max(0, total - int(prog.split("/")[0]))
+        except ValueError:
+            return total
+    return total
+
+
+def select_figtext_batch(databank: dict, max_figures: int) -> list[str]:
+    """Claimed, figure-budgeted selection — REMAINING-aware.
+
+    Papers in-progress finish first, then fewest-remaining. Whole papers
+    pack greedily into the budget; when none fits whole, the head paper is
+    taken ALONE and the tool's --max-figures pool caps the round — big
+    papers make progress across rounds instead of being skipped forever
+    (693 papers at 13+ figures were structurally unreachable under the
+    old skip rule)."""
+    pending = sorted(
+        (
+            k
+            for k, r in databank.items()
+            if _fig_pending(r) and k not in _FIGTEXT_CLAIMS
+        ),
+        key=lambda k: (
+            0 if "/" in str(databank[k].get("figtext_progress") or "") else 1,
+            _figs_remaining(databank[k]),
+            k,
+        ),
+    )
+    batch: list[str] = []
+    figures = 0
+    for key in pending:
+        n = _figs_remaining(databank[key])
+        if figures + n > max_figures:
+            if batch:
+                break
+            # Nothing fits whole: take the head paper alone; the tool's
+            # figure pool bounds the round.
+            batch.append(key)
+            break
+        batch.append(key)
+        figures += n
+    _FIGTEXT_CLAIMS.update(batch)
+    return batch
+
+
+def release_figtext_keys(keys: list[str]) -> None:
+    _FIGTEXT_CLAIMS.difference_update(keys)
+
+
+async def action_figtext_drain_batch(step_input):
+    """Describe a bounded, claimed slice of undescribed figures — the
+    figtext_drain flow's one work step, built to ride as a parallel branch.
+
+    Delegates to action_fig_review_batch (the bake-off-validated
+    /v1/vision pipeline); muse vision runs on its own vision contexts, so
+    this consumes NO batched text seats (measured vision+text
+    serialization 0.068). Preflights the tool venv: a missing interpreter
+    DECLINES the round instead of booking figtext_failed on papers the
+    tool never saw.
+
+    Inputs: working_directory. Result: attempted_papers, figures, done,
+    failed, reason.
+    """
+    from agent.actions.scholarly_actions import read_databank
+    from agent.models import StepOutput
+
+    effects = step_input.effects
+    budget = _figtext_drain_budget()
+
+    def _decline(reason: str) -> StepOutput:
+        summary = {"attempted_papers": 0, "figures": 0, "reason": reason}
+        return StepOutput(
+            result=summary,
+            observations=f"figtext drain idle ({reason})",
+            context_updates={"figtext_summary": summary},
+        )
+
+    if budget <= 0:
+        return _decline("disabled")
+    if effects is None:
+        return _decline("no effects")
+    tool_py = os.path.join(_repo_root(), _FIG_TOOL_PY)
+    if not os.path.isfile(tool_py):
+        return _decline("fig_review venv missing")
+
+    databank = await read_databank(effects)
+    keys = select_figtext_batch(databank, budget)
+    if not keys:
+        return _decline("nothing unclaimed pending")
+    figures = min(budget, sum(_figs_remaining(databank.get(k) or {}) for k in keys))
+    try:
+        sub = step_input.model_copy(
+            update={
+                "inputs": {
+                    **dict(step_input.inputs or {}),
+                    "paper_keys": keys,
+                    # The tool banks per-figure readings and resumes, so the
+                    # budget is a round PACER, not an eligibility wall.
+                    "max_figures": budget,
+                }
+            }
+        )
+        out = await action_fig_review_batch(sub)
+        result = dict(out.result or {})
+    finally:
+        release_figtext_keys(keys)
+    summary = {
+        "attempted_papers": len(keys),
+        "figures": figures,
+        "done": result.get("done", 0),
+        "failed": result.get("failed", 0),
+        "partial": result.get("partial", 0),
+    }
+    return StepOutput(
+        result=summary,
+        observations=(
+            f"figtext drain: {figures} figure(s) across {len(keys)} paper(s) — "
+            f"{summary['done']} done, {summary['partial']} partial, "
+            f"{summary['failed']} failed"
+        ),
+        context_updates={"figtext_summary": summary},
+    )
+
+
+# ── The curate drain: whole-paper review+pack on an idle text seat ───
+#
+# WHY STATELESS. The dispatch curator runs a memoryful session (ingest →
+# review → pack in one KV lineage). A drain branch instead re-sends the doc
+# per turn: the context PEAK is one doc + one prompt + one answer, never the
+# accumulated session — which is what lets whole-paper work fit a shared
+# batched cell at all. The doc prefix is identical across the two turns, so
+# prefix reuse recovers most of the re-prefill when the engine offers it.
+
+_CURATE_CLAIMS: set[str] = set()
+_CURATE_DOC_CACHE: dict[str, int] = {}  # paper_key -> curator-doc chars
+
+# Seat-budget derivation (tokens), against the live shared cell:
+#   static prefix 1,765 + three sibling lanes at their measured p95
+#   (3 x ~6.8k) + review answer 4k + pack answer 8k + prompt bodies ~1.5k.
+# Everything left is doc room. Chars/token ~3.3 measured on this corpus's
+# admitted markdown (18.25M muse tokens over ~60MB text).
+_CURATE_RESERVE_TOKENS = 36_000
+_CURATE_CHARS_PER_TOKEN = 3.3
+
+
+class _CurateTransportFault(Exception):
+    """Server/transport failure — decline the round, book NOTHING."""
+
+
+def _curate_drain_budget() -> int:
+    raw = os.environ.get("OUROBOROS_CURATE_PAPERS", "").strip()
+    try:
+        return max(0, int(raw)) if raw else 1
+    except ValueError:
+        return 1
+
+
+async def _curate_doc_budget_chars(effects) -> int:
+    """Doc budget scoped to the LIVE cell (health, never config).
+
+    0 means "don't run": server unreachable, or the cell is too small for
+    whole-paper work beside the sibling lanes — under the 32k cell this
+    drain self-gates OFF and costs nothing until the cell is grown.
+    """
+    raw = os.environ.get("OUROBOROS_CURATE_DOC_CHARS", "").strip()
+    if raw:
+        try:
+            return max(0, int(raw))
+        except ValueError:
+            pass
+    try:
+        pool = await effects.inference_pool_health()
+    except Exception:  # noqa: BLE001 — unreachable server just declines
+        return 0
+    cell = int((pool or {}).get("kvPoolTokens") or 0)
+    doc_tokens = cell - _CURATE_RESERVE_TOKENS
+    if doc_tokens < 4_000:
+        return 0
+    return int(doc_tokens * _CURATE_CHARS_PER_TOKEN)
+
+
+# ── coverage priority ────────────────────────────────────────────────
+#
+# THE THIN BINS, measured over the 995 packed papers (2026-08-23):
+# LIBS appears in 6% of the accepted corpus and Raman/FTIR-on-heritage
+# in 31%, against XRD 50% and microscopy 58%. Both thin bins are the
+# best-represented aspects in the PENDING pool (172 LIBS, 112 heritage
+# of 546) — i.e. the marginal pending paper closes a real gap while the
+# average one deepens a bin that is already thick.
+#
+# Two aspect-naming generations coexist on records (the goal-phrase form
+# and a later snake_case form); both map here, because a record written
+# under either must sort the same.
+_PRIORITY_ASPECTS = frozenset(
+    {
+        "libs mineral spectra",
+        "emission_spectroscopy",
+        "raman ftir cultural heritage",
+        "vibrational_spectroscopy",
+    }
+)
+
+
+def _aspect_priority(record: dict) -> int:
+    """0 = closes a thin coverage bin, 1 = everything else.
+
+    Deliberately NOT starvation-free, unlike the lane fairness rule: the
+    priority pool is finite and drains, after which every paper is tier 1
+    again. Retune by re-measuring bin coverage, not by taste.
+    """
+    aspects = record.get("source_aspects")
+    if not isinstance(aspects, list):
+        return 1
+    for a in aspects:
+        if str(a).strip().lower() in _PRIORITY_ASPECTS:
+            return 0
+    return 1
+
+
+async def select_curate_paper(
+    effects, databank: dict, budget_chars: int
+) -> tuple[str, str]:
+    """Claim the smallest fitting pending paper, thin-bin aspects first.
+
+    Ordered by (coverage priority, doc chars, key). Smallest-first within
+    a tier remains the throughput policy — the drain eats each tier from
+    the short end — and papers over the budget are still left rather than
+    truncated (the compression ladder in `_build_doc_for` is what gets
+    most of them under it).
+    """
+    sized: list[tuple[int, int, str]] = []
+    for key, rec in databank.items():
+        if key in _CURATE_CLAIMS or not _curation_pending(rec):
+            continue
+        chars = _CURATE_DOC_CACHE.get(key)
+        if chars is None:
+            doc = await _build_doc_for(effects, key, budget_chars)
+            chars = len(doc)
+            _CURATE_DOC_CACHE[key] = chars
+        if 0 < chars <= budget_chars:
+            sized.append((_aspect_priority(rec), chars, key))
+    if not sized:
+        return "", ""
+    _, _, key = min(sized)
+    doc = await _build_doc_for(effects, key, budget_chars)
+    if len(doc) > budget_chars:  # doc changed since caching (e.g. new en.md)
+        _CURATE_DOC_CACHE[key] = len(doc)
+        return "", ""
+    _CURATE_CLAIMS.add(key)
+    return key, doc
+
+
+def release_curate_keys(keys: list[str]) -> None:
+    _CURATE_CLAIMS.difference_update(keys)
+
+
+async def _curate_turn(effects, prompt: str, max_tokens: int):
+    result = await effects.run_inference(
+        prompt, {"max_tokens": max_tokens, "temperature": "t*0.4"}
+    )
+    if getattr(result, "error", None):
+        raise _CurateTransportFault(str(result.error))
+    text = result.text or ""
+    if not text.strip():
+        # An empty response is an infrastructure symptom (contention,
+        # reasoning-swallowed budget), never a verdict — replaying the same
+        # doc parsed cleanly. Booking it as review_failed would burn the
+        # paper permanently; deferring re-selects it next round.
+        raise _CurateTransportFault("empty response text")
+    return text
+
+
+async def _curate_stateless(effects, paper_key: str, doc: str) -> dict:
+    """Review + pack via stateless turns; returns book_result-shaped state.
+
+    Model-quality failures (unparseable review, gates failed twice) come
+    back as bookable review_failed/pack_failed states. Transport faults
+    raise — the caller declines the round without burning the paper (the
+    fig_review transport-burn lesson).
+    """
+    from agent.llm_json import parse_llm_json
+
+    state: dict = {"paper_key": paper_key, "session_id": ""}
+    review_prompt = await _render_prompt(
+        "curator/review_paper", {"corpus_subject": await _corpus_subject(effects)}
+    )
+    review = None
+    for nudge in (
+        "",
+        '\n\nReturn ONLY the fenced JSON verdict object with "verdict" '
+        '("accept" or "deny"), "summary", and "issues".',
+    ):
+        text = await _curate_turn(
+            effects, doc + "\n\n---\n\n" + review_prompt + nudge, 4096
+        )
+        review = parse_llm_json(text)
+        if isinstance(review, dict) and review.get("verdict") in ("accept", "deny"):
+            break
+        review = None
+    if review is None:
+        state["review"] = {"status": "review_failed", "summary": "", "issues": []}
+        return state
+
+    verdict = "accepted" if review["verdict"] == "accept" else "denied"
+    state["review"] = {
+        "status": verdict,
+        "summary": str(review.get("summary") or "").strip(),
+        "issues": [str(i) for i in (review.get("issues") or [])][:20],
+        "deny_category": (
+            str(review.get("deny_category") or "").strip().lower()
+            if verdict == "denied"
+            else ""
+        ),
+    }
+    if verdict == "denied":
+        return state
+
+    registry = await _load_registry(effects)
+    attempts = 0
+    gates: dict = {"passed": False, "feedback": ""}
+    data = None
+    feedback = ""
+    for _ in range(2):  # attempt 2 renders with attempt 1's gate findings
+        attempts += 1
+        pack_prompt = await _render_prompt(
+            "curator/pack_data",
+            {
+                "key_registry_block": format_key_registry(registry),
+                "gate_feedback": feedback,
+            },
+        )
+        text = await _curate_turn(effects, doc + "\n\n---\n\n" + pack_prompt, 8192)
+        parsed = parse_llm_json(text)
+        data = parsed if isinstance(parsed, dict) and parsed else None
+        if data is not None:
+            data = canonicalize_pack_keys(data, await load_key_aliases(effects))
+        gates = (
+            _run_pack_gates(data, doc, registry)
+            if data is not None
+            else {"passed": False, "feedback": "output was not a JSON object"}
+        )
+        if gates["passed"]:
+            break
+        feedback = gates["feedback"]
+
+    if not gates["passed"]:
+        state["pack"] = {
+            "status": "pack_failed",
+            "reason": f"gates failed twice: {gates['feedback'][:300]}",
+            "attempts": attempts,
+            "quality": {
+                "grounding_rate": gates.get("grounding", {}).get("grounding_rate"),
+                "parse_attempts": attempts,
+            },
+        }
+        return state
+    state["pack"] = {
+        "status": "packed",
+        "data": data,
+        "attempts": attempts,
+        "quality": {
+            "grounding_rate": gates["grounding"]["grounding_rate"],
+            "numeric_leaves": gates["grounding"]["numeric_leaves"],
+            "ungrounded": gates["grounding"]["ungrounded"],
+            "new_keys": len(gates["registry"]["new_keys"]),
+            "reused_keys": len(gates["registry"]["reused_keys"]),
+            "near_duplicate_flags": gates["near_dups"],
+            "parse_attempts": attempts,
+        },
+    }
+    return state
+
+
+async def action_curate_drain_batch(step_input):
+    """Curate up to OUROBOROS_CURATE_PAPERS seat-sized papers per round —
+    the curate_drain flow's work step, built to ride as a parallel branch
+    on an idle batched text seat. Papers run SERIALLY (one seat, one doc
+    in the cell at a time); the budget exists for long network-bound
+    windows where one paper leaves the seat idle for the back half.
+
+    Stateless review+pack (context peak = doc + one answer), booked through
+    action_curate_book_result so the envelope, registry update and
+    tag_review_agreement ride the production path. Transport faults end
+    the round with nothing booked for that paper; claims release either
+    way.
+
+    Inputs: working_directory. Result: attempted, outcomes[].
+    """
+    from agent.actions.scholarly_actions import read_databank
+    from agent.models import StepInput, StepOutput
+
+    effects = step_input.effects
+    budget = _curate_drain_budget()
+
+    def _summary_out(outcomes: list, reason: str = "") -> StepOutput:
+        summary = {"attempted": len(outcomes), "outcomes": outcomes}
+        if reason:
+            summary["reason"] = reason
+        obs = (
+            "curate drain: "
+            + "; ".join(f"{o['paper_key']} → {o['outcome']}" for o in outcomes)
+            if outcomes
+            else f"curate drain idle ({reason})"
+        )
+        return StepOutput(
+            result=summary,
+            observations=obs,
+            context_updates={"curate_drain_summary": summary},
+        )
+
+    if budget <= 0:
+        return _summary_out([], "disabled")
+    if effects is None:
+        return _summary_out([], "no effects")
+    budget_chars = await _curate_doc_budget_chars(effects)
+    if budget_chars <= 0:
+        return _summary_out(
+            [], "cell below whole-paper threshold or server unreachable"
+        )
+
+    outcomes: list[dict] = []
+    for _ in range(budget):
+        databank = await read_databank(effects)
+        key, doc = await select_curate_paper(effects, databank, budget_chars)
+        if not key:
+            return _summary_out(outcomes, "nothing unclaimed fits the seat budget")
+        try:
+            try:
+                state = await _curate_stateless(effects, key, doc)
+            except _CurateTransportFault as e:
+                logger.warning("curate drain transport fault on %s: %s", key, e)
+                return _summary_out(outcomes, f"transport fault ({str(e)[:120]})")
+            except Exception:  # noqa: BLE001 — code faults must not burn papers
+                logger.exception(
+                    "curate drain errored on %s — ending round, not booking", key
+                )
+                return _summary_out(outcomes, "internal error (see log)")
+            out = await action_curate_book_result(
+                StepInput(effects=effects, context={"curate_state": state})
+            )
+            _CURATE_DOC_CACHE.pop(key, None)
+        finally:
+            release_curate_keys([key])
+        outcomes.append(
+            {
+                "paper_key": key,
+                "outcome": str(
+                    (out.result or {}).get("status")
+                    or state["review"].get("status", "")
+                ),
+                "doc_chars": len(doc),
+            }
+        )
+    return _summary_out(outcomes)
 
 
 async def action_fig_review_sweep_next(step_input):
@@ -667,6 +1225,9 @@ async def action_fig_review_batch(step_input):
         "--vl-backend",
         _fig_backend(),
     ]
+    max_figures = int(step_input.inputs.get("max_figures") or 0)
+    if max_figures > 0:
+        cmd += ["--max-figures", str(max_figures)]
     if _fig_backend() == "mlx" and _fig_mlx_model():
         cmd += ["--model", _fig_mlx_model()]
     result = await effects.run_command(cmd, timeout=FIG_TIMEOUT_S)
@@ -680,28 +1241,57 @@ async def action_fig_review_batch(step_input):
         if isinstance(r, dict) and r.get("paper_key"):
             reports[r["paper_key"]] = r
 
+    from agent.actions.extraction_actions import is_toolchain_fault
+
     databank = await read_databank(effects)
-    updates, done, failed = [], 0, 0
+    updates, done, failed, skipped, partial = [], 0, 0, 0, 0
     for k in keys:
         rec = dict(databank.get(k) or {"paper_key": k})
         rep = reports.get(k)
+        err = (rep or {}).get("error") or "no report from tool"
         if rep is not None and not rep.get("error"):
-            rec["figtext_status"] = "figtext_done"
-            rec["figtext_path"] = f"{FIGTEXT_DIR}/{k}.json"
-            done += 1
+            if int(rep.get("remaining") or 0) > 0:
+                # Partial round under --max-figures: readings are banked in
+                # the sidecar; the record stays fig-PENDING so a later round
+                # resumes where this one stopped. Progress is bookkeeping,
+                # never a terminal status.
+                rec["figtext_progress"] = (
+                    f"{int(rep.get('described') or 0)}/{int(rep.get('figs_total') or 0)}"
+                )
+                partial += 1
+            else:
+                rec["figtext_status"] = "figtext_done"
+                rec["figtext_path"] = f"{FIGTEXT_DIR}/{k}.json"
+                rec["figtext_progress"] = ""
+                done += 1
+        elif rep is not None and is_toolchain_fault(err):
+            # TRANSPORT, NOT VERDICT — the same rule the extraction ladder
+            # learned from the vlm-500 incident: a reported HTTP 5xx /
+            # connection failure says nothing about the paper's figures,
+            # and booking figtext_failed on it burned 34 papers terminally
+            # during the 2026-08-16 server outage. Leave the record
+            # untouched so a later sweep retries it. Deliberately NARROW:
+            # a tool that produced NO report (missing venv, misconfigured
+            # command) still books figtext_failed below — the curate pass
+            # proceeds md-only rather than the sweep spinning forever on a
+            # permanently absent tool (the curator e2e pins this).
+            skipped += 1
+            continue
         else:
             rec["figtext_status"] = "figtext_failed"
-            rec["failure_reason"] = (
-                f"fig_review: {(rep or {}).get('error') or 'no report from tool'}"
-            )
+            rec["failure_reason"] = f"fig_review: {err}"
             failed += 1
         updates.append(rec)
     await append_records(effects, updates)
 
-    status = "success" if done else "failed"
-    summary = f"Fig review: {done} done, {failed} failed of {len(keys)}"
+    status = "success" if done or partial else "failed"
+    summary = (
+        f"Fig review: {done} done, {failed} failed of {len(keys)}"
+        + (f", {partial} partial" if partial else "")
+        + (f", {skipped} deferred (toolchain fault)" if skipped else "")
+    )
     return StepOutput(
-        result={"status": status, "done": done, "failed": failed},
+        result={"status": status, "done": done, "failed": failed, "partial": partial},
         observations=summary,
         context_updates={
             "directive_report": {
@@ -815,11 +1405,60 @@ async def _render_prompt(template_id: str, context: dict) -> str:
     )
 
 
-async def _build_doc_for(effects, paper_key: str) -> str:
-    fc = await effects.read_file(f"databank/markdown/{paper_key}.md")
+# Which compression rung each paper's doc was built at, for the booking
+# stamp (review_doc_form). In-process, like the claims sets: review,
+# pack and gate all run in the one mission process, so the form chosen
+# at selection is the form every later rebuild of that key sees.
+_DOC_FORMS: dict[str, str] = {}
+
+
+async def _build_doc_for(
+    effects, paper_key: str, budget_chars: int | None = None
+) -> str:
+    """The curator doc, compressed only as far as the budget requires.
+
+    With no budget the doc is raw (legacy callers). With one, the doc
+    walks doc_compression.LADDER — raw first, then the lossless table
+    conversion, then two squeeze depths — and takes the FIRST rung that
+    fits. Blind-checked at 95% verdict agreement with both misses
+    conservative (see doc_compression module docstring); the ladder
+    exists precisely because the misses clustered at needless depth.
+    Figtext is never compressed — the <img> anchors survive every rung,
+    so grounding and figure claims work unchanged.
+    """
+    from agent.actions.doc_compression import LADDER, compress_rung
+
+    # Prefer the gated English translation when the translation drain has
+    # produced one (translation preserves numbers and <img> paths verbatim,
+    # so figtext anchoring and the grounding gate work unchanged).
+    fc = await effects.read_file(f"databank/markdown/{paper_key}.en.md")
+    if not getattr(fc, "exists", False):
+        fc = await effects.read_file(f"databank/markdown/{paper_key}.md")
     md = fc.content if getattr(fc, "exists", False) else ""
     figtext = await _load_figtext(effects, paper_key)
-    return build_curator_doc(md, figtext)
+    if budget_chars is None:
+        budget_chars = await _curate_doc_budget_chars(effects)
+    doc = build_curator_doc(md, figtext)
+    if budget_chars <= 0 or len(doc) <= budget_chars:
+        _DOC_FORMS[paper_key] = "raw"
+        return doc
+    import asyncio
+
+    loop = asyncio.get_running_loop()
+    for rung in LADDER[1:]:
+        # Executor, not inline: the ladder is regex-heavy CPU work and the
+        # first selection scan walks ~500 oversized docs — run inline it
+        # blocks every lane on the one loop (and the monitor's stale-decode
+        # recovery would read the stall as a server wedge).
+        compressed = await loop.run_in_executor(None, compress_rung, md, rung)
+        doc = build_curator_doc(compressed, figtext)
+        if len(doc) <= budget_chars:
+            _DOC_FORMS[paper_key] = rung
+            return doc
+    # Still over: return the deepest form; selection skips it (> budget)
+    # exactly as it skipped the raw doc before — genuinely parked.
+    _DOC_FORMS[paper_key] = "full-over"
+    return doc
 
 
 async def action_curate_ingest_review(step_input):
@@ -1206,10 +1845,35 @@ async def action_curate_book_result(step_input):
     databank = await read_databank(effects)
     rec = dict(databank.get(paper_key) or {"paper_key": paper_key})
     rec["review_status"] = review.get("status") or "review_failed"
+    # Which compression rung the reviewed doc was built at ("raw" for
+    # the untouched form) — provenance for the serializer and for any
+    # later audit of compressed-doc verdicts.
+    rec["review_doc_form"] = _DOC_FORMS.pop(paper_key, "") or rec.get(
+        "review_doc_form", ""
+    )
     rec["review_summary"] = review.get("summary") or ""
     rec["review_issues"] = review.get("issues") or []
     rec["deny_category"] = review.get("deny_category") or ""
     rec["tag_review_agreement"] = tag_review_agreement(rec)
+    # A DENIAL CLEARS ANY PACK. Live 2026-08-20: two borderline papers
+    # were accepted+packed, then re-reviewed ~2 min later by a round that
+    # had loaded the databank before the first booking landed; the flip
+    # to denied carried the stale pack_status along and two denied
+    # papers sat "packed" for two days — headed straight for the
+    # training corpus. Whatever the verdict race, a record that says
+    # denied must never simultaneously say packed.
+    if rec["review_status"] == "denied" and rec.get("pack_status"):
+        ds = rec.get("dataset_path") or ""
+        rec["pack_status"] = ""
+        rec["dataset_path"] = ""
+        rec["pack_quality"] = None
+        if ds:
+            try:
+                dp = os.path.join(str(getattr(effects, "working_directory", "")), ds)
+                if os.path.isfile(dp):
+                    os.remove(dp)
+            except OSError:
+                logger.warning("could not remove stale pack artifact %s", ds)
 
     outcome = rec["review_status"]
     if rec["review_status"] == "accepted":

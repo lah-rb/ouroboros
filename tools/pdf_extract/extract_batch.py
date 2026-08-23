@@ -579,6 +579,99 @@ def _prose_text(page) -> str:
     return "\n".join(parts)
 
 
+# Script census over the produced markdown. The span metric is an
+# English-prose instrument (CJK is stripped before sampling above), so the
+# VERDICT layer needs to know when a low span score means "non-Latin paper"
+# rather than "unfaithful extraction" — numerics are the language-invariant
+# anchor either way. Mirrored in agent/actions/extraction_actions.py
+# (separate venvs — keep in sync).
+_SCRIPT_RANGES = (
+    ("latin", ((0x0041, 0x024F),)),
+    ("cyrillic", ((0x0400, 0x04FF),)),
+    ("greek", ((0x0370, 0x03FF),)),
+    # Han + kana + CJK punctuation/fullwidth, matching _CJK_RE's spirit.
+    ("cjk", ((0x3000, 0x30FF), (0x3400, 0x4DBF), (0x4E00, 0x9FFF), (0xFF00, 0xFFEF))),
+    ("hangul", ((0xAC00, 0xD7AF), (0x1100, 0x11FF))),
+    (
+        "arabic",
+        ((0x0600, 0x06FF), (0x0750, 0x077F), (0xFB50, 0xFDFF), (0xFE70, 0xFEFF)),
+    ),
+    ("hebrew", ((0x0590, 0x05FF),)),
+    ("thai", ((0x0E00, 0x0E7F),)),
+    ("devanagari", ((0x0900, 0x097F),)),
+)
+
+
+def _script_profile(text: str) -> dict:
+    """Letter-class fractions of ``text`` (digits/punct/space excluded).
+
+    Returns {"latin": f, "cyrillic": f, ..., "nonlatin": f} rounded to 3
+    places; all zeros for text with no classified letters.
+    """
+    counts = {name: 0 for name, _ in _SCRIPT_RANGES}
+    total = 0
+    for ch in text:
+        cp = ord(ch)
+        for name, ranges in _SCRIPT_RANGES:
+            if any(lo <= cp <= hi for lo, hi in ranges):
+                counts[name] += 1
+                total += 1
+                break
+    if not total:
+        return {**{k: 0.0 for k in counts}, "nonlatin": 0.0}
+    out = {k: round(v / total, 3) for k, v in counts.items()}
+    out["nonlatin"] = round(1.0 - counts["latin"] / total, 3)
+    return out
+
+
+# Collapse threshold mirrors extraction_actions.MAX_REPEAT_WORDS (the
+# verdict's degen limit): runs the verdict would condemn get collapsed to
+# one unit + an explicit marker instead, because the degen census
+# (2026-08-16) showed faithful documents condemned wholesale for one
+# looping region. Mirrored in agent/actions/extraction_actions.py
+# (separate venvs — keep in sync).
+_DEGEN_COLLAPSE_LIMIT = 200
+
+
+def _collapse_degenerate_runs(
+    text: str, limit: int = _DEGEN_COLLAPSE_LIMIT, max_period: int = _REPEAT_MAX_PERIOD
+) -> tuple:
+    toks = list(re.finditer(r"\S+", text))
+    if len(toks) < limit:
+        return text, 0
+    words = [t.group() for t in toks]
+    spans = []
+    for period in range(1, max_period + 1):
+        run = 0
+        for i in range(period, len(words) + 1):
+            if i < len(words) and words[i] == words[i - period]:
+                run += 1
+            else:
+                if run + period > limit:
+                    spans.append((i - run, i, period))
+                run = 0
+    if not spans:
+        return text, 0
+    spans.sort()
+    merged = [list(spans[0])]
+    for a, b, pp in spans[1:]:
+        if a <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b, pp])
+    collapsed = 0
+    out = text
+    for a, b, pp in reversed(merged):
+        unit = " ".join(words[a : a + pp])
+        marker = (
+            f"*[degenerate OCR run collapsed: {b - a} repeated words of "
+            f"{unit[:40]!r} — content at this location was not read]*"
+        )
+        out = out[: toks[a].start()] + marker + out[toks[b - 1].end() :]
+        collapsed += b - a
+    return out, collapsed
+
+
 def _max_repeat_words(md: str, max_period: int = _REPEAT_MAX_PERIOD) -> int:
     """Words spanned by the longest back-to-back repeated block.
 
@@ -690,8 +783,14 @@ def _entropy(img: Image.Image) -> float:
     return -sum((c / total) * math.log2(c / total) for c in hist if c)
 
 
-def _collect_figures(src_dir: str, dest_dir: str) -> tuple[int, int, dict]:
+def _collect_figures(
+    src_dir: str, dest_dir: str, start: int = 0
+) -> tuple[int, int, dict]:
     """Dedup + filter figure crops from src into dest as fig_NN.png.
+
+    ``start`` offsets the numbering (book-segment mode appends to a dir that
+    already holds earlier segments' figures; full runs keep 0 so a retry
+    overwrites rather than duplicates).
 
     Returns (kept, dropped, rename_map src_basename -> dest_relpath).
     """
@@ -750,7 +849,7 @@ def _collect_figures(src_dir: str, dest_dir: str) -> tuple[int, int, dict]:
                 )
                 continue
             os.makedirs(dest_dir, exist_ok=True)
-            name = f"fig_{kept:02d}.png"
+            name = f"fig_{start + kept:02d}.png"
             img.save(os.path.join(dest_dir, name))
             seen.append((h, name, img.copy()))
             renames[os.path.basename(path)] = name
@@ -766,16 +865,34 @@ def _collect_figures(src_dir: str, dest_dir: str) -> tuple[int, int, dict]:
 # ── Per-paper extraction ──────────────────────────────────────────────
 
 
-def extract_paper(pipe, pdf_path: str, key: str, databank_dir: str, dpi: int) -> dict:
+def extract_paper(
+    pipe,
+    pdf_path: str,
+    key: str,
+    databank_dir: str,
+    dpi: int,
+    temperature: float = 0.8,
+    top_p: float = 0.95,
+    page_range: tuple | None = None,
+) -> dict:
+    """``page_range=(a, b)`` extracts pages [a, b) only — the BOOK SEGMENT
+    mode. An explicit range is operator intent, so the oversize referral is
+    bypassed; the markdown lands in a part file (markdown/<key>.part_AAAA.md)
+    for the drain to assemble once every segment is done, and figure
+    numbering continues from what is already on disk so segments never
+    clobber earlier crops."""
     t0 = time.time()
     report = {
         "paper_key": key,
         "md_path": "",
         "pages": 0,
+        "total_pages": 0,
+        "page_range": list(page_range) if page_range else None,
         "verified_pages": 0,
         "unverified_pages": 0,
         "numeric_match_rate": 0.0,
         "span_pass_rate": 0.0,
+        "script_profile": {},
         "max_repeat_words": 0,
         "oversize": False,
         "table_token_leak": 0,
@@ -791,7 +908,14 @@ def extract_paper(pipe, pdf_path: str, key: str, databank_dir: str, dpi: int) ->
 
     try:
         doc = fitz.open(pdf_path)
-        report["pages"] = len(doc)
+        report["total_pages"] = len(doc)
+        if page_range:
+            lo = max(0, int(page_range[0]))
+            hi = min(len(doc), int(page_range[1]))
+            page_indices = list(range(lo, hi))
+        else:
+            page_indices = list(range(len(doc)))
+        report["pages"] = len(page_indices)
         # OVERSIZE: MEASURED, NOT ATTEMPTED. A dispatch shares one timeout
         # across its whole batch, so a book does not merely fail — it burns
         # the budget its companions needed and takes them down with it. One
@@ -801,7 +925,7 @@ def extract_paper(pipe, pdf_path: str, key: str, databank_dir: str, dpi: int) ->
         # well below a book, so this refuses volumes without touching long
         # review articles. Not a failure — a referral: these are substantial
         # documents that deserve a decision before any GPU is spent on them.
-        if len(doc) > _MAX_EXTRACT_PAGES:
+        if page_range is None and len(doc) > _MAX_EXTRACT_PAGES:
             report["oversize"] = True
             report["error"] = ""
             report["seconds"] = round(time.time() - t0, 1)
@@ -811,14 +935,18 @@ def extract_paper(pipe, pdf_path: str, key: str, databank_dir: str, dpi: int) ->
         num_hit = num_total = span_hit = span_total = 0
 
         with tempfile.TemporaryDirectory(prefix="pdfx_") as tmp:
-            for i, page in enumerate(doc):
+            for i in page_indices:
+                page = doc[i]
                 png = os.path.join(tmp, f"p{i}.png")
                 page.get_pixmap(dpi=dpi).save(png)
                 truth = _prose_text(page)
 
                 parts = []
                 out_dir = os.path.join(tmp, f"out{i}")
-                for res in pipe.predict(png):
+                # Explicit, every call: the client otherwise pins temperature
+                # to 0 (greedy) for llama-cpp-server backends, and greedy
+                # loops deterministically on some pages. See --vl-temperature.
+                for res in pipe.predict(png, temperature=temperature, top_p=top_p):
                     md = getattr(res, "markdown", None)
                     if isinstance(md, dict):
                         parts.append(md.get("markdown_texts") or "")
@@ -846,7 +974,12 @@ def extract_paper(pipe, pdf_path: str, key: str, databank_dir: str, dpi: int) ->
                 else:
                     report["unverified_pages"] += 1
 
-            kept, droppedn, renames = _collect_figures(tmp, fig_dir)
+            fig_start = (
+                sum(1 for f in os.listdir(fig_dir) if f.startswith("fig_"))
+                if page_range and os.path.isdir(fig_dir)
+                else 0
+            )
+            kept, droppedn, renames = _collect_figures(tmp, fig_dir, start=fig_start)
             report["figures_kept"] = kept
             report["figures_dropped"] = droppedn
 
@@ -855,15 +988,39 @@ def extract_paper(pipe, pdf_path: str, key: str, databank_dir: str, dpi: int) ->
         # Rewrite image refs the pipeline emitted to our relative layout.
         for old, new in renames.items():
             joined = joined.replace(old, f"../figures/{key}/{new}")
-        md_path = os.path.join(md_dir, f"{key}.md")
+        # The pipeline emits refs as imgs/<basename>; the basename rewrite
+        # above left a stale "imgs/" prefix, and "imgs/../figures/…"
+        # collapses to markdown/figures/… — one directory too shallow. Live:
+        # every figure link in the corpus resolved to a nonexistent path
+        # (invisible to the substring-anchored consumers, broken for any
+        # path-resolving reader — caught in the 2026-08-16 triage review).
+        joined = joined.replace("imgs/../figures/", "../figures/")
+        # Refs to figures _collect_figures DROPPED (dedup/junk filter) have
+        # no rename entry and would dangle at a file that exists nowhere.
+        # Replace the tag with an inert marker so the drop is visible in
+        # the document instead of masquerading as a broken image.
+        joined = re.sub(
+            r'<img\s[^>]*src="imgs/[^"]+"[^>]*/?>',
+            "*[figure removed by extraction filter]*",
+            joined,
+        )
+        md_name = f"{key}.part_{page_range[0]:04d}.md" if page_range else f"{key}.md"
+        md_path = os.path.join(md_dir, md_name)
         with open(md_path, "w") as f:
             f.write(joined)
         report["md_path"] = os.path.relpath(md_path, databank_dir)
         report["numeric_match_rate"] = num_hit / num_total if num_total else 1.0
         report["span_pass_rate"] = span_hit / span_total if span_total else 1.0
+        report["script_profile"] = _script_profile(joined)
         # Measured on the joined document: a loop can straddle a page boundary,
         # and the rates above cannot see one at all.
         report["max_repeat_words"] = _max_repeat_words(joined)
+        if report["max_repeat_words"] > _DEGEN_COLLAPSE_LIMIT:
+            joined, ncol = _collapse_degenerate_runs(joined)
+            report["degen_collapsed_words"] = ncol
+            report["max_repeat_words"] = _max_repeat_words(joined)
+            with open(md_path, "w") as f:
+                f.write(joined)
         # RECORDED, NOT GATED. The signal is real (3 for 3 on the audit
         # sample, no false positives) but only one paper carried enough of
         # them to justify a cut, and fitting a threshold to one example is how
@@ -883,6 +1040,11 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--pdfs", nargs="+", required=True)
     ap.add_argument("--keys", nargs="*", default=None)
+    ap.add_argument(
+        "--page-range",
+        default=None,
+        help="A:B — extract pages [A, B) only (book-segment mode; single key)",
+    )
     ap.add_argument("--databank-dir", required=True)
     ap.add_argument(
         "--model",
@@ -910,6 +1072,30 @@ def main() -> int:
         default=4,
         help="llamacpp server slots; paddle fires region crops concurrently. "
         "Measured to saturate at 4 (2026-08-12)",
+    )
+    # SAMPLING IS PINNED BY THE CLIENT, NOT THE SERVER, so this is the ONLY
+    # effective control: paddlex sends an explicit `temperature: 0` to every
+    # llama-cpp-server backend when none is given (predictor.py:503), which
+    # overrides any server-side generation default. Greedy is the lab default
+    # for PaddleOCR-VL and it ORBITS on loop-prone pages — one paper repeated
+    # the word "both" 3,003 times, byte-identically, on two machines and two
+    # serving paths. The lab's own docs offer `--do-sample true
+    # --temperature 0.8` as the stochastic alternative; these defaults are
+    # that. NOTE the historical corpus (through 2026-08-15) was extracted at
+    # the client-pinned 0 — every quality figure predating these flags is a
+    # greedy figure.
+    ap.add_argument(
+        "--vl-temperature",
+        type=float,
+        default=0.8,
+        help="VL sampling temperature passed per predict() (0 = greedy, "
+        "which deterministically loops on some pages)",
+    )
+    ap.add_argument(
+        "--vl-top-p",
+        type=float,
+        default=0.95,
+        help="VL nucleus sampling threshold passed per predict()",
     )
     args = ap.parse_args()
 
@@ -979,7 +1165,20 @@ def main() -> int:
             ),
         )
         for pdf, key in zip(args.pdfs, keys):
-            report = extract_paper(pipe, pdf, key, args.databank_dir, args.dpi)
+            pr = None
+            if args.page_range:
+                a, _, b = args.page_range.partition(":")
+                pr = (int(a), int(b))
+            report = extract_paper(
+                pipe,
+                pdf,
+                key,
+                args.databank_dir,
+                args.dpi,
+                temperature=args.vl_temperature,
+                top_p=args.vl_top_p,
+                page_range=pr,
+            )
             print(json.dumps(report, ensure_ascii=False), flush=True)
     finally:
         # Guard the whole TEARDOWN, not the return. A `return` inside finally

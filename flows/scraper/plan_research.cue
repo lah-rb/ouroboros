@@ -56,9 +56,13 @@ plan_research: #FlowDefinition & {
 				{formatter: "format_mission_meta", output_key: "mission_objective"
 					params: {mission: {$ref: "context.mission"}, field: "objective"}},
 			]
-			// MEDIUM: decompose the abstract into research aspects — dev/REASONING_DEPTH_POLICY_2026-08-16.md
-			config: reasoning: "medium"
-			config: temperature: "t*0.4"
+			// Explicit budget (unset = the server's 16384 default, reserved by
+			// entitlement). A research plan is the longest single scraper
+			// output — measured 1,431 tokens — so this stays generous.
+			config: {
+				temperature: "t*0.4"
+				max_tokens:  6144
+			}
 			resolver: {
 				type: "rule"
 				rules: [

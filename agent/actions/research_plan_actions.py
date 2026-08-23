@@ -26,6 +26,24 @@ DRY_ROUNDS_TO_STOP = 2
 CORPUS_GOAL_SIGNATURE = "corpus-catalog"
 
 
+async def _set_goal_status(effects, mission, goal) -> None:
+    """Persist one goal's (already in-memory-mutated) status.
+
+    Mission-ops pilot: prefers effects.mission_apply with a GoalStatusOp —
+    a field-granular, merge-safe write — and falls back to whole-document
+    save_mission for effects doubles without the surface. Status sets are
+    idempotent, so mirroring on the in-memory object AND applying the op is
+    safe (counters would not be — see the loop park site)."""
+    apply = getattr(effects, "mission_apply", None)
+    if apply is not None:
+        from agent.persistence.models import GoalStatusOp
+
+        applied = await apply([GoalStatusOp(goal_id=goal.id, status=goal.status)])
+        if applied is not None:
+            return
+    await effects.save_mission(mission)
+
+
 def _aspect_slug(name: str) -> str:
     return "".join(c if c.isalnum() else "-" for c in name.strip().lower()).strip("-")
 
@@ -212,11 +230,18 @@ async def action_discovery_sweep_next(step_input: StepInput) -> StepOutput:
                 aspect.dry_rounds = 0
             changed = True
         exhausted = aspect.dry_rounds >= DRY_ROUNDS_TO_STOP
-        if (
-            have >= aspect.coverage_target
-            or exhausted
-            or len(goal.reports) >= MAX_DISCOVERY_ROUNDS
-        ):
+        # A GATE-REOPENED GOAL MUST RUN AT LEAST ONE ROUND. The gate's
+        # coverage metric is TAGGED papers; this sweep's target counts RAW
+        # candidates — after a reopen (harvest empties goal.reports) the
+        # candidate count usually already exceeds the target, and completing
+        # on it re-closes the goal with "0 round(s)" without ever searching.
+        # Live: a 200-cycle gate↔harvest spin, zero discover dispatches,
+        # while four aspects sat at 149-797/833 TAGGED. With reports empty,
+        # the candidate target is not a reason to complete; only exhaustion
+        # or the round cap is. New rounds now also run with the seeded
+        # corpus_languages, which the exhaustion verdict predates.
+        target_met = have >= aspect.coverage_target and bool(goal.reports)
+        if target_met or exhausted or len(goal.reports) >= MAX_DISCOVERY_ROUNDS:
             goal.status = "complete"
             changed = True
             logger.info(
@@ -374,8 +399,11 @@ async def action_catalog_sweep_next(step_input: StepInput) -> StepOutput:
         http_state = await effects.read_state(_HTTP_STATE_KEY) or {}
         used = int(http_state.get("total_requests") or 0)
         if used >= budget:
+            # Mission-ops pilot: an idempotent status set — mirrored on the
+            # cycle's shared in-memory object AND persisted as an op (safe to
+            # double-apply, unlike counters).
             goal.status = "complete"
-            await effects.save_mission(mission)
+            await _set_goal_status(effects, mission, goal)
             return StepOutput(
                 result={"sweep_complete": True, "budget_exhausted": True},
                 observations=(
@@ -410,7 +438,7 @@ async def action_catalog_sweep_next(step_input: StepInput) -> StepOutput:
     if not batch:
         goal.status = "complete"
         if effects:
-            await effects.save_mission(mission)
+            await _set_goal_status(effects, mission, goal)
         return StepOutput(
             result={"sweep_complete": True},
             observations="Catalog sweep: worklist empty — corpus goal complete",
@@ -497,6 +525,16 @@ async def action_harvest_research_findings(step_input: StepInput) -> StepOutput:
                 # Reset the round budget — the gate has authorized more rounds.
                 goal.reports = []
                 reopened += 1
+            # COVERAGE IS MEASURED IN TAGGED PAPERS, and new candidates are
+            # untagged until CATALOGED — so a coverage reopen must also
+            # reopen the corpus catalog goal, or discovery pours candidates
+            # into a worklist no phase ever drains (the phase ladder only
+            # runs catalog while the extraction goal is incomplete) and the
+            # gate's coverage number can never move.
+            corpus = by_sig.get(CORPUS_GOAL_SIGNATURE)
+            if corpus is not None and corpus.status == "complete":
+                corpus.status = "incomplete"
+                reopened += 1
             if effects:
                 hint = (
                     "only adjacent-relevance hits — broaden toward the aspect's "
@@ -528,6 +566,10 @@ async def action_harvest_research_findings(step_input: StepInput) -> StepOutput:
     if retag_records:
         await append_records(effects, retag_records)
     if effects:
+        # NOT migrated to mission ops: a reopen is status + reports=[] — a
+        # nested multi-field change, i.e., an owner-shaped write. Ops cover
+        # single-field shapes only (see models.MissionOp); forcing this one
+        # would leave stale round budgets in the crash window.
         await effects.save_mission(mission)
 
     return StepOutput(

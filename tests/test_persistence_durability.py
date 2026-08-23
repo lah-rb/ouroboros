@@ -133,3 +133,40 @@ def test_push_event_reports_failure_rather_than_raising(tmp_path, monkeypatch):
 
 def test_read_events_on_a_missing_file_is_empty_not_an_error(tmp_path):
     assert _pm(tmp_path).read_events() == []
+
+
+# ── portability ───────────────────────────────────────────────────────
+
+
+def _mission_json(tmp_path, working_directory: str) -> None:
+    os.makedirs(tmp_path / ".agent", exist_ok=True)
+    (tmp_path / ".agent" / "mission.json").write_text(
+        json.dumps(
+            {
+                "id": "m1",
+                "title": "t",
+                "objective": "o",
+                "config": {"working_directory": working_directory},
+            }
+        )
+    )
+
+
+def test_load_rebinds_a_working_directory_from_another_machine(tmp_path):
+    """The directory the file was READ FROM outranks the one it remembers.
+
+    A corpus copied between machines carries the old absolute path, and
+    nothing crashes when it is wrong — effects resolve their own paths, so
+    the mission runs normally while any action that hands the stored string
+    to a subprocess addresses a directory that does not exist.
+    """
+    _mission_json(tmp_path, "/Users/someone/corpora/spectra")
+    state = _pm(tmp_path).load_mission()
+    assert state is not None
+    assert state.config.working_directory == os.path.realpath(str(tmp_path))
+
+
+def test_load_leaves_a_matching_working_directory_alone(tmp_path):
+    _mission_json(tmp_path, str(tmp_path))
+    state = _pm(tmp_path).load_mission()
+    assert state.config.working_directory == os.path.realpath(str(tmp_path))

@@ -96,8 +96,6 @@ research_gate: #FlowDefinition & {
 				context_keys: ["probe_abstract", "probe_tags"]
 				input_keys: []
 			}
-			// HIGH: verdict: the grounding gate — a wrong pass ships an ungrounded tag — dev/REASONING_DEPTH_POLICY_2026-08-16.md
-			config: reasoning: "high"
 			config: temperature: "t*0.2"
 			resolver: {
 				type: "rule"

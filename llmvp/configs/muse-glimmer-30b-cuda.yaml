@@ -1,0 +1,96 @@
+# muse on the 3090/3060 rig — the CUDA-machine view of muse-glimmer-30b.
+#
+# WHY A SEPARATE FILE. Two machines share this repo and a probe LEDGER IS A
+# MEASUREMENT OF ONE MACHINE: the base config carries probe_verified_n_ctx
+# 131072 from the M1 (run_id cells_20260811-221252, 116 GB unified), which on
+# a 24 GB card accounts to ~25.6 GiB and cannot exist — yet the KV preflight
+# reads it as "measured to load and decode on this machine". Probing the base
+# here would clobber the M1's ledger with a CUDA ceiling: the same
+# cross-machine bug in the other direction (see manager._rebind_working_
+# directory for the working_directory instance of this class). Per-machine
+# facts live in a per-machine file, selected by the untracked
+# active_config.txt.
+#
+# BATCHED, 4 SEATS IN THE EXISTING CELL. Measured on this rig 2026-08-15
+# (260 inference calls, scraper flow): median total context 5,382 tokens,
+# p95 6,762, 1 of 260 over 8k. In batched mode n_ctx is the SHARED cell, so
+# 4 seats inside the same 32768 the pool config already allocates cost ZERO
+# additional KV — the single-seat window was 6x oversized for this flow.
+# The curator flow reads whole markdowns and will need its own measurement
+# before it gets seats.
+extends: muse-glimmer-30b
+
+model:
+  # Path and n_ctx are stated here even though inheritance would supply them:
+  # --probe-context reads the RAW child file (no inheritance resolution) and
+  # needs both, and this machine's real path beats the base's /Users/… +
+  # LLMVP_MODELS_ROOT basename redirect anyway.
+  path: /home/lah-rb/models/muse-glimmer-30B-kquant-dynamic.gguf
+  # In batched mode this is the SHARED cell across seats. Grown 32768 →
+  # 65536 (2026-08-17) to admit the curate drain's whole-paper turns beside
+  # the measured scraper lanes (median 5,382, p95 6,762/turn): one curator
+  # seat needs doc (~30k) + answers, three sibling lanes ~20k p95 combined.
+  # VRAM: +32,768 tok ≈ +1.66 GiB KV against 1.94 GiB measured free
+  # (nvidia-smi, all buffers resident), funded by vision_n_ctx 16384 → 8192
+  # (−0.42 GiB). NOT 91k: probe_verified_n_ctx was a TEXT-ONLY probe; at 91k
+  # the resident vision KV + its 1.18 GiB compute buffer no longer fit and
+  # figtext dies. Verified at boot + canaries, 2026-08-17.
+  # ── 3060 LAYER-SPLIT (operator-directed overnight, 2026-08-22) ──────
+  # Paddle down + OCR lane disabled: the 3060 hosts 18/52 muse layers.
+  # Geometry (GGUF headers): 1 KB/token/layer KV, 0.32 GB weights/layer.
+  # n_ctx is the SHARED CELL POOL, not a per-stream position budget — it
+  # may exceed the trained 131,072 because no single stream approaches
+  # it (operator note). Ladder: 196608 -> 180224 -> 163840 -> 147456;
+  # this line records the rung that PROBED CLEAN.
+  # ── SPLIT REVERTED (2026-08-22 late): paddle returns to CUDA1 for the
+  # 404-PDF queue; muse whole on CUDA0 (operator: "curator lanes
+  # exclusively on the 3090"). The split leg's full record + final
+  # metrics live in ~/tools/ouroboros-ops/LAYER_SPLIT_EXPERIMENT.md —
+  # [40,12]@131072 was the stable rung, 80.9 completions/h over 5.5 h,
+  # zero faults. Re-apply it whenever paddle next drains.
+  n_ctx: 65536
+  probe_verified_weights_bytes: 19653957984
+  probe_verified_n_ctx: 91136
+  # The base declares vision_n_ctx 131072 — an M1 sizing (7 GB of lazy KV
+  # against 123 GB) that on this card is a landmine: never built, costing
+  # nothing, until one stray vision request tries to allocate 6.5 GiB into
+  # ~3 GiB of free VRAM and kills the primary. Paddle owns page OCR here;
+  # muse vision remains available for figure work at a window that fits.
+  # 8192 = 0.42 GiB, ~5x a dense figure answer (figure work peaks ~1.6k
+  # answer + split-panel image tokens; book pages ride paddle, not muse).
+  # Halved from 16384 (2026-08-17) to fund the batched cell's growth to
+  # 65536 for the curate drain.
+  # Vision grows 8192 -> 24576 with the freed 3090 VRAM (the 8192 cap
+  # existed only because the un-split 3090 could not hold more beside
+  # the 65k text pool).
+  vision_n_ctx: 8192
+  # PROJECTOR ON THE 3060. GPU0 holds weights + the batched cell and has
+  # ~2.9 GiB slack; the vision graph needs its KV (0.85 GiB) AND a compute
+  # buffer (measured 1.18 GiB at reserve, 2026-08-16) — adding the ~1.3 GiB
+  # mmproj on top OOM'd at ggml_gallocr_reserve and took the process down.
+  # The projector is the one piece that relocates cleanly (the paddle knob):
+  # image encode runs on CUDA1 beside paddle, bursty and small.
+  vision_projector_gpu: true
+  vision_projector_device: "CUDA1"
+
+resources:
+  decode_mode: batched
+  # 4 -> 5 (2026-08-21): the doubled translate lanes proved seats were
+  # the binding constraint again — all 4 busy in 71% of capacity ticks,
+  # occupancy p50 0.69/p90 0.91, and effective decode rose 42% (35.5 ->
+  # 50.3 gen tok/s wall) when the idle seat was spent, at an 11%
+  # per-stream tax. A 5th working seq shares the same unified 65,536-cell
+  # pool (seq_cp static heads cost no new cells); admission's QUEUE
+  # verdict remains the correctness backstop if entitlement outruns
+  # cells. Judge by the same CapacitySample series that earned it.
+  # 5 -> 6 with the ~3x cell pool: the 5th seat proved out within hours
+  # (occupancy p50 0.69 -> saturated 71% of ticks); the grown pool feeds
+  # a 6th. Admission's QUEUE verdict remains the backstop.
+  # 6 -> 8 (2026-08-22 curation-finale): the final split leg ran 6
+  # streams with seats exhausted 88% of ticks while cells sat at median
+  # 35k free — seats, not cells, bound. Two more seats for the review
+  # drain; the engine QUEUE verdict absorbs cell collisions.
+  # 8 -> 6 with the pool back at 65,536 (2026-08-22): the 8th and 7th
+  # seat were funded by the split's 131k cells; on the reverted pool the
+  # proven plateau is 6 (see LAYER_SPLIT_EXPERIMENT.md close-out).
+  max_concurrent_requests: 6
