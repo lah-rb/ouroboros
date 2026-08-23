@@ -295,3 +295,87 @@ def test_preflight_counts_the_projector_only_when_configured():
     assert "mmproj" in wt, "the exclusion note must survive"
     # The exclusion itself must not have been turned into an inclusion.
     assert "EXCLUDED" in wt or "excluded" in wt
+
+
+# ── the reasoning dial on the vision path (2026-08-23) ────────────────
+#
+# run_vision_completion had NO reasoning parameter, so the vision path served
+# whatever each family's resting default was and no caller could ask for a
+# depth. Wiring it exposed a sharper bug: the mtmd handler builds its prompt
+# from the MODEL'S OWN chat template, so the level has to arrive as a SYSTEM
+# MESSAGE, and the first implementation rendered that block with persona="".
+#
+# A stripped block is not a smaller prompt, it is a DIFFERENT one. Given only
+# "Reasoning effort is set to low…" plus a bare identity, qwen3.8 emitted a
+# STOP TOKEN AS ITS FIRST TOKEN (finish_reason='stop', raw_len=0) on every
+# budget from 300 to 4096, while the same model at high — and on the text
+# path, where the persona is present — answered normally.
+
+
+def _pinned_config():
+    """Pin thinking=per_request for the dial tests.
+
+    resolve_thinking reads the GLOBAL config, so a sibling test that leaves a
+    thinking="off" or thinking_available=False config installed collapses every
+    level onto one and these assertions fail only in full-suite order — which
+    is exactly how they first failed. The gemma gate tests pin the same way.
+    """
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    cfg = SimpleNamespace(
+        model=SimpleNamespace(
+            thinking="per_request", thinking_available=True, thinking_mode=None
+        )
+    )
+    return patch("core.config.get_config", return_value=cfg)
+
+
+def _vision_system_body(family: str, *, persona: str, reasoning: str) -> str:
+    """The system body run_vision_completion injects, by the same rule.
+
+    Segments [0] and [-1] are the ROLE WRAPPER, which the model's own template
+    supplies; everything between is the body. Sliced rather than filtered on
+    is_framing on purpose — qwen38's effort sentence is marked framing (it
+    comes from reasoning_prefix), so a content-only filter drops exactly the
+    directive being requested.
+    """
+    from formats.registry import clear_cache, get_renderer
+
+    with _pinned_config():
+        clear_cache()
+        segs = get_renderer(family).render_system_segments(
+            persona=persona, reasoning=reasoning
+        )
+    return "".join(t for t, _fr in segs[1:-1]) if len(segs) > 2 else ""
+
+
+@pytest.mark.parametrize("family", ["muse-glimmer", "qwen38"])
+def test_the_injected_block_carries_the_persona_not_just_the_directive(family):
+    body = _vision_system_body(family, persona="SENTINEL_PERSONA", reasoning="low")
+    assert "SENTINEL_PERSONA" in body, (
+        f"{family}: the vision system block dropped the persona — this is the "
+        "exact shape that made qwen3.8 stop on its first token"
+    )
+
+
+@pytest.mark.parametrize("family", ["muse-glimmer", "qwen38"])
+def test_low_and_high_render_different_bodies(family):
+    low = _vision_system_body(family, persona="P", reasoning="low")
+    high = _vision_system_body(family, persona="P", reasoning="high")
+    assert low != high, f"{family}: the dial is inert — low and high are identical"
+
+
+def test_the_role_wrapper_is_excluded():
+    # The template supplies its own <|im_start|>system / <|start|>system.
+    # Leaking ours would double-wrap the message.
+    for family, marker in (("muse-glimmer", "<|start|>"), ("qwen38", "<|im_start|>")):
+        body = _vision_system_body(family, persona="P", reasoning="low")
+        assert marker not in body, f"{family}: role framing leaked into the body"
+
+
+def test_a_family_with_no_dial_yields_an_empty_body():
+    # deepseek4's system template is "{reasoning_prefix}{persona}" with an
+    # empty identity, so with no persona there is nothing to inject and the
+    # caller must leave the request alone rather than prepend an empty system.
+    assert _vision_system_body("deepseek4", persona="", reasoning="low").strip() == ""

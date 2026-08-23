@@ -1,3 +1,19 @@
+# ── VISION-BENCH VARIANT (2026-08-23) ────────────────────────────────
+# Identical to qwen3.8-27b.yaml except the TEXT n_ctx is 262144 -> 32768.
+#
+# WHY: loading this model as a HOT SECONDARY alongside muse for the VL
+# re-measurement, the residency governor refused with
+#   "qwen3.8-27b needs 89.2 GB on MTL0; 27.7 GB already hot there against a
+#    105.3 GB budget"
+# — 68 GB of that is TEXT KV at the 262144 ceiling (65536 B/tok measured),
+# and a figure-transcription bench never touches the text path. The vision
+# path has its own vision_n_ctx. Trimming the unused context is what makes
+# both candidates resident at once, which is the point: routed per request
+# with nothing drained between them, so neither gets a cold-cache advantage.
+#
+# NOT a tuning change. Do not use this config for text work — 262144 is the
+# probe-verified ceiling and belongs to the canonical config.
+#
 # ── Qwen 3.8 27B — takes the 3.6-27B slot (2026-08-17) ──────────────
 # Replaces llmvp/configs/archive/qwen3.6-27b.yaml, the greenfield Tier-1
 # UNANIMOUS winner (2026-07-24, two independent Opus judges, aggregate 48.0 vs
@@ -94,7 +110,7 @@ model:
   # is 65536 B/tok (64 KiB) — a 4.06x overshoot by the header formula, same
   # as 3.6 measured: full_attention_interval 4 means only 16 of 64 layers
   # hold a growing cache. At this ceiling: 22.9 GB weights + ~17.2 GB KV.
-  n_ctx: 262144
+  n_ctx: 32768
   kv_bytes_per_token_measured: 65536
   probe_verified_weights_bytes: 22884408288
   probe_verified_n_ctx: 262144

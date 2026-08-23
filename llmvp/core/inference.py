@@ -1272,6 +1272,7 @@ async def run_vision_completion(
     max_tokens: Optional[int] = None,
     temperature: Optional[float] = None,
     model: Optional[str] = None,
+    reasoning: Optional[str] = None,
 ) -> VisionOutcome:
     """Run one image+text completion through the mtmd handler.
 
@@ -1291,6 +1292,7 @@ async def run_vision_completion(
     "de-globalize the request path" work and is NOT done here.
     """
     import time as _time
+    from pathlib import Path
 
     from fastapi.concurrency import run_in_threadpool
 
@@ -1343,6 +1345,62 @@ async def run_vision_completion(
         raise ImageIntakeError(
             "no image parts in the request — use the text endpoint for text-only"
         )
+
+    # ── THE REASONING DIAL, VIA THE SYSTEM BLOCK ────────────────────────
+    # The mtmd handler builds its prompt from the MODEL'S OWN chat template,
+    # so the renderer's generation-prompt gate never runs here and a caller
+    # had no way to ask for a depth at all — the vision path served whatever
+    # the family's resting default was, silently. Every family that has a
+    # dial already declares it as SYSTEM-BLOCK text (harmony's
+    # `Reasoning strength: low`, qwen38's effort sentence via
+    # reasoning_prefix), and the template does accept a system message, so
+    # the level is delivered the way the family itself spells it.
+    #
+    # Segments [0] and [-1] are the ROLE WRAPPER, which the template will
+    # supply itself; everything between is the system body. Slicing that way
+    # rather than filtering on is_framing is deliberate — qwen38's effort
+    # sentence is marked framing (it comes from reasoning_prefix), so a
+    # content-only filter drops exactly the directive being requested.
+    #
+    # A family with no dial renders an empty body and is left alone.
+    if reasoning:
+        try:
+            _r = _get_format_renderer(mcfg.family)
+            # RENDER THE SYSTEM BLOCK THE WAY THE TEXT PATH DOES — persona and
+            # tools included (preprocessing/builder.py). A stripped-down block
+            # is not a smaller version of the same prompt, it is a DIFFERENT
+            # prompt: measured 2026-08-23, qwen3.8 given only
+            # "Reasoning effort is set to low…" plus a bare identity emitted a
+            # stop token as its FIRST token (finish_reason='stop', raw_len=0)
+            # on every budget from 300 to 4096, while the same model at high —
+            # and the same model on the text path, where the persona is
+            # present — answered normally.
+            _persona_text = ""
+            _pf = getattr(serving.prompt, "persona_file", "") or ""
+            if _pf:
+                _pp = Path(_pf).expanduser().resolve()
+                if _pp.is_file():
+                    _persona_text = _pp.read_text(encoding="utf-8")
+            _tools_text = ""
+            _tf = getattr(serving.prompt, "tools_file", "") or ""
+            if _tf:
+                _tp = Path(_tf).expanduser().resolve()
+                if _tp.is_file():
+                    _tools_text = _tp.read_text(encoding="utf-8")
+            _segs = _r.render_system_segments(
+                persona=_persona_text, reasoning=reasoning, tools=_tools_text
+            )
+            if len(_segs) > 2:
+                _body = "".join(t for t, _fr in _segs[1:-1]).strip()
+                if _body and not any(m.get("role") == "system" for m in prepared):
+                    prepared = [{"role": "system", "content": _body}] + prepared
+                    log.info(
+                        "👁  vision reasoning=%s -> system block (%d chars)",
+                        reasoning,
+                        len(_body),
+                    )
+        except Exception:  # noqa: BLE001 — a dial failure must not kill the request
+            log.debug("vision reasoning injection failed", exc_info=True)
 
     if not hasattr(backend, "acquire_vision_instance"):
         raise RuntimeError("the active backend does not support vision")

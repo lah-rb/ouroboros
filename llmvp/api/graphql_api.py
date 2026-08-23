@@ -526,6 +526,12 @@ class VisionCompletionRequest:
     # Route to a HOT SECONDARY (loadModel) instead of the primary. None =
     # the primary, which is every pre-existing caller.
     model: Optional[str] = strawberry.field(default=None)
+    # Reasoning DEPTH (low/medium/high/xhigh). The mtmd handler builds its
+    # prompt from the model's own chat template, so this is delivered as a
+    # system block rendered by the family's spec — see run_vision_completion.
+    # None = the family's resting default, which is what every pre-existing
+    # caller got implicitly.
+    reasoning: Optional[str] = strawberry.field(default=None)
 
 
 @strawberry.input
@@ -1327,6 +1333,7 @@ class Mutation:
         try:
             outcome = await run_vision_completion(
                 messages=[{"role": "user", "content": parts}],
+                reasoning=request.reasoning,
                 max_tokens=request.max_tokens,
                 temperature=request.temperature,
                 model=request.model,
