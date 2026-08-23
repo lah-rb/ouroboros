@@ -73,6 +73,20 @@ model:
   vision_projector_gpu: true
   vision_projector_device: "CUDA1"
 
+  # ── REASONING FLAGS: PINNED TO MATCH THE BASE, NOT INHERITED ────────
+  # The shared base turned both on (2026-08-16 port, bringing muse in
+  # line with the lab's published expectations for the family) and this
+  # file inherits by extends:, so a later base edit would move THIS
+  # machine's behaviour on the next boot with no commit here to show it.
+  # Both values are deliberately identical to the base — this is a pin,
+  # not an override, and it should be updated to match whenever the base
+  # legitimately changes. Operator ruling 2026-08-23: correct for the
+  # scraper workflow too, and low-impact either way, since the curate
+  # path is overwhelmingly stateless turns and never requests a
+  # reasoning level (so the head-swap is inert for this workload).
+  resident_strip_reasoning: true
+  reasoning_head_swap: true
+
 resources:
   decode_mode: batched
   # 4 -> 5 (2026-08-21): the doubled translate lanes proved seats were
