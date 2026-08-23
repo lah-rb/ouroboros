@@ -194,3 +194,185 @@ def test_new_registry_entries_carry_tier_and_family():
     assert reg["xrd_peak_intensity"]["tier"] == "family"
     assert reg["xrd_peak_intensity"]["family"] == "peaks"
     assert reg["weird_bespoke_thing"]["tier"] == "bespoke-pool"
+
+
+# ── denied reviews as a citation source (OFF by default) ─────────────
+
+
+def _denied_review(key, dois=(), summary="The paper is a review of LIBS methods"):
+    return {
+        "paper_key": key,
+        "doi": f"10.9/{key}",
+        "review_status": "denied",
+        "review_summary": summary,
+        "review_issues": ["No original measured spectra"],
+        "reference_dois": list(dois),
+        "md_path": f"databank/markdown/{key}.md",
+    }
+
+
+def test_is_review_denial_reads_the_curators_own_words():
+    from agent.actions.scholarly_actions import is_review_denial
+
+    assert is_review_denial(_denied_review("a"))
+    # denied, but not for being a review
+    assert not is_review_denial(
+        {"review_status": "denied", "review_summary": "Off-topic geochronology study"}
+    )
+    # an accepted paper that merely mentions reviews is not a source
+    assert not is_review_denial(
+        {"review_status": "accepted", "review_summary": "is a review"}
+    )
+    assert not is_review_denial({})
+
+
+@pytest.mark.asyncio
+async def test_review_mining_is_off_by_default(monkeypatch):
+    """The flag unset must reproduce pre-2026-08-23 behaviour exactly."""
+    monkeypatch.delenv("OUROBOROS_BIBLIO_MINE_REVIEWS", raising=False)
+    from agent.actions.scholarly_actions import action_mine_bibliographies
+
+    fx = MockEffects(
+        files={
+            "databank/papers.jsonl": json.dumps(_denied_review("rev1")) + "\n",
+            "databank/markdown/rev1.md": "See doi:10.1000/x1 and doi:10.1000/x2",
+        }
+    )
+    out = await action_mine_bibliographies(
+        StepInput(inputs={}, context={}, params={}, effects=fx)
+    )
+    assert out.result["mined"] == 0, "a denied review must be invisible when off"
+
+
+@pytest.mark.asyncio
+async def test_review_mining_when_enabled_mines_denied_reviews(monkeypatch):
+    monkeypatch.setenv("OUROBOROS_BIBLIO_MINE_REVIEWS", "1")
+    from agent.actions.scholarly_actions import action_mine_bibliographies
+
+    fx = MockEffects(
+        files={
+            "databank/papers.jsonl": json.dumps(_denied_review("rev1")) + "\n",
+            "databank/markdown/rev1.md": "refs doi:10.1000/x1 and doi:10.1000/x2",
+        }
+    )
+    out = await action_mine_bibliographies(
+        StepInput(inputs={}, context={}, params={}, effects=fx)
+    )
+    assert out.result["mined"] == 1
+    assert out.result["reviews_mined"] == 1
+
+
+@pytest.mark.asyncio
+async def test_accepted_papers_are_mined_before_reviews(monkeypatch):
+    """A starved budget must not be spent entirely on citation-only records."""
+    monkeypatch.setenv("OUROBOROS_BIBLIO_MINE_REVIEWS", "1")
+    from agent.actions.scholarly_actions import action_mine_bibliographies
+
+    acc = {
+        "paper_key": "zzz_accepted",  # sorts last by key, must still win
+        "doi": "10.1/acc",
+        "review_status": "accepted",
+        "md_path": "databank/markdown/zzz_accepted.md",
+    }
+    fx = MockEffects(
+        files={
+            "databank/papers.jsonl": json.dumps(_denied_review("aaa_rev"))
+            + "\n"
+            + json.dumps(acc)
+            + "\n",
+            "databank/markdown/aaa_rev.md": "doi:10.1000/x1",
+            "databank/markdown/zzz_accepted.md": "doi:10.1000/y1",
+        }
+    )
+    out = await action_mine_bibliographies(
+        StepInput(inputs={}, context={}, params={"budget": 1}, effects=fx)
+    )
+    assert out.result["mined"] == 1
+    assert out.result["reviews_mined"] == 0, "accepted paper must be mined first"
+
+
+def _oa_result(doi, url):
+    return {
+        _OA: HttpResult(
+            status=200,
+            url=_OA,
+            json_data={
+                "results": [
+                    {
+                        "title": "Cited work",
+                        "doi": f"https://doi.org/{doi}",
+                        "publication_year": 2020,
+                        "authorships": [],
+                        "ids": {"openalex": "W9"},
+                        "abstract_inverted_index": None,
+                    }
+                ]
+            },
+        )
+    }
+
+
+@pytest.mark.asyncio
+async def test_review_citations_need_the_bar_and_stamp_provenance(monkeypatch):
+    """One review does not promote; two do (the configurable default)."""
+    monkeypatch.setenv("OUROBOROS_BIBLIO_MINE_REVIEWS", "1")
+    monkeypatch.setenv("OUROBOROS_BIBLIO_REVIEW_MIN_CITES", "2")
+    two = [dict(_denied_review("r0", ["10.5555/reviewed"]), biblio_mined_at="t")]
+    fx = MockEffects(
+        files={"databank/papers.jsonl": "".join(json.dumps(r) + "\n" for r in two)},
+        http_responses=_oa_result("10.5555/reviewed", _OA),
+    )
+    out = await action_biblio_snowball(_si(fx))
+    assert out.result["promoted"] == 0, "1 review citation must not clear the bar"
+
+    three = two + [
+        dict(_denied_review("r1", ["10.5555/reviewed"]), biblio_mined_at="t")
+    ]
+    fx2 = MockEffects(
+        files={"databank/papers.jsonl": "".join(json.dumps(r) + "\n" for r in three)},
+        http_responses=_oa_result("10.5555/reviewed", _OA),
+    )
+    out2 = await action_biblio_snowball(_si(fx2))
+    assert out2.result["promoted"] == 1, out2.result
+    bank = await read_databank(fx2)
+    new = [r for r in bank.values() if r.get("discovery_method") == "biblio_snowball"]
+    assert new[0]["cited_by_reviews"] == 2
+    assert new[0]["cited_by_accepted"] == 0
+
+
+@pytest.mark.asyncio
+async def test_disabled_reviews_leave_promotion_identical(monkeypatch):
+    """The off path must not see review citations at all."""
+    monkeypatch.delenv("OUROBOROS_BIBLIO_MINE_REVIEWS", raising=False)
+    recs = [
+        dict(_denied_review(f"r{i}", ["10.5555/reviewed"]), biblio_mined_at="t")
+        for i in range(5)
+    ]
+    fx = MockEffects(
+        files={"databank/papers.jsonl": "".join(json.dumps(r) + "\n" for r in recs)},
+        http_responses=_oa_result("10.5555/reviewed", _OA),
+    )
+    out = await action_biblio_snowball(_si(fx))
+    assert out.result["promoted"] == 0
+    assert "reviews" not in (out.result.get("reason") or "")
+
+
+@pytest.mark.asyncio
+async def test_accepted_pair_still_promotes_with_reviews_enabled(monkeypatch):
+    """Enabling reviews must not raise the bar for accepted-paper evidence."""
+    monkeypatch.setenv("OUROBOROS_BIBLIO_MINE_REVIEWS", "1")
+    recs = [
+        {
+            "paper_key": k,
+            "review_status": "accepted",
+            "biblio_mined_at": "t",
+            "reference_dois": ["10.5555/shared"],
+        }
+        for k in ("a", "b")
+    ]
+    fx = MockEffects(
+        files={"databank/papers.jsonl": "".join(json.dumps(r) + "\n" for r in recs)},
+        http_responses=_oa_result("10.5555/shared", _OA),
+    )
+    out = await action_biblio_snowball(_si(fx))
+    assert out.result["promoted"] == 1, out.result

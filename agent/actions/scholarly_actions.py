@@ -1335,6 +1335,55 @@ def extract_reference_dois(md: str, cap: int = MAX_REFERENCE_DOIS) -> list[str]:
     return out
 
 
+# ── denied reviews as a citation source ──────────────────────────────
+#
+# A review article is worthless as TRAINING text — no original
+# measurements, which is exactly why the curator denies it — but its
+# bibliography is a domain expert's curated survey of our subject.
+# Measured 2026-08-23 over the 12 denied reviews that already had
+# references extracted: 891 unique DOIs, 865 of them absent from the
+# databank — 97% novel at 72 novel DOIs/paper, against 87% and 26/paper
+# for the accepted papers the snowball feeds on today. 102 denied
+# reviews are on hand, none mined; the projection is ~7.3k novel DOIs
+# (order of magnitude — extrapolated from 12, and a novel DOI is only
+# ~31% likely to be OA-retrievable).
+#
+# OFF BY DEFAULT. With OUROBOROS_BIBLIO_MINE_REVIEWS unset every
+# function here behaves exactly as it did before this was added.
+_REVIEW_DENIAL_RE = re.compile(
+    r"\breview (article|paper|chapter)\b|is a review|survey of|overview of"
+    r"|book review|position (article|paper)|state.of.the.art|literature review",
+    re.I,
+)
+
+
+def mine_reviews_enabled() -> bool:
+    return os.environ.get("OUROBOROS_BIBLIO_MINE_REVIEWS", "").strip() not in (
+        "",
+        "0",
+        "false",
+        "no",
+    )
+
+
+def is_review_denial(record: dict) -> bool:
+    """A paper the curator denied because it is a review/survey.
+
+    Reads the curator's OWN words (summary + issues) rather than a
+    separate classifier: the denial text is what the shape analysis was
+    validated against, and a record whose text never says "review" is
+    not one, whatever its title claims.
+    """
+    if record.get("review_status") != "denied":
+        return False
+    blob = (
+        str(record.get("review_summary") or "")
+        + " "
+        + " ".join(str(i) for i in (record.get("review_issues") or []))
+    )
+    return bool(_REVIEW_DENIAL_RE.search(blob))
+
+
 async def action_mine_bibliographies(step_input: StepInput) -> StepOutput:
     """Mine reference DOIs from curator-ACCEPTED papers' markdown.
 
@@ -1358,25 +1407,38 @@ async def action_mine_bibliographies(step_input: StepInput) -> StepOutput:
             context_updates={"biblio_mine_summary": {"mined": 0}},
         )
     databank = await read_databank(effects)
+    want_reviews = mine_reviews_enabled()
     pend = [
         r
         for r in databank.values()
-        if r.get("review_status") == "accepted"
+        if (
+            r.get("review_status") == "accepted"
+            or (want_reviews and is_review_denial(r))
+        )
         and not r.get("biblio_mined_at")
         and (r.get("md_en_path") or r.get("md_path"))
     ]
+    # Accepted papers first: they feed the training corpus AND the
+    # snowball, so a starved round must never spend its budget entirely
+    # on records that only ever contribute citations.
+    pend.sort(key=lambda r: (r.get("review_status") != "accepted",))
     if not pend:
         return StepOutput(
             result={"mined": 0, "reason": "nothing unmined"},
             observations="biblio mine idle (nothing unmined)",
             context_updates={"biblio_mine_summary": {"mined": 0}},
         )
-    pend.sort(key=lambda r: r.get("paper_key", ""))
+    pend.sort(
+        key=lambda r: (r.get("review_status") != "accepted", r.get("paper_key", ""))
+    )
     mined = 0
     new_dois = 0
+    reviews_mined = 0
     now = _now_iso()
     for rec in pend[:budget]:
         rec = dict(rec)
+        if rec.get("review_status") != "accepted":
+            reviews_mined += 1
         path = rec.get("md_en_path") or rec.get("md_path")
         fc = await effects.read_file(str(path))
         text = fc.content if getattr(fc, "exists", False) else ""
@@ -1388,11 +1450,17 @@ async def action_mine_bibliographies(step_input: StepInput) -> StepOutput:
         new_dois += max(0, len(rec["reference_dois"]) - prior)
         mined += 1
         await append_records(effects, [rec])
-    summary = {"mined": mined, "dois_total": new_dois, "remaining": len(pend) - mined}
+    summary = {
+        "mined": mined,
+        "dois_total": new_dois,
+        "remaining": len(pend) - mined,
+        "reviews_mined": reviews_mined,
+    }
     return StepOutput(
         result=summary,
         observations=(
-            f"biblio mine: {mined} accepted paper(s), {summary['remaining']} remain"
+            f"biblio mine: {mined} paper(s) "
+            f"({reviews_mined} denied review(s)), {summary['remaining']} remain"
         ),
         context_updates={"biblio_mine_summary": summary},
     )
@@ -1436,10 +1504,37 @@ async def action_biblio_snowball(step_input: StepInput) -> StepOutput:
     have_dois = {
         str(r.get("doi") or "").lower() for r in databank.values() if r.get("doi")
     }
+    # REVIEW CITATIONS ARE COUNTED SEPARATELY, and the bar for them is a
+    # LIVE POLICY QUESTION — measure before trusting a default.
+    #
+    # Repeat-citation is a brutal filter at this corpus depth: of 13,087
+    # novel DOIs cited by accepted papers, only 106 (0.8%) are cited
+    # twice. Among the 12 mined reviews' 865 novel DOIs, exactly ONE is
+    # cited twice and none three times (2026-08-23). Extrapolating the
+    # collision rate to all 107 reviews gives order-80 DOIs at >=2 and
+    # low single digits at >=3 — i.e. a bar of 3 makes this feature
+    # almost inert, which is why it is NOT the default.
+    #
+    # The deeper point: consensus is the wrong model for a review. A
+    # research paper cites what it built on; a review bibliography IS a
+    # domain expert's curated survey, so a single appearance is already
+    # an endorsement — the reason the yield is 97% novel at 72 DOIs a
+    # paper. Setting this to 1 switches the policy from "several reviews
+    # agree" to "one expert survey vouched for it", with the existing
+    # candidate cap and per_round pacing as the throttle instead of the
+    # multiplicity gate. That is the operator's call at stoke time; 2
+    # (the accepted-paper bar, no stricter) is the conservative default.
+    review_min = int(
+        step_input.params.get("review_min_citations")
+        or os.environ.get("OUROBOROS_BIBLIO_REVIEW_MIN_CITES", "2")
+    )
     counts: dict[str, int] = {}
+    review_counts: dict[str, int] = {}
     aspects: dict[str, list] = {}
     for r in databank.values():
-        if r.get("review_status") != "accepted":
+        accepted = r.get("review_status") == "accepted"
+        from_review = mine_reviews_enabled() and is_review_denial(r)
+        if not accepted and not from_review:
             continue
         strong = [
             t.get("aspect")
@@ -1450,13 +1545,26 @@ async def action_biblio_snowball(step_input: StepInput) -> StepOutput:
             d = str(doi).lower()
             if d in have_dois:
                 continue
-            counts[d] = counts.get(d, 0) + 1
+            if accepted:
+                counts[d] = counts.get(d, 0) + 1
+            else:
+                review_counts[d] = review_counts.get(d, 0) + 1
             aspects.setdefault(d, []).extend(strong[:2])
-    backlog = sorted(
-        (d for d, c in counts.items() if c >= min_cites), key=lambda d: -counts[d]
-    )
+
+    def _total(d: str) -> int:
+        return counts.get(d, 0) + review_counts.get(d, 0)
+
+    qualified = {
+        d
+        for d in set(counts) | set(review_counts)
+        if counts.get(d, 0) >= min_cites or _total(d) >= review_min
+    }
+    backlog = sorted(qualified, key=lambda d: (-_total(d), -counts.get(d, 0), d))
     if not backlog:
-        return _decline(f"no unheld DOI cited {min_cites}+ times by accepted papers")
+        return _decline(
+            f"no unheld DOI cited {min_cites}+ times by accepted papers"
+            + (f" or {review_min}+ counting reviews" if review_counts else "")
+        )
     batch = backlog[: min(per_round, cap_total - already)]
 
     promoted: list[dict] = []
@@ -1484,6 +1592,11 @@ async def action_biblio_snowball(step_input: StepInput) -> StepOutput:
                 continue
             rec["discovery_method"] = "biblio_snowball"
             rec["cited_by_accepted"] = counts.get(d, 0)
+            # Stamped even when zero: the cohort's downstream accept-rate
+            # is the number that decides whether review-sourced discovery
+            # earns its place, and it can only be measured if the
+            # provenance is on the record from the start.
+            rec["cited_by_reviews"] = review_counts.get(d, 0)
             promoted.append(rec)
     if promoted:
         await append_records(effects, promoted)
