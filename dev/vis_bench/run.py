@@ -24,17 +24,19 @@ byte-identical across models.
 """
 
 import json
+import os
 import sys
 import time
 import urllib.request
 from pathlib import Path
 
-SCRATCH = Path(
-    "/private/tmp/claude-501/-Users-lah-rb-Repos-ouroboros/"
-    "89c0814e-2bf4-43de-a225-ceaa353d642d/scratchpad"
-)
-OUT = SCRATCH / "vl_set10_results.jsonl"
-SET = json.loads((SCRATCH / "vl_set10.json").read_text())
+HERE = Path(__file__).resolve().parent
+# THE INSTRUMENT LIVES IN THE REPO, NOT A SCRATCHPAD. The 2026-08-11 set was
+# lost exactly that way: the scripts survived in dev/, the set definition and
+# its 192 reference facts did not, and the whole thing had to be rebuilt.
+SET = json.loads((HERE / "set" / "vl_set10.json").read_text())
+OUT = Path(os.environ.get("VIS_BENCH_OUT", HERE / "results" / "answers.jsonl"))
+OUT.parent.mkdir(parents=True, exist_ok=True)
 GQL = "http://localhost:8008/graphql"
 
 # Byte-identical to dev/vl_set10_bench.py's QUESTION — a different question
@@ -95,6 +97,46 @@ def gql(query: str, variables: dict, timeout: float = 2400.0) -> dict:
     return payload["data"]
 
 
+# ZERO-TOKEN RECOVERY.
+# A zero-token vision response is a known symptom — core/inference.py has
+# carried the note since 2026-08-12 — but the 2026-08-23 set showed it has TWO
+# causes that need different handling, and conflating them hides a real result:
+#
+#   * INTERMITTENT. The model sometimes emits a stop as its FIRST token at
+#     identical settings. `elementmap_colorbar` returned EMPTY on one pass and
+#     1,556 tokens on the next with nothing changed (temperature 0.2). This is
+#     noise and must be retried, or a coin flip becomes a 27-fact hole.
+#   * LEVEL-SENSITIVE. `multipanel_micrograph_eds` returned EMPTY at low AND
+#     medium across repeats, and answered at high. That is NOT noise — it is
+#     the measurement. A model that cannot answer a figure at the requested
+#     depth has failed that figure, and papering over it by silently promoting
+#     the level would compare two different experiments.
+#
+# So: retry at the SAME settings (noise), never escalate the level (result).
+# Lowering max_tokens was tried and does nothing here — EMPTY persisted at
+# 2048/1024/512/256 on a figure that then answered at 2048.
+EMPTY_RETRIES = 3
+
+
+def _ask_with_retries(req: dict, key: str, label: str) -> dict:
+    last: dict = {}
+    for attempt in range(1, EMPTY_RETRIES + 1):
+        data = gql(VISION_MUTATION, {"req": req})["visionCompletion"]
+        last = data
+        if (data.get("text") or "").strip():
+            if attempt > 1:
+                print(
+                    f"    recovered: {key} answered on attempt {attempt}"
+                    f"/{EMPTY_RETRIES} (zero-token intermittency)",
+                    flush=True,
+                )
+            data["attempts"] = attempt
+            return data
+        print(f"    empty: {key} attempt {attempt}/{EMPTY_RETRIES}", flush=True)
+    last["attempts"] = EMPTY_RETRIES
+    return last
+
+
 labels = sys.argv[1:]
 if not labels:
     raise SystemExit("usage: vl_set10_graphql.py <primary_label> [secondary ...]")
@@ -126,7 +168,7 @@ for label, route in routed.items():
             req["model"] = route
         t = time.time()
         try:
-            data = gql(VISION_MUTATION, {"req": req})["visionCompletion"]
+            data = _ask_with_retries(req, key, label)
         except Exception as e:  # noqa: BLE001 — bench boundary
             print(
                 f"  {label} :: {key}: ERROR {type(e).__name__}: {str(e)[:150]}",
@@ -167,6 +209,7 @@ for label, route in routed.items():
                         "handler": data.get("handler"),
                         "decode_ms": data.get("decodeMs"),
                         "think_block": think,
+                        "attempts": data.get("attempts"),
                     }
                 )
                 + "\n"

@@ -1,0 +1,41 @@
+## DESCRIPTION
+
+A six-panel composite electron-microscopy figure laid out as a 3-column x 2-row grid. Panels are labelled `(a)`, `(b)`, `(c)` across the top row and `(d)`, `(e)`, `(f)` across the bottom row; every panel letter is set in lower case inside round brackets, in black type on a small white rectangle with a thin blue-grey border, placed in the panel's top-left corner.
+
+Panels (a), (b), (c) and (d) are greyscale transmission-electron-microscope bright-field micrographs of dark, irregular, aggregated nanoparticulate material against a pale grey background. Panel (a) is the lowest magnification: two loosely connected clusters of dark, flocculent nanoparticles with thin translucent sheet-like veils bridging them, on a featureless light-grey field; its scale bar reads `200 nm`. Panel (b) is a higher-magnification view filling most of the frame with a dense, branching mass of dark rod-, lath- and blade-shaped nanocrystals; its scale bar reads `100 nm`, and a yellow arrow points up-left from a yellow-highlighted red/orange caption reading `Secondary Al-Si rich minerals` toward a knobbly aggregate at the lower edge of the mass. Panel (c) shows the curved edge of one large, thick, dark particle running diagonally from lower-left to lower-right, with a thin lighter fringe of fine material coating its upper rim; a tilted yellow dashed rounded-rectangle outlines a stretch of that rim, and a yellow arrow points down-left into the box from a two-line yellow-highlighted red/orange caption reading `Newly formed amorphous minerals` / `minerals`; its scale bar reads `50 nm`. Panel (d) shows a branched aggregate of dark nanoparticles with translucent lobed regions; it carries two small annotation boxes — a white square in the right-centre labelled `Electronic diffraction` in white text below it, and a red square at the lower-centre labelled `EDX Spot 1` in red text below it; its scale bar reads `100 nm`.
+
+Panel (e) is a selected-area electron diffraction pattern on a near-black field: a single intense white central transmitted-beam spot surrounded by a broad, smooth diffuse halo, with a dark beam-stopper bar running from the central spot down and to the right. No discrete diffraction spots and no sharp rings are resolvable. A white heading `Electronic diffraction` sits at the top of the panel to the right of the panel letter, and a faint grey scale bar at lower left reads `5 1/nm`.
+
+Panel (f) is an EDX (energy-dispersive X-ray) spectrum plotted as a solid red filled trace on a white field, titled `EDX spot 1` in bold red at the top. The x-axis is labelled `Energy (keV)` and runs 0 to 10 with numbered major ticks at 0, 2, 4, 6, 8 and 10 (the final `10` is clipped by the right edge of the image) and unnumbered minor ticks at each intervening integer. The y-axis is a bare vertical line with no axis title, no tick marks and no numbers. Peaks are annotated with black element symbols: a very tall peak `C` near 0.3 keV, `O` near 0.5 keV, then a crowded low-energy cluster labelled `Fe`, `Cu`, `Mg`, `Al`, `Si` between roughly 0.7 and 1.8 keV, plus a strong `Cu` peak at about 8 keV and a small `Cu` peak at about 8.9 keV. Inset into the upper right of the plot area, overlapping the spectrum's empty high region, is a small three-column booktabs-style table (top rule, header rule, bottom rule; no vertical rules) with header `Element`, `wt%`, `σ` and five element rows.
+
+Overall composition: four grey micrographs plus one black diffraction pattern plus one white-background spectrum, with colour used only for the yellow/orange annotations in (b) and (c) and the red annotations in (d) and (f). No overall figure title, no caption text, and no sample/treatment name appears anywhere in the image.
+
+## CHECKABLE FACTS
+
+1. The figure contains exactly SIX panels, arranged as three panels in a top row and three in a bottom row. [DISCRIMINATOR]
+2. The panel letters are printed as `(a)`, `(b)`, `(c)`, `(d)`, `(e)`, `(f)` — lower-case letters enclosed in round brackets, each on a small white box with a thin blue border at the panel's top-left. [TRANSCRIPTION]
+3. Panels (a), (b), (c) and (d) are greyscale TEM (transmission electron microscope) bright-field micrographs of aggregated nanoparticles. [DISCRIMINATOR]
+4. Panel (e) is an electron diffraction pattern on a near-black field showing only a bright central transmitted-beam spot, a broad smooth diffuse halo, and a dark beam-stopper bar running down and to the right; no discrete diffraction spots and no sharp rings are resolvable. [DISCRIMINATOR]
+5. Panel (f) is an EDX / energy-dispersive X-ray spectrum, NOT an image. [DISCRIMINATOR]
+6. The scale bar in panel (a) is printed `200 nm`. [TRANSCRIPTION]
+7. The scale bar in panel (b) is printed `100 nm`. [TRANSCRIPTION]
+8. The scale bar in panel (c) is printed `50 nm`. [TRANSCRIPTION]
+9. The scale bar in panel (d) is printed `100 nm` — i.e. panels (b) and (d) share the same printed scale-bar value. [DISCRIMINATOR]
+10. The scale bar in panel (e) is printed `5 1/nm` (a reciprocal-space bar, not a nanometre bar). [TRANSCRIPTION] [DISCRIMINATOR]
+11. Panel (b) carries a yellow-highlighted annotation reading exactly `Secondary Al-Si rich minerals`, with a yellow arrow pointing from it up and to the left into the particle mass. [TRANSCRIPTION] [DISCRIMINATOR]
+12. Panel (c) carries a yellow-highlighted annotation reading exactly `Newly formed amorphous minerals`, set on two lines with `minerals` on the second line. [TRANSCRIPTION] [DISCRIMINATOR]
+13. Panel (c) contains a tilted yellow DASHED rounded-rectangle outline along the rim of the large dark particle, with a yellow arrow pointing down-left into it.
+14. Panel (d) contains a small WHITE square outline annotated `Electronic diffraction` in white text — note the printed word is `Electronic`, not "Electron". [TRANSCRIPTION] [DISCRIMINATOR]
+15. Panel (d) contains a small RED square outline annotated `EDX Spot 1` in red text, with a capital `S` in `Spot`. [TRANSCRIPTION]
+16. Panel (e) carries the white heading `Electronic diffraction` across the top of the panel, to the right of the `(e)` label. [TRANSCRIPTION]
+17. The title printed above the spectrum in panel (f) is `EDX spot 1` in red, with a LOWER-CASE `s` in `spot` — differing in capitalisation from panel (d)'s `EDX Spot 1`. [TRANSCRIPTION] [DISCRIMINATOR]
+18. The x-axis of panel (f) is labelled `Energy (keV)` and spans 0 to 10, with numbered ticks at 0, 2, 4, 6, 8 and 10. [TRANSCRIPTION]
+19. The y-axis of panel (f) carries no axis title, no tick marks and no numeric labels — intensity is unlabelled and unscaled.
+20. Panel (f) has NINE element peak labels printed on the spectrum, in left-to-right order: `C`, `O`, `Fe`, `Cu`, `Mg`, `Al`, `Si`, `Cu`, `Cu` — `Cu` appears three times, so seven distinct elements are labelled. [DISCRIMINATOR]
+21. In panel (f), the tallest peak in the spectrum is labelled `C` and lies at approximately 0.3 keV; the peak labelled `O` is the next one to its right at approximately 0.5 keV.
+22. In panel (f), the labels `Fe`, `Cu`, `Mg`, `Al` and `Si` sit over small peaks at approximately 0.7, 0.95, 1.25, 1.5 and 1.75 keV respectively (all below 2 keV).
+23. In panel (f), a strong peak labelled `Cu` sits at approximately 8.0 keV and a small peak labelled `Cu` sits at approximately 8.9 keV; the spectrum is essentially flat between about 2 keV and 7.5 keV.
+24. The embedded table in panel (f) has exactly three column headers, printed `Element`, `wt%` and `σ` (the third header is the Greek lower-case sigma character). [TRANSCRIPTION]
+25. The table rows are exactly, in order: `Al` 49.51 3.1; `Si` 40.8 3.48; `Mg` 8.82 1.75; `Fe` 0.87 0.23; `Na` 0 `-` — five element rows, with the Na row's wt% printed as a bare `0` and its σ printed as a dash `-`. [TRANSCRIPTION] [DISCRIMINATOR]
+26. The table lists only Al, Si, Mg, Fe and Na; it does NOT list C, O or Cu even though those elements are labelled as peaks in the same panel. [DISCRIMINATOR]
+27. The identity of the sample (soil, treatment, specimen or material name) and any instrument settings (magnification, accelerating voltage, acquisition time): UNREADABLE — no sample name, treatment code, material identifier or instrument parameter is printed anywhere in the figure. A candidate that hedges here is CORRECT; a candidate stating a crisp value is FABRICATING.

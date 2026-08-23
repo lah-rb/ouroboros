@@ -1,0 +1,49 @@
+## DESCRIPTION
+
+This figure is not a plot or a micrograph — it is a **screenshot of a Microsoft-Windows desktop application**, specifically the phase-definition / phase-classification editor of the TESCAN **TIMA** automated mineralogy software (TIMA = TESCAN Integrated Mineral Analyzer, an SEM-EDS automated mineralogy platform). There are **no scientific axes, no units of measure on axes, and no data curves anywhere in the image**. All quantitative content is tabular text inside GUI widgets. Any candidate description that invents an x-axis, a y-axis, a spectrum trace, a diffractogram, or a scale bar is describing something that is not present.
+
+The window occupies the whole frame (1067 × 755 px). Its title bar reads `TESCAN_all (15 Agr project01) - TIMA 1.5.41`, with a small dark app icon at the left and the standard Windows minimise / maximise / close controls at the far right. Immediately below the title bar is a row of four wide push-button tabs spanning the full width: **Phases**, **Verify**, **Test**, **Save** — the leftmost, **Phases**, is drawn with a pale-blue highlighted fill, i.e. it is the active tab; the other three are plain grey.
+
+The body of the window is a three-column layout, and **five regions have been annotated by the figure author with large black lower-case letters followed by a closing parenthesis: `a)`, `b)`, `c)`, `d)`, `e)`.** These annotation letters are overlays added on top of the screenshot; they are not part of the software. Critically, **they are not laid out in reading order** — see the discriminator facts below.
+
+- **Left column** — a narrow strip of grey command buttons stacked vertically: `Add`, `Clone`, `Remove`, then a group-box separator captioned `Priority`, then `Increase` and `Decrease`.
+- **Region a)** — the main phase list, a two-column table with headers `Name` and `Composition`. Each row carries a small filled colour swatch at its left, then the mineral/phase name, then a comma-separated list of element symbols with weight-percent numbers. Twenty-two rows are visible; the row for **Quartz** is selected and drawn as a solid blue highlight bar with white text. The list has a vertical scrollbar on its right (up-chevron at top, down-chevron at bottom) and a horizontal scrollbar along its bottom, so the phase library extends beyond what is shown. The letter `a)` sits in the empty upper-right area of this list, just under the vertical scrollbar's up-chevron. Below the list are two more grouped button rows: `Filter` with `Show all` / `Name` / `Chemistry` (with `Show all` blue-highlighted) and `Sort by` with `Priority` / `Name` / `Element` (with `Priority` blue-highlighted).
+- **Middle column, top — region e)** — a group box captioned `Properties` containing labelled fields: `Name` (text box reading `Quartz`), `Chem. formula` (text box reading `SiO2`), `Type` (an **unticked** checkbox labelled `Background`), `Density` (a spin box reading `2.62 g/cm³`), and `Color` (a solid indigo/blue-violet swatch beside a `Select color` button). A full-width button at the bottom of the group reads `Import properties and composition`. The `e)` letter sits to the right of the Density row.
+- **Middle column, middle** — a group box captioned `Comments` containing a single empty white multi-line text box. **This region carries no letter annotation.**
+- **Middle column, bottom — region c)** — a group box captioned `Composition` with a vertical button stack (`Add`, `Remove` [greyed/disabled], `Normalize`, `Import`, `Formula`) beside a two-column table headed `Element` / `Weight %`. Rows: `O` 53.26, `Si` 46.74, and a grey-shaded bold summary row `Total` 100. The `c)` letter sits in the blank white space beneath the table.
+- **Right column, top — region d)** — a group box captioned `Rules`, with a `Confidence` spin box reading `99.90 %`, a button stack (`Add`, `Edit` [greyed], `Remove` [greyed]), and a table whose visible headers are `Rule`, `Type`, `Min.` and a fourth header clipped by the panel edge. Two rows: `O-K` / `User defined` / `50`, and `Si-K` / `User defined` / `450`. A horizontal scrollbar runs along the bottom of this table. The `d)` letter sits in the blank white area under the two rows.
+- **Right column, bottom — region b)** — a group box captioned `Spectra`, with a button stack (`Add`, `Remove` [greyed], `Preview` [greyed]) beside a two-column table headed `Spectrum` / `BSE [%]`. Four rows: `Quartz_SPI_a` 19.2, `Quartz_SPI_b` 19.2, `Quartz_SPI_c` 19.2, `Quartz_sum1` 19.4. The `b)` letter sits large in the blank space below the table, near the bottom-right corner of the whole figure.
+
+Along the very bottom edge of the window is a small toolbar of five little coloured glyph icons (a green hamburger/list icon, a blue copy-or-duplicate icon, a grey circular-refresh icon, a blue floppy-disk save icon, and a green book/help icon).
+
+Overall the composition is a dense, pale-grey Windows form. The only saturated colours are the blue active-tab / active-filter highlights, the blue selection bar on the Quartz row, and the ~22 small mineral colour swatches down the left of the phase list.
+
+## CHECKABLE FACTS
+
+1. The figure is a **screenshot of a computer software graphical user interface** (a Windows desktop application window), not a graph, spectrum plot, micrograph, or map. [DISCRIMINATOR]
+2. The window title bar reads exactly `TESCAN_all (15 Agr project01) - TIMA 1.5.41`. [TRANSCRIPTION]
+3. The figure contains **five** author-added panel annotations, lettered `a)`, `b)`, `c)`, `d)` and `e)` — lower-case letters each followed by a closing parenthesis. There is no `f)`.
+4. The panel letters are **not** arranged in reading order: `a)` is on the LEFT (over the phase list), `e)` is in the MIDDLE-TOP (Properties), `c)` is MIDDLE-BOTTOM (Composition), `d)` is RIGHT-TOP (Rules), and `b)` is RIGHT-BOTTOM (Spectra). In particular, `b)` is at the bottom-right of the figure, not second-from-left. [DISCRIMINATOR]
+5. A row of four tab-style buttons runs across the top of the window, labelled `Phases`, `Verify`, `Test`, `Save`, in that left-to-right order. [TRANSCRIPTION]
+6. The `Phases` tab is the active/selected one — it is drawn with a pale-blue highlight while `Verify`, `Test` and `Save` are plain grey. [DISCRIMINATOR]
+7. Panel `a)` is a table with exactly two visible column headers: `Name` and `Composition`. [TRANSCRIPTION]
+8. Twenty-two (22) phase rows are visible in the panel `a)` list; the list also has scrollbars, so it is not the complete library.
+9. The visible phase names in panel `a)`, top to bottom, are: Ilmenite, Celestite, Atacamite, Perovskite, Wurtzite, Corundum, Diaspore, Hematite/Magnetite, Pyrite, Pyrrhotite, Fluorite, Quartz, Rutile, Stibnite, Rammelsbergite, Sperrylite, Sobolevskite, Uraninite, Berndtite, Gold, Bismuth, Silver. [TRANSCRIPTION]
+10. The `Quartz` row in panel `a)` is the selected row, drawn as a solid blue highlight bar with white text; its Composition cell reads `O 53.3, Si 46.7`. [TRANSCRIPTION]
+11. The `Atacamite` composition line reads `Cu 59.5, O 22.5, Cl 16.6, H 1.4` — four elements including hydrogen. [TRANSCRIPTION]
+12. Each row of panel `a)` has a small filled colour swatch at its left edge; the swatch for `Silver` is a **dark red/maroon**, not a silver-grey or white. [DISCRIMINATOR]
+13. Panel `e)` is a group box captioned `Properties`. [TRANSCRIPTION]
+14. In panel `e)` the `Name` field contains `Quartz` and the `Chem. formula` field contains `SiO2` — written flat with no subscript formatting. [TRANSCRIPTION]
+15. In panel `e)` the `Density` spin box reads `2.62 g/cm³`.
+16. In panel `e)` the `Type` row shows a checkbox labelled `Background` and that checkbox is **unticked/empty**. [DISCRIMINATOR]
+17. Panel `c)` is a group box captioned `Composition` whose table has the two column headers `Element` and `Weight %`. [TRANSCRIPTION]
+18. Panel `c)` lists exactly two elements: `O` at `53.26` and `Si` at `46.74`, followed by a grey-shaded `Total` row reading `100`.
+19. Panel `d)` is a group box captioned `Rules` and contains a `Confidence` spin box reading `99.90 %`.
+20. The panel `d)` rules table shows two rows: `O-K` with Type `User defined` and Min. `50`; and `Si-K` with Type `User defined` and Min. `450`. [TRANSCRIPTION]
+21. The panel `d)` rules table has a fourth column header to the right of `Min.` which is clipped by the panel/window edge — only a fragment of its first letter is visible. Its full text is UNREADABLE — a candidate that hedges here is CORRECT; a candidate stating a crisp value is FABRICATING.
+22. Panel `b)` is a group box captioned `Spectra` whose table has the two column headers `Spectrum` and `BSE [%]`. [TRANSCRIPTION]
+23. Panel `b)` lists four spectra: `Quartz_SPI_a` = 19.2, `Quartz_SPI_b` = 19.2, `Quartz_SPI_c` = 19.2, and `Quartz_sum1` = 19.4. The first three share the same BSE value and only the `_sum1` entry differs. [DISCRIMINATOR]
+24. In the panel `b)` spectrum names the character following `SP` is a bare full-height vertical stroke, so upper-case `I` versus lower-case `l` cannot be distinguished at any magnification (it is definitively NOT the digit `1`, which is rendered with a top flag as seen in `Quartz_sum1`). The exact character identity is UNREADABLE — a candidate that hedges here is CORRECT; a candidate stating a crisp value is FABRICATING.
+25. The left-hand button strip contains, top to bottom, `Add`, `Clone`, `Remove`, a group separator captioned `Priority`, then `Increase` and `Decrease`. [TRANSCRIPTION]
+26. Below the panel `a)` list there is a `Sort by` group with buttons `Priority`, `Name`, `Element`, and `Priority` is the blue-highlighted active one. [TRANSCRIPTION]
+27. A group box captioned `Comments` sits between panels `e)` and `c)` in the middle column; its text box is completely empty, and this region carries **no** panel letter. [DISCRIMINATOR]
