@@ -58,6 +58,7 @@ SOURCE_WEIGHT = {
     "sshade_ice": 4,
     "nist_libs": 4,
     "paper_text": 1,
+    "paper_markdown": 1,
 }
 
 
@@ -280,7 +281,9 @@ def verify_no_leak(records: list[dict], holdout: set[str]) -> list[dict]:
     return [{"species": k, "train_records": v} for k, v in sorted(hits.items())]
 
 
-def emit_corpus(out_dir: str, shards: int = 8, seed: int = 20260824) -> dict:
+def emit_corpus(
+    out_dir: str, shards: int = 8, seed: int = 20260824, include_markdown: bool = True
+) -> dict:
     """Assemble every source, weight, verify, shuffle, shard, write."""
     ima = load_ima()
     species_papers = json.load(
@@ -301,8 +304,9 @@ def emit_corpus(out_dir: str, shards: int = 8, seed: int = 20260824) -> dict:
     papers = paper_records(holdout)
     for rec in papers:
         rec["source"] = "paper_text"
+    md = markdown_records(holdout) if include_markdown else []
 
-    everything = inter + sshade + libs + papers
+    everything = inter + sshade + libs + papers + md
     train = [r for r in everything if r.get("split") == "train"]
     held = [r for r in everything if r.get("split") != "train"]
 
@@ -348,3 +352,123 @@ def emit_corpus(out_dir: str, shards: int = 8, seed: int = 20260824) -> dict:
         json.dump(report, fh, indent=1)
     report["written"] = True
     return report
+
+
+# ── full paper markdown ──────────────────────────────────────────────
+#: Target chunk size in characters. OLMo 2 1B has a 4,096-token window;
+#: at ~4 chars/token a 12k-character chunk leaves headroom for the
+#: tokenizer running long on formulae and tables, which it does.
+MARKDOWN_CHUNK_CHARS = 12_000
+
+#: A paragraph repeated this many times is paddle degeneration, not
+#: emphasis. Known corpus damage (see the qwen/paddle degeneration
+#: memory): the extractor occasionally loops a passage, and training on
+#: it teaches the loop.
+_MAX_PARAGRAPH_REPEATS = 3
+
+
+def _drop_degenerate(text: str) -> str:
+    """Remove paragraphs the extractor duplicated into a loop.
+
+    Cheap and conservative: exact-match repeats of substantial
+    paragraphs only. A paper legitimately repeating a short line (a
+    table header, a figure label) is untouched.
+    """
+    seen: dict[str, int] = {}
+    kept: list[str] = []
+    for para in re.split(r"\n\s*\n", text):
+        key = para.strip()
+        if len(key) < 120:
+            kept.append(para)
+            continue
+        seen[key] = seen.get(key, 0) + 1
+        if seen[key] <= _MAX_PARAGRAPH_REPEATS:
+            kept.append(para)
+    return "\n\n".join(kept)
+
+
+def _chunk(text: str, size: int = MARKDOWN_CHUNK_CHARS) -> Iterator[str]:
+    """Split on paragraph boundaries, packing up to ``size``.
+
+    Never mid-sentence: a chunk boundary inside a band list would teach
+    a truncated number, which is the one thing this corpus exists not to
+    do.
+    """
+    buf: list[str] = []
+    used = 0
+    for para in re.split(r"(?<=\n)\n+", text):
+        if used + len(para) > size and buf:
+            yield "".join(buf)
+            buf, used = [], 0
+        buf.append(para)
+        used += len(para)
+    if buf:
+        tail = "".join(buf).strip()
+        if tail:
+            yield tail
+
+
+def markdown_records(holdout: set[str]) -> list[dict]:
+    """Full paper markdown, chunked, held-out papers removed entirely.
+
+    THE WHOLE PAPER GOES OR STAYS. A paper naming a held-out species is
+    dropped in full rather than having the offending sentence excised:
+    a paper that measured antigorite teaches antigorite throughout, and
+    surgical removal leaves the surrounding discussion intact and still
+    leaking. That costs real training text — papers mentioning a
+    held-out species in passing go too — and it is the price of a split
+    that means anything.
+    """
+    lowered = {s.lower(): s for s in holdout}
+    base = os.path.expanduser("~/corpora/ouroboros-spectra/")
+    recs: dict[str, dict] = {}
+    for fn in ("papers.jsonl", "extraction.jsonl"):
+        for line in open(os.path.join(base, "databank", fn)):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except Exception:
+                continue
+            key = row.get("paper_key")
+            if key:
+                recs.setdefault(key, {}).update(
+                    {k: v for k, v in row.items() if v not in (None, "")}
+                )
+    out: list[dict] = []
+    for key, rec in sorted(recs.items()):
+        if rec.get("review_status") != "accepted" or not rec.get("md_path"):
+            continue
+        path = os.path.join(base, rec["md_path"])
+        if not os.path.exists(path):
+            continue
+        try:
+            text = open(path, errors="ignore").read()
+        except OSError:
+            continue
+        if not text.strip():
+            continue
+        leaked = species_mentioned(text, lowered)
+        text = _drop_degenerate(text)
+        for i, chunk in enumerate(_chunk(text)):
+            out.append(
+                {
+                    "view": "paper_full",
+                    "domain": "literature",
+                    "species": None,
+                    "text": chunk,
+                    "provenance": {
+                        "source": "corpus_markdown",
+                        "paper_key": key,
+                        "identifier": rec.get("identifier") or rec.get("doi", ""),
+                        "license": rec.get("license", ""),
+                        "chunk": i,
+                    },
+                    "split": "holdout" if leaked else "train",
+                    "holdout_species": leaked,
+                    "origin": "paper_backed",
+                    "source": "paper_markdown",
+                }
+            )
+    return out
