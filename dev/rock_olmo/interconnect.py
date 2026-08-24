@@ -123,6 +123,22 @@ def within_tolerance(reported: float, reference: float) -> bool:
     return abs(reported - reference) <= ACCEPTED_COMPARISON_CM1
 
 
+#: derivation tag -> how the position was obtained, in words.
+_DERIVATION_PHRASES = {
+    "peak_pick": "peak-picked from the {source} spectrum",
+    "trough_pick": "read as absorption minima from the {source} spectrum",
+    "formula_to_lines": "derived from the formula against {source}",
+}
+
+
+def _derivation_phrase(provenance: dict) -> str:
+    source = provenance.get("source", "the reference")
+    tag = provenance.get("derivation")
+    if tag in _DERIVATION_PHRASES:
+        return _DERIVATION_PHRASES[tag].format(source=source)
+    return f"as catalogued by {source}"
+
+
 def _tol_phrase(reported: float, reference: float) -> str:
     """How a reported value relates to the reference.
 
@@ -163,12 +179,12 @@ def view_forward(
     body = _fmt_peaks(peaks)
     if not body:
         return {}
-    derived = provenance.get("derivation") == "peak_pick"
-    how = (
-        f"peak-picked from the {provenance.get('source','reference')} spectrum"
-        if derived
-        else f"as catalogued by {provenance.get('source','the reference')}"
-    )
+    # ANY derivation, not just peak_pick. Checking one derivation name
+    # made ECOSTRESS trough-picks read "as catalogued by ECOSTRESS" —
+    # asserting the library published positions it does not publish,
+    # which is precisely the provenance smoothing this module exists to
+    # avoid.
+    how = _derivation_phrase(provenance)
     return {
         "view": "forward",
         "species": species,
@@ -242,13 +258,9 @@ def view_corroboration(
     species: str, reported: float, reference: float, tech: str, paper: dict, ref: dict
 ) -> dict:
     """A paper's reported position beside the reference position."""
-    derived = ref.get("derivation") == "peak_pick"
-    ref_desc = (
-        f"peak-picked from the {ref.get('source','reference')} spectrum of "
-        f"{ref.get('sample_id','a characterised specimen')}"
-        if derived
-        else f"catalogued by {ref.get('source','the reference')}"
-    )
+    ref_desc = _derivation_phrase(ref)
+    if ref.get("sample_id"):
+        ref_desc += f" of {ref['sample_id']}"
     return {
         "view": "corroboration",
         "species": species,

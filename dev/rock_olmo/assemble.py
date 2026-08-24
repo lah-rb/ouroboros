@@ -220,7 +220,9 @@ def load_reference_modalities(
 
 
 # ── sibling grouping (contrastive view) ──────────────────────────────
-def formula_siblings(ima: dict[str, str], refmods: dict[str, dict]) -> dict[str, list[dict]]:
+def formula_siblings(
+    ima: dict[str, str], refmods: dict[str, dict], exclude: set[str] | None = None
+) -> dict[str, list[dict]]:
     """species -> co-members of its formula group that have spectra.
 
     Only species with peaks can be contrasted; naming a sibling we
@@ -228,8 +230,16 @@ def formula_siblings(ima: dict[str, str], refmods: dict[str, dict]) -> dict[str,
     (antigorite / lizardite / chrysotile all being Mg3Si2O5(OH)4), so
     grouping is on the formula alone.
     """
+    # HELD-OUT SPECIES ARE EXCLUDED FROM SIBLING LISTS. A contrastive
+    # view names every member of its formula group, so a train species
+    # whose group contains a held-out one leaks it verbatim: "Anatase,
+    # Brookite, Rutile share the composition Ti4+O2" published two
+    # held-out names while training on rutile.
+    exclude = exclude or set()
     groups: dict[str, list[str]] = collections.defaultdict(list)
     for species, formula in ima.items():
+        if species in exclude:
+            continue
         key = normalise_formula(formula)
         if key and species in refmods and refmods[species]["modalities"].get("Raman"):
             groups[key].append(species)
@@ -313,6 +323,14 @@ def _species_papers_path() -> str:
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "species_papers.json")
 
 
+def _names_any(text: str, lowered: dict[str, str]) -> bool:
+    """Whether ``text`` names any of ``lowered``, on word boundaries."""
+    low = (text or "").lower()
+    return any(
+        re.search(rf"(?<![a-z]){re.escape(k)}(?![a-z])", low) for k in lowered
+    )
+
+
 def assemble(rruff_archive: str = "excellent_unoriented.zip", limit_species: int = 0) -> dict:
     """Build the record stream. Deterministic end to end."""
     ima = load_ima()
@@ -320,7 +338,7 @@ def assemble(rruff_archive: str = "excellent_unoriented.zip", limit_species: int
     holdout = {s for picks in select_holdout(species_papers, ima).values() for s in picks}
     refmods = load_reference_modalities(rruff_archive=rruff_archive)
     reports = load_paper_reports({s: ima.get(s, "") for s in species_papers})
-    siblings = formula_siblings(ima, refmods)
+    siblings = formula_siblings(ima, refmods, exclude=holdout)
     corpus_classes = collections.Counter(
         (refmods.get(s, {}).get("facts", {}) or {}).get("mineral_class") or "unknown"
         for s in species_papers
@@ -328,6 +346,8 @@ def assemble(rruff_archive: str = "excellent_unoriented.zip", limit_species: int
 
     records: list[dict] = []
     stats: collections.Counter = collections.Counter()
+
+    holdout_lower = {h.lower(): h for h in holdout}
 
     def emit(species: str, split: str, origin: str) -> int:
         formula = ima.get(species, "")
@@ -356,6 +376,19 @@ def assemble(rruff_archive: str = "excellent_unoriented.zip", limit_species: int
         # records — one view drowning the other four, which defeats the
         # point of having four. Closest pairs first, so the cap keeps
         # the most informative comparisons.
+        # A CITATION CAN LEAK. Paper titles name the species they
+        # studied, so "Raman spectroscopic study of azurite and
+        # malachite" published a held-out name inside a malachite
+        # record. Titles naming a held-out species are replaced with a
+        # neutral reference rather than dropping the comparison, which
+        # is still valid data about the species being trained on.
+        if split == SPLIT_TRAIN and holdout_lower:
+            for entry in reported:
+                title = (entry.get("paper") or {}).get("citation") or ""
+                if _names_any(title, holdout_lower):
+                    entry["paper"] = dict(
+                        entry["paper"], citation="a study in this corpus", citation_redacted=True
+                    )
         reported.sort(key=lambda r: abs(r["reported"] - r["reference"]))
         reported = reported[:MAX_CORROBORATIONS_PER_SPECIES]
         views = build_views(

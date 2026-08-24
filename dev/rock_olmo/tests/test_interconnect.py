@@ -182,3 +182,32 @@ def test_pairs_beyond_tolerance_are_gated_out_entirely():
     corr = [v for v in build_views(rec) if v["view"] == "corroboration"]
     assert len(corr) == 1
     assert "Y" in corr[0]["text"]
+
+
+# ── derivation honesty across sources ────────────────────────────────
+def test_trough_picks_are_not_described_as_catalogued():
+    """Regression: checking only "peak_pick" made ECOSTRESS trough
+    positions read "as catalogued by ECOSTRESS", asserting the library
+    published positions it does not publish."""
+    rec = {
+        "species": "Ilmenite",
+        "formula": "Fe2+Ti4+O3",
+        "modalities": {"thermal infrared": [{"position_um": 12.522}]},
+        "provenance": {
+            "thermal infrared": {"source": "ECOSTRESS", "derivation": "trough_pick"}
+        },
+    }
+    text = next(v for v in build_views(rec) if v["view"] == "forward")["text"]
+    assert "absorption minima" in text
+    assert "catalogued" not in text
+
+
+def test_genuinely_catalogued_data_still_says_catalogued():
+    rec = {
+        "species": "Ilmenite",
+        "formula": "Fe2+Ti4+O3",
+        "modalities": {"Raman": [{"position_cm-1": 680.0}]},
+        "provenance": {"Raman": {"source": "SomeCatalogue"}},
+    }
+    text = next(v for v in build_views(rec) if v["view"] == "forward")["text"]
+    assert "catalogued by SomeCatalogue" in text
