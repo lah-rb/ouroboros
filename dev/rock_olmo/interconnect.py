@@ -51,13 +51,38 @@ PRIORITY_SOURCES = ("RRUFF", "ECOSTRESS", "SSHADE", "NIST_ASD")
 VIEWS = ("forward", "inverse", "cross_modal", "contrastive", "corroboration")
 
 
+#: Position key -> the unit it is expressed in. A feature list carries
+#: its own axis: Raman/FTIR peaks are wavenumbers, reflectance troughs
+#: are wavelengths. Hardcoding one key silently formatted the other to
+#: an empty string, so the cross-modal view saw a single modality and
+#: emitted nothing — 0 cross_modal records until this was found, despite
+#: 172 species having two or more modalities indexed.
+_POSITION_KEYS = (
+    ("position_cm-1", "cm-1"),
+    ("position_um", "um"),
+    ("position_nm", "nm"),
+    ("peak_cm-1", "cm-1"),
+    ("wavelength_nm", "nm"),
+)
+
+
 def _fmt_peaks(
-    peaks: Iterable[dict], key: str = "position_cm-1", unit: str = "cm-1"
+    peaks: Iterable[dict], key: str | None = None, unit: str | None = None
 ) -> str:
+    peaks = list(peaks)
+    if not peaks:
+        return ""
+    if key is None:
+        for candidate, candidate_unit in _POSITION_KEYS:
+            if any(candidate in p for p in peaks):
+                key, unit = candidate, candidate_unit
+                break
+    if key is None:
+        return ""
     vals = [p[key] for p in peaks if key in p]
     if not vals:
         return ""
-    return ", ".join(f"{v:g}" for v in vals) + f" {unit}"
+    return ", ".join(f"{v:g}" for v in vals) + (f" {unit}" if unit else "")
 
 
 #: Wavenumber agreement tiers, in cm-1. Set from BOTH a measurement over

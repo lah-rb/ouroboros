@@ -136,7 +136,12 @@ def pick_peaks(
                 "relative_intensity": round((y - lo) / (hi - lo), 3),
             }
         )
+    # Intensity CHOOSES which peaks to keep; position PRESENTS them.
+    # Ordering output by intensity implies "these are the most
+    # diagnostic bands", a judgement a local-maximum finder cannot make.
     out.sort(key=lambda p: -p["relative_intensity"])
+    out = out[:14]
+    out.sort(key=lambda p: p["position_cm-1"])
     return out
 
 
@@ -211,6 +216,86 @@ def iter_ecostress(limit: int = 0) -> Iterator[dict]:
         if rec["species"] and rec["kind"].strip().lower() == "mineral":
             rec["file"] = os.path.basename(f)
             yield rec
+
+
+def read_ecostress_spectrum(path: str) -> list[tuple[float, float]]:
+    """(wavelength_um, reflectance_percent) samples from an ECOSTRESS file."""
+    out: list[tuple[float, float]] = []
+    try:
+        with open(path, errors="ignore") as fh:
+            for line in fh:
+                parts = line.split()
+                if len(parts) != 2:
+                    continue
+                try:
+                    out.append((float(parts[0]), float(parts[1])))
+                except ValueError:
+                    continue
+    except OSError:
+        return []
+    return out
+
+
+def pick_troughs(
+    spectrum: list[tuple[float, float]],
+    min_depth_frac: float = 0.02,
+    min_separation: float = 0.15,
+) -> list[dict]:
+    """Absorption MINIMA of a reflectance spectrum, as derived features.
+
+    NOT pick_peaks with a sign flip in spirit — the physics differs and
+    so does the vocabulary. A Raman spectrum's information is in its
+    emission maxima; a reflectance or emissivity spectrum's is in its
+    absorption features, which are TROUGHS. A maxima-finder run over
+    reflectance data returns featureless continuum shoulders and misses
+    every diagnostic band, so this is a separate function.
+
+    Depth is measured against the LOCAL continuum (running maximum
+    either side) because a broad reflectance rolloff otherwise swamps
+    the shallow narrow features that identify a mineral.
+
+    The 2% default was calibrated on real data: on a mimetite TIR
+    spectrum spanning 0.3-76.5% reflectance, 5% returned 3 features and
+    1% returned 42 (noise), while 2% returned 16 — the right order for a
+    TIR spectrum's reststrahlen and Christiansen features.
+    """
+    if len(spectrum) < 5:
+        return []
+    # ECOSTRESS writes TIR spectra on a DESCENDING wavelength axis
+    # (15.4 -> 2.0 um), which made every separation gap negative and
+    # silently disabled de-duplication.
+    spectrum = sorted(spectrum)
+    ys = [y for _, y in spectrum]
+    lo, hi = min(ys), max(ys)
+    if hi <= lo:
+        return []
+    span = hi - lo
+    # EDGE GUARD: a minimum in the outermost few percent of a scan is
+    # usually the continuum turning over at the detector limit, and
+    # because those turns are deep, depth-ranking put them first.
+    x_lo, x_hi = spectrum[0][0], spectrum[-1][0]
+    margin = (x_hi - x_lo) * 0.05
+    out: list[dict] = []
+    for i in range(1, len(spectrum) - 1):
+        x, y = spectrum[i]
+        if x < x_lo + margin or x > x_hi - margin:
+            continue
+        if not (y < spectrum[i - 1][1] and y <= spectrum[i + 1][1]):
+            continue
+        left = max(ys[max(0, i - 25) : i] or [y])
+        right = max(ys[i + 1 : i + 26] or [y])
+        depth = (min(left, right) - y) / span
+        if depth < min_depth_frac:
+            continue
+        if out and x - out[-1]["position_um"] < min_separation:
+            if depth > out[-1]["relative_depth"]:
+                out[-1] = {"position_um": round(x, 3), "relative_depth": round(depth, 3)}
+            continue
+        out.append({"position_um": round(x, 3), "relative_depth": round(depth, 3)})
+    out.sort(key=lambda p: -p["relative_depth"])
+    out = out[:12]
+    out.sort(key=lambda p: p["position_um"])
+    return out
 
 
 # ── NIST ASD ─────────────────────────────────────────────────────────
