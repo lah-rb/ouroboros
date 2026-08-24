@@ -542,3 +542,140 @@ def test_step_end_carries_a_bounded_observations_preview():
     e = StepEnd(step="summarize", observations_preview="x" * 5000)
     assert hasattr(e, "observations_preview")
     assert _OBSERVATIONS_PREVIEW_CAP <= 2000
+
+
+# ── confirm-before-reopen (fixture collisions) ────────────────────────
+
+
+class _FlakyEffects(MockEffects):
+    """Fails a command the first N times, then passes it.
+
+    Models the live defect: the sweep runs its checks concurrently against ONE
+    shared workspace, so a check that writes its own fixture can have it
+    clobbered by a neighbour — red in the wave, green when run alone.
+    """
+
+    def __init__(self, flaky_cmd: str, fail_times: int = 1, **kw):
+        super().__init__(**kw)
+        self._flaky = flaky_cmd
+        self._left = fail_times
+        self.run_counts: dict[str, int] = {}
+
+    async def run_command(self, command, working_dir=None, timeout=30):
+        cmd_str = " ".join(command)
+        self.run_counts[cmd_str] = self.run_counts.get(cmd_str, 0) + 1
+        if cmd_str == _wrap(self._flaky):
+            if self._left > 0:
+                self._left -= 1
+                return CommandResult(
+                    return_code=1, stdout="", stderr="clobbered", command=cmd_str
+                )
+            return CommandResult(return_code=0, stdout="", stderr="", command=cmd_str)
+        return await super().run_command(command, working_dir, timeout)
+
+
+@pytest.mark.asyncio
+async def test_collision_red_does_not_reopen():
+    # The check fails in the wave and passes on the quiet re-run: a collision,
+    # not a regression. The goal must survive untouched — this is the exact
+    # loop that reopened one qwen3.8 goal 5x while it passed 6/6 in isolation.
+    beta = _goal("beta", [_check("play_and_assert")])
+    m = _mission([beta])
+    fx = _FlakyEffects("play_and_assert", fail_times=1)
+
+    out = await action_regression_sweep(_si(m, fx))
+
+    assert out.result["reopened"] == 0
+    assert beta.status == "complete"
+    assert beta.regression_check_failed is False  # never marked red
+    assert fx.run_counts[_wrap("play_and_assert")] == 2  # wave + confirmation
+    assert "1 collision(s) held back" in out.observations
+
+
+@pytest.mark.asyncio
+async def test_real_regression_survives_the_confirmation():
+    # The whole point of the guard is that it must not blunt real detection:
+    # a red that survives isolation still reopens, with its provenance intact.
+    beta = _goal("beta", [_check("really_broken")])
+    m = _mission([beta])
+    fx = _FlakyEffects("really_broken", fail_times=99)
+
+    out = await action_regression_sweep(_si(m, fx))
+
+    assert out.result["reopened"] == 1
+    assert beta.status == "incomplete"
+    assert beta.regression_check_failed is True
+    assert beta.regression_reopened is True
+    assert fx.run_counts[_wrap("really_broken")] == 2  # confirmed, then believed
+    assert "collision" not in out.observations
+
+
+@pytest.mark.asyncio
+async def test_confirmation_probes_from_a_cold_workspace(monkeypatch):
+    # Control #2 of the authored-test arm, reused: the re-run must start from
+    # the same flushed floor the acceptance rung will later use, or a fixture
+    # left by the wave decides the verdict.
+    import agent.actions.interactive_actions as ia
+
+    order: list[str] = []
+
+    async def _spy_flush(effects, mission):
+        order.append("flush")
+        return ["save.json"]
+
+    monkeypatch.setattr(ia, "flush_known_transients", _spy_flush)
+
+    class _OrderedEffects(_FlakyEffects):
+        async def run_command(self, command, working_dir=None, timeout=30):
+            order.append(" ".join(command))
+            return await super().run_command(command, working_dir, timeout)
+
+    beta = _goal("beta", [_check("writes_save_then_loads")])
+    m = _mission([beta])
+    fx = _OrderedEffects("writes_save_then_loads", fail_times=1)
+
+    await action_regression_sweep(_si(m, fx))
+
+    # wave run, THEN flush, THEN the confirmation run
+    assert order == [
+        _wrap("writes_save_then_loads"),
+        "flush",
+        _wrap("writes_save_then_loads"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_recomplete_direction_is_not_confirmed():
+    # A spurious red here only leaves a goal open for the next wave, so it buys
+    # nothing and would put a serial re-run on the common path.
+    beta = _reopened("beta", [_check("still_red")])
+    m = _mission([beta])
+    fx = _FlakyEffects("still_red", fail_times=1)
+
+    out = await action_regression_sweep(_si(m, fx))
+
+    assert out.result["autocompleted"] == 0
+    assert beta.status == "incomplete"
+    assert fx.run_counts[_wrap("still_red")] == 1  # no confirmation spent
+
+
+@pytest.mark.asyncio
+async def test_flush_failure_never_aborts_the_sweep(monkeypatch):
+    # The flush is best-effort: a workspace that refuses an unlink must not
+    # cost us the confirmation, or the guard evaporates exactly when the tree
+    # is in the odd state that most needs it.
+    import agent.actions.interactive_actions as ia
+
+    async def _boom(effects, mission):
+        raise OSError("read-only workspace")
+
+    monkeypatch.setattr(ia, "flush_known_transients", _boom)
+
+    beta = _goal("beta", [_check("play_and_assert")])
+    m = _mission([beta])
+    fx = _FlakyEffects("play_and_assert", fail_times=1)
+
+    out = await action_regression_sweep(_si(m, fx))
+
+    assert out.result["reopened"] == 0  # probed anyway, and it passed
+    assert beta.status == "complete"

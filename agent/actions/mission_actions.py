@@ -4784,6 +4784,11 @@ async def action_regression_sweep(step_input: StepInput) -> StepOutput:
       fix re-clears its whole blast radius in one deterministic wave instead of
       one interact cycle per goal.
 
+    Every reopen-direction FAILURE is re-run alone from a flushed workspace
+    before it is believed (see the confirm block below): the wave shares one
+    mutable tree, so a red can be a fixture collision rather than a broken
+    behaviour. Only a red that survives isolation reopens a goal.
+
     Skips the just-completed goal in the reopen direction (best-effort; the
     disarm backstop covers a missed skip). Always advances last_regression_cycle
     to disarm the PhaseRule until the next edit. A persistently-refuted
@@ -4862,6 +4867,7 @@ async def action_regression_sweep(step_input: StepInput) -> StepOutput:
     reopened: set[str] = set()
     autocompleted: set[str] = set()
     ran = 0
+    torn = 0  # reopen-direction failures that did not survive a quiet re-run
     if complete_pairs or recomplete_pairs:
         sem = asyncio.Semaphore(_REGRESSION_CONCURRENCY)
 
@@ -4900,6 +4906,90 @@ async def action_regression_sweep(step_input: StepInput) -> StepOutput:
             *[_run(g, c, "recomplete") for g, c in recomplete_pairs],
         )
         ran = len(outcomes)
+
+        # CONFIRM BEFORE REOPEN (2026-08-24). The pairs above run
+        # _REGRESSION_CONCURRENCY-wide against ONE shared workspace, so a red
+        # here is not yet evidence that a behaviour broke. Two mechanisms
+        # produce a red no code caused:
+        #   * FIXTURE COLLISION — a check that writes its own precondition
+        #     (`save.json`, then load it) has that file overwritten by another
+        #     check running beside it, or deleted by a pre-session transient
+        #     flush. The subprocess then loads someone else's state and never
+        #     reaches the asserted screen.
+        #   * TORN READ — a check that reads the tree catches it mid-edit,
+        #     between two writes of a multi-file repair.
+        # Measured on the qwen3.8 polish run: one goal reopened 5 times and was
+        # diagnosed 7 times while its check passed 6/6 when run alone. The
+        # existing backstops cannot see this — the authored-test arm declines
+        # (`recommended_flow='retest'` means no code change, so there is no
+        # negative control to author against) and the disarm counter only
+        # advances on the evaluator-contradiction route, which a sweep reopen
+        # never takes. The result is a goal that loops forever precisely
+        # BECAUSE the model keeps correctly reporting that nothing broke.
+        #
+        # So: re-run each reopen-direction failure ALONE, after the gather has
+        # drained and from a freshly flushed (cold) workspace — the same floor
+        # the authored-test probe uses. A real regression fails both times; a
+        # collision does not survive the quiet re-run.
+        #
+        # Only the REOPEN direction is confirmed. A spurious fail there
+        # DESTROYS verified state; a spurious fail in the recomplete direction
+        # merely leaves the goal open for the next wave, and paying a serial
+        # re-run for that would slow every sweep to buy nothing.
+        suspect = [
+            (i, o)
+            for i, o in enumerate(outcomes)
+            if o[0] == "reopen" and not o[3]["passed"]
+        ]
+        if suspect:
+            from agent.actions.interactive_actions import flush_known_transients
+
+            outcomes = list(outcomes)
+            for idx, (direction, goal, check, row) in suspect:
+                cmd = check["command"]
+                try:
+                    # Cold floor per check, not per batch: a prior confirmation
+                    # can leave the very fixture the next one must write itself.
+                    await flush_known_transients(effects, mission)
+                except Exception:  # noqa: BLE001 — never abort a sweep on flush
+                    logger.debug(
+                        "regression confirm: flush failed, probing anyway",
+                        exc_info=True,
+                    )
+                try:
+                    res = await effects.run_command(
+                        ["/bin/sh", "-c", cmd], timeout=_check_timeout(check)
+                    )
+                    confirmed_pass = res.return_code == 0 and not getattr(
+                        res, "timed_out", False
+                    )
+                except Exception:  # noqa: BLE001 — a bad check never aborts
+                    confirmed_pass = False
+                    res = None
+                if not confirmed_pass:
+                    continue  # the red survived isolation — a real regression
+                torn += 1
+                outcomes[idx] = (
+                    direction,
+                    goal,
+                    check,
+                    check_result(
+                        check.get("name", "acceptance check"),
+                        cmd,
+                        True,
+                        required=True,
+                        stdout=getattr(res, "stdout", ""),
+                        stderr=getattr(res, "stderr", ""),
+                        return_code=0,
+                    ),
+                )
+                logger.info(
+                    "Regression sweep: '%s' failed in the wave but PASSED alone "
+                    "from a cold workspace — collision, not a regression; not "
+                    "reopening. check=%s",
+                    goal.description[:50],
+                    cmd[:120],
+                )
 
         # Aggregate PER GOAL: reopen if ANY required check failed; auto-complete
         # only if ALL required checks pass (a per-check loop would auto-complete
@@ -4992,6 +5082,7 @@ async def action_regression_sweep(step_input: StepInput) -> StepOutput:
     obs = (
         f"ran {ran} check(s) over {n_goals} goal(s) -> {len(reopened)} reopened, "
         f"{len(autocompleted)} auto-completed"
+        + (f", {torn} collision(s) held back" if torn else "")
         if (complete_pairs or recomplete_pairs)
         else "no grounded checks to sweep"
     )
