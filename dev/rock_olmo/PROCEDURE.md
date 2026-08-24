@@ -201,21 +201,61 @@ disabled de-duplication.
 
 ---
 
-## 9. Emitter — NEXT
+## 9. Emitter
 
-Not built. Turns these records plus ~17M tokens of paper text into the
-training file:
+```bash
+cd dev/rock_olmo && ../../.venv/bin/python -c \
+  "import emit; print(emit.emit_corpus('<out_dir>', shards=8))"
+```
 
-- 4x weighting for the priority datasets (RRUFF, ECOSTRESS, SSHADE,
-  NIST ASD) delivered as views, not copies
-- holdout **physically separated**, verified absent from every view
-- SSHADE ices on their own join key (`species_inchikey`), a separate
-  domain from the minerals
-- shuffle and shard
+| | |
+|---|---|
+| train records | 4,456 -> **14,713 weighted**, ~1.15M tokens |
+| interconnect / paper / NIST-LIBS / SSHADE | 3,035 / 1,037 / 292 / 92 |
+| holdout | 322 records, written separately |
+| shards | 8, balanced at 1,839 each |
 
-**Open question worth answering before training rather than after:**
-162k interconnect tokens against ~17M of paper text is 0.8% of the
-corpus. Even at 4x it is under 4%. If the interconnects are meant to
-shape reasoning rather than add facts, that ratio may be too thin — the
-lever is more views per species (per-sample records, more techniques,
-more sibling groups), not more copies of these.
+**THE HOLDOUT IS A WRITE BARRIER, not a report.** The emitter refuses to
+write if a held-out species appears in any train record's rendered text.
+It refused three times and each was a real leak with a different cause:
+contrastive siblings naming held-out species while training on a third;
+paper TITLES used as citations ("Raman spectroscopic study of azurite
+and malachite"); and the check reading `title+data` while the record
+emitted `summary+facts`, so a review summary leaked past it. Any of the
+three would have shipped a silently contaminated eval.
+
+Matching is on WORD BOUNDARIES — bare substring flagged
+"Natrojarosite" as leaking "Jarosite", a different species whose name
+merely contains a held-out one.
+
+---
+
+## 10. Mix ratio — DECIDED
+
+Weighting is per RECORD, not per token, so the interconnects land at
+roughly **20% of the training mix** (3,035 of 4,456 unweighted records,
+but the paper text carries far more tokens per record). An earlier
+token-only estimate put them at 0.8%, which was the wrong denominator.
+
+**Operator ruling 2026-08-24: 20% stands for this pass.** Reasonable on
+its face, and the point of the run is to see what it produces. This is
+the dominant lever on whether the model learns to *do* spectroscopy
+rather than merely know facts about it, so it is the first number to
+revisit if the eval disappoints — upward via more views per species
+(per-sample records, more techniques, more sibling groups), not via more
+copies of the same views.
+
+---
+
+## 11. Remaining before a training run
+
+- **Shards must live somewhere durable.** The build writes wherever it
+  is pointed; a scratch directory is lost with the session.
+- OLMo 2 1B pulled to `~/models` with the HF token.
+- The 3090 freed — LLMVP holds it while the scraper runs.
+- SSHADE per-band VOTables are NOT mirrored (only the 68-row
+  catalogue), so no ice band positions are asserted. Mirroring them is
+  the cheapest available enrichment if the ices matter more later.
+- ECOSTRESS VSWIR is under-used: 156 species have reflectance troughs
+  indexed but the cross-modal view only reaches those that also have
+  Raman.
