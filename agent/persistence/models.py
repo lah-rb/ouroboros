@@ -47,6 +47,12 @@ class MissionConfig(BaseModel):
     # hacks); raising it on a completed mission + `mission resume` reopens
     # and continues the ladder (see completed_at_phase).
     top_phase: str = "quality"
+    # How many times the polish gate may RUN on one mission. Each entry is a
+    # full consumer session + questionnaire + reflection, and its findings
+    # land as functional goals that reopen work — so the phase re-enters by
+    # design and needs a bound, not a completion condition. 1 = one honest
+    # consumer pass. See flow_sets.PhaseRule(kind="polish_pending").
+    polish_max_entries: int = 1
     effects_profile: Literal["local", "git_managed", "dry_run"] = "local"
     escalation_budget_usd: float | None = None
     escalation_tokens_used: int = 0
@@ -1151,6 +1157,20 @@ class MissionState(BaseModel):
     # write, so this list is the durable, self-healing account.
     observed_transient_files: list[str] = Field(default_factory=list)
     environment_verified: bool = False  # Pipeline v9: set after project_ops succeeds
+    # ── Polish phase (rank 60), 2026-08-23 ───────────────────────────────
+    # quality_verified moves the quality gate from TERMINAL to a flag_unset
+    # rule so a phase can sit above it. A gate pass now SETS this instead of
+    # finalizing the mission; at the default top_phase (quality, rank 50) the
+    # rank-60 rules are skipped by the ceiling and exhaustion completes the
+    # mission exactly as before — one extra cycle, same end state.
+    quality_verified: bool = False
+    # Times the polish gate has RUN to conclusion. Bounded by
+    # config.polish_max_entries: a consumer run emits functional goals, which
+    # reopen work, which re-enters polish — without a bound this phase never
+    # terminates by construction. Plain int incremented in place (the
+    # reopen_count pattern); NOT a CRDT counter — mission_doc.COUNTER_FIELDS
+    # refuses fields it does not know.
+    polish_entries: int = 0
     # ── League run protocol (epoch v2.0, 2026-08-02) — both additive ──
     # The budget park now lands at the work→entry boundary, BEFORE the entry
     # flow books the finished flow's report; these tail-call inputs are

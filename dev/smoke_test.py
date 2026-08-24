@@ -416,6 +416,17 @@ FLOW_INPUTS = {
         "execution_persona": "You are a QA tester. Run the app and check basic functionality.",
         "working_directory": "/tmp/test-project",
     },
+    # ── polish phase (rank 60) ──
+    "polish_gate": {
+        "mission_id": "test-mission-001",
+        "working_directory": "/tmp/test-project",
+        "architecture_run_command": "python main.py",
+    },
+    "consumer_session": {
+        "execution_persona": "You were given this program free in exchange for honest feedback.",
+        "working_directory": "/tmp/test-project",
+        "launch_command": "python main.py",
+    },
 }
 
 # Flows that need special max_steps limits (complex sub-flow invocations
@@ -427,7 +438,9 @@ FLOW_MAX_STEPS = {}
 # ops_task is an honestly-long straight DAG (~25 steps, no internal loop)
 # that also EMBEDS run_session as a subflow — under mocks it exhausts any
 # budget inside that loop, exactly like run_session itself.
-EXPECTED_MAX_STEPS = {"run_session", "ops_task"}
+# consumer_session shares run_session's unbounded-exploration shape, so it
+# reaches the step ceiling in smoke for the same reason.
+EXPECTED_MAX_STEPS = {"run_session", "ops_task", "consumer_session"}
 
 
 async def smoke_test_flow(flow_name, flow_def, registry, all_flows, max_steps=15):

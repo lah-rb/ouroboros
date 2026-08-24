@@ -195,6 +195,15 @@ def build_action_registry() -> ActionRegistry:
     Returns:
         An ActionRegistry with all built-in actions registered.
     """
+    # ── Polish phase (rank 60) ────────────────────────────────────
+    from agent.actions.polish_actions import (
+        action_harvest_polish_findings,
+        action_mark_quality_verified,
+        action_split_consumer_brief,
+        action_prepare_questionnaire,
+        action_record_answer,
+    )
+
     # ── Mission control ───────────────────────────────────────────
     from agent.actions.mission_actions import (
         action_load_mission_state,
@@ -488,6 +497,12 @@ def build_action_registry() -> ActionRegistry:
     registry.register("reopen_curation_goal", action_reopen_curation_goal)
     registry.register("functional_sweep_next", action_functional_sweep_next)
     registry.register("harvest_quality_findings", action_harvest_quality_findings)
+    # ── polish phase (rank 60) ──
+    registry.register("mark_quality_verified", action_mark_quality_verified)
+    registry.register("prepare_questionnaire", action_prepare_questionnaire)
+    registry.register("record_answer", action_record_answer)
+    registry.register("harvest_polish_findings", action_harvest_polish_findings)
+    registry.register("split_consumer_brief", action_split_consumer_brief)
     registry.register("quality_sweep_next", action_quality_sweep_next)
     registry.register("warning_sweep_next", action_warning_sweep_next)
     registry.register("run_test_suite_gate", action_run_test_suite_gate)

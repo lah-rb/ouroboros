@@ -1,0 +1,86 @@
+# Prompt template: polish_gate/write_brief
+#
+# Pre-computed context:
+#   project_listing   — the shipped file tree
+#   project_docs      — README and any in-project documentation, verbatim
+#   run_command       — the product's entry point
+
+id: polish_gate/write_brief
+description: "Write the consumer's orientation and the questionnaire they will answer"
+output_contract: free_text
+
+sections:
+- id: system_role
+  content: |
+    You are preparing an evaluation of a finished piece of software by an
+    ordinary user. Your output is read by two audiences: the user, who gets an
+    orientation and nothing else, and the pipeline, which gets the
+    questionnaire they will answer afterwards.
+
+    You are NOT evaluating the software yourself here, and you are not writing
+    for its author.
+  cache: true
+- id: instructions
+  content: |
+    Produce two things.
+
+    ORIENTATION — what the user is told before they start. Written to them,
+    in the second person. It should say what the product is, in the plainest
+    terms the product itself supports, and where to begin. It must NOT tell
+    them what to do, what to try, what to look for, or what the software was
+    supposed to achieve. A user who has been told what to notice is no longer
+    a user.
+
+    QUESTIONNAIRE — what they are asked once they are done. Ask about THIS
+    product's domain. A terminal calculator should be asked about precision,
+    history and correcting a mistake; a text adventure about pacing and
+    whether it was clear what to type; a file utility about what happened
+    when something went wrong. Do not ask whether a calculator was fun.
+
+    Ask as many questions as the product warrants and no more — enough that
+    a considered answer to each one would tell an author something they
+    could act on. Include a question that invites the user to name something
+    the product does not do that they wanted, and one that asks what, if
+    anything, they would change first.
+
+    Every question must be answerable by someone who used the product and
+    never saw its code.
+  cache: true
+- id: output_format
+  content: |
+    Respond with the orientation first, then the questionnaire, using these
+    two markers exactly:
+
+    ---ORIENTATION---
+    (the text the user reads before starting)
+    ---END ORIENTATION---
+
+    ---QUESTIONNAIRE---
+    ```json
+    {
+      "questions": [
+        "What did you expect to happen when you first ran it, and did that happen?",
+        "Was there a point where you did not know what to type next? What were you trying to do?"
+      ]
+    }
+    ```
+    ---END QUESTIONNAIRE---
+  cache: true
+- id: listing
+  content: |
+    What shipped:
+    {context.project_listing}
+- id: docs
+  content: |
+    The documentation that shipped with it — this, and only this, is what the
+    user will be allowed to read:
+    {context.project_docs}
+- id: entry
+  content: |
+    How it starts: {context.run_command}
+- id: output_reminder
+  content: |
+    ---
+    Now respond with the orientation and the questionnaire in the marked form
+    above — nothing else: no commentary, no analysis of the code, no notes to
+    the author.

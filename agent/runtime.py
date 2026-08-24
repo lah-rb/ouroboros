@@ -260,7 +260,10 @@ def _real_out(result: Any, ws_out: int) -> int:
 # Hard cap on the observations preview carried in every StepEnd trace event.
 _OBSERVATIONS_PREVIEW_CAP = 600
 
-_SUBFLOW_MAX_STEPS = {"run_session": 4000}
+# consumer_session shares run_session's shape and therefore its scaling: ~2
+# steps per turn, bounded by how much product there is to use rather than by
+# a task list. Same ceiling for the same reason.
+_SUBFLOW_MAX_STEPS = {"run_session": 4000, "consumer_session": 4000}
 
 
 def _subflow_max_steps(flow_name: str) -> int:

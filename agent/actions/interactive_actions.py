@@ -44,6 +44,27 @@ _INTERACT_RPC_TIMEOUT_S = 450.0
 # nuance ("deprecation warnings are not failures") is folded in below.
 OPERATOR_PERSONA = load_prompt_text("personas/operator")
 
+# The session's voice is a PARAMETER, not a constant. The operator persona
+# frames the model as a tester — "do NOT modify, patch, or install the software
+# under test", "if you see an error trace, read it and report it" — which is
+# correct for every caller that existed when it was written and wrong for a
+# consumer, who has no idea there is a thing "under test". Callers that pass
+# nothing keep the operator verbatim. The flow_key below already hashes the
+# persona text, so per-persona KV pinning falls out for free.
+_DEFAULT_SESSION_PERSONA = "personas/operator"
+
+
+def _session_persona(name: str) -> str:
+    """Persona text for a session, falling back to the operator on any miss."""
+    ref = (name or "").strip() or _DEFAULT_SESSION_PERSONA
+    if ref == _DEFAULT_SESSION_PERSONA:
+        return OPERATOR_PERSONA
+    try:
+        return load_prompt_text(ref)
+    except Exception:  # noqa: BLE001 — a bad persona ref must not kill the run
+        logger.warning("Unknown session persona %r — using the operator", ref)
+        return OPERATOR_PERSONA
+
 
 # ── start_interactive_session ─────────────────────────────────────────
 
@@ -108,6 +129,7 @@ async def action_start_interactive_session(step_input: StepInput) -> StepOutput:
         pass
 
     expected_prompt = params.get("expected_prompt", "")
+    _persona_text = _session_persona(str(params.get("persona", "") or ""))
     try:
         create_args = {
             "working_directory": working_dir,
@@ -140,10 +162,10 @@ async def action_start_interactive_session(step_input: StepInput) -> StepOutput:
         try:
             # Pin the interact OPERATOR_PERSONA head across sessions (it leads
             # every charter seed) — later interact sessions skip re-prefilling it.
-            _interact_key = f"interact:plan:{hashlib.md5(OPERATOR_PERSONA.encode('utf-8')).hexdigest()[:10]}"
+            _interact_key = f"interact:plan:{hashlib.md5(_persona_text.encode('utf-8')).hexdigest()[:10]}"
             inference_session_id = await effects.start_inference_session(
                 {"ttl_seconds": 300},
-                static_prefix=OPERATOR_PERSONA,
+                static_prefix=_persona_text,
                 flow_key=_interact_key,
             )
         except Exception:
@@ -164,12 +186,48 @@ async def action_start_interactive_session(step_input: StepInput) -> StepOutput:
     # the plan_interaction turn no longer carries a `role` section, so this is the
     # only place the model sees it. Both are invariant, so they cost prefill once
     # instead of every turn.
+    # PRE-LAUNCH. A consumer has no shell — the menu offers only send_input and
+    # close — so nothing can start the program the way an operator does. When a
+    # launch_command is given it is run HERE, before the first turn, so the
+    # consumer's opening view is the product's own first screen rather than a
+    # prompt they have no way to use. Best-effort: a launch that fails leaves
+    # the transcript showing why, which is itself the finding.
+    launch_command = str(params.get("launch_command", "") or "").strip()
+    if launch_command and session_id:
+        try:
+            launch_result = await effects.mcp_call_tool(
+                conn_id,
+                "send_input",
+                {
+                    "session_id": session_id,
+                    "text": launch_command + "\n",
+                    "await_response": True,
+                    "settle_ms": 1500,
+                    "timeout_ms": 30000,
+                },
+                timeout=_INTERACT_RPC_TIMEOUT_S,
+            )
+            context_updates["launch_command"] = launch_command
+            context_updates["session_history"] = [
+                {
+                    "turn": 0,
+                    "action": "launch",
+                    "input": launch_command,
+                    "output": launch_result.get("output", ""),
+                    "status": launch_result.get("status", "error"),
+                    "program_running": True,
+                }
+            ]
+            logger.info("Pre-launched %r for session %s", launch_command, session_id)
+        except Exception as e:  # noqa: BLE001 — the transcript records the failure
+            logger.error("Pre-launch failed for %r: %s", launch_command, e)
+
     session_goal = params.get("session_goal", "")
     if isinstance(session_goal, str) and session_goal.strip() and inference_session_id:
         from agent.session_injections import queue as queue_injection
 
         seed = (
-            f"{OPERATOR_PERSONA}\n\n"
+            f"{_persona_text}\n\n"
             f"---TEST CHARTER---\n{session_goal.strip()}\n---END CHARTER---"
         )
         queue_injection(context_updates, step_input.context, seed)

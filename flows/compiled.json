@@ -1533,6 +1533,346 @@
       "fallback": "reorganize"
     }
   },
+  "consumer_session": {
+    "flow": "consumer_session",
+    "version": 1,
+    "description": "Interactive session driven by a consumer persona over a\npre-launched program. No shell: the model can only talk to the\nproduct. The inference session outlives the PTY so the caller\ncan put the questionnaire to the same consumer.",
+    "context_tier": "session_task",
+    "returns": {
+      "terminal_output": {
+        "type": "string",
+        "from": "context.terminal_output",
+        "optional": true
+      },
+      "inference_session_id": {
+        "type": "string",
+        "from": "context.inference_session_id",
+        "optional": true
+      },
+      "launch_command": {
+        "type": "string",
+        "from": "context.launch_command",
+        "optional": true
+      }
+    },
+    "projections": {},
+    "input": {
+      "required": [
+        "execution_persona",
+        "working_directory",
+        "launch_command"
+      ],
+      "optional": [
+        "environment_vars",
+        "expected_prompt"
+      ]
+    },
+    "defaults": {
+      "config": {
+        "temperature": "t*1.0"
+      }
+    },
+    "steps": {
+      "start_session": {
+        "action": "start_interactive_session",
+        "description": "Start PTY, pre-launch the product, seed the consumer voice",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {
+          "working_directory": {
+            "$ref": "input.working_directory"
+          },
+          "environment_vars": {
+            "$ref": "input.environment_vars",
+            "default": ""
+          },
+          "session_goal": {
+            "$ref": "input.execution_persona"
+          },
+          "expected_prompt": {
+            "$ref": "input.expected_prompt",
+            "default": ""
+          },
+          "persona": "personas/consumer",
+          "launch_command": {
+            "$ref": "input.launch_command"
+          }
+        },
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.session_started == true",
+              "transition": "plan_interaction"
+            },
+            {
+              "condition": "true",
+              "transition": "close_failure"
+            }
+          ]
+        },
+        "publishes": [
+          "mcp_connection_id",
+          "mcp_session_id",
+          "inference_session_id",
+          "session_history",
+          "launch_command"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "plan_interaction": {
+        "action": "inference",
+        "description": "Consumer decides what to do next \u2014 type something, or stop",
+        "context": {
+          "required": [
+            "mcp_session_id",
+            "session_history"
+          ],
+          "optional": [
+            "inference_session_id"
+          ]
+        },
+        "params": {},
+        "turn": {
+          "response_shape": "menu_compound",
+          "sections": [
+            {
+              "type": "evidence",
+              "template": "run_in_terminal/session_state",
+              "required": false
+            },
+            {
+              "type": "instruction",
+              "template": "polish_gate/consumer_interaction_rules",
+              "required": false
+            },
+            {
+              "type": "options",
+              "required": false
+            },
+            {
+              "type": "envelope",
+              "required": false
+            }
+          ],
+          "response": {
+            "options": {
+              "send_input": {
+                "key": "send_input",
+                "description": "Type something to the program and see what it does. Include \\n at the end.",
+                "arg": {
+                  "name": "text",
+                  "description": "What you want to type"
+                },
+                "terminal": false
+              },
+              "close": {
+                "key": "close",
+                "description": "Stop using it \u2014 when you have formed a real impression of what it is like to use, or when it has stopped being usable.",
+                "arg": {
+                  "name": "reason",
+                  "description": "Why you are stopping"
+                },
+                "terminal": false
+              }
+            },
+            "publish_selection": "planned_action"
+          },
+          "transitions": {
+            "default": "execute_interaction",
+            "no_answer": "close_session",
+            "options": {
+              "send_input": "execute_interaction",
+              "close": "confirm_close"
+            }
+          },
+          "config": {
+            "temperature": "t*1.0",
+            "reasoning": "low"
+          },
+          "retries": 3
+        },
+        "pre_compute": [
+          {
+            "formatter": "format_last_turn",
+            "output_key": "last_turn",
+            "params": {
+              "source": {
+                "$ref": "context.session_history"
+              }
+            }
+          },
+          {
+            "formatter": "format_session_history",
+            "output_key": "session_history",
+            "params": {
+              "source": {
+                "$ref": "context.session_history"
+              }
+            }
+          }
+        ],
+        "config": {},
+        "publishes": [
+          "inference_response"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "execute_interaction": {
+        "action": "send_interaction",
+        "description": "Send the consumer's input to the running program",
+        "context": {
+          "required": [
+            "mcp_connection_id",
+            "mcp_session_id",
+            "session_history",
+            "inference_response"
+          ],
+          "optional": [
+            "planned_action",
+            "planned_action_arg",
+            "launch_command",
+            "close_confirmations"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.session_done == true",
+              "transition": "confirm_close"
+            },
+            {
+              "condition": "result.stuck_detected == true",
+              "transition": "close_session"
+            },
+            {
+              "condition": "result.process_exited == true",
+              "transition": "confirm_close"
+            },
+            {
+              "condition": "result.command_sent == true",
+              "transition": "plan_interaction"
+            },
+            {
+              "condition": "true",
+              "transition": "close_failure"
+            }
+          ]
+        },
+        "publishes": [
+          "mcp_session_id",
+          "session_history",
+          "launch_command",
+          "close_confirmations"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "confirm_close": {
+        "action": "confirm_close_gate",
+        "description": "First stop: ask once whether they are done; later: honour it",
+        "context": {
+          "required": [
+            "mcp_session_id"
+          ],
+          "optional": [
+            "session_history",
+            "close_confirmations",
+            "inference_session_id",
+            "launch_command",
+            "planned_action",
+            "planned_action_arg"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.should_notice == true",
+              "transition": "plan_interaction"
+            },
+            {
+              "condition": "true",
+              "transition": "close_session"
+            }
+          ]
+        },
+        "publishes": [
+          "close_confirmations"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "close_session": {
+        "action": "close_interactive_session",
+        "description": "Close PTY \u2014 the consumer stays available for questions",
+        "context": {
+          "required": [
+            "mcp_session_id",
+            "session_history"
+          ],
+          "optional": [
+            "mcp_connection_id",
+            "inference_session_id",
+            "terminal_output",
+            "session_summary"
+          ]
+        },
+        "params": {
+          "keep_inference_session": true
+        },
+        "config": {},
+        "effects": [],
+        "publishes": [
+          "terminal_output",
+          "inference_session_id"
+        ],
+        "status": "success",
+        "terminal": true
+      },
+      "close_failure": {
+        "action": "close_interactive_session",
+        "description": "Close session \u2014 failed (inference session preserved)",
+        "context": {
+          "required": [],
+          "optional": [
+            "mcp_connection_id",
+            "mcp_session_id",
+            "session_history",
+            "inference_session_id",
+            "terminal_output",
+            "session_summary"
+          ]
+        },
+        "params": {
+          "keep_inference_session": true
+        },
+        "config": {},
+        "effects": [],
+        "publishes": [
+          "terminal_output",
+          "inference_session_id"
+        ],
+        "status": "failed",
+        "terminal": true
+      }
+    },
+    "entry": "start_session",
+    "overflow": {
+      "strategy": "split",
+      "fallback": "reorganize"
+    }
+  },
   "create": {
     "flow": "create",
     "version": 2,
@@ -8361,6 +8701,10 @@
               "transition": "dispatch_quality_gate"
             },
             {
+              "condition": "result.phase == 'polish'",
+              "transition": "dispatch_polish_gate"
+            },
+            {
               "condition": "result.phase == 'complete'",
               "transition": "completed"
             },
@@ -9196,7 +9540,7 @@
           "rules": [
             {
               "condition": "result.status == 'success'",
-              "transition": "completed"
+              "transition": "mark_quality_verified"
             },
             {
               "condition": "true",
@@ -9204,6 +9548,103 @@
             }
           ]
         },
+        "terminal": false
+      },
+      "mark_quality_verified": {
+        "action": "mark_quality_verified",
+        "description": "Record that the quality gate passed",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "dispatch_polish_gate": {
+        "action": "flow",
+        "description": "Consumer evaluation pass over the finished product",
+        "config": {},
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "effects": [],
+        "flow": "polish_gate",
+        "input_map": {
+          "working_directory": {
+            "$ref": "context.mission.config.working_directory"
+          },
+          "mission_id": {
+            "$ref": "input.mission_id"
+          },
+          "architecture_run_command": {
+            "$ref": "context.mission.architecture.run_command",
+            "default": ""
+          },
+          "architecture": {
+            "$ref": "context.mission.architecture",
+            "default": ""
+          }
+        },
+        "params": {},
+        "publishes": [
+          "polish_findings",
+          "consumer_report",
+          "experience_summary"
+        ],
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "harvest_polish_findings"
+            }
+          ]
+        },
+        "terminal": false
+      },
+      "harvest_polish_findings": {
+        "action": "harvest_polish_findings",
+        "description": "Create/re-open goals from the consumer's experience",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "polish_findings",
+            "consumer_report",
+            "experience_summary"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
         "terminal": false
       },
       "harvest_quality_findings": {
@@ -10194,6 +10635,467 @@
       }
     },
     "entry": "prepare_frame",
+    "overflow": {
+      "strategy": "split",
+      "fallback": "reorganize"
+    }
+  },
+  "polish_gate": {
+    "flow": "polish_gate",
+    "version": 1,
+    "description": "A consumer uses the finished product and says what it was like.\nProduces goals, not a verdict \u2014 there is no pass/fail here, only\nwhat a user wanted that they did not get.",
+    "context_tier": "mission_objective",
+    "returns": {
+      "terminal_output": {
+        "type": "string",
+        "from": "context.terminal_output",
+        "optional": true
+      },
+      "polish_findings": {
+        "type": "string",
+        "from": "context.polish_findings",
+        "optional": true
+      },
+      "consumer_report": {
+        "type": "string",
+        "from": "context.questionnaire_report",
+        "optional": true
+      },
+      "experience_summary": {
+        "type": "string",
+        "from": "context.experience_summary",
+        "optional": true
+      }
+    },
+    "projections": {},
+    "input": {
+      "required": [
+        "working_directory",
+        "mission_id"
+      ],
+      "optional": [
+        "architecture_run_command",
+        "architecture"
+      ]
+    },
+    "defaults": {
+      "config": {
+        "temperature": "t*0.5"
+      }
+    },
+    "steps": {
+      "scan_project": {
+        "action": "scan_project",
+        "description": "",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "config": {},
+        "param_schema": {
+          "root": {
+            "type": "string",
+            "required": false,
+            "default": ".",
+            "description": "Root directory to scan"
+          }
+        },
+        "params": {
+          "root": "."
+        },
+        "publishes": [
+          "project_manifest"
+        ],
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.file_count > 0",
+              "transition": "write_brief"
+            },
+            {
+              "condition": "true",
+              "transition": "gate_empty"
+            }
+          ]
+        },
+        "effects": [],
+        "terminal": false
+      },
+      "write_brief": {
+        "action": "inference",
+        "description": "Write the consumer's orientation and their questionnaire",
+        "context": {
+          "required": [
+            "project_manifest"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "prompt_template": {
+          "template": "polish_gate/write_brief",
+          "context_keys": [
+            "project_listing",
+            "project_docs"
+          ],
+          "input_keys": [
+            "architecture_run_command"
+          ]
+        },
+        "pre_compute": [
+          {
+            "formatter": "format_project_listing",
+            "output_key": "project_listing",
+            "params": {
+              "source": {
+                "$ref": "context.project_manifest"
+              }
+            }
+          },
+          {
+            "formatter": "format_project_docs",
+            "output_key": "project_docs",
+            "params": {
+              "source": {
+                "$ref": "context.project_manifest"
+              }
+            }
+          }
+        ],
+        "config": {
+          "temperature": "t*0.5",
+          "reasoning": "medium"
+        },
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "split_brief"
+            }
+          ]
+        },
+        "publishes": [
+          "inference_response"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "split_brief": {
+        "action": "split_consumer_brief",
+        "description": "Separate the orientation from the questionnaire",
+        "context": {
+          "required": [
+            "inference_response"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.ok == true",
+              "transition": "consumer_run"
+            },
+            {
+              "condition": "true",
+              "transition": "gate_empty"
+            }
+          ]
+        },
+        "publishes": [
+          "consumer_brief",
+          "questionnaire"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "consumer_run": {
+        "action": "flow",
+        "config": {},
+        "context": {
+          "required": [
+            "consumer_brief"
+          ],
+          "optional": []
+        },
+        "description": "The consumer uses the product",
+        "effects": [],
+        "flow": "consumer_session",
+        "input_map": {
+          "execution_persona": {
+            "$ref": "context.consumer_brief"
+          },
+          "working_directory": {
+            "$ref": "input.working_directory"
+          },
+          "launch_command": {
+            "$ref": "input.architecture_run_command",
+            "default": "python main.py"
+          }
+        },
+        "params": {},
+        "publishes": [
+          "terminal_output",
+          "inference_session_id"
+        ],
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "prepare_questionnaire"
+            }
+          ]
+        },
+        "terminal": false
+      },
+      "prepare_questionnaire": {
+        "action": "prepare_questionnaire",
+        "description": "Build the question queue",
+        "context": {
+          "required": [
+            "questionnaire"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.has_next == true",
+              "transition": "ask_question"
+            },
+            {
+              "condition": "true",
+              "transition": "summarize_experience"
+            }
+          ]
+        },
+        "publishes": [
+          "question_queue",
+          "question_current",
+          "questionnaire_answers"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "ask_question": {
+        "action": "inference",
+        "description": "Put one question to the consumer, in their own session",
+        "context": {
+          "required": [
+            "question_current"
+          ],
+          "optional": [
+            "inference_session_id"
+          ]
+        },
+        "params": {},
+        "prompt_template": {
+          "template": "polish_gate/ask_question",
+          "context_keys": [
+            "question_current"
+          ],
+          "input_keys": []
+        },
+        "config": {
+          "temperature": "t*1.0",
+          "reasoning": "medium"
+        },
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "record_answer"
+            }
+          ]
+        },
+        "publishes": [
+          "inference_response"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "record_answer": {
+        "action": "record_answer",
+        "description": "Store the answer and advance the queue",
+        "context": {
+          "required": [
+            "question_queue",
+            "inference_response"
+          ],
+          "optional": [
+            "questionnaire_answers"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.has_next == true",
+              "transition": "ask_question"
+            },
+            {
+              "condition": "true",
+              "transition": "summarize_experience"
+            }
+          ]
+        },
+        "publishes": [
+          "question_queue",
+          "question_current",
+          "questionnaire_answers"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "summarize_experience": {
+        "action": "inference",
+        "description": "The consumer reflects on the whole experience",
+        "context": {
+          "required": [],
+          "optional": [
+            "inference_session_id"
+          ]
+        },
+        "params": {},
+        "prompt_template": {
+          "template": "polish_gate/summarize_experience",
+          "context_keys": [],
+          "input_keys": []
+        },
+        "config": {
+          "temperature": "t*0.5",
+          "reasoning": "medium"
+        },
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "end_session"
+            }
+          ]
+        },
+        "publishes": [
+          "experience_summary"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "end_session": {
+        "action": "end_inference_session",
+        "description": "",
+        "context": {
+          "required": [],
+          "optional": [
+            "inference_session_id"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "conclude"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "conclude": {
+        "action": "inference",
+        "description": "Turn the consumer's experience into goals",
+        "context": {
+          "required": [
+            "questionnaire_answers"
+          ],
+          "optional": [
+            "experience_summary"
+          ]
+        },
+        "params": {},
+        "prompt_template": {
+          "template": "polish_gate/conclude",
+          "context_keys": [
+            "questionnaire_report",
+            "experience_summary"
+          ],
+          "input_keys": []
+        },
+        "pre_compute": [
+          {
+            "formatter": "format_questionnaire_report",
+            "output_key": "questionnaire_report",
+            "params": {
+              "source": {
+                "$ref": "context.questionnaire_answers"
+              }
+            }
+          }
+        ],
+        "config": {
+          "temperature": "t*0.3",
+          "reasoning": "high"
+        },
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "gate_done"
+            }
+          ]
+        },
+        "publishes": [
+          "polish_findings",
+          "questionnaire_report"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "gate_done": {
+        "action": "noop",
+        "description": "",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": true,
+        "status": "success"
+      },
+      "gate_empty": {
+        "action": "noop",
+        "description": "",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": true,
+        "status": "success"
+      }
+    },
+    "entry": "scan_project",
     "overflow": {
       "strategy": "split",
       "fallback": "reorganize"
@@ -16919,6 +17821,10 @@
               "transition": "dispatch_quality_gate"
             },
             {
+              "condition": "result.phase == 'polish'",
+              "transition": "dispatch_polish_gate"
+            },
+            {
               "condition": "result.phase == 'complete'",
               "transition": "completed"
             },
@@ -17716,7 +18622,7 @@
           "rules": [
             {
               "condition": "result.status == 'success'",
-              "transition": "completed"
+              "transition": "mark_quality_verified"
             },
             {
               "condition": "true",
@@ -17724,6 +18630,103 @@
             }
           ]
         },
+        "terminal": false
+      },
+      "mark_quality_verified": {
+        "action": "mark_quality_verified",
+        "description": "Record that the quality gate passed",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "dispatch_polish_gate": {
+        "action": "flow",
+        "description": "Consumer evaluation pass over the finished product",
+        "config": {},
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "effects": [],
+        "flow": "polish_gate",
+        "input_map": {
+          "working_directory": {
+            "$ref": "context.mission.config.working_directory"
+          },
+          "mission_id": {
+            "$ref": "input.mission_id"
+          },
+          "architecture_run_command": {
+            "$ref": "context.mission.architecture.run_command",
+            "default": ""
+          },
+          "architecture": {
+            "$ref": "context.mission.architecture",
+            "default": ""
+          }
+        },
+        "params": {},
+        "publishes": [
+          "polish_findings",
+          "consumer_report",
+          "experience_summary"
+        ],
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "harvest_polish_findings"
+            }
+          ]
+        },
+        "terminal": false
+      },
+      "harvest_polish_findings": {
+        "action": "harvest_polish_findings",
+        "description": "Create/re-open goals from the consumer's experience",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "polish_findings",
+            "consumer_report",
+            "experience_summary"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
         "terminal": false
       },
       "harvest_quality_findings": {
@@ -18197,6 +19200,10 @@
             {
               "condition": "result.phase == 'quality'",
               "transition": "dispatch_quality_gate"
+            },
+            {
+              "condition": "result.phase == 'polish'",
+              "transition": "dispatch_polish_gate"
             },
             {
               "condition": "result.phase == 'complete'",
@@ -18916,7 +19923,7 @@
           "rules": [
             {
               "condition": "result.status == 'success'",
-              "transition": "completed"
+              "transition": "mark_quality_verified"
             },
             {
               "condition": "true",
@@ -18924,6 +19931,103 @@
             }
           ]
         },
+        "terminal": false
+      },
+      "mark_quality_verified": {
+        "action": "mark_quality_verified",
+        "description": "Record that the quality gate passed",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "dispatch_polish_gate": {
+        "action": "flow",
+        "description": "Consumer evaluation pass over the finished product",
+        "config": {},
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "effects": [],
+        "flow": "polish_gate",
+        "input_map": {
+          "working_directory": {
+            "$ref": "context.mission.config.working_directory"
+          },
+          "mission_id": {
+            "$ref": "input.mission_id"
+          },
+          "architecture_run_command": {
+            "$ref": "context.mission.architecture.run_command",
+            "default": ""
+          },
+          "architecture": {
+            "$ref": "context.mission.architecture",
+            "default": ""
+          }
+        },
+        "params": {},
+        "publishes": [
+          "polish_findings",
+          "consumer_report",
+          "experience_summary"
+        ],
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "harvest_polish_findings"
+            }
+          ]
+        },
+        "terminal": false
+      },
+      "harvest_polish_findings": {
+        "action": "harvest_polish_findings",
+        "description": "Create/re-open goals from the consumer's experience",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "polish_findings",
+            "consumer_report",
+            "experience_summary"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
         "terminal": false
       },
       "harvest_quality_findings": {
@@ -19397,6 +20501,10 @@
             {
               "condition": "result.phase == 'quality'",
               "transition": "dispatch_quality_gate"
+            },
+            {
+              "condition": "result.phase == 'polish'",
+              "transition": "dispatch_polish_gate"
             },
             {
               "condition": "result.phase == 'complete'",
@@ -20196,7 +21304,7 @@
           "rules": [
             {
               "condition": "result.status == 'success'",
-              "transition": "completed"
+              "transition": "mark_quality_verified"
             },
             {
               "condition": "true",
@@ -20204,6 +21312,103 @@
             }
           ]
         },
+        "terminal": false
+      },
+      "mark_quality_verified": {
+        "action": "mark_quality_verified",
+        "description": "Record that the quality gate passed",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "dispatch_polish_gate": {
+        "action": "flow",
+        "description": "Consumer evaluation pass over the finished product",
+        "config": {},
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "effects": [],
+        "flow": "polish_gate",
+        "input_map": {
+          "working_directory": {
+            "$ref": "context.mission.config.working_directory"
+          },
+          "mission_id": {
+            "$ref": "input.mission_id"
+          },
+          "architecture_run_command": {
+            "$ref": "context.mission.architecture.run_command",
+            "default": ""
+          },
+          "architecture": {
+            "$ref": "context.mission.architecture",
+            "default": ""
+          }
+        },
+        "params": {},
+        "publishes": [
+          "polish_findings",
+          "consumer_report",
+          "experience_summary"
+        ],
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "harvest_polish_findings"
+            }
+          ]
+        },
+        "terminal": false
+      },
+      "harvest_polish_findings": {
+        "action": "harvest_polish_findings",
+        "description": "Create/re-open goals from the consumer's experience",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "polish_findings",
+            "consumer_report",
+            "experience_summary"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
         "terminal": false
       },
       "harvest_quality_findings": {

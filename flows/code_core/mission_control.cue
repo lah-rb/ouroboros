@@ -125,6 +125,7 @@ mission_control: #FlowDefinition & {
 					// sets tests_verified and falls through to the quality gate.
 					{condition: "result.phase == 'test_suite'", transition: "dispatch_test_gate"},
 					{condition: "result.phase == 'quality'", transition: "dispatch_quality_gate"},
+					{condition: "result.phase == 'polish'", transition: "dispatch_polish_gate"},
 					{condition: "result.phase == 'complete'", transition: "completed"},
 					{condition: "true", transition: "dispatch_planning"},
 				]
@@ -591,11 +592,79 @@ mission_control: #FlowDefinition & {
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "result.status == 'success'", transition: "completed"},
+					// A PASS NO LONGER FINALIZES. It sets quality_verified and returns
+					// to check_phase so a phase ABOVE the gate (polish, rank 60) can
+					// run. At the default ceiling the ladder exhausts on the next
+					// pass and completes exactly as it did before.
+					{condition: "result.status == 'success'", transition: "mark_quality_verified"},
 					{condition: "true", transition: "harvest_quality_findings"},
 				]
 			}
 			publishes: ["quality_results", "gate_failure_reason"]
+		}
+
+		mark_quality_verified: #StepDefinition & {
+			action:      "mark_quality_verified"
+			description: "Record that the quality gate passed"
+			context: required: ["mission"]
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "true", transition: "check_phase"},
+				]
+			}
+		}
+
+		// ══════════════════════════════════════════════════════════
+		// Phase 5: Polish Gate (rank 60, opt-in via top_phase: polish)
+		// ══════════════════════════════════════════════════════════
+		//
+		// Hands the verified build to a CONSUMER — a model that did not write
+		// it, cannot see the source, and is told only what shipped with the
+		// product. Its findings land as functional goals and clear
+		// quality_verified, so the ladder drops back down and the gate must
+		// re-pass on the way up. config.polish_max_entries bounds the loop.
+
+		dispatch_polish_gate: #StepDefinition & {
+			action:      "flow"
+			description: "Consumer evaluation pass over the finished product"
+			flow:        "polish_gate"
+			context: required: ["mission"]
+			input_map: {
+				working_directory: {$ref: "context.mission.config.working_directory"}
+				mission_id:        {$ref: "input.mission_id"}
+				// The consumer's launch point. effective_smoke_command is the
+				// piped self-terminating form and is WRONG here — a consumer
+				// needs the program to stay open.
+				architecture_run_command: {$ref: "context.mission.architecture.run_command", default: ""}
+				architecture:             {$ref: "context.mission.architecture", default: ""}
+			}
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "true", transition: "harvest_polish_findings"},
+				]
+			}
+			publishes: ["polish_findings", "consumer_report", "experience_summary"]
+		}
+
+		// Books the entry whether or not anything was found: a consumer who
+		// wanted nothing changed is a RESULT, not an unverified run. (Contrast
+		// the vacuous-verification rule, which fails a gate on zero CHECKABLE
+		// items — here zero findings is the observation.)
+		harvest_polish_findings: #StepDefinition & {
+			action:      "harvest_polish_findings"
+			description: "Create/re-open goals from the consumer's experience"
+			context: {
+				required: ["mission"]
+				optional: ["polish_findings", "consumer_report", "experience_summary"]
+			}
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "true", transition: "check_phase"},
+				]
+			}
 		}
 
 		// Harvest gate findings into goals (one per finding, classified by the

@@ -1,0 +1,30 @@
+# Prompt template: polish_gate/summarize_experience
+#
+# Also runs inside the consumer's session. Everything they did and every
+# thought they had while doing it is in this KV already — this asks them to
+# look back over it, not to re-read a transcript.
+
+id: polish_gate/summarize_experience
+description: "The consumer reflects on the whole experience"
+output_contract: free_text
+
+sections:
+- id: framing
+  content: |
+    ---LOOKING BACK---
+    Think back over the whole time you spent with this — not question by
+    question, but as one experience.
+
+    What surprised you, in either direction? Where did the thing you expected
+    and the thing that happened come apart? How did you feel by the end, and
+    was that different from how you felt at the start? Was there a moment you
+    would describe to someone else, good or bad?
+
+    Say what you actually noticed, including anything you passed over at the
+    time and only now think mattered. Write it as a person describing an
+    experience, not as a report.
+  cache: true
+- id: reminder
+  content: |
+    ---
+    Now write that reflection.

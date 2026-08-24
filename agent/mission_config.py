@@ -98,6 +98,10 @@ class MissionYAMLConfig(BaseModel):
     top_phase: Literal[
         "structural", "environment", "functional", "test_suite", "quality", "polish"
     ] = "quality"
+    # How many times the polish gate may run (top_phase: polish only). Each
+    # entry is one consumer session whose findings reopen functional work, so
+    # the phase re-enters by design; this is the bound that makes it terminate.
+    polish_max_entries: int = Field(default=1, ge=1)
     # OPT-IN: design-phase domain research runs the deep_research sweep
     # instead of the one-shot search. Feasible as a daily only on batched
     # gpt-oss; punishing on pooled substrates. Default off.

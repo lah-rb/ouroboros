@@ -116,6 +116,7 @@ mission_control_contracted: #FlowDefinition & {
 					// sets tests_verified and falls through to the quality gate.
 					{condition: "result.phase == 'test_suite'", transition: "dispatch_test_gate"},
 					{condition: "result.phase == 'quality'", transition: "dispatch_quality_gate"},
+					{condition: "result.phase == 'polish'", transition: "dispatch_polish_gate"},
 					{condition: "result.phase == 'complete'", transition: "completed"},
 					{condition: "true", transition: "dispatch_planning"},
 				]
@@ -551,7 +552,8 @@ mission_control_contracted: #FlowDefinition & {
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "result.status == 'success'", transition: "completed"},
+					// A PASS NO LONGER FINALIZES — see code_core/mission_control.cue.
+					{condition: "result.status == 'success'", transition: "mark_quality_verified"},
 					{condition: "true", transition: "harvest_quality_findings"},
 				]
 			}
@@ -562,6 +564,58 @@ mission_control_contracted: #FlowDefinition & {
 		// summarize `class`). Reached from dispatch_quality_gate on failure. New/
 		// reopened goals route through check_phase to their sweeps (functional ->
 		// functional_sweep_next + interact re-test; quality -> quality_sweep_next).
+		mark_quality_verified: #StepDefinition & {
+			action:      "mark_quality_verified"
+			description: "Record that the quality gate passed"
+			context: required: ["mission"]
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "true", transition: "check_phase"},
+				]
+			}
+		}
+
+		// ── Polish gate (rank 60, opt-in via top_phase: polish) ──
+		// Mirrors code_core/mission_control.cue. These controllers share
+		// CODE_CORE_PHASES, so evaluate_phases returns 'polish' for them too —
+		// without these steps the router would fall through to its default and
+		// silently re-plan instead of running the consumer pass.
+		dispatch_polish_gate: #StepDefinition & {
+			action:      "flow"
+			description: "Consumer evaluation pass over the finished product"
+			flow:        "polish_gate"
+			context: required: ["mission"]
+			input_map: {
+				working_directory:        {$ref: "context.mission.config.working_directory"}
+				mission_id:               {$ref: "input.mission_id"}
+				architecture_run_command: {$ref: "context.mission.architecture.run_command", default: ""}
+				architecture:             {$ref: "context.mission.architecture", default: ""}
+			}
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "true", transition: "harvest_polish_findings"},
+				]
+			}
+			publishes: ["polish_findings", "consumer_report", "experience_summary"]
+		}
+
+		harvest_polish_findings: #StepDefinition & {
+			action:      "harvest_polish_findings"
+			description: "Create/re-open goals from the consumer's experience"
+			context: {
+				required: ["mission"]
+				optional: ["polish_findings", "consumer_report", "experience_summary"]
+			}
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "true", transition: "check_phase"},
+				]
+			}
+		}
+
 		harvest_quality_findings: #StepDefinition & {
 			action:      "harvest_quality_findings"
 			description: "Create/re-open goals from quality-gate findings"

@@ -1,0 +1,37 @@
+# Prompt template: polish_gate/ask_question
+#
+# Runs INSIDE the consumer's own inference session — the run and its reasoning
+# are already in this KV. One question per turn: the queue never shows the
+# model the whole list, because a visible list gets answered as one flattened
+# paragraph rather than as considered separate answers.
+#
+# Pre-computed context:
+#   question_current — the single question being put now
+
+id: polish_gate/ask_question
+description: "Put one questionnaire question to the consumer who just used the product"
+output_contract: free_text
+
+sections:
+- id: framing
+  content: |
+    ---YOU HAVE FINISHED USING IT---
+    You were given this product free in exchange for honest feedback. You have
+    just finished using it. Below is one question about that experience.
+
+    Answer it as yourself, from what actually happened to you — not what the
+    software probably intended, and not a summary of its features. If nothing
+    about this question stood out, say so; that is an answer.
+
+    If your honest answer is unflattering, give it anyway. That is the entire
+    reason you were given the thing.
+  cache: true
+- id: question
+  content: |
+    ---QUESTION---
+    {context.question_current}
+    ---END QUESTION---
+- id: reminder
+  content: |
+    ---
+    Answer this one question, in your own words.

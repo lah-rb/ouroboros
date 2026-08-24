@@ -193,6 +193,7 @@ def cmd_mission_create(args: argparse.Namespace) -> None:
         max_cycles=(yaml_config.max_cycles if yaml_config else None),
         max_wall_clock_s=(yaml_config.max_wall_clock if yaml_config else None),
         corpus_target=(yaml_config.corpus_target if yaml_config else 0),
+        polish_max_entries=(yaml_config.polish_max_entries if yaml_config else 1),
     )
 
     mission = MissionState(objective=objective, principles=principles, config=config)

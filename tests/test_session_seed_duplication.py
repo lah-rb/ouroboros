@@ -32,12 +32,20 @@ import pytest
 
 ACTIONS = Path(__file__).resolve().parent.parent / "agent" / "actions"
 
-# (module, the constant passed as static_prefix)
+# (module, the NAME passed as static_prefix)
+#
+# interactive_actions moved from the constant OPERATOR_PERSONA to the local
+# `_persona_text` on 2026-08-23, when the session persona became a per-call
+# parameter (the consumer voice for the polish phase; every caller that passes
+# nothing still resolves to the operator). What these tests actually protect is
+# the INVARIANT, not the identifier: whatever is sent as static_prefix must be
+# the same text the flow_key hashes, or a cache HIT can mean the pinned KV does
+# not match the prefix being sent.
 SEED_SITES = [
     ("diagnosis_session_actions", "SYSTEM_PROMPT"),
     ("router_actions", "SYSTEM_PROMPT"),
     ("escalation_actions", "SYSTEM_PROMPT"),
-    ("interactive_actions", "OPERATOR_PERSONA"),
+    ("interactive_actions", "_persona_text"),
 ]
 
 

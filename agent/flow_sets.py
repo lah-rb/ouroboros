@@ -204,11 +204,40 @@ CODE_CORE_PHASES: tuple[PhaseRule, ...] = (
         observation="Quality-fix phase: {incomplete}/{total} incomplete",
         rank=PHASE_RANKS["quality"],
     ),
+    # The quality gate was the TERMINAL rule until 2026-08-23. It is now a
+    # flag_unset so a phase can sit ABOVE it: a gate pass sets quality_verified
+    # instead of finalizing the mission. At the default ceiling (quality, rank
+    # 50) the two rank-60 rules below are skipped and exhaustion completes the
+    # mission exactly as the old terminal did — one extra cycle, same end state.
     PhaseRule(
-        kind="terminal",
+        kind="flag_unset",
         phase="quality",
+        flag="quality_verified",
         observation="All goals complete — ready for quality gate",
         rank=PHASE_RANKS["quality"],
+    ),
+    # Polish: hand the finished product to a consumer who did not build it.
+    # Bounded by config.polish_max_entries because its findings land as
+    # FUNCTIONAL goals and clear quality_verified — the phase reopens work
+    # below itself and would otherwise re-enter forever by construction.
+    # Sits after the gate so a consumer never evaluates an unverified build.
+    PhaseRule(
+        kind="polish_pending",
+        phase="polish",
+        observation="Quality verified — handing the build to a consumer",
+        rank=PHASE_RANKS["polish"],
+    ),
+    # Terminal is "complete", not a gate name. The polish GATE is dispatched by
+    # polish_pending above; by the time control reaches here every applicable
+    # rule is satisfied and the entries are spent, so there is nothing left to
+    # dispatch. (Contrast the scraper sets below, whose terminal IS their gate.)
+    # Returning "polish" here re-dispatched the gate forever — caught by
+    # test_spent_entries_fall_through_to_complete.
+    PhaseRule(
+        kind="terminal",
+        phase="complete",
+        observation="All goals complete and polish entries spent",
+        rank=PHASE_RANKS["polish"],
     ),
 )
 
@@ -480,6 +509,20 @@ def evaluate_phases(mission: Any, phases: tuple[PhaseRule, ...]) -> tuple[str, s
         if rule.kind == "flag_unset":
             if not getattr(mission, rule.flag, False):
                 return rule.phase, rule.observation
+            continue
+
+        if rule.kind == "polish_pending":
+            # Fires while the mission has consumer passes left to spend. NOT a
+            # flag: a flag would make polish a one-shot, and the whole design is
+            # that a consumer run reopens work and can be run again on the
+            # improved build. Reading both sides defensively — a legacy
+            # mission.json predates both fields.
+            _spent = int(getattr(mission, "polish_entries", 0) or 0)
+            _allowed = int(
+                getattr(getattr(mission, "config", None), "polish_max_entries", 1) or 1
+            )
+            if _spent < _allowed:
+                return rule.phase, f"{rule.observation} ({_spent + 1}/{_allowed})"
             continue
 
         if rule.kind == "attr_truthy":

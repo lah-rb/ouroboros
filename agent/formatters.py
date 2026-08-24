@@ -382,6 +382,67 @@ def format_project_listing(params: dict, namespaces: dict) -> str:
     return "\n".join(lines)
 
 
+# Documentation extensions and stems a product actually ships to its users.
+# Deliberately narrow: the polish phase shows the consumer ONLY what shipped
+# with the product, and a broad match here would hand them design notes or a
+# task list, which is the one thing that turns a user back into a developer.
+_DOC_SUFFIXES = (".md", ".rst", ".txt")
+_DOC_STEMS = ("readme", "usage", "manual", "guide", "help", "instructions", "changelog")
+
+
+def format_project_docs(params: dict, namespaces: dict) -> str:
+    """The product's own user-facing documentation, verbatim.
+
+    Reads from the scan manifest, whose values already carry the file content
+    snippet. A product with no documentation renders the absence explicitly
+    rather than an empty string — "this shipped with nothing to read" is a
+    finding about the product, and a silent blank would read as a gathering
+    failure instead.
+    """
+    manifest = params.get("source") or {}
+    blocks: list[str] = []
+    total = 0
+    for filepath, content in manifest.items():
+        low = str(filepath).lower()
+        name = low.rsplit("/", 1)[-1]
+        stem = name.rsplit(".", 1)[0]
+        if not (low.endswith(_DOC_SUFFIXES) and stem in _DOC_STEMS):
+            continue
+        body = str(content or "").strip()
+        if not body:
+            continue
+        block = f"--- {filepath} ---\n{body}"
+        if blocks and total + len(block) > _LISTING_MAX_CHARS:
+            blocks.append("… (further documentation omitted)")
+            break
+        blocks.append(block)
+        total += len(block)
+    if not blocks:
+        return "(The product shipped with no user-facing documentation.)"
+    return "\n\n".join(blocks)
+
+
+def format_questionnaire_report(params: dict, namespaces: dict) -> str:
+    """The consumer's answers, paired with the questions they answered.
+
+    Kept as Q/A pairs rather than a flattened block: the conclude step has to
+    tell what a user actually said from what they were asked, and a run of
+    unattributed prose makes the question's framing look like the user's own
+    observation.
+    """
+    answers = params.get("source") or []
+    if not isinstance(answers, list) or not answers:
+        return "(The consumer answered no questions.)"
+    blocks: list[str] = []
+    for i, item in enumerate(answers, 1):
+        if not isinstance(item, dict):
+            continue
+        q = str(item.get("question", "")).strip()
+        a = str(item.get("answer", "")).strip() or "(no answer given)"
+        blocks.append(f"Q{i}. {q}\nA{i}. {a}")
+    return "\n\n".join(blocks) if blocks else "(The consumer answered no questions.)"
+
+
 def format_search_findings(params: dict, namespaces: dict) -> str:
     """Render stored exa findings (TaskState.search_findings) as an Observation
     block for the stuck-task charter. Empty/sentinel -> '' (section is when:-gated)."""
@@ -783,6 +844,8 @@ PRE_COMPUTE_FORMATTERS: dict[str, Any] = {
     "format_mission_meta": format_mission_meta,
     "format_project_file_list": format_project_file_list,
     "format_project_listing": format_project_listing,
+    "format_project_docs": format_project_docs,
+    "format_questionnaire_report": format_questionnaire_report,
     "format_modality_sidecars": format_modality_sidecars,
     "format_search_findings": format_search_findings,
     "format_validation_results": format_validation_results,
