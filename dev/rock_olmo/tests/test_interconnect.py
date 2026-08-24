@@ -1,6 +1,6 @@
 """Interconnected views: coverage, provenance honesty, and framing."""
 
-from agent.interconnect import VIEWS, build_views, view_contrastive, view_corroboration
+from interconnect import VIEWS, build_views, view_contrastive, view_corroboration
 
 _REC = {
     "species": "Antigorite",

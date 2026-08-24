@@ -1,6 +1,6 @@
 """Held-out species selection: balance, determinism, and what it refuses."""
 
-from agent.holdout import (
+from holdout import (
     AMBIGUOUS_NAMES,
     BAND_HOLDOUT,
     PROTECTED,

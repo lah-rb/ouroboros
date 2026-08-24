@@ -2,7 +2,7 @@
 
 import pytest
 
-from agent.training_form import canonicalize, convert, split_key
+from training_form import canonicalize, convert, split_key
 
 
 # ── key splitting ────────────────────────────────────────────────────
