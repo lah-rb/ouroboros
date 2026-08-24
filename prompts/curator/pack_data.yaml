@@ -58,6 +58,20 @@ sections:
       - Numbers VERBATIM from the paper (text, tables, or the labeled
         figure readings). Never average, convert units, extrapolate, or
         estimate — if the paper says "approximately 1.2 GPa", pack 1.2.
+      - UNIT CONVERSION IS THE FAILURE THAT COSTS WHOLE PAPERS. The
+        value must be COPYABLE FROM THE PAGE: carry the unit in the
+        KEY and the printed digits in the value. Normalising a
+        magnitude looks helpful and is rejected, because the gate
+        matches the number as PRINTED:
+            paper prints "3.551 MHz"  ✅ {"frequency_mhz": 3.551}
+                                      ❌ {"frequency_hz": 3551000}
+            paper prints "44 nm"      ✅ {"particle_size_nm": 44}
+                                      ❌ {"particle_size_m": 4.4e-08}
+            paper prints "1.28 GPa"   ✅ {"tensile_strength_gpa": 1.28}
+                                      ❌ {"tensile_strength_mpa": 1280}
+        Same for percentages, temperatures and wavelengths. When the
+        printed form and your preferred unit disagree, the printed form
+        wins — or omit the value.
       - Include the source conditions a value is meaningless without
         (temperature, composition, processing state).
       - Omit what the paper does not state. Sparse and grounded beats
@@ -85,7 +99,9 @@ sections:
       }
       ```
 
-      ❌ WRONG — invented average, unit conversion, synonym key:
+      ❌ WRONG — invented average, converted unit, synonym key
+      (the paper printed 759 MPa and 1.28 GPa; none of these three
+      values can be found on the page):
       ```json
       {"yield_strength_gpa_avg": 0.76, "tensile_strength_megapascals": 1280}
       ```

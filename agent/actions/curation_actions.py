@@ -135,16 +135,83 @@ def _numeric_leaf_tokens(value, path: str = "") -> list[tuple[str, str]]:
     return out
 
 
+#: A comma acting as a DECIMAL separator: between digits, with one or two
+#: digits after it. Two exclusions carry real weight:
+#:   * thousands separators always group in THREES, so {1,2} drops "1,234";
+#:   * the trailing (?!\d{1,2},) drops CHAINS — an enumeration like
+#:     "batches 1,2,3,4,5,6,7" otherwise reads as six decimal commas and
+#:     can convince the convention detector below that a point-convention
+#:     document is a comma-convention one, which then grounds a
+#:     fabricated "1.2". Caught by test_point_convention_document_is_
+#:     left_alone before this ever ran on the corpus.
+_DECIMAL_COMMA_RE = re.compile(r"(?<=\d),(?=\d{1,2}\b)(?!\d{1,2},)")
+#: A point used the same way, for deciding which convention a doc follows.
+_DECIMAL_POINT_RE = re.compile(r"\d\.\d")
+
+
+#: EVIDENCE that a document uses the comma convention, as opposed to the
+#: substitution pattern above. Requires TWO OR MORE digits before the
+#: comma, because the cheap look-alikes are single-digit: citation
+#: brackets ("[1,2]"), figure references ("Fig. 3,4") and short
+#: enumerations all pair single digits, while real measurements
+#: ("57,65 %", "1486,6 eV", "45,3 emu/g") carry a multi-digit integer
+#: part. Counting only those keeps a bibliography from voting.
+_DECIMAL_COMMA_EVIDENCE_RE = re.compile(r"(?<!\d)\d{2,},(?=\d{1,2}\b)(?!\d{1,2},)")
+
+
+def _decimal_comma_variant(doc_n: str) -> str:
+    """``doc_n`` with decimal commas rewritten as points, or "" if the
+    document does not use that convention.
+
+    WHY THIS EXISTS. The comma-stripped compact form below was added so
+    thousands-separated numbers ground ("1,234,567" -> "1234567"). On a
+    document that writes decimals with commas — French, Spanish,
+    Portuguese, Russian, German, and plenty of European-published
+    English — that same stripping DESTROYS the number: "57,65 %"
+    compacts to "5765", so a correctly parsed 57.65 could never match
+    and the paper was rejected for being right. Measured 2026-08-24:
+    46% of corpus markdown contains decimal-comma numbers and 10% use
+    the convention predominantly; 4 of the 5 standing ungrounded pack
+    failures were this bug, not fabrication.
+
+    GATED ON THE DOCUMENT'S OWN CONVENTION, deliberately. Rewriting
+    unconditionally would turn an enumeration like "samples 1,2 and 3"
+    into "1.2" and could ground a value the paper never states — the
+    exact failure this gate exists to prevent. So the rewrite applies
+    only where comma-decimals are frequent AND at least as common as
+    point-decimals, which is the signature of a document that has
+    committed to the convention.
+    """
+    # Evidence and substitution use DIFFERENT patterns on purpose. The
+    # evidence bar is strict (multi-digit integer part) so only real
+    # measurements vote; once the document has demonstrably committed to
+    # the convention, substitution runs on the looser pattern so short
+    # values like "5,5" convert too.
+    #
+    # NOT a ratio against point-decimals — that was the first attempt and
+    # it failed on real documents: paddle's HTML tables, DOIs and version
+    # strings contribute plenty of point-decimals, so a Russian paper
+    # with 94 comma-decimals lost 94-to-190 and never engaged. An
+    # absolute floor of demonstrably-measurement-shaped commas is the
+    # signal; the point count is not evidence about the body text.
+    if len(_DECIMAL_COMMA_EVIDENCE_RE.findall(doc_n)) < 5:
+        return ""
+    return _DECIMAL_COMMA_RE.sub(".", doc_n)
+
+
 def grounding_check(data: dict, doc: str) -> dict:
     """Every numeric token in ``data`` must appear in the curator doc.
 
     The anti-fabrication gate: a value the paper (text or inlined
-    figtext) never states cannot be packed. Matching runs against both
-    the normalized doc and a whitespace-compacted form (tables and
-    thousands-separated numbers split tokens across whitespace).
+    figtext) never states cannot be packed. Matching runs against the
+    normalized doc, a whitespace-compacted form (tables and
+    thousands-separated numbers split tokens across whitespace), and —
+    only for documents that use the convention — a decimal-comma
+    variant (see ``_decimal_comma_variant``).
     """
     doc_n = _norm(doc)
     doc_compact = re.sub(r"[\s,]", "", doc_n)
+    doc_decimal = _decimal_comma_variant(doc_n)
     tokens = _numeric_leaf_tokens(data)
     # Match UNSIGNED: _norm strips '-' from the doc (markdown dash
     # punctuation), so a signed packed token can never match — live,
@@ -155,7 +222,9 @@ def grounding_check(data: dict, doc: str) -> dict:
     ungrounded = [
         {"path": path, "token": tok}
         for path, tok in tokens
-        if (u := tok.lstrip("-")) not in doc_n and u not in doc_compact
+        if (u := tok.lstrip("-")) not in doc_n
+        and u not in doc_compact
+        and not (doc_decimal and u in doc_decimal)
     ]
     rate = 1.0 if not tokens else 1 - len(ungrounded) / len(tokens)
     return {

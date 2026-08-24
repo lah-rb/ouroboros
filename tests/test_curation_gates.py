@@ -245,3 +245,76 @@ def test_registry_scalar_list_widening_is_compatible():
     # Real drift still fails.
     result = registry_check({"lattice_parameter_angstrom": "3.59 A"}, registry)
     assert len(result["type_mismatches"]) == 1
+
+
+# ── decimal-comma documents (2026-08-24) ─────────────────────────────
+#
+# The comma-stripped compact form exists so thousands separators ground.
+# On a document that writes decimals with commas it destroyed the number
+# instead: "57,65 %" -> "5765", so a correctly parsed 57.65 could never
+# match and the paper was rejected for being RIGHT. 46% of corpus
+# markdown carries decimal-comma numbers; 10% use the convention
+# predominantly (fr/es/pt/ru/de and European-published English).
+
+_ES_DOC = (
+    "Composicion quimica: SiO2 57,65 % | Al2O3 13,69 % | Fe2O3 5,77 % "
+    "| MgO 1,81 %. Radiacion XPS 1486,6 eV medida a 25,4 grados. "
+    "Tamano de particula 11,3 nm y 10,8 nm."
+)
+
+
+def test_decimal_comma_document_grounds_point_parsed_values():
+    data = {"sio2_percent": 57.65, "al2o3_percent": 13.69, "xps_ev": 1486.6}
+    result = grounding_check(data, _ES_DOC)
+    assert result["passed"], result
+    assert result["grounding_rate"] == 1.0
+
+
+def test_thousands_separators_still_ground():
+    doc = "The detector recorded 1,234,567 counts over 12.5 seconds."
+    assert grounding_check({"counts": 1234567}, doc)["passed"]
+
+
+def test_enumeration_commas_do_not_manufacture_a_decimal():
+    """The false positive the convention gate exists to prevent."""
+    doc = "Samples 1,2 and 3 were annealed at 12.5 K for 4.0 hours."
+    result = grounding_check({"fabricated": 1.2}, doc)
+    assert not result["passed"]
+    assert result["grounding_rate"] == 0.0
+
+
+def test_point_convention_document_is_left_alone():
+    """A doc that uses points keeps the strict reading — no widening."""
+    doc = "Values 3.14 and 2.72 measured; batches 1,2,3,4,5,6,7 prepared."
+    assert not grounding_check({"bogus": 1.2}, doc)["passed"]
+    assert grounding_check({"pi": 3.14}, doc)["passed"]
+
+
+def test_sparse_comma_use_does_not_trigger_the_variant():
+    """Below the frequency floor the strict reading stands."""
+    doc = "One value 5,5 appears here; everything else uses 1.0 and 2.0 style."
+    assert not grounding_check({"v": 5.5}, doc)["passed"]
+
+
+def test_citation_brackets_do_not_vote_for_the_comma_convention():
+    """Single-digit pairs are the look-alike; only measurements vote."""
+    doc = (
+        "As reported [1,2] and confirmed [3,4] and again [5,6] and [7,8] "
+        "and [9,1] the value was 3.75 units."
+    )
+    assert not grounding_check({"fabricated": 1.2}, doc)["passed"]
+
+
+def test_comma_convention_survives_a_point_heavy_markup_document():
+    """Real corpus shape: paddle HTML + DOIs supply many point-decimals
+    while the body text uses comma decimals (measured 94 vs 190)."""
+    # Six+ MEASUREMENT-shaped commas (multi-digit integer part) — the
+    # evidence floor deliberately ignores "5,77"-style single-digit pairs
+    # because citation brackets look identical.
+    body = " ".join(
+        f"<td style='text-align: center; word-wrap: break-word;'>{v}</td>"
+        for v in ("57,65", "13,69", "45,3", "39,8", "1486,6", "25,4", "11,3")
+    )
+    doc = f"doi 10.5281/zenodo.6790073 v1.0 rev 2.3 tabla 1.2 {body}"
+    result = grounding_check({"sio2": 57.65, "al2o3": 13.69, "sat": 45.3}, doc)
+    assert result["passed"], result
