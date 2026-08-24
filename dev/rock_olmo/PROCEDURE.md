@@ -247,7 +247,92 @@ copies of the same views.
 
 ---
 
-## 11. Remaining before a training run
+## 11. Run 1 result — FORMAT ACQUISITION, NOT SPECTROSCOPY
+
+Read this before designing run 2. The loss curve looks like a success and
+the generations show it is not.
+
+### The numbers
+
+| | eval loss | ppl |
+|---|---|---|
+| baseline (base model) | 1.8499 | 6.36 |
+| epoch 1.25 | 1.6785 | 5.36 |
+| **epoch 2.50** | **1.6692** | **5.31** ← best |
+| epoch 3.12 | 1.6696 | |
+| epoch 3.75 | 1.6698 | |
+
+**-9.77% on held-out species.** OLMo 2 1B, LoRA r32 on attention + MLP
+(24.1M trainable), corpus v2, stopped at epoch 3.75 on two consecutive
+eval rises. Best adapter and full history in
+`~/models/olmo2-1b-spectra-lora`.
+
+### What generation actually shows
+
+```
+Quartz   shows Raman bands at -> 152.1, 163.1, 182.8, 195.5, 205.3, 216.3
+Hematite shows Raman bands at -> 152.1, 163.1, 182.8, 195.5, 205.3, 216.3
+```
+
+IDENTICAL output for different minerals. The model is not conditioning
+on the species: it learned "emit an ascending comma-separated list of
+three-digit numbers". Against known bands — Quartz 1/4, Hematite 1/5,
+Calcite 0/4, and those hits are coincidence from dense sequences. Asked
+what has bands at 1085/712/282 (textbook calcite) it answered
+"Kainosite-(Y)".
+
+The flat eval curve was consistent with this the whole time: the
+template was learned in epoch 1 and there was nothing further to gain.
+
+### Why
+
+Each species appears in **2-8** interconnect records, and those records
+are **4.6% of tokens** — while the TEMPLATE appears in ~12,000 weighted
+records. Format is massively reinforced; each individual fact gets a
+handful of examples. A 1B model with a LoRA and 10.5M tokens learns the
+former and not the latter.
+
+### What this implies for run 2
+
+The problem is NOT the interconnect ratio. It is EXPOSURE PER FACT, and
+more copies of the same views cannot fix it:
+
+- more DISTINCT records per species — per-sample rather than
+  per-species records, more techniques, more sibling groups
+- SSHADE per-band VOTables mirrored (only the 68-row catalogue is used)
+- ECOSTRESS VSWIR is indexed for 156 species but only reaches
+  cross-modal where Raman also exists
+- or accept that factual recall needs a larger base model, and treat
+  the 1B as a style/format demonstrator
+
+The corpus itself is sound — grounded, leak-verified, 13,055 spectral
+points. This is a finding about model capacity and data density.
+
+### Three eval bugs found during the run
+
+Each would have produced a confident wrong conclusion:
+
+1. **The eval set was the first 400 holdout records**, which is 80%
+   templated material against a holdout that is 84% markdown. It scored
+   the model on what it learns fastest. Fixed to stratified sampling —
+   and the honest baseline moved 2.7979 -> 1.8499, so every comparison
+   against the old number was meaningless.
+2. **Resuming carried `best_metric` from the old eval set.** New evals
+   scored ~1.85 against an inherited 1.4998 on a different scale, so no
+   new best would ever be recorded and `load_best_model_at_end` would
+   have shipped the 0.6-EPOCH checkpoint while the logs showed five
+   epochs of training.
+3. **Killing the run means `load_best_model_at_end` never fires.** The
+   best checkpoint has to be selected and consolidated by hand.
+
+The root cause of 1 and 2 is the same: THE MEASURING INSTRUMENT CHANGED
+MID-EXPERIMENT. Fixing the eval was right, but a changed metric
+invalidates every comparison crossing the change — baseline,
+checkpoint bookkeeping, and any pre-registered expectation.
+
+---
+
+## 12. Remaining before a training run
 
 - **Shards must live somewhere durable.** The build writes wherever it
   is pointed; a scratch directory is lost with the session.

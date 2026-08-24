@@ -55,6 +55,33 @@ CORPUS = os.path.expanduser("~/corpora/rock-olmo-training/v2")
 OUT = os.path.expanduser("~/models/olmo2-1b-spectra-lora")
 
 
+def stratified_sample(rows: list[dict], cap: int, seed: int = 20260824) -> list[dict]:
+    """A cap-sized eval set that MIRRORS the holdout's composition.
+
+    Taking the first N records is not a sample — holdout.jsonl is written
+    in generation order, so its head is interconnect and summary records
+    while the file is 84% paper markdown. Evaluating on that head scored
+    the model mostly on short, highly templated text, which it learns
+    fast regardless of whether it knows the mineral: held-out loss read
+    1.4998 at epoch 0.62, far better than the corpus warrants, and it was
+    also driving best-checkpoint selection. Proportional sampling makes
+    the number mean what it claims.
+    """
+    import random as _random
+
+    buckets: dict[str, list[dict]] = {}
+    for row in rows:
+        buckets.setdefault(row.get("source", ""), []).append(row)
+    rng = _random.Random(seed)
+    out: list[dict] = []
+    for source, group in sorted(buckets.items()):
+        take = max(1, round(cap * len(group) / len(rows)))
+        rng.shuffle(group)
+        out.extend(group[:take])
+    rng.shuffle(out)
+    return out[:cap]
+
+
 def load_split(pattern: str) -> list[dict]:
     rows: list[dict] = []
     for path in sorted(glob.glob(os.path.join(CORPUS, pattern))):
@@ -86,12 +113,19 @@ def main() -> None:
     ap.add_argument("--rank", type=int, default=32)
     ap.add_argument("--eval-cap", type=int, default=400)
     ap.add_argument("--smoke", action="store_true", help="20 steps, tiny eval")
+    ap.add_argument("--resume", default=None, help="checkpoint dir to resume from")
     args = ap.parse_args()
 
     print(f"[{time.strftime('%H:%M:%S')}] loading corpus", flush=True)
     train_rows = load_split("train-*.jsonl")
-    eval_rows = load_split("holdout.jsonl")[: args.eval_cap]
-    print(f"  train {len(train_rows):,} records | eval {len(eval_rows):,}", flush=True)
+    eval_rows = stratified_sample(load_split("holdout.jsonl"), args.eval_cap)
+    import collections as _c
+
+    print(
+        f"  train {len(train_rows):,} records | eval {len(eval_rows):,} "
+        f"{dict(_c.Counter(r['source'] for r in eval_rows))}",
+        flush=True,
+    )
 
     tok = AutoTokenizer.from_pretrained(MODEL)
     if tok.pad_token is None:
@@ -158,8 +192,15 @@ def main() -> None:
         eval_steps=max(10, total // 8),
         per_device_eval_batch_size=args.batch,
         save_strategy="steps",
-        save_steps=max(20, total // 4),
+        # Save ON eval boundaries so every checkpoint has a score, and
+        # keep the BEST rather than the last: over 4-5 epochs on 10.5M
+        # tokens a 1B model will start memorising, and the last
+        # checkpoint is then the worst one to ship.
+        save_steps=max(10, total // 8),
         save_total_limit=3,
+        load_best_model_at_end=True,
+        metric_for_best_model="eval_loss",
+        greater_is_better=False,
         gradient_checkpointing=True,
         report_to=[],
         seed=20260824,
@@ -178,8 +219,13 @@ def main() -> None:
     print(f"[{time.strftime('%H:%M:%S')}] BASELINE eval_loss={base['eval_loss']:.4f} "
           f"ppl={math.exp(min(20, base['eval_loss'])):.1f}", flush=True)
 
-    trainer.train()
+    trainer.train(resume_from_checkpoint=args.resume)
 
+    history = [
+        {k: v for k, v in h.items() if k in ("step", "epoch", "eval_loss", "loss")}
+        for h in trainer.state.log_history
+        if "eval_loss" in h or "loss" in h
+    ]
     final = trainer.evaluate()
     print(f"[{time.strftime('%H:%M:%S')}] FINAL eval_loss={final['eval_loss']:.4f} "
           f"ppl={math.exp(min(20, final['eval_loss'])):.1f}", flush=True)
@@ -194,6 +240,11 @@ def main() -> None:
                 "eval_records": len(eval_rows),
                 "baseline_eval_loss": base["eval_loss"],
                 "final_eval_loss": final["eval_loss"],
+                "best_eval_loss": min(
+                    (h["eval_loss"] for h in history if "eval_loss" in h),
+                    default=final["eval_loss"],
+                ),
+                "history": history,
                 "args": vars(args),
             },
             fh,
