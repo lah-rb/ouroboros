@@ -69,20 +69,13 @@ def _corr(reported, reference):
     )["text"]
 
 
-def test_a_sub_unit_gap_reads_as_reporting_precision():
-    assert "within the precision" in _corr(375, 375.2)
-
-
-def test_a_few_wavenumber_gap_names_both_possibilities():
-    """Neither an uncertainty budget nor reference authority is asserted."""
-    text = _corr(371, 375.2)
-    assert "may be reporting precision or a genuine shift" in text
-
-
-def test_a_large_gap_offers_physical_causes_not_a_verdict():
-    text = _corr(340, 375.2)
-    assert "calibration" in text and "polytype" in text
-    assert "wrong" not in text.lower() and "error" not in text.lower()
+def test_a_gap_is_never_framed_as_the_paper_being_wrong():
+    """Superseded the earlier fixed-phrase tests: the tiered policy below
+    checks each band, this checks the invariant across all of them."""
+    for pair in ((375, 375.2), (375, 377), (375, 382), (375, 400)):
+        text = _corr(*pair).lower()
+        assert "wrong" not in text and "error" not in text
+        assert "incorrect" not in text
 
 
 def test_an_exact_match_is_stated_plainly():
@@ -143,3 +136,49 @@ def test_all_view_names_are_declared():
     }
     assert produced <= set(VIEWS)
     assert produced == set(VIEWS)
+
+
+# ── tolerance policy (measured knee + field convention) ──────────────
+from interconnect import (  # noqa: E402
+    ACCEPTED_COMPARISON_CM1,
+    INSTRUMENT_PRECISION_CM1,
+    within_tolerance,
+)
+
+
+def test_tolerance_tiers_are_ordered():
+    assert INSTRUMENT_PRECISION_CM1 < ACCEPTED_COMPARISON_CM1
+
+
+def test_sub_instrument_gap_reads_as_agreement():
+    assert "the two agree" in _corr(375.0, 375.4)
+
+
+def test_a_few_wavenumbers_is_reporting_precision():
+    assert "normally reported" in _corr(375, 377)
+
+
+def test_within_ten_offers_drift_or_a_real_shift():
+    text = _corr(375, 382)
+    assert "calibration drift" in text and "substitution" in text
+
+
+def test_beyond_ten_is_named_a_probable_different_mode():
+    text = _corr(375, 400)
+    assert "different vibrational mode" in text
+
+
+def test_pairs_beyond_tolerance_are_gated_out_entirely():
+    """Not a weak corroboration — probably an unrelated band. Emitting
+    it would teach a false equivalence."""
+    assert within_tolerance(375, 382)
+    assert not within_tolerance(375, 400)
+    rec = dict(_REC, reported=[
+        {"reported": 375, "reference": 400, "technique": "Raman",
+         "paper": {"citation": "X"}, "ref": {"source": "RRUFF"}},
+        {"reported": 375, "reference": 377, "technique": "Raman",
+         "paper": {"citation": "Y"}, "ref": {"source": "RRUFF"}},
+    ])
+    corr = [v for v in build_views(rec) if v["view"] == "corroboration"]
+    assert len(corr) == 1
+    assert "Y" in corr[0]["text"]

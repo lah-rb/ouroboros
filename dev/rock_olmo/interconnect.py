@@ -60,26 +60,75 @@ def _fmt_peaks(
     return ", ".join(f"{v:g}" for v in vals) + f" {unit}"
 
 
+#: Wavenumber agreement tiers, in cm-1. Set from BOTH a measurement over
+#: this corpus and the field's own conventions, because either alone
+#: would have been a guess.
+#:
+#: MEASURED: 22,913 paper-reported Raman values paired against their
+#: nearest RRUFF peak-pick for a species the paper names. Binned at
+#: 1 cm-1, the bin-to-bin decay runs 0.51, 0.76, 0.81, 0.83, 0.80, 0.79
+#: through bin 6 and then FLATTENS — 0.94, 0.97, 0.88, 0.94, 1.14. The
+#: steep part is the genuine population; the flat part is coincidental
+#: proximity, running about 1% of pairs per bin. So real agreement is
+#: concentrated below ~7 cm-1.
+#:
+#: FIELD PRACTICE: a well-calibrated modern Raman spectrometer holds
+#: sub-1 cm-1 wavenumber accuracy (~0.33 cm-1 MAE typical, ~1 cm-1 at
+#: the detector edge), while realistic calibration DRIFT reaches
+#: ±9 cm-1 — and ±10 cm-1 is the tolerance conventionally accepted when
+#: comparing spectra against RRUFF.
+#:
+#: The two agree, which is the reassuring part: the measured knee at
+#: ~7 sits inside the ±10 convention, and the ±9 drift figure explains
+#: why the genuine population reaches that far at all.
+INSTRUMENT_PRECISION_CM1 = 1.0
+REPORTING_PRECISION_CM1 = 3.0
+ACCEPTED_COMPARISON_CM1 = 10.0
+
+
+def within_tolerance(reported: float, reference: float) -> bool:
+    """Whether a pair is close enough to be worth asserting at all.
+
+    Beyond the field's ±10 cm-1 comparison tolerance a "match" is more
+    likely a DIFFERENT vibrational mode or a second phase than the same
+    band shifted, and emitting it would manufacture a corroboration the
+    data does not support. Measured here: past 10 cm-1 the distribution
+    is flat, i.e. indistinguishable from coincidence.
+    """
+    return abs(reported - reference) <= ACCEPTED_COMPARISON_CM1
+
+
 def _tol_phrase(reported: float, reference: float) -> str:
-    """How a reported value relates to the reference, without asserting
-    an uncertainty budget or ranking the two."""
+    """How a reported value relates to the reference.
+
+    The reference grounds the comparison; it does not adjudicate. A
+    difference is named as precision or as accuracy, with physical
+    causes offered rather than a verdict (operator ruling 2026-08-24).
+    """
     gap = abs(reported - reference)
     if gap == 0:
         return "matching the reference position exactly"
-    if gap < 1:
+    if gap <= INSTRUMENT_PRECISION_CM1:
         return (
-            f"differing from the reference by {gap:.2g} — within the precision "
-            "at which positions are normally reported"
+            f"differing by {gap:.2g} — inside the wavenumber accuracy a "
+            "calibrated spectrometer holds, so the two agree"
         )
-    if gap < 5:
+    if gap <= REPORTING_PRECISION_CM1:
         return (
-            f"offset from the reference by {gap:.2g}, a difference that may be "
-            "reporting precision or a genuine shift in this sample"
+            f"differing by {gap:.2g}, within the precision at which band "
+            "positions are normally reported"
+        )
+    if gap <= ACCEPTED_COMPARISON_CM1:
+        return (
+            f"offset by {gap:.2g}, inside the tolerance conventionally accepted "
+            "when comparing against reference spectra — consistent with "
+            "calibration drift, or with a real shift from substitution or "
+            "crystallinity in this sample"
         )
     return (
-        f"offset from the reference by {gap:.3g}, large enough to reflect "
-        "calibration, a different polytype, or cation substitution rather "
-        "than rounding"
+        f"offset by {gap:.3g}, beyond the tolerance normally accepted for "
+        "comparison — more likely a different vibrational mode or a second "
+        "phase than the same band displaced"
     )
 
 
@@ -216,6 +265,12 @@ def build_views(record: dict) -> list[dict]:
         if v:
             out.append(v)
     for rep in record.get("reported") or []:
+        # GATE, not just phrasing: a pair beyond the accepted comparison
+        # tolerance is not a weak corroboration, it is probably a
+        # different vibrational mode. Emitting it would teach a false
+        # equivalence between two unrelated bands.
+        if not within_tolerance(rep["reported"], rep["reference"]):
+            continue
         v = view_corroboration(
             species,
             rep["reported"],
