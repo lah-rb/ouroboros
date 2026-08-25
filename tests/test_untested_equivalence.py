@@ -157,3 +157,101 @@ async def test_incomplete_goals_do_not_count_as_coverage():
 
     assert await _untested_already_covered(fx, m, "untested: drop") is False
     assert fx.prompts == []
+
+
+# ── the gate is satisfied, the mission is not finished ────────────────
+#
+# The all-suppressed branch predates the polish phase, when the quality gate
+# WAS the end of the ladder, so it returned done=True and mission_control
+# routed straight to `completed`. The day the coverage check landed that ended
+# a top_phase=polish mission at entry 1 of 3 — its gate's only findings were
+# coverage gaps the new check suppressed, so the branch fired and entries 2
+# and 3 never ran, with quality_verified still False.
+
+
+def _gate_mission(top_phase: str, entries: int = 0) -> MissionState:
+    # The earlier rungs must be satisfied or the ladder stops below quality
+    # and the assertion under test never gets exercised (mirrors the fixture
+    # in test_polish_phase.py).
+    m = MissionState(
+        objective="t",
+        status="active",
+        config=MissionConfig(
+            working_directory="/tmp/x", top_phase=top_phase, polish_max_entries=3
+        ),
+        goals=[_verified("player can drop items")],
+    )
+    m.architecture = {"run_command": "python main.py"}
+    m.environment_verified = True
+    m.tests_verified = True
+    m.polish_entries = entries
+    return m
+
+
+async def _harvest(mission, findings):
+    from agent.actions.mission_actions import action_harvest_quality_findings
+    from agent.models import StepInput
+
+    return await action_harvest_quality_findings(
+        StepInput(
+            context={
+                "mission": mission,
+                "quality_results": {"fix_tasks": findings},
+            },
+            params={},
+            effects=None,
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_all_suppressed_gate_satisfies_rather_than_finalises(monkeypatch):
+    import agent.actions.mission_actions as ma
+
+    async def _covered(effects, mission, text):
+        return True
+
+    monkeypatch.setattr(ma, "_untested_already_covered", _covered)
+    m = _gate_mission("polish")
+
+    out = await _harvest(m, [{"description": "untested: drop was not exercised"}])
+
+    assert out.result.get("done") is not True, "must not finalise the mission"
+    assert m.quality_verified is True, "the gate had nothing to act on — satisfied"
+
+
+@pytest.mark.asyncio
+async def test_the_ladder_then_reaches_polish_not_complete(monkeypatch):
+    """The whole point: with entries left, the ceiling decides, not the gate."""
+    import agent.actions.mission_actions as ma
+    from agent.flow_sets import CODE_CORE_PHASES, evaluate_phases
+
+    async def _covered(effects, mission, text):
+        return True
+
+    monkeypatch.setattr(ma, "_untested_already_covered", _covered)
+    m = _gate_mission("polish", entries=1)
+
+    await _harvest(m, [{"description": "untested: drop was not exercised"}])
+    phase, _ = evaluate_phases(m, CODE_CORE_PHASES)
+
+    assert phase == "polish"
+
+
+@pytest.mark.asyncio
+async def test_default_ceiling_still_completes(monkeypatch):
+    """At top_phase=quality this must stay behaviour-identical to the old
+    finalize — the ladder, not the branch, is what ends it."""
+    import agent.actions.mission_actions as ma
+    from agent.flow_sets import CODE_CORE_PHASES, evaluate_phases
+
+    async def _covered(effects, mission, text):
+        return True
+
+    monkeypatch.setattr(ma, "_untested_already_covered", _covered)
+    m = _gate_mission("quality")
+
+    await _harvest(m, [{"description": "untested: drop was not exercised"}])
+    phase, _ = evaluate_phases(m, CODE_CORE_PHASES)
+
+    assert phase == "complete"

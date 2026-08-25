@@ -4810,16 +4810,38 @@ async def action_harvest_quality_findings(step_input: StepInput) -> StepOutput:
         suppressed,
     )
     if suppressed and not (created or reopened or skipped):
-        # Every finding this round was a twice-refuted noise pattern.
-        # A gate failing SOLELY on suppressed claims must not loop the
-        # mission forever (live: 52 consecutive gate-fail rounds kept
-        # alive by 7 immortal claims) — treat as no actionable findings.
+        # Every finding this round was non-actionable — a twice-refuted noise
+        # pattern, or a coverage gap a completed goal already establishes. The
+        # gate has nothing to act on. A gate failing SOLELY on suppressed
+        # claims must not loop the mission forever (live: 52 consecutive
+        # gate-fail rounds kept alive by 7 immortal claims).
+        #
+        # But that is a SATISFIED GATE, NOT A FINISHED MISSION. This returned
+        # done=True until 2026-08-25, which mission_control routes straight to
+        # `completed` — written before the polish phase existed, when the
+        # quality gate WAS the end of the ladder. Live cost the day the
+        # coverage-equivalence check landed: a top_phase=polish mission ended
+        # at polish entry 1 of 3, because the gate's only findings were
+        # coverage gaps the new check suppressed. The branch fired, the
+        # mission finalized, and entries 2 and 3 never ran — with
+        # quality_verified still False, so evaluate_phases itself still said
+        # 'quality' while the mission sat completed.
+        #
+        # Setting the flag breaks the same loop the branch was written for
+        # (a verified gate cannot re-fire) and hands the decision back to the
+        # ladder, which is the only thing that knows the mission's ceiling. At
+        # the default top_phase=quality the ladder returns complete and this
+        # is behaviour-identical to the old finalize.
+        mission.quality_verified = True
+        if effects:
+            await effects.save_mission(mission)
         return StepOutput(
-            result={"done": True},
+            result={"done": False},
             observations=(
-                f"Quality gate: all {suppressed} finding(s) suppressed as "
-                f"twice-refuted noise — no actionable findings, finalizing"
+                f"Quality gate: all {suppressed} finding(s) non-actionable "
+                f"(already verified, or twice-refuted noise) — gate satisfied"
             ),
+            context_updates={"mission": mission},
         )
     # created+reopened>0 at gate time (the gate only runs when all goals are
     # complete, so a fresh finding is new or matches a completed goal). skipped

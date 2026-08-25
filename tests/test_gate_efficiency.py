@@ -147,8 +147,14 @@ async def test_twice_refuted_claim_is_suppressed():
             effects=fx,
         )
     )
-    # The only finding was suppressed noise — gate finalizes instead of looping.
-    assert out.result.get("done") is True
+    # The only finding was suppressed noise. The anti-loop property is what
+    # matters here and it now lives in the FLAG, not in finalizing the
+    # mission: a verified gate cannot re-fire, and the ladder — which is the
+    # only thing that knows the mission's ceiling — decides what comes next.
+    # (Returning done=True skipped the polish phase entirely; see
+    # tests/test_untested_equivalence.py for that regression.)
+    assert out.result.get("done") is not True
+    assert mission.quality_verified is True
     assert not any(g.origin == "quality_gate" for g in mission.goals)
 
 
@@ -297,8 +303,12 @@ async def test_shape_finding_suppressed_after_two_behavior_refutes():
     )
     assert goal.status == "complete"
     assert goal.shape_refutes == 2
-    # Only finding, all suppressed → the loop-breaker finalizes.
-    assert out2.result.get("done") is True
+    # Only finding, all suppressed → the loop-breaker fires. It marks the
+    # gate SATISFIED rather than finalizing the mission: same anti-loop
+    # guarantee (a verified gate cannot re-fire), but the ceiling still gets
+    # to decide whether anything comes after quality.
+    assert out2.result.get("done") is not True
+    assert m.quality_verified is True
 
 
 @pytest.mark.asyncio
