@@ -822,6 +822,8 @@ class LocalEffects:
             return None
         if path.lower().endswith(".pdf") and not body.startswith(b"%PDF"):
             return None  # same magic rule as the primary path
+        if path.lower().endswith(".pdf") and b"%%EOF" not in body[-4096:]:
+            return None  # same truncation rule as the primary path
 
         os.makedirs(os.path.dirname(resolved) or ".", exist_ok=True)
         with open(resolved, "wb") as f:
@@ -899,10 +901,15 @@ class LocalEffects:
                 os.makedirs(os.path.dirname(resolved) or ".", exist_ok=True)
                 written = 0
                 head = b""
+                # Rolling tail for the %%EOF check below. A PDF's trailer is
+                # the last few hundred bytes; 4 KiB is generous and costs one
+                # small slice per chunk.
+                tail = b""
                 with open(resolved, "wb") as f:
                     async for chunk in response.aiter_bytes():
                         if len(head) < 8:
                             head += chunk[: 8 - len(head)]
+                        tail = (tail + chunk)[-4096:]
                         written += len(chunk)
                         if written > max_bytes:
                             f.close()
@@ -939,6 +946,29 @@ class LocalEffects:
                     content_type=content_type,
                     error=f"response is not a PDF (magic {head[:8]!r})",
                 )
+            if path.lower().endswith(".pdf") and b"%%EOF" not in tail:
+                # A SEVERED TAIL IS INVISIBLE WITHOUT THIS. httpx's
+                # aiter_bytes() ending early — a CDN or WAF closing the
+                # connection mid-stream — is indistinguishable from a
+                # complete body: the loop simply ends and every prior check
+                # passes, because they all look at the HEAD. 27 of 3,134
+                # PDFs were booked this way (22 at exactly 1 MiB, 3 at
+                # exactly 5 MiB), each one then permanently frozen because
+                # action_download_papers skips any record that already has a
+                # pdf_path. Truncation is server-side and cannot be
+                # prevented here — it can only be detected and re-fetched.
+                os.unlink(resolved)
+                self._log_entry(
+                    "http_download", url, f"truncated: no %%EOF in {written}b", start
+                )
+                return DownloadResult(
+                    success=False,
+                    url=url,
+                    path=path,
+                    status=200,
+                    content_type=content_type,
+                    error=f"PDF is truncated (no %%EOF trailer in {written} bytes)",
+                )
             self._log_entry("http_download", url, f"{written}b -> {path}", start)
             return DownloadResult(
                 success=True,
@@ -949,6 +979,15 @@ class LocalEffects:
                 content_type=content_type,
             )
         except Exception as e:
+            # Remove whatever landed before the failure. The over-max_bytes
+            # and bad-magic paths both unlink; this one did not, so a
+            # mid-stream ReadTimeout left a partial PDF on disk that later
+            # os.path.exists-style logic could silently adopt.
+            try:
+                if os.path.exists(resolved):
+                    os.unlink(resolved)
+            except OSError:
+                pass
             self._log_entry("http_download", url, f"error: {e}", start)
             return DownloadResult(success=False, url=url, path=path, error=str(e))
 
@@ -1339,6 +1378,40 @@ class LocalEffects:
         except Exception as e:  # noqa: BLE001 — capacity never breaks a caller
             logger.debug("capacity_snapshot failed: %s", e)
             return None
+
+    async def run_vision(
+        self,
+        prompt: str,
+        image_path: str,
+        model: str | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+    ):
+        """Vision completion over the LLMVP GraphQL API.
+
+        `image_path` must resolve under the server's model.vision_image_roots
+        or the server refuses to read it — that is deliberate, and it is why
+        callers render into the workspace rather than /tmp.
+        """
+        start = time.monotonic()
+        result = await self._get_inference().run_vision(
+            prompt,
+            image_path,
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        self._log_entry(
+            "run_vision",
+            f"{os.path.basename(image_path)} model={model or 'primary'}",
+            (
+                f"error: {result.error}"
+                if result.error
+                else f"{len(result.text or '')} chars"
+            ),
+            start,
+        )
+        return result
 
     def capacity_start(self) -> None:
         """Begin the subscription. Idempotent; safe without a server."""

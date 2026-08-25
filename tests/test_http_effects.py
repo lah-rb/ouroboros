@@ -78,16 +78,71 @@ def test_params_forwarded(tmp_path):
 # ── LocalEffects.http_download ────────────────────────────────────────
 
 
+#: A COMPLETE little PDF: magic head and the %%EOF trailer a reader needs to
+#: know the file is whole. The fixture used to be b"%PDF-1.4 body", which is
+#: exactly the shape of a truncated download.
+_WHOLE_PDF = b"%PDF-1.4 body\ntrailer\n%%EOF\n"
+
+
 def test_download_streams_bytes_to_workspace(tmp_path):
     def handler(request):
         return httpx.Response(
-            200, content=b"%PDF-1.4 body", headers={"content-type": "application/pdf"}
+            200, content=_WHOLE_PDF, headers={"content-type": "application/pdf"}
         )
 
     fx = _local(tmp_path, handler)
     r = asyncio.run(fx.http_download("https://x.org/p.pdf", "pdfs/p.pdf"))
     assert r.success is True
-    assert (tmp_path / "pdfs" / "p.pdf").read_bytes() == b"%PDF-1.4 body"
+    assert (tmp_path / "pdfs" / "p.pdf").read_bytes() == _WHOLE_PDF
+
+
+def test_download_rejects_a_truncated_pdf_and_leaves_no_file(tmp_path):
+    """The 2026-08-25 defect. A severed tail passes every head-based check —
+    magic, status, content-type — because they all look at the front. 27 of
+    3,134 PDFs were booked this way, then frozen forever: once a record has
+    a pdf_path, action_download_papers skips it and nothing re-fetches."""
+
+    def handler(request):
+        return httpx.Response(
+            200,
+            content=b"%PDF-1.4 body without a trailer",
+            headers={"content-type": "application/pdf"},
+        )
+
+    fx = _local(tmp_path, handler)
+    r = asyncio.run(fx.http_download("https://x.org/p.pdf", "pdfs/p.pdf"))
+    assert r.success is False
+    assert "truncated" in (r.error or "")
+    # And nothing is left behind for later logic to adopt.
+    assert not (tmp_path / "pdfs" / "p.pdf").exists()
+
+
+def test_a_trailer_anywhere_in_the_last_4k_counts(tmp_path):
+    """Real PDFs carry %%EOF then incremental-update padding; the check must
+    look at a window, not the final bytes."""
+
+    def handler(request):
+        return httpx.Response(
+            200,
+            content=b"%PDF-1.4 " + b"x" * 2000 + b"%%EOF" + b"\n" * 40,
+            headers={"content-type": "application/pdf"},
+        )
+
+    fx = _local(tmp_path, handler)
+    assert asyncio.run(fx.http_download("https://x.org/p.pdf", "pdfs/p.pdf")).success
+
+
+def test_a_non_pdf_destination_is_not_trailer_checked(tmp_path):
+    """The rule keys off the DECLARED destination, like the magic check —
+    an .html or .json download has no trailer and must not be rejected."""
+
+    def handler(request):
+        return httpx.Response(
+            200, content=b'{"a": 1}', headers={"content-type": "application/json"}
+        )
+
+    fx = _local(tmp_path, handler)
+    assert asyncio.run(fx.http_download("https://x.org/d.json", "d.json")).success
 
 
 def test_download_rejects_html(tmp_path):

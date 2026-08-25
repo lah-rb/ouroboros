@@ -35,11 +35,13 @@ def test_snapshot_free_cells_equals_engine_free_cells():
     fields = eng.capacity_fields()
     assert fields["free_cells"] == eng._free_cells(POOL)
     # And it is the documented arithmetic, not a coincidence.
-    expected = (
-        POOL
-        - max(eng._live_occupancy(), eng._pinned_occupancy())
-        - fields["pool_slack"]
-    )
+    #
+    # Occupancy is a PER-SEAT max, SUMMED — not a global
+    # max(live_total, pinned_total). The global form under-counted every seat
+    # but the largest, which is how admission came to believe 33,904 cells
+    # were free while the cache could not seat 2,048 rows (2026-08-25).
+    # Bands (flow prefixes, snapshot pins) hold real cells and count too.
+    expected = POOL - eng._occupancy() - eng._band_occupancy() - fields["pool_slack"]
     assert fields["free_cells"] == max(0, expected)
 
 

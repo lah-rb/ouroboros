@@ -1532,10 +1532,36 @@ class LlamaCppBackend(BaseBackend):
         else:
             engine._repetition_guard_factory = lambda: None
         engine._reasoning_heads = reasoning_heads
+        # Cells the engine cannot see: the snapshot band lives in the backend's
+        # registry, and under kv_unified those pins are free until their source
+        # seat is cleared — then they are not. Admission over-reported free
+        # cells by exactly this amount before 2026-08-25.
+        engine.extra_occupancy_fn = self._batched_band_occupancy
         for seat in self._engine_seats:
             seat._engine_ref = engine
         engine.start()
         self._engine = engine
+
+    def _batched_band_occupancy(self) -> int:
+        """Cells pinned on the snapshot band, for the engine's admission math.
+
+        CALLED ON THE DECODE THREAD from _free_cells, so it reads CACHED INTS
+        only — no ctypes, no _ctx dereference. Three server-killing SIGSEGVs
+        are documented at the n_ctx_seq read below for exactly that reason,
+        and test_n_ctx_seq_health_read.py enforces it.
+
+        Live pins (_batched_snap_seqs), not registry flags: a refresh demotes
+        pins while leaving registry entries behind, and counting the stale
+        ones would shrink the pool permanently.
+        """
+        total = 0
+        for key in list(self._batched_snap_seqs):
+            entry = self._snap_registry.get(key)
+            if not entry:
+                continue
+            total += int(entry.get("static_len") or 0)
+            total += len(entry.get("dyn_tokens") or ())
+        return total
 
     def _refresh_context_sync(self, inst: Any) -> None:
         """Tier-4 in-process context refresh: drop + rebuild the ``llama_context``

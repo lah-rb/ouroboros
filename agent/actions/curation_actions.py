@@ -42,6 +42,7 @@ Numeric tokenization mirrors tools/pdf_extract/extract_batch.py
 
 from __future__ import annotations
 from agent.paths import repo_root as _repo_root
+from agent.scheduler.capacity_claim import current_claim
 
 import difflib
 import json
@@ -873,15 +874,44 @@ async def action_figtext_drain_batch(step_input):
 # prefix reuse recovers most of the re-prefill when the engine offers it.
 
 _CURATE_CLAIMS: set[str] = set()
-_CURATE_DOC_CACHE: dict[str, int] = {}  # paper_key -> curator-doc chars
+#: paper_key -> (raw_chars, floor_chars). BOTH ARE BUDGET-INDEPENDENT.
+#: The old cache stored the size of a doc built FOR ONE BUDGET, which under a
+#: per-round budget is wrong in both directions: a doc compressed for a small
+#: budget caches small and looks eligible forever, and a doc measured under a
+#: large budget never learns it could compress under a small one. Keying the
+#: cache by budget instead would rebuild ~500-1,100 compressed docs per round
+#: in an executor, on the same box as the GPU.
+_CURATE_DOC_CACHE: dict[str, tuple[int, int]] = {}
+#: paper_key -> selection rounds this paper was pending but over budget.
+#: In-process on purpose: it rides the same lifetime as _CURATE_CLAIMS and
+#: _CURATE_DOC_CACHE, and a mission run sees hundreds of rounds (400+ idle
+#: rounds per lane observed), so aging fires well inside one run without
+#: adding a sidecar write per round.
+_CURATE_STARVED: dict[str, int] = {}
+#: Rounds over budget before a paper is promoted to the head of its tier.
+_CURATE_AGING_ROUNDS = 25
 
 # Seat-budget derivation (tokens), against the live shared cell:
 #   static prefix 1,765 + three sibling lanes at their measured p95
 #   (3 x ~6.8k) + review answer 4k + pack answer 8k + prompt bodies ~1.5k.
 # Everything left is doc room. Chars/token ~3.3 measured on this corpus's
 # admitted markdown (18.25M muse tokens over ~60MB text).
-_CURATE_RESERVE_TOKENS = 36_000
+# DEGRADED RUNG ONLY. This number bundles "three sibling lanes at their
+# measured p95" into a static reserve — a stand-in for free cells from
+# before free cells were knowable. It is correct on the degraded rung
+# BECAUSE degradation collapses the pool to DEGRADED_WIDTH = 1
+# (capacity_model.py): with no signal exactly one unit runs, so sizing
+# against the whole configured cell is not oversubscription. On the live
+# rungs it would double-charge for siblings that free_cells already counts.
+_CURATE_DEGRADED_RESERVE_TOKENS = 36_000
 _CURATE_CHARS_PER_TOKEN = 3.3
+# Non-doc cost of ONE curate turn, in tokens. The review and pack turns are
+# SEQUENTIAL and stateless, so the peak is one of them: the pack answer
+# (8,192 — the ENGINE charges max_tokens at admission, not what is actually
+# generated), the pack prompt with its key-registry block, and the tokenizer
+# margin the client cannot measure.
+_CURATE_TURN_OVERHEAD_TOKENS = 14_000
+_CURATE_MIN_DOC_TOKENS = 4_000
 
 
 class _CurateTransportFault(Exception):
@@ -896,12 +926,26 @@ def _curate_drain_budget() -> int:
         return 1
 
 
-async def _curate_doc_budget_chars(effects) -> int:
-    """Doc budget scoped to the LIVE cell (health, never config).
+async def _curate_doc_budget_chars(effects, claim_tokens: int = 0) -> int:
+    """Doc budget for THIS lane, THIS round, sized against LIVE free cells.
 
-    0 means "don't run": server unreachable, or the cell is too small for
-    whole-paper work beside the sibling lanes — under the 32k cell this
-    drain self-gates OFF and costs nothing until the cell is grown.
+    Rung 1  operator override (env)
+    Rung 2  the dispatcher's reservation-adjusted claim   <- the normal path
+    Rung 3  a live capacity snapshot  (single-lane callers, no worker pool)
+    Rung 4  the legacy static cell    (feed degraded => width 1 => sole consumer)
+
+    0 means "don't run" — never "run something smaller than a paper".
+
+    WHY NOT kvPoolTokens. That field is the STATIC CONFIGURED n_ctx
+    (llama_cpp_backend: info["kv_pool_tokens"] = int(n_ctx)), not what is
+    free. Every curate lane therefore computed the same budget as though it
+    were the only consumer, and four lanes oversubscribed the pool ~4x. That
+    is what produced the 31,244-token prompt behind the 2026-08-24/25 wedge.
+
+    n_ctx_seq is load-bearing, not decoration: a SEAT's window can be smaller
+    than the pool, and the engine rejects a prompt against the seat
+    (_admit: "Prompt (N tokens) exceeds context window"). "Up to the max
+    context" is bounded by the seat, not the cell.
     """
     raw = os.environ.get("OUROBOROS_CURATE_DOC_CHARS", "").strip()
     if raw:
@@ -909,13 +953,40 @@ async def _curate_doc_budget_chars(effects) -> int:
             return max(0, int(raw))
         except ValueError:
             pass
-    try:
-        pool = await effects.inference_pool_health()
-    except Exception:  # noqa: BLE001 — unreachable server just declines
-        return 0
-    cell = int((pool or {}).get("kvPoolTokens") or 0)
-    doc_tokens = cell - _CURATE_RESERVE_TOKENS
-    if doc_tokens < 4_000:
+
+    cells = int(claim_tokens or 0)  # rung 2
+    if cells <= 0:  # rung 3
+        snap = None
+        fn = getattr(effects, "capacity_snapshot", None)
+        if fn is not None:
+            try:
+                snap = await fn()
+            except Exception:  # noqa: BLE001 — capacity never breaks a caller
+                snap = None
+        if snap is not None and getattr(snap, "knows_kv", False):
+            # Parked, latched, or head-blocked: adding load cannot help, and
+            # a queued oversized prompt is what head-blocks everything else.
+            if (
+                not getattr(snap, "serving", True)
+                or getattr(snap, "engine_fatal", None)
+                or int(getattr(snap, "waiting", 0) or 0) > 0
+            ):
+                return 0
+            free = int(getattr(snap, "free_cells", 0) or 0)
+            seat = int(getattr(snap, "n_ctx_seq", 0) or 0)
+            cells = min(free, seat) if seat else free
+    if cells <= 0:  # rung 4
+        try:
+            pool = await effects.inference_pool_health()
+        except Exception:  # noqa: BLE001 — unreachable server just declines
+            return 0
+        cell = int((pool or {}).get("kvPoolTokens") or 0)
+        # Written so this rung reproduces the pre-2026-08-25 number exactly:
+        # cell - 36,000 doc tokens, once the overhead below is subtracted.
+        cells = cell - _CURATE_DEGRADED_RESERVE_TOKENS + _CURATE_TURN_OVERHEAD_TOKENS
+
+    doc_tokens = cells - _CURATE_TURN_OVERHEAD_TOKENS
+    if doc_tokens < _CURATE_MIN_DOC_TOKENS:
         return 0
     return int(doc_tokens * _CURATE_CHARS_PER_TOKEN)
 
@@ -942,6 +1013,11 @@ _PRIORITY_ASPECTS = frozenset(
 )
 
 
+#: Technique-level mirror of _PRIORITY_ASPECTS, for content bins the
+#: pre-OCR triage assigns from the page itself.
+_PRIORITY_TECHNIQUES = frozenset({"libs", "raman", "ftir"})
+
+
 def _aspect_priority(record: dict) -> int:
     """0 = closes a thin coverage bin, 1 = everything else.
 
@@ -949,6 +1025,21 @@ def _aspect_priority(record: dict) -> int:
     priority pool is finite and drains, after which every paper is tier 1
     again. Retune by re-measuring bin coverage, not by taste.
     """
+    # THE CONTENT BIN WINS WHEN PRESENT. `source_aspects` records which
+    # search query FOUND the paper, which is not the same claim as what the
+    # paper is about — measured, it binned a coffee-classification study and
+    # a single-cell Raman imaging paper into mineral spectroscopy. The
+    # pre-OCR triage read the actual first page, so its verdict is the better
+    # evidence, exactly as extraction's `language` beats the catalog's.
+    #
+    # Absent (untriaged, or triage unavailable) falls through to the aspect,
+    # so this is additive and a corpus with no triage behaves as before.
+    bin_ = str(record.get("content_bin") or "").strip().lower()
+    if bin_:
+        if bin_ in _PRIORITY_TECHNIQUES:
+            return 0
+        if bin_ in ("off_topic", "review"):
+            return 1
     aspects = record.get("source_aspects")
     if not isinstance(aspects, list):
         return 1
@@ -956,6 +1047,22 @@ def _aspect_priority(record: dict) -> int:
         if str(a).strip().lower() in _PRIORITY_ASPECTS:
             return 0
     return 1
+
+
+async def _curate_doc_sizes(effects, paper_key: str) -> tuple[int, int]:
+    """(raw_chars, floor_chars) for one paper — independent of any budget.
+
+    `raw` is the uncompressed curator doc; `floor` is the deepest rung of the
+    compression ladder. Between them they answer both questions selection
+    asks — "can this ever fit?" and "how big will it be at this budget?" —
+    without the answer depending on the budget it was measured under.
+    """
+    raw = len(await _build_doc_for(effects, paper_key, 0))  # 0 => raw form
+    if raw <= 0:
+        return 0, 0
+    # An unmeetable budget forces the walk to the deepest rung.
+    floor = len(await _build_doc_for(effects, paper_key, 1))
+    return raw, min(raw, floor)
 
 
 async def select_curate_paper(
@@ -969,24 +1076,35 @@ async def select_curate_paper(
     truncated (the compression ladder in `_build_doc_for` is what gets
     most of them under it).
     """
-    sized: list[tuple[int, int, str]] = []
+    sized: list[tuple[int, int, int, str]] = []
     for key, rec in databank.items():
         if key in _CURATE_CLAIMS or not _curation_pending(rec):
             continue
-        chars = _CURATE_DOC_CACHE.get(key)
-        if chars is None:
-            doc = await _build_doc_for(effects, key, budget_chars)
-            chars = len(doc)
-            _CURATE_DOC_CACHE[key] = chars
-        if 0 < chars <= budget_chars:
-            sized.append((_aspect_priority(rec), chars, key))
+        sizes = _CURATE_DOC_CACHE.get(key)
+        if sizes is None:
+            sizes = await _curate_doc_sizes(effects, key)
+            _CURATE_DOC_CACHE[key] = sizes
+        raw_chars, floor_chars = sizes
+        # Eligible if the DEEPEST compression fits; ordered by what this
+        # budget will actually produce.
+        if not (0 < floor_chars <= budget_chars):
+            _CURATE_STARVED[key] = _CURATE_STARVED.get(key, 0) + 1
+            continue
+        chars = raw_chars if 0 < raw_chars <= budget_chars else floor_chars
+        # Aging: a paper repeatedly passed over for being too big is promoted
+        # to the head of its tier as soon as a claim covers it. Smallest-first
+        # is still the throughput policy; this only bounds the tail's latency,
+        # which is otherwise unbounded when discovery keeps feeding small docs.
+        aged = 0 if _CURATE_STARVED.get(key, 0) >= _CURATE_AGING_ROUNDS else 1
+        sized.append((_aspect_priority(rec), aged, chars, key))
     if not sized:
         return "", ""
-    _, _, key = min(sized)
+    _, _, _, key = min(sized)
     doc = await _build_doc_for(effects, key, budget_chars)
     if len(doc) > budget_chars:  # doc changed since caching (e.g. new en.md)
-        _CURATE_DOC_CACHE[key] = len(doc)
+        _CURATE_DOC_CACHE[key] = await _curate_doc_sizes(effects, key)
         return "", ""
+    _CURATE_STARVED.pop(key, None)
     _CURATE_CLAIMS.add(key)
     return key, doc
 
@@ -1153,7 +1271,13 @@ async def action_curate_drain_batch(step_input):
         return _summary_out([], "disabled")
     if effects is None:
         return _summary_out([], "no effects")
-    budget_chars = await _curate_doc_budget_chars(effects)
+    # The dispatcher admitted this lane against a live reading of the pool
+    # and claimed it; size the document against THAT, not against the static
+    # configured cell. None outside the worker pool, where rung 3/4 apply.
+    claim = current_claim()
+    budget_chars = await _curate_doc_budget_chars(
+        effects, claim_tokens=(claim.tokens if claim else 0)
+    )
     if budget_chars <= 0:
         return _summary_out(
             [], "cell below whole-paper threshold or server unreachable"
@@ -1165,6 +1289,14 @@ async def action_curate_drain_batch(step_input):
         key, doc = await select_curate_paper(effects, databank, budget_chars)
         if not key:
             return _summary_out(outcomes, "nothing unclaimed fits the seat budget")
+        if claim is not None:
+            # Hand back what this document did not need. A 20k-token paper
+            # must not hold a 55k claim for the length of the unit, or the
+            # "several small docs give us parallelism" half of the design
+            # never happens — the first lane would sit on the whole pool.
+            claim.resize(
+                int(len(doc) / _CURATE_CHARS_PER_TOKEN) + _CURATE_TURN_OVERHEAD_TOKENS
+            )
         try:
             try:
                 state = await _curate_stateless(effects, key, doc)

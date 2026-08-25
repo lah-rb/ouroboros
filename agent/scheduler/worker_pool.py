@@ -39,6 +39,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
+from agent.scheduler.capacity_claim import Claim, claim_scope
+
 logger = logging.getLogger(__name__)
 
 
@@ -65,6 +67,12 @@ class Lane:
     # How long to wait before re-checking an empty queue. Idle lanes must
     # not spin: there is no work-arrival signal from the databank.
     idle_backoff_s: float = 20.0
+    #: Does this lane size its unit against whatever is free, rather than a
+    #: fixed estimate? A dynamic lane claims the pool it was admitted
+    #: against and hands back what its work did not need
+    #: (agent/scheduler/capacity_claim.py). For these lanes `est_kv` is the
+    #: MINIMUM VIABLE UNIT — the admission gate, not the expected draw.
+    dynamic_kv: bool = False
 
 
 # Measured N* per resource comes from the throughput sweep; until it runs
@@ -401,15 +409,28 @@ class WorkerPool:
                 self._last_refusal = f"{lane.name}: {verdict.reason}"
                 logger.debug("lane %s not admitted: %s", lane.name, verdict.reason)
                 return False
-            token = self.model.reserve(lane.name, lane.est_kv, lane.seats)
+            claim_kv = lane.est_kv
+            if lane.dynamic_kv:
+                # Claim the pool we were just admitted against — the SAME
+                # reading admit() used, so the next lane's admit() sees it
+                # already spent rather than racing on a stale number. The
+                # unit trims this as soon as it knows its real cost.
+                claim_kv = max(lane.est_kv, int(verdict.free_cells or 0))
+            token = self.model.reserve(lane.name, claim_kv, lane.seats)
 
         st.inflight += 1
         st.last_dispatch_at = self._now()
         self._resource_inflight[lane.resource] = (
             self._resource_inflight.get(lane.resource, 0) + 1
         )
+        claim = None
+        if token is not None and self.model is not None:
+            claim = Claim(
+                tokens=int(claim_kv), lane=lane.name, _model=self.model, _token=token
+            )
         try:
-            result = await self._run_flow(lane)
+            with claim_scope(claim):
+                result = await self._run_flow(lane)
         finally:
             st.inflight -= 1
             self._resource_inflight[lane.resource] = max(
@@ -564,7 +585,12 @@ def lanes_for_scraper() -> List[Lane]:
             name="curate",
             flow="curate_drain",
             resource="text_seat",
-            est_kv=20_000,
+            # MINIMUM VIABLE UNIT, not the expected draw: the smallest
+            # doc worth curating (4k tok) plus one turn's overhead
+            # (14k). Keep in step with _CURATE_MIN_DOC_TOKENS +
+            # _CURATE_TURN_OVERHEAD_TOKENS in curation_actions.py.
+            est_kv=18_000,
+            dynamic_kv=True,
             idle_backoff_s=30.0,
         ),
         # Second curate lane (overnight guidance, 2026-08-22): review is
@@ -577,7 +603,12 @@ def lanes_for_scraper() -> List[Lane]:
             name="curate2",
             flow="curate_drain",
             resource="text_seat",
-            est_kv=20_000,
+            # MINIMUM VIABLE UNIT, not the expected draw: the smallest
+            # doc worth curating (4k tok) plus one turn's overhead
+            # (14k). Keep in step with _CURATE_MIN_DOC_TOKENS +
+            # _CURATE_TURN_OVERHEAD_TOKENS in curation_actions.py.
+            est_kv=18_000,
+            dynamic_kv=True,
             idle_backoff_s=30.0,
         ),
         # Third curate lane (2026-08-22 03:xx): two lanes ran 59d/59d
@@ -587,14 +618,24 @@ def lanes_for_scraper() -> List[Lane]:
             name="curate3",
             flow="curate_drain",
             resource="text_seat",
-            est_kv=20_000,
+            # MINIMUM VIABLE UNIT, not the expected draw: the smallest
+            # doc worth curating (4k tok) plus one turn's overhead
+            # (14k). Keep in step with _CURATE_MIN_DOC_TOKENS +
+            # _CURATE_TURN_OVERHEAD_TOKENS in curation_actions.py.
+            est_kv=18_000,
+            dynamic_kv=True,
             idle_backoff_s=30.0,
         ),
         Lane(
             name="curate4",
             flow="curate_drain",
             resource="text_seat",
-            est_kv=20_000,
+            # MINIMUM VIABLE UNIT, not the expected draw: the smallest
+            # doc worth curating (4k tok) plus one turn's overhead
+            # (14k). Keep in step with _CURATE_MIN_DOC_TOKENS +
+            # _CURATE_TURN_OVERHEAD_TOKENS in curation_actions.py.
+            est_kv=18_000,
+            dynamic_kv=True,
             idle_backoff_s=30.0,
         ),
         # OA recovery: pure network I/O (Wayback / CORE / meta-tag routes)

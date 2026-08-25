@@ -67,6 +67,18 @@ _TERMINAL_EXTRACTION = (
     # here so the sweep stops offering it; it is a REVIEW QUEUE, not a
     # rejection — see the oversize branch below.
     "extract_oversize",
+    # Pre-OCR triage read the first page and found no geological subject —
+    # a polymer FTIR study, a sensor-network paper, a nuclear-institute
+    # annual report. Measured: 25 of a hand-labelled 40 in the queue.
+    #
+    # A DISTINCT status, deliberately, and not extract_failed: nothing here
+    # failed. This is a REVIEW QUEUE like extract_oversize — the verdict and
+    # its reason are recorded, so a human can list them
+    # (`extraction_status == "extract_off_topic"`) and clear the field to
+    # send any of them back through. Reviews are NOT skipped: their
+    # reference lists feed citation mining, so they stay in the queue at
+    # low priority.
+    "extract_off_topic",
 )
 
 # QUALITY POLICY — recalibrated 2026-08-14 against blind judgement.
@@ -561,21 +573,37 @@ def select_ocr_batch(databank: dict, max_pdfs: int) -> list[str]:
     must release_ocr_keys() in a finally.
 
     Order: papers already PART-EXTRACTED first, then needs_reextract, then
-    the rest. Finish-first matters more than it looks — a half-extracted
-    paper is holding banked part files and a page cursor, and every round
-    that starts something else instead leaves that work unfinished on disk
-    while the queue grows around it. A bounded retry still outranks fresh
-    work for the original reason: it should not queue behind the backlog.
+    by CONTENT PRIORITY, then the rest. Finish-first matters more than it
+    looks — a half-extracted paper is holding banked part files and a page
+    cursor, and every round that starts something else instead leaves that
+    work unfinished on disk while the queue grows around it. A bounded retry
+    still outranks fresh work for the original reason: it should not queue
+    behind the backlog.
+
+    `content_priority` is the pre-OCR triage's verdict (0 thin-bin, 1 normal,
+    2 review). It sorts BELOW the two durability rules on purpose: finishing
+    banked work and honouring a retry both beat starting a better paper.
+    Untriaged papers default to 1, so a queue with no triage keeps exactly
+    its previous order.
     """
     pending = [
         (k, r)
         for k, r in databank.items()
         if _extraction_pending(r) and r.get("pdf_path") and k not in _OCR_CLAIMS
     ]
+
+    def _content_priority(rec: dict) -> int:
+        try:
+            v = rec.get("content_priority")
+            return int(v) if v is not None and str(v) != "" else 1
+        except (TypeError, ValueError):
+            return 1
+
     pending.sort(
         key=lambda kr: (
             not (kr[1].get("extract_progress") or {}).get("parts"),
             kr[1].get("extraction_status") != "needs_reextract",
+            _content_priority(kr[1]),
         )
     )
     keys = [k for k, _ in pending[:max_pdfs]]
@@ -943,6 +971,96 @@ async def _book_segment_round(
         release_ocr_keys([key])
 
 
+async def _triage_claimed(step_input, effects, databank: dict, keys: list[str]) -> dict:
+    """Triage claimed papers; return {'keep': [...], 'counts': {...}}.
+
+    NEVER raises into the drain. Triage is an optimisation: if the vision
+    model is unreachable, the prompt changes, or anything else goes wrong,
+    every paper keeps its place and the round proceeds exactly as it did
+    before this existed. A triage outage must not become an OCR outage.
+
+    Books two fields to the sidecar for each paper it judges — `content_bin`
+    and `content_priority` — plus a terminal `extract_off_topic` for papers
+    whose first page is confidently not geological. That status is a REVIEW
+    QUEUE, not a rejection: distinct from extract_failed, reason recorded,
+    clearable by hand.
+    """
+    from agent.actions import preocr_triage as pt
+    from agent.actions.scholarly_actions import append_extraction_records
+
+    budget = pt.TRIAGE_BUDGET
+    counts = {"triaged": 0, "off_topic": 0, "unknown": 0, "corrupt": 0}
+    if budget <= 0 or not keys:
+        return {"keep": keys, "counts": counts}
+
+    keep: list[str] = []
+    records: list[dict] = []
+    for key in keys:
+        rec = databank.get(key) or {}
+        # Already judged in an earlier round — do not pay for it twice.
+        if rec.get("content_priority") not in (None, ""):
+            keep.append(key)
+            continue
+        if counts["triaged"] >= budget:
+            keep.append(key)  # over budget this round; judge it next time
+            continue
+        pdf = rec.get("pdf_path")
+        if not pdf:
+            keep.append(key)
+            continue
+        try:
+            v = await pt.triage_one(effects, key, pdf)
+        except Exception:  # noqa: BLE001 — an optimisation must not break the lane
+            logger.exception("pre-OCR triage errored on %s — keeping it", key)
+            keep.append(key)
+            continue
+        counts["triaged"] += 1
+        verdict = v.get("verdict")
+        row = {
+            "paper_key": key,
+            "content_bin": v.get("bin") or "",
+            "content_priority": int(v.get("priority", 1)),
+        }
+        if verdict == "off_topic":
+            counts["off_topic"] += 1
+            row["extraction_status"] = "extract_off_topic"
+            row["failure_reason"] = v.get("reason", "")[:200]
+            logger.info("🚦 triage: %s -> off_topic (%s)", key, v.get("reason", ""))
+        elif verdict == "corrupt":
+            counts["corrupt"] += 1
+            row["extraction_status"] = "extract_failed"
+            row["failure_reason"] = v.get("reason", "")[:200]
+            logger.warning("🚦 triage: %s -> corrupt (%s)", key, v.get("reason", ""))
+        else:
+            if verdict == "unknown":
+                counts["unknown"] += 1
+            keep.append(key)
+        records.append(row)
+
+    # ALWAYS report, even when every paper was kept. A round that logs only
+    # its removals is indistinguishable from a round that never ran — which
+    # is precisely how this looked on its first live bounce: four papers had
+    # been judged and booked, and the log said nothing at all.
+    if counts["triaged"]:
+        logger.info(
+            "🚦 pre-OCR triage: %d judged — %d kept, %d off-topic, %d unreadable, "
+            "%d corrupt",
+            counts["triaged"],
+            counts["triaged"] - counts["off_topic"] - counts["corrupt"],
+            counts["off_topic"],
+            counts["unknown"],
+            counts["corrupt"],
+        )
+    if records:
+        try:
+            await append_extraction_records(effects, records)
+        except Exception:  # noqa: BLE001
+            logger.exception("pre-OCR triage could not book verdicts")
+            # The verdicts are lost but the papers are not: anything not kept
+            # was removed from THIS round only and is pending again next time.
+    return {"keep": keep, "counts": counts}
+
+
 async def action_ocr_drain_batch(step_input: StepInput) -> StepOutput:
     """Drain a bounded slice of the OCR backlog — the ocr_drain flow's one
     work step, built to run as a PARALLEL BRANCH beside discovery.
@@ -1010,15 +1128,35 @@ async def action_ocr_drain_batch(step_input: StepInput) -> StepOutput:
             observations="OCR drain: nothing unclaimed pending",
             context_updates={"ocr_summary": summary},
         )
+    claimed = list(keys)
     try:
+        # PRE-OCR TRIAGE. Read each claimed paper's FIRST PAGE before spending
+        # ~290s of OCR on it: paddle transcribes the page (~3s), muse reads
+        # the TEXT (~13s) and returns a technique bin plus a priority.
+        #
+        # Inside the existing try/finally on purpose — the keys are already
+        # claimed, so a triage that books-and-drops costs the lane nothing
+        # extra and cannot leak a claim.
+        triaged = await _triage_claimed(step_input, effects, databank, keys)
+        keys = triaged["keep"]
+        if not keys:
+            summary = {"attempted": 0, "triage": triaged["counts"]}
+            return StepOutput(
+                result=summary,
+                observations=(
+                    "OCR drain: every claimed paper was triaged out "
+                    f"({triaged['counts']})"
+                ),
+                context_updates={"ocr_summary": summary},
+            )
         sub = step_input.model_copy(
             update={"inputs": {**dict(step_input.inputs or {}), "paper_keys": keys}}
         )
         out = await action_extract_pdf_batch(sub)
         result = dict(out.result or {})
     finally:
-        release_ocr_keys(keys)
-    summary = {"attempted": len(keys), **result}
+        release_ocr_keys(claimed)
+    summary = {"attempted": len(keys), "triage": triaged["counts"], **result}
     obs = f"OCR drain: {len(keys)} pdf(s) — {out.observations}"
     # UNDER-FILLED ROUND RIDES A BOOK SEGMENT TOO. The strict
     # empty-queue-only gate starved the book lane: acquisition keeps the

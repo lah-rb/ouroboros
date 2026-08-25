@@ -431,6 +431,33 @@ _END_LENGTH = "length"
 # not a guarantee.
 _POOL_SLACK = 256
 
+# ── PRESSURE LADDER PACING ──────────────────────────────────────────
+#
+# THE LIVELOCK THIS EXISTS TO PREVENT (2026-08-24/25, 3h38m outage).
+# _ensure_batch used to double _live_prefill_budget at the top of EVERY
+# _step, "one doubling per step, upstream-style". _relieve_pressure
+# halves it on a pressure event. The two cancelled: 1024 -> doubled to
+# 2048 -> build a 2048-row batch -> decode returns 1 -> halve to 1024 ->
+# next step doubles straight back. The ladder could therefore never
+# descend to _MIN_PREFILL_BUDGET, which made rung 2 (evict/force-window)
+# UNREACHABLE while any stream sat in PREFILL. 2,288,327 no-progress
+# decodes, GPU idle, a 396 MB log of one repeated line.
+#
+# The fix is a rule, not a number: THE BUDGET GROWS ON EVIDENCE OF
+# SUCCESS, NEVER ON THE PASSAGE OF A STEP. Any value >= 2 breaks the
+# livelock; 4 keeps time-to-first-token recovery brisk after a transient.
+_PREFILL_RECOVERY_STEPS = 4
+# Consecutive pressure steps before the decode thread yields. The ladder
+# terminates on its own (rung 2 retires exactly one stream per event), so
+# reaching this means something OUTSIDE the step loop holds the pool.
+_PRESSURE_BACKOFF_AFTER = 8
+_PRESSURE_BACKOFF_STEP_S = 0.02
+_PRESSURE_BACKOFF_MAX_S = 0.25
+# Absolute backstop. Pressure this many steps running, with the ladder at
+# its floor, means no admission on this pool is survivable. Clearing the
+# engine is recoverable — every caller retries — and spinning is not.
+_PRESSURE_GIVE_UP = 64
+
 
 class _AdmitVerdict(Enum):
     ADMIT = "admit"
@@ -460,6 +487,14 @@ class BatchedEngine:
         self._n_batch = n_batch
         self._prefill_chunk = min(prefill_chunk or n_batch, n_batch)
         self._live_prefill_budget = self._prefill_chunk
+        # Pressure-ladder pacing; see the constants above for the incident.
+        self._clean_steps_since_pressure = 0
+        self._consecutive_pressure = 0
+        # Seam: tests record instead of sleeping the decode thread.
+        self._sleep = time.sleep
+        # Injected by the backend: cells held on the snapshot band, which the
+        # engine cannot see. Cached ints only — this runs on the decode thread.
+        self.extra_occupancy_fn: Optional[Callable[[], int]] = None
         self._persona_heads: Dict[str, PersonaHead] = dict(persona_heads or {})
         self._reasoning_heads: Dict[str, PersonaHead] = {}  # level -> head
         # Stateless flow cache (batched): key -> FlowPin on the seq map's flow
@@ -630,6 +665,16 @@ class BatchedEngine:
                     or self._waiting
                 ):
                     self._wake.wait()
+                # A pool with nothing live is the one moment the ladder is
+                # certainly stale: whatever caused the pressure is gone.
+                # Reset here so a transient does not tax the next request's
+                # time-to-first-token for the life of the process.
+                if not self._streams and (
+                    self._live_prefill_budget != self._prefill_chunk
+                ):
+                    self._live_prefill_budget = self._prefill_chunk
+                    self._clean_steps_since_pressure = 0
+                    self._consecutive_pressure = 0
                 if self._shutdown:
                     self._fail_all(RetriableEngineError("engine shut down"))
                     return
@@ -660,6 +705,11 @@ class BatchedEngine:
                     self._step()
                 except RuntimeError as exc:
                     self._on_fatal(exc)
+                else:
+                    # ret == 1 raises nothing, so a step that made no
+                    # progress is invisible above this loop. This is what
+                    # makes sustained pressure finite and observable.
+                    self._pressure_backoff()
 
     def _has_active_streams(self) -> bool:
         return any(s.phase is not StreamPhase.DONE for s in self._streams.values())
@@ -704,15 +754,68 @@ class BatchedEngine:
             held += int(s.gen_start_pos) + int(s.effective_max)
         return held
 
+    def _band_occupancy(self) -> int:
+        """Cells pinned OUTSIDE the seats: the flow band, plus whatever the
+        backend holds on the snapshot band.
+
+        Under kv_unified a `seq_cp` SHARES cells, so a band pin costs nothing
+        while its source seat is alive — and then costs everything the moment
+        that seat is cleared, invisibly. Counted nowhere before 2026-08-25,
+        which is how admission came to believe 33,904 cells were free while
+        the cache could not seat 2,048 rows.
+        """
+        held = 0
+        for pin in self._flow_pins.values():
+            held += int(getattr(pin, "n_tokens", 0) or 0)
+        fn = self.extra_occupancy_fn
+        if fn is not None:
+            try:
+                held += int(fn() or 0)
+            except Exception:  # noqa: BLE001 — never break the decode thread
+                pass
+        return held
+
+    def _occupancy(self, exclude: Optional[StreamRequest] = None) -> int:
+        """Per-seat max(pinned, live), SUMMED.
+
+        The previous `max(live_total, pinned_total)` avoided double-counting a
+        pinned seat mid-turn by under-counting everything else: four idle
+        pinned seats at 8k plus two live streams at 20k read as 40k rather
+        than 72k. Taking the max PER SEAT keeps the anti-double-count property
+        without discarding the other seats.
+        """
+        live_by_seq: Dict[int, int] = {}
+        for st in self._streams.values():
+            if st.phase is StreamPhase.DONE or (
+                exclude is not None and st.req is exclude
+            ):
+                continue
+            if st.slot is None:
+                continue
+            seq = int(st.slot.seq)
+            live_by_seq[seq] = (
+                live_by_seq.get(seq, 0) + int(st.gen_start_pos) + int(st.effective_max)
+            )
+        held, seen = 0, set()
+        for seat in self._seats:
+            seq = int(seat.seq)
+            seen.add(seq)
+            pinned = (
+                max(int(seat.n_tokens), int(seat.static_len))
+                if seat.pinned
+                else int(seat.static_len)
+            )
+            held += max(pinned, live_by_seq.get(seq, 0))
+        # A live stream on a seq with no seat still holds real cells.
+        held += sum(v for seq, v in live_by_seq.items() if seq not in seen)
+        return held
+
     def _free_cells(self, n_ctx: int, exclude: Optional[StreamRequest] = None) -> int:
         """Cells available to a new stream right now."""
         if not n_ctx:
             return 0
-        # Pinned seats are already counted inside _live_occupancy when they have
-        # a live stream; take the larger of the two views rather than summing,
-        # which would double-count a pinned seat mid-turn.
-        occupied = max(self._live_occupancy(exclude), self._pinned_occupancy())
-        return max(0, n_ctx - occupied - _POOL_SLACK)
+        occupied = self._occupancy(exclude) + self._band_occupancy()
+        return max(0, n_ctx - occupied - self._pool_slack)
 
     def _size_against_pool(
         self, req: StreamRequest, n_ctx: int, total: int
@@ -724,24 +827,53 @@ class BatchedEngine:
         if not n_ctx:
             return per_stream, _AdmitVerdict.ADMIT
 
-        free = self._free_cells(n_ctx, exclude=req) - len(req.prompt_tokens)
-        if free >= per_stream:
-            return per_stream, _AdmitVerdict.ADMIT
-        if free >= _MIN_ADMIT_BUDGET:
-            # Shrink: a smaller generation that COMPLETES beats a larger one
-            # that gets evicted, because eviction discards everything.
+        prompt = len(req.prompt_tokens)
+        pool = self._free_cells(n_ctx, exclude=req)  # slack already removed
+        usable = pool - prompt  # may be negative
+
+        # THE PROMPT MUST FIT FIRST, AND WITH A GENERATION ABOVE IT.
+        # Sizing on `usable` alone reads as "how much may this stream
+        # generate" and hides the question that actually mattered on
+        # 2026-08-24/25: could a 31,244-token prompt be PREFILLED at all?
+        # It could not, and the engine spent 3h38m rediscovering that one
+        # 2,048-row batch at a time.
+        if usable < _MIN_ADMIT_BUDGET:
             logger.info(
-                "✂️ stream admitted at %d tokens (asked %d) — %d free cells",
-                free,
-                per_stream,
-                free,
+                "⏳ prompt %d tok does not fit: %d free cells (pool %d, "
+                "occupied %d, slack %d) leave %d for generation, floor %d",
+                prompt,
+                pool,
+                n_ctx,
+                n_ctx - pool - self._pool_slack,
+                self._pool_slack,
+                usable,
+                _MIN_ADMIT_BUDGET,
             )
-            return free, _AdmitVerdict.ADMIT
-        # Can it ever fit? Compare against the irreducible floor.
-        headroom = n_ctx - self._pinned_occupancy() - _POOL_SLACK
-        if headroom - len(req.prompt_tokens) < _MIN_ADMIT_BUDGET:
-            return 0, _AdmitVerdict.IMPOSSIBLE
-        return 0, _AdmitVerdict.QUEUE
+            # Can it EVER fit? Compare against the irreducible floor.
+            headroom = n_ctx - self._pinned_occupancy() - self._pool_slack
+            if headroom - prompt < _MIN_ADMIT_BUDGET:
+                return 0, _AdmitVerdict.IMPOSSIBLE
+            return 0, _AdmitVerdict.QUEUE
+
+        if usable >= per_stream:
+            return per_stream, _AdmitVerdict.ADMIT
+        # Shrink: a smaller generation that COMPLETES beats a larger one that
+        # gets evicted, because eviction discards everything.
+        #
+        # PROMPT, POOL AND RESIDUAL ARE THREE DIFFERENT NUMBERS. The previous
+        # format string printed `free` for both placeholders, so the log read
+        # "admitted at 2660 tokens ... 2660 free cells" — self-consistent,
+        # and it never showed the 31,244-token prompt that was the whole story.
+        logger.info(
+            "✂️ stream admitted at %d tokens (asked %d): prompt %d tok, "
+            "%d free cells, %d residual",
+            usable,
+            per_stream,
+            prompt,
+            pool,
+            usable,
+        )
+        return usable, _AdmitVerdict.ADMIT
 
     def _drain_waiting(self) -> None:
         """Retry queued admissions once capacity may have freed. FIFO, and it
@@ -925,6 +1057,7 @@ class BatchedEngine:
         self._h_steps += 1
         if ret == 1:
             self._h_kv_pressure_events += 1
+            self._consecutive_pressure += 1
             for s in active:
                 mark_past, mark_pos = s.mark
                 if s.n_past != mark_past:
@@ -938,6 +1071,10 @@ class BatchedEngine:
                 s.i_batch = -1
             self._relieve_pressure(active)
             return
+        # The decode landed. This is the only evidence that justifies giving
+        # the prefill budget a rung back — see _grow_prefill_budget.
+        self._consecutive_pressure = 0
+        self._grow_prefill_budget()
 
         # 4. Sample + per-stream hooks.
         for s in sorted((x for x in active if x.i_batch >= 0), key=lambda x: x.i_batch):
@@ -990,6 +1127,62 @@ class BatchedEngine:
                 )
                 self._retire(s, reason=reason)
 
+    def _grow_prefill_budget(self) -> None:
+        """Climb back toward the configured chunk — on EVIDENCE, not on time.
+
+        A rung costs _PREFILL_RECOVERY_STEPS successful decodes. That is the
+        whole fix for the 2026-08-24/25 wedge: growth that ran once per step
+        cancelled the pressure ladder's halving exactly, so the budget
+        oscillated between two values forever and the ladder's lower rungs
+        were unreachable. Requiring evidence of success means a pressure
+        event that recurs inside the recovery window can never be undone.
+        """
+        if self._live_prefill_budget >= self._prefill_chunk:
+            self._clean_steps_since_pressure = 0
+            return
+        self._clean_steps_since_pressure += 1
+        if self._clean_steps_since_pressure < _PREFILL_RECOVERY_STEPS:
+            return
+        self._clean_steps_since_pressure = 0
+        self._live_prefill_budget = min(
+            self._prefill_chunk, self._live_prefill_budget * 2
+        )
+
+    def _pressure_backoff(self) -> None:
+        """Yield the decode thread when pressure repeats, and give up if it
+        never clears.
+
+        A decode that returns 1 is not an exception, so nothing above the
+        step loop can see a step that made no progress — the only outward
+        signs are a hot thread and a log the size of a small database. This
+        is the layer that makes sustained pressure observable and finite.
+        """
+        n = self._consecutive_pressure
+        if n < _PRESSURE_BACKOFF_AFTER:
+            return
+        if n >= _PRESSURE_GIVE_UP:
+            logger.error(
+                "🧱 KV pressure %d steps running with the ladder at %d — "
+                "clearing the engine (live=%d pinned=%d)",
+                n,
+                self._live_prefill_budget,
+                self._live_occupancy(),
+                self._pinned_occupancy(),
+            )
+            self._fail_all(RuntimeError("KV pressure could not be relieved"))
+            self._consecutive_pressure = 0
+            return
+        # NEVER sleep on pending work: a control op is a seat release, which
+        # is exactly the thing that could relieve the pressure.
+        if self._control_inbox or self._join_inbox or self._paused:
+            return
+        self._sleep(
+            min(
+                _PRESSURE_BACKOFF_STEP_S * (n - _PRESSURE_BACKOFF_AFTER + 1),
+                _PRESSURE_BACKOFF_MAX_S,
+            )
+        )
+
     def _relieve_pressure(self, active: List[StreamState]) -> None:
         """KV-pressure ladder: shrink prefill first; if there is nothing
         left to shrink, evict the largest stateless stream."""
@@ -999,10 +1192,24 @@ class BatchedEngine:
             self._live_prefill_budget = max(
                 _MIN_PREFILL_BUDGET, self._live_prefill_budget // 2
             )
-            logger.warning(
-                "⚠️ KV pressure: prefill budget halved to %d",
-                self._live_prefill_budget,
-            )
+            # A halving in progress cancels any accumulated recovery credit;
+            # otherwise a pressure event inside the recovery window could be
+            # undone by growth on the very next clean step.
+            self._clean_steps_since_pressure = 0
+            # Full volume for the first rung of an EPISODE only. Seven
+            # warnings while a ladder descends is diagnosis; 2,288,327 of
+            # them is a 396 MB log that hides the diagnosis.
+            if self._consecutive_pressure <= 1:
+                logger.warning(
+                    "⚠️ KV pressure: prefill budget halved to %d",
+                    self._live_prefill_budget,
+                )
+            else:
+                logger.debug(
+                    "⚠️ KV pressure: prefill budget halved to %d (event %d)",
+                    self._live_prefill_budget,
+                    self._consecutive_pressure,
+                )
             return
         # FORCE-WINDOW, don't discard. This used to retire the victim with a
         # RetriableEngineError, which routes through `out.finish(error)` and
@@ -1448,12 +1655,11 @@ class BatchedEngine:
             self._batch = internals.LlamaBatch(
                 n_tokens=self._n_batch, embd=0, n_seq_max=self._seq_map.n_seq_max
             )
-        # Prefill budget decays back toward the configured chunk after
-        # pressure events (one doubling per step, upstream-style).
-        if self._live_prefill_budget < self._prefill_chunk:
-            self._live_prefill_budget = min(
-                self._prefill_chunk, self._live_prefill_budget * 2
-            )
+        # NO BUDGET GROWTH HERE. This is where the 2026-08-24/25 livelock
+        # lived: growing once per step cancelled _relieve_pressure's halving
+        # exactly, so the ladder never descended and rung 2 was unreachable.
+        # Growth now happens in _grow_prefill_budget, after a decode that
+        # actually SUCCEEDED.
         return self._batch
 
     def _family(self) -> str:
@@ -1486,6 +1692,27 @@ class BatchedEngine:
         """The shared cell size, from a CACHED int — never a live context
         dereference (see inference/capacity.py rule 2)."""
         return int(getattr(self._llama, "_n_ctx", 0) or 0)
+
+    @property
+    def _pool_slack(self) -> int:
+        """Cells held back when sizing admissions: ONE batch for the decode in
+        flight, ONE for the marginal admission's first prefill chunk.
+
+        _POOL_SLACK = 256 was a guess that predated n_batch = 2048. It let a
+        stream be admitted with less than an EIGHTH of a prefill batch of
+        headroom above its prompt, which is how a 31,244-token prompt entered
+        a pool that could not seat 2,048 rows (2026-08-24/25). The slack is by
+        definition a function of the batch size, so it is derived from it.
+
+        Capped at n_ctx // 8 so a small deployment or test context is not
+        consumed by its own safety margin — n_ctx 4096 with n_batch 2048 would
+        otherwise report zero free cells forever, an outage dressed as caution.
+        """
+        n_ctx = self._pool_n_ctx()
+        want = max(_POOL_SLACK, 2 * self._n_batch)
+        if not n_ctx:
+            return want
+        return min(want, max(_POOL_SLACK, n_ctx // 8))
 
     def capacity_fields(self) -> dict:
         """Every number a scheduler needs, as plain ints.
@@ -1521,7 +1748,7 @@ class BatchedEngine:
             "free_cells": self._free_cells(n_ctx),
             "live_occupancy": live,
             "pinned_occupancy": pinned,
-            "pool_slack": _POOL_SLACK,
+            "pool_slack": self._pool_slack,
             "min_admit_budget": _MIN_ADMIT_BUDGET,
             "static_prefix_tokens": max(
                 (int(seat.static_len) for seat in self._seats), default=0
@@ -1567,6 +1794,11 @@ class BatchedEngine:
             "engine_steps": self._h_steps,
             "prefill_budget": self._live_prefill_budget,
             "kv_pressure_events": self._h_kv_pressure_events,
+            # health() is a FREE dict. Never add this to capacity_fields():
+            # an unknown key there raises TypeError inside the bare except
+            # at _publish_capacity, silently no-oping every publish.
+            "consecutive_pressure": self._consecutive_pressure,
+            "prefill_recovery_credit": self._clean_steps_since_pressure,
             "kv_forced_windows": self._h_forced_windows,
             "kv_evictions": self._h_evictions,
             "decode_failures": self.h_decode_failures,

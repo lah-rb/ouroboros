@@ -56,6 +56,30 @@ query Completion($request: CompletionRequest!) {
 }
 """
 
+# Vision completion. A MUTATION, not a query, and a separate pipeline from
+# `completion`: the mtmd handler builds its own prompt from the model's chat
+# template, so the server deliberately does not overload createCompletion.
+#
+# `model` routes to a HOT SECONDARY (loadModel) — this is how paddle-ocr-vl is
+# reached without a second server or a private llama-server process.
+#
+# NOTE for callers: unlike the text path, run_vision_completion does NOT split
+# reasoning from the answer (core/inference.py does that only in
+# run_completion). A prompt that invites deliberation will get deliberation in
+# `text`. Ask this path to TRANSCRIBE or DESCRIBE; ask the text path to decide.
+VISION_MUTATION = """
+mutation VisionCompletion($request: VisionCompletionRequest!) {
+    visionCompletion(request: $request) {
+        text
+        generatedTokens
+        promptTokens
+        imageCount
+        visionModel
+        decodeMs
+    }
+}
+"""
+
 # GraphQL query for health check (includes generation progress + diagnostics)
 HEALTH_QUERY = """
 query Health {
@@ -338,6 +362,15 @@ def _request_identity(request_body: dict) -> str:
     session_id = request_vars.get("sessionId")
     if session_id:
         return str(session_id)
+    # VISION TAKES NO requestId. `VisionCompletionRequest` is deliberately
+    # narrower than `CompletionRequest`, and GraphQL rejects the WHOLE
+    # request for one undeclared field — every vision call failed with
+    # "Field 'requestId' is not defined by type 'VisionCompletionRequest'"
+    # until this check existed. Fall back to id-less watchdog mode, which
+    # this function already documents as the honest answer when there is
+    # nothing to match on.
+    if "VisionCompletionRequest" in str((request_body or {}).get("query") or ""):
+        return ""
     request_id = f"ouro-{uuid.uuid4().hex[:16]}"
     request_vars["requestId"] = request_id
     return request_id
@@ -799,6 +832,44 @@ class InferenceEffect:
             runaway_token_ceiling=COMPLETION_RUNAWAY_TOKEN_CEILING,
         )
 
+    async def run_vision(
+        self,
+        prompt: str,
+        image_path: str,
+        model: str | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+    ) -> InferenceResult:
+        """One image + text in, completion out, over the SAME transport.
+
+        `image_path` is sent as a PATH, not base64: the server reads it only
+        when it resolves under model.vision_image_roots, so the workspace has
+        to live under one of those roots — and when it does, a page render
+        costs no encode/decode round-trip.
+
+        `model` routes to a hot secondary (e.g. "paddle-ocr-vl" for OCR).
+
+        THE ANSWER IS RAW. This path does not split reasoning from content the
+        way the text path does, so give it transcription/description work and
+        let the text path do any deciding.
+        """
+        client = await self._get_client()
+        request_vars: dict[str, Any] = {
+            "prompt": prompt,
+            "images": [{"path": image_path}],
+        }
+        if max_tokens is not None:
+            request_vars["maxTokens"] = int(max_tokens)
+        if temperature is not None:
+            request_vars["temperature"] = float(temperature)
+        if model:
+            request_vars["model"] = str(model)
+        return await self._request_with_health_watchdog(
+            client,
+            {"query": VISION_MUTATION, "variables": {"request": request_vars}},
+            response_key="visionCompletion",
+        )
+
     # Errors that mean "the infrastructure could not take this request right
     # now", as opposed to "the model produced nothing". ONLY these retry.
     # Deliberately NOT included: timeouts (the server may still be working, and
@@ -939,10 +1010,20 @@ class InferenceEffect:
                     )
 
                 completion = data["data"][response_key]
+                # VisionCompletionResponse is deliberately NARROWER than
+                # CompletionResponse — no tokensGenerated, no finished, no
+                # cache fields (a zero there would read as a cache MISS,
+                # which is a different and false claim from "this path has
+                # no cache"). Read the two required fields tolerantly so one
+                # response shape does not need a second parser.
                 return InferenceResult(
                     text=completion["text"],
-                    tokens_generated=completion["tokensGenerated"],
-                    finished=completion["finished"],
+                    tokens_generated=int(
+                        completion.get("tokensGenerated")
+                        or completion.get("generatedTokens")
+                        or 0
+                    ),
+                    finished=bool(completion.get("finished", True)),
                     truncated=completion.get("truncated", False),
                     # Cache-aware counts — .get with defaults so a server that
                     # doesn't yet return these degrades to whitespace fallback.

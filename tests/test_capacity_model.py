@@ -393,3 +393,35 @@ def test_a_lane_that_draws_any_kv_is_still_bounded():
     m = _model(_snap(seats_free=0, free_cells=100, min_admit_budget=512))
     assert not m.admit("odd", est_kv=5_000, seats=0).admitted
     assert not m.admit("odd2", est_kv=0, seats=1).admitted
+
+
+# ── claims may be corrected downward (2026-08-25) ────────────────────
+
+
+def test_a_claim_may_be_corrected_downward_only():
+    """Shrinking hands cells back to sibling lanes. Growing would be a
+    SECOND admission decision, and this model is an optimizer with the
+    engine as the authority — a claim that could grow would be a client
+    quietly re-admitting itself."""
+    m = _model(_snap(free_cells=60_000))
+    tok = m.reserve("curate", 50_000, 1)
+    m.resize(tok, 20_000)
+    assert m._pending[tok].est_kv == 20_000
+    m.resize(tok, 45_000)  # upward: ignored
+    assert m._pending[tok].est_kv == 20_000
+    m.resize(tok, 0)  # nonsense: ignored
+    assert m._pending[tok].est_kv == 20_000
+
+
+def test_resize_frees_cells_for_a_sibling_lane():
+    m = _model(_snap(free_cells=60_000))
+    tok = m.reserve("curate", 50_000, 1)
+    before_cells, _ = m.effective()
+    m.resize(tok, 20_000)
+    after_cells, _ = m.effective()
+    assert after_cells == before_cells + 30_000
+
+
+def test_resize_on_an_unknown_token_is_a_no_op():
+    m = _model(_snap(free_cells=60_000))
+    m.resize("not-a-token", 1_000)  # must not raise

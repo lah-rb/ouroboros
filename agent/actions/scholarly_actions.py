@@ -680,6 +680,19 @@ EXTRACTION_OWNED_FIELDS = frozenset(
         # the one translation should trust. Only set when detected, so an
         # absent key never shadows a real catalog value on overlay.
         "language",
+        # Pre-OCR triage verdicts. The content-derived technique bin and the
+        # queue priority derived from it, both read off the paper's FIRST
+        # PAGE. Same argument as `language` above: extraction is the layer
+        # that actually read the document, so its verdict beats the search
+        # aspect that happened to find the paper — measured, that aspect
+        # binned a coffee-classification paper and a single-cell imaging
+        # paper into mineral spectroscopy.
+        #
+        # These MUST live here and not on the papers side: source_aspects is
+        # scraper-owned, both writers do whole-file read-modify-write, and a
+        # field absent from this set is dropped on write with no error.
+        "content_bin",
+        "content_priority",
     }
 )
 

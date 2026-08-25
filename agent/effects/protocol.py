@@ -428,6 +428,21 @@ class Effects(Protocol):
         """
         ...
 
+    async def run_vision(
+        self,
+        prompt: str,
+        image_path: str,
+        model: str | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+    ):
+        """Vision completion: one image path + text in, completion out.
+
+        The path is read server-side and only under its configured image
+        roots; remote URLs are refused rather than fetched.
+        """
+        ...
+
     async def inference_pool_health(self) -> dict:
         """Pool-sizing facts from the inference server's health endpoint
         (kvPoolTokens, decodeMode, poolSize).

@@ -295,3 +295,97 @@ async def test_priority_is_finite_and_untagged_papers_still_run():
     second, _ = await select_curate_paper(fx, bank, 1000)
     assert first == "libs" and second == "plain"
     release_curate_keys([first, second])
+
+
+# ── the dynamic budget (2026-08-25) ──────────────────────────────────
+#
+# Before this, the budget came from `kvPoolTokens` — the STATIC CONFIGURED
+# n_ctx, not what is free. Every curate lane therefore sized as though it
+# were the only consumer, four lanes oversubscribed the pool ~4x, and the
+# resulting 31,244-token prompt wedged the engine for 3h38m.
+
+
+class _Snap:
+    """A capacity snapshot shaped like agent/effects/capacity.py's."""
+
+    def __init__(self, **kw):
+        self.knows_kv = kw.pop("knows_kv", True)
+        self.serving = kw.pop("serving", True)
+        self.engine_fatal = kw.pop("engine_fatal", None)
+        self.waiting = kw.pop("waiting", 0)
+        self.free_cells = kw.pop("free_cells", 0)
+        self.n_ctx_seq = kw.pop("n_ctx_seq", 0)
+
+
+class _CapEffects(MockEffects):
+    def __init__(self, snap, **kw):
+        super().__init__(**kw)
+        self._snap = snap
+
+    async def capacity_snapshot(self):
+        return self._snap
+
+
+@pytest.mark.asyncio
+async def test_the_budget_follows_live_free_cells_not_the_configured_cell():
+    _clear_state()
+    fx = _CapEffects(_Snap(free_cells=30_000), pool_health={"kvPoolTokens": 65536})
+    got = await _curate_doc_budget_chars(fx)
+    # (30,000 - 14,000 overhead) * 3.3
+    assert got == int((30_000 - 14_000) * 3.3)
+    # And emphatically NOT the static-cell answer.
+    assert got < await _curate_doc_budget_chars(
+        MockEffects(pool_health={"kvPoolTokens": 65536})
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_dispatcher_claim_beats_the_snapshot():
+    """The snapshot has not seen the sibling lanes' reservations; the claim
+    has. Sizing off the snapshot when a claim exists re-creates the
+    oversubscription the claim exists to prevent."""
+    _clear_state()
+    fx = _CapEffects(_Snap(free_cells=60_000), pool_health={"kvPoolTokens": 65536})
+    got = await _curate_doc_budget_chars(fx, claim_tokens=40_000)
+    assert got == int((40_000 - 14_000) * 3.3)
+
+
+@pytest.mark.asyncio
+async def test_the_budget_is_capped_by_the_per_seat_window():
+    """A SEAT's window can be smaller than the pool, and the engine rejects
+    a prompt against the seat, not the cell. Without this cap the action
+    builds a document the engine will refuse."""
+    _clear_state()
+    fx = _CapEffects(_Snap(free_cells=120_000, n_ctx_seq=32_768))
+    assert await _curate_doc_budget_chars(fx) == int((32_768 - 14_000) * 3.3)
+
+
+@pytest.mark.asyncio
+async def test_a_parked_or_head_blocked_server_yields_no_budget():
+    _clear_state()
+    for snap in (
+        _Snap(free_cells=60_000, serving=False),
+        _Snap(free_cells=60_000, engine_fatal="boom"),
+        _Snap(free_cells=60_000, waiting=3),
+    ):
+        assert await _curate_doc_budget_chars(_CapEffects(snap)) == 0
+
+
+@pytest.mark.asyncio
+async def test_a_degraded_feed_falls_back_to_the_static_cell():
+    """Correct BECAUSE degradation collapses the pool to width 1: with no
+    signal exactly one unit runs, so the whole cell is not oversubscription.
+    This rung must reproduce the pre-2026-08-25 number exactly."""
+    _clear_state()
+    legacy = await _curate_doc_budget_chars(
+        MockEffects(pool_health={"kvPoolTokens": 65536})
+    )
+    assert legacy == int((65_536 - 36_000) * 3.3)
+
+    none_snap = _CapEffects(None, pool_health={"kvPoolTokens": 65536})
+    assert await _curate_doc_budget_chars(none_snap) == legacy
+
+    unknown = _CapEffects(
+        _Snap(free_cells=60_000, knows_kv=False), pool_health={"kvPoolTokens": 65536}
+    )
+    assert await _curate_doc_budget_chars(unknown) == legacy
