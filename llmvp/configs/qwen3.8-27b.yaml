@@ -138,9 +138,13 @@ model:
   # anything to serve. LAZY: nothing is allocated until the first vision
   # request, and the text path never touches it.
   #
-  # vision_n_ctx is held at 32768 rather than the text ceiling: a figure
-  # transcription is one image and one answer, and the vision context holds
-  # its own KV for the process lifetime once built.
+  # vision_n_ctx is 8192, NOT the text ceiling and not 32768 — MEASURED
+  # 2026-08-23: at 32768 every vision request died with
+  # `mtmd_helper_eval_chunk_single: Media evaluation failed with error code -1`
+  # and `find_slot: non-consecutive token position`. This family's DEEPSTACK
+  # projector (qwen3vl_merger, clip.vision.is_deepstack_layers) does not
+  # survive the larger context on this build; 8192 works, and a figure
+  # transcription is one image and one answer anyway. Raise only with a probe.
   mmproj_path: /Users/lah-rb/.lmstudio/models/unsloth/Qwen3.8-27B-GGUF/mmproj-F16.gguf
   vision_n_ctx: 8192
   vision_image_roots:

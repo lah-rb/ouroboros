@@ -318,6 +318,22 @@ def cmd_mission_resume(args: argparse.Namespace) -> None:
         done_at = str(getattr(mission, "completed_at_phase", "") or "quality")
         if PHASE_RANKS.get(top, 0) > PHASE_RANKS.get(done_at, 0):
             mission.status = "active"
+            # Seed the flags this mission ALREADY earned. Completing at a phase
+            # means every rule at or below its rank was satisfied; without this
+            # the reopen re-verifies each tier below the new ceiling from
+            # scratch, which is the opposite of what stacking promises.
+            from agent.flow_sets import flags_satisfied_at, get_flow_set
+
+            _spec = get_flow_set(
+                str(getattr(mission.config, "flow_set", "") or "code_core")
+            ).phases
+            _seeded = [
+                f
+                for f in flags_satisfied_at(done_at, _spec)
+                if not getattr(mission, f, False)
+            ]
+            for _flag in _seeded:
+                setattr(mission, _flag, True)
             pm.save_mission(mission)
             event = Event(
                 type="resume",
@@ -330,6 +346,8 @@ def cmd_mission_resume(args: argparse.Namespace) -> None:
             )
             pm.push_event(event)
             print(f"▶  Mission reopened: ceiling {done_at} -> {top}.")
+            if _seeded:
+                print(f"   Already earned at '{done_at}': {', '.join(_seeded)}")
         else:
             print(
                 f"Mission completed at top_phase '{done_at}' and the ceiling "

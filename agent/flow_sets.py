@@ -437,6 +437,35 @@ def get_flow_set(name: str) -> FlowSetSpec:
     return spec
 
 
+def flags_satisfied_at(completed_phase: str, spec: tuple) -> list[str]:
+    """Phase flags a mission has ALREADY earned by completing at a phase.
+
+    Phase stacking's whole promise is "run to structural today, raise the
+    ceiling and resume tomorrow" — but a reopened mission starts with every
+    flag false, so it re-verifies each tier BELOW the new ceiling from
+    scratch. Live cost, 2026-08-23: a mission that completed at `quality`
+    and was reopened at `polish` re-ran the quality gate, whose fresh UX
+    session could not cover a finished game in one pass and harvested four
+    `untested:` goals for features the mission had already verified. It
+    would have converged eventually, at the price of re-litigating settled
+    work every time a ceiling moves.
+
+    Completing AT a phase means every rule at or below its rank was
+    satisfied, so the flags those rules gate are earned. Derived from the
+    spec rather than a hand-kept list: a new flag_unset rule is covered the
+    day it lands, which is the same reasoning the featurizer and strip
+    paths use for their vocabularies.
+    """
+    done_rank = PHASE_RANKS.get(str(completed_phase or ""), 0)
+    if not done_rank:
+        return []
+    return [
+        r.flag
+        for r in spec
+        if r.kind == "flag_unset" and r.flag and 0 < r.rank <= done_rank
+    ]
+
+
 def evaluate_phases(mission: Any, phases: tuple[PhaseRule, ...]) -> tuple[str, str]:
     """Evaluate a phase spec against mission state -> (phase, observation).
 
