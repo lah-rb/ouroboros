@@ -435,6 +435,13 @@ class InferenceEffect:
         self._model_default_temperature = model_default_temperature
         self._model = model
         self._client: httpx.AsyncClient | None = None
+        # Session ids this client currently holds open. A memoryful session
+        # CHECKS OUT its backend instance and keeps it across turns (seq 0
+        # stays resident so the next turn skips prefill) — see the checkout
+        # comment in llama_cpp_backend.acquire_instance. So while this set is
+        # non-empty we are holding a seat, and a "busy" verdict on any other
+        # call may be us blocking ourselves. Used by _is_self_deadlock.
+        self._open_sessions: set[str] = set()
         # Health-watchdog timing. INSTANCE attributes, not function-local
         # constants, so tests can shrink them (TESTING.md: "timing knobs used
         # by drains/settles should be instance attributes"). The watchdog is
@@ -818,6 +825,36 @@ class InferenceEffect:
         err = (result.error or "").lower()
         return bool(err) and any(m in err for m in self._TRANSIENT_ERROR_MARKERS)
 
+    def _is_self_deadlock(self, result: InferenceResult) -> bool:
+        """True when the seat we are waiting for is one we are holding.
+
+        A memoryful session checks its instance out and keeps it BETWEEN
+        turns, by design. When a stateless call is issued inside that
+        session's lifetime and the pool is at its limit, the only seat is
+        ours and no amount of waiting frees it: the mission blocks on itself.
+
+        Live on 2026-08-24 (qwen3.8 polish run): a diagnosis session finished
+        turn 4 and kept its pin; the fix path dispatched data_patch, whose
+        translation is a STATELESS completion; it burned the whole 4-attempt
+        ladder over ~10 minutes and gave up 52ms before the session's own
+        turn 5 began. One in three data_patch dispatches that night.
+
+        Deliberately keyed on capacity only ("busy"), never on connection
+        errors — a dropped connection is real weather and must still retry.
+
+        Slightly pessimistic when the pool has been scaled past one seat and
+        the exhaustion is genuinely someone else's: we then skip a retry that
+        might have worked. That trade is deliberate. The cost of failing fast
+        is one cheap fallback (data_patch defers to the full rewrite, which
+        already carries the repair); the cost of waiting on ourselves is
+        minutes of wall-clock per occurrence and, under an event-driven wait
+        rather than a bounded ladder, a hang with no fallback at all.
+        """
+        if not self._open_sessions:
+            return False
+        err = (result.error or "").lower()
+        return "instances are busy" in err
+
     async def _request_with_health_watchdog(
         self,
         client: httpx.AsyncClient,
@@ -847,6 +884,21 @@ class InferenceEffect:
                 client, request_body, response_key, runaway_token_ceiling
             )
             if not self._is_transient(result):
+                return result
+            if self._is_self_deadlock(result):
+                # ERROR, not warning: this is a structural condition (a call
+                # shape that cannot be served while we hold a session), not
+                # capacity weather, and the caller's fallback is about to be
+                # taken on the strength of it.
+                logger.error(
+                    "Inference refused and NOT retried: the pool is at its "
+                    "limit and this client holds %d open session(s) (%s) — "
+                    "the seat is ours, so waiting cannot free it. Failing "
+                    "fast to the caller's fallback. %s",
+                    len(self._open_sessions),
+                    ", ".join(sorted(self._open_sessions))[:120],
+                    result.error,
+                )
                 return result
             if i < attempts - 1:
                 delay = self._TRANSIENT_BACKOFF_S[
@@ -1327,7 +1379,9 @@ class InferenceEffect:
                 error_msg = "; ".join(e.get("message", str(e)) for e in data["errors"])
                 raise InferenceError(f"Start session failed: {error_msg}")
 
-            return data["data"]["startSession"]["sessionId"]
+            session_id = data["data"]["startSession"]["sessionId"]
+            self._open_sessions.add(session_id)
+            return session_id
 
         except httpx.ConnectError as e:
             raise InferenceError(f"Cannot connect to LLMVP: {e}") from e
@@ -1387,16 +1441,34 @@ class InferenceEffect:
         # its definition) — LLMVP's own guards own runaways otherwise. The
         # session id is what health publishes for these turns, so the watchdog
         # matches on it without anything extra being sent.
-        return await self._request_with_health_watchdog(
+        result = await self._request_with_health_watchdog(
             client,
             request_body,
             response_key="sessionCompletion",
             runaway_token_ceiling=SESSION_RUNAWAY_TOKEN_CEILING,
         )
+        # STALENESS ESCAPE. A session can die server-side without anyone
+        # calling end_session — expiry, an eviction, a server bounce. The seat
+        # went with it, so a claim we still hold is a lie, and _is_self_deadlock
+        # would fail-fast every stateless call for the rest of the run on the
+        # strength of it. The server's own vocabulary for a session it no
+        # longer has (core/session_manager.py) is the signal.
+        err = (result.error or "").lower()
+        if err and ("not found" in err or "expired" in err or "unknown session" in err):
+            self._open_sessions.discard(session_id)
+        return result
 
     async def end_session(self, session_id: str) -> bool:
         """End a memoryful session via GraphQL mutation."""
         client = await self._get_client()
+
+        # Drop the seat claim FIRST and unconditionally. If the mutation fails
+        # we no longer know that we hold it, and a stale claim would make
+        # _is_self_deadlock fail-fast every later stateless call for the rest
+        # of the run — turning a lost teardown into a permanent capability
+        # loss. Over-claiming costs one wrong fail-fast; under-claiming costs
+        # the whole run.
+        self._open_sessions.discard(session_id)
 
         try:
             response = await client.post(

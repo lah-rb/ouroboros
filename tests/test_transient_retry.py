@@ -171,3 +171,112 @@ async def test_retries_can_be_disabled():
     result = await _run(fx)
     assert fx.attempts == 1
     assert "busy" in (result.error or "").lower()
+
+
+# ── self-deadlock: the seat we are waiting for is one we hold ─────────────
+#
+# A memoryful session CHECKS OUT its backend instance and keeps it across
+# turns, by design (llama_cpp_backend.acquire_instance: "a checkout — e.g. a
+# session pinned between turns — is not GPU work"). A stateless call issued
+# inside that session's lifetime, against a pool at its limit, is therefore
+# waiting for a seat nobody will ever release: the mission blocks on itself.
+#
+# Live on 2026-08-24 (qwen3.8 polish run): a diagnosis session finished turn 4
+# and kept its pin; the fix path dispatched data_patch, whose translation is a
+# stateless completion. It burned the full ladder over ~10 minutes and gave up
+# 52ms before that same session's turn 5 began — one in three data_patch
+# dispatches that night. Retrying was never going to work, and the fallback
+# (defer to the full rewrite) was correct and available the whole time.
+
+
+@pytest.mark.asyncio
+async def test_holding_a_session_fails_fast_instead_of_waiting_on_itself():
+    fx = _effects([_busy()], retries=3)
+    fx._open_sessions.add("3c433fac850a4fd4")
+
+    result = await _run(fx)
+
+    assert fx.attempts == 1  # no ladder — the seat is ours
+    assert "busy" in (result.error or "")
+
+
+@pytest.mark.asyncio
+async def test_no_session_held_still_rides_out_real_contention():
+    """The 07-26 incident had NO session open — that seat really did free.
+    The guard must not touch this path."""
+    fx = _effects([_busy(), _ok()], retries=3)
+    assert not fx._open_sessions
+
+    result = await _run(fx)
+
+    assert fx.attempts == 2
+    assert result.tokens_generated == 42
+
+
+@pytest.mark.asyncio
+async def test_connection_errors_retry_even_while_a_session_is_held():
+    """A dropped connection is real weather, not self-contention — holding a
+    session says nothing about it, so the ladder must still run."""
+    dropped = InferenceResult(
+        text="", tokens_generated=0, finished=False, error="Connection error: reset"
+    )
+    fx = _effects([dropped, _ok()], retries=3)
+    fx._open_sessions.add("sess-a")
+
+    result = await _run(fx)
+
+    assert fx.attempts == 2
+    assert result.tokens_generated == 42
+
+
+@pytest.mark.asyncio
+async def test_ending_a_session_releases_the_claim_even_when_teardown_fails():
+    """A stale claim would fail-fast every later stateless call for the rest
+    of the run, so the claim drops before the mutation is even attempted."""
+    import httpx
+
+    fx = InferenceEffect(endpoint="http://unused")
+    fx._open_sessions.add("sess-a")
+
+    async def _boom(*a, **kw):
+        raise httpx.ConnectError("server gone")
+
+    class _C:
+        post = staticmethod(_boom)
+
+    async def _client():
+        return _C()
+
+    fx._get_client = _client  # type: ignore[method-assign]
+
+    ok = await fx.end_session("sess-a")
+
+    assert ok is False  # teardown genuinely failed
+    assert not fx._open_sessions  # ...and the claim still went
+
+
+@pytest.mark.asyncio
+async def test_a_session_the_server_lost_drops_its_claim():
+    """A session can die server-side with nobody calling end_session — expiry,
+    eviction, a bounce. The seat went with it, so holding the claim would make
+    every later stateless call fail fast on a lie."""
+    fx = InferenceEffect(endpoint="http://unused")
+    fx._open_sessions.add("sess-a")
+
+    async def _client():
+        return object()
+
+    async def _gone(*a, **kw):
+        return InferenceResult(
+            text="",
+            tokens_generated=0,
+            finished=False,
+            error="Session sess-a not found",
+        )
+
+    fx._get_client = _client  # type: ignore[method-assign]
+    fx._request_with_health_watchdog = _gone  # type: ignore[method-assign]
+
+    await fx.session_turn("sess-a", "hello")
+
+    assert not fx._open_sessions
