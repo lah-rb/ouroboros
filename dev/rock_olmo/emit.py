@@ -36,7 +36,13 @@ import re
 from typing import Iterator
 
 from assemble import assemble, load_ima, stable_choice
+from libs_layer import (
+    DEFAULT_T,
+    TEMPERATURE_PAIR,
+    predict_species_lines,
+)
 from holdout import elements, select_holdout
+from interconnect import view_libs_predicted, view_libs_temperature
 from reference_layer import REF_ROOT, load_asd_lines
 from training_form import canonicalize
 
@@ -160,50 +166,49 @@ def sshade_records() -> list[dict]:
 
 
 # ── NIST-derived LIBS expectations ───────────────────────────────────
-def libs_records(species_formulas: dict[str, str], holdout: set[str], top: int = 6) -> list[dict]:
-    """species -> the emission lines LIBS would show, DERIVED from its
-    formula.
+def libs_records(
+    species_formulas: dict[str, str], holdout: set[str], top: int = 6
+) -> list[dict]:
+    """species -> the LIBS lines it should show, DERIVED from its formula.
 
-    This is the mindat bridge: a mineral's formula gives its elements,
-    and the elements give their catalogued emission lines. The
-    derivation is the lesson — it is how LIBS identification actually
-    works — so the record says it is derived rather than implying the
-    lines were measured on the mineral.
+    This is the mindat bridge: a mineral's formula gives its elements, and
+    the elements give their emission lines. The derivation is the lesson —
+    it is how LIBS identification actually works — so records say they are
+    derived rather than implying the lines were measured on the mineral.
+
+    Now carries RELATIVE INTENSITIES as well as positions. The previous
+    version listed wavelengths only, which does not say which line is
+    strong, and strength is most of what makes a LIBS spectrum usable.
+    The literature we collected cannot supply it — of 126 LIBS papers in
+    the databank, essentially none carry intensity tables — but NIST ASD
+    carries the transition probability, upper-level energy and degeneracy
+    needed to compute it under LTE. See libs_layer.
     """
-    cache: dict[str, list[dict]] = {}
     out: list[dict] = []
     for species, formula in sorted(species_formulas.items()):
         if species in holdout:
             continue
-        els = elements(formula)
-        if not els:
+        groups = predict_species_lines(formula, DEFAULT_T, max_elements=top)
+        if len(groups) < 2:
             continue
-        parts = []
-        for el in els:
-            if el not in cache:
-                cache[el] = load_asd_lines(el, top=3)
-            lines = cache[el]
-            if lines:
-                wl = ", ".join(f"{l['wavelength_nm']:g}" for l in lines)
-                parts.append(f"{el} at {wl} nm")
-        if len(parts) < 2:
-            continue
-        out.append(
-            {
-                "view": "forward",
-                "domain": "libs_derived",
-                "species": species,
-                "text": (
-                    f"A LIBS spectrum of {species} ({formula}) should show emission from "
-                    f"each element in its formula: " + "; ".join(parts[:top]) + ". "
-                    "Line positions are the catalogued atomic values for those elements, "
-                    "not measurements on this mineral."
-                ),
-                "provenance": {"source": "NIST ASD", "derivation": "formula_to_lines"},
-                "split": "train",
-                "origin": "reference_only",
-            }
+        base = {"domain": "libs_derived", "split": "train", "origin": "reference_only"}
+        v = view_libs_predicted(species, formula, groups, DEFAULT_T)
+        if v:
+            out.append({**v, **base})
+        # The temperature pair is the part a flat line list cannot teach:
+        # the same mineral legitimately gives different relative
+        # intensities at different plasma temperatures.
+        t_cool, t_hot = TEMPERATURE_PAIR
+        vt = view_libs_temperature(
+            species,
+            formula,
+            predict_species_lines(formula, t_cool, max_elements=top),
+            predict_species_lines(formula, t_hot, max_elements=top),
+            t_cool,
+            t_hot,
         )
+        if vt:
+            out.append({**vt, **base})
     return out
 
 
@@ -233,7 +238,9 @@ def paper_records(holdout: set[str]) -> list[dict]:
         for key, value in data.items():
             if key.endswith("_as_packed") or value in (None, "", [], {}):
                 continue
-            facts.append(f"{key.replace('_', ' ')}: {json.dumps(value, ensure_ascii=False)[:160]}")
+            facts.append(
+                f"{key.replace('_', ' ')}: {json.dumps(value, ensure_ascii=False)[:160]}"
+            )
         text = summary + ("\n" + "\n".join(facts[:24]) if facts else "")
         # CHECK WHAT IS EMITTED, not a proxy for it. The first version
         # scanned title+data while emitting summary+facts, so a review
@@ -287,9 +294,15 @@ def emit_corpus(
     """Assemble every source, weight, verify, shuffle, shard, write."""
     ima = load_ima()
     species_papers = json.load(
-        open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "species_papers.json"))
+        open(
+            os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "species_papers.json"
+            )
+        )
     )["papers"]
-    holdout = {s for picks in select_holdout(species_papers, ima).values() for s in picks}
+    holdout = {
+        s for picks in select_holdout(species_papers, ima).values() for s in picks
+    }
 
     inter = assemble()["records"]
     for rec in inter:

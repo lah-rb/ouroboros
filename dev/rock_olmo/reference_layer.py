@@ -30,10 +30,11 @@ from __future__ import annotations
 
 import glob
 import io
+import json
 import os
 import re
 import zipfile
-from typing import Iterator
+from typing import Any, Iterator
 
 REF_ROOT = os.path.expanduser("~/corpora/mineral-refs")
 
@@ -289,7 +290,10 @@ def pick_troughs(
             continue
         if out and x - out[-1]["position_um"] < min_separation:
             if depth > out[-1]["relative_depth"]:
-                out[-1] = {"position_um": round(x, 3), "relative_depth": round(depth, 3)}
+                out[-1] = {
+                    "position_um": round(x, 3),
+                    "relative_depth": round(depth, 3),
+                }
             continue
         out.append({"position_um": round(x, 3), "relative_depth": round(depth, 3)})
     out.sort(key=lambda p: -p["relative_depth"])
@@ -312,15 +316,26 @@ def load_asd_lines(element: str, top: int = 12) -> list[dict]:
     rows: list[dict] = []
     with open(path, errors="ignore") as fh:
         header = fh.readline().rstrip("\n").split("\t")
-        try:
-            i_wl = header.index("obs_wl_vac(nm)")
-            i_int = header.index("intens")
-            i_sp = header.index("sp_num")
-        except ValueError:
+        # Column names differ across the 92 files: 50 use `_vac`, 42 use
+        # `_air`. Resolving one fixed name returned [] for the other 42 —
+        # Ca, Li, H and 39 more contributed NO lines to any LIBS record.
+        i_wl = next(
+            (
+                header.index(c)
+                for c in ("obs_wl_air(nm)", "obs_wl_vac(nm)", "obs_wl(nm)")
+                if c in header
+            ),
+            None,
+        )
+        i_int = header.index("intens") if "intens" in header else None
+        # Hydrogen has no sp_num column at all; every hydrogen line is
+        # necessarily H I, since H II is a bare proton and cannot emit.
+        i_sp = header.index("sp_num") if "sp_num" in header else None
+        if i_wl is None or i_int is None:
             return []
         for line in fh:
             parts = line.rstrip("\n").split("\t")
-            if len(parts) <= max(i_wl, i_int, i_sp):
+            if len(parts) <= max(i_wl, i_int, i_sp or 0):
                 continue
             wl = parts[i_wl].strip().strip('"')
             inten = parts[i_int].strip().strip('"')
@@ -335,9 +350,123 @@ def load_asd_lines(element: str, top: int = 12) -> list[dict]:
                 {
                     "wavelength_nm": round(wlf, 4),
                     "relative_intensity": intf,
-                    "ionisation_stage": parts[i_sp].strip().strip('"'),
+                    "ionisation_stage": (
+                        parts[i_sp].strip().strip('"') if i_sp is not None else "1"
+                    ),
                     "element": element,
                 }
             )
     rows.sort(key=lambda r: -r["relative_intensity"])
     return rows[:top]
+
+
+# ---------------------------------------------------------------------------
+# STRUCTURAL LAYER
+#
+# Added after run 2 showed the ceiling is a MISSING INPUT rather than
+# missing capacity: Raman reads bonding geometry, composition does not
+# encode bonding geometry, and composition was all the model had. LoRA on
+# the backbone changed nothing, which is what a missing input looks like.
+#
+# Two sources, deliberately different in kind:
+#   mindat  -- metadata ABOUT a structure (crystal system, cell, Strunz)
+#              for 94.8% of our species. Broad, cheap, and measured at
+#              +0.0714 holdout (t=7.50) as features.
+#   AMCSD   -- the structure ITSELF (atomic positions -> coordination
+#              numbers and bond lengths) for ~46%. Narrower, but it is
+#              the quantity that actually sets a band position, and the
+#              mindat metadata provably did NOT move polymorphs.
+# ---------------------------------------------------------------------------
+
+MINDAT_GEO = os.path.join(REF_ROOT, "mindat", "geomaterials.jsonl")
+CIF_FEATURES = os.path.expanduser("~/corpora/rock-olmo-training/cif_features.json")
+
+#: mindat stores the Strunz class as four separate columns; only the top
+#: level is stable enough to name in prose.
+STRUNZ_CLASSES = {
+    "1": "native element",
+    "2": "sulfide",
+    "3": "halide",
+    "4": "oxide",
+    "5": "carbonate",
+    "6": "borate",
+    "7": "sulfate",
+    "8": "phosphate",
+    "9": "silicate",
+    "10": "organic compound",
+}
+
+
+def _num(value: Any) -> float | None:
+    """mindat writes absent numerics as '0' or '' rather than null, and a
+    zero cell length is not a measurement — it is a missing field wearing
+    a number. Treat non-positive as absent."""
+    try:
+        x = float(value)
+    except (TypeError, ValueError):
+        return None
+    return x if x > 0 else None
+
+
+def load_mindat_structure(path: str = MINDAT_GEO) -> dict[str, dict]:
+    """species (lowercased) -> structural metadata.
+
+    Keys kept are the ones that survived feature selection: crystal
+    system, space-group number, cell lengths and angles, Strunz class,
+    calculated density, hardness. Everything else in the 148-field record
+    is either provenance, optical, or locality data that no view uses.
+    """
+    out: dict[str, dict] = {}
+    if not os.path.exists(path):
+        return out
+    with open(path) as fh:
+        for line in fh:
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            name = (rec.get("name") or "").strip()
+            if not name:
+                continue
+            strunz = str(rec.get("strunz10ed1") or "").strip()
+            # NOT the International Tables number. Verified 2026-08-24
+            # against AMCSD H-M symbols: Quartz is ITA 152 and mindat says
+            # 89; Pyrite is 205 and mindat says 204; Marcasite is 58 and
+            # mindat says 73 — no offset fits, so this is a mindat-internal
+            # id. Named accordingly: printing it as "space group 89" would
+            # be a fabricated fact of exactly the kind the grounding gate
+            # exists to stop. The TRUE symbol comes from AMCSD below.
+            sg = rec.get("spacegroup")
+            try:
+                sg = int(sg) if sg not in (None, "", 0, "0") else None
+            except (TypeError, ValueError):
+                sg = None
+            out[name.lower()] = {
+                "species": name,
+                "crystal_system": (rec.get("csystem") or "").strip() or None,
+                "mindat_spacegroup_id": sg or None,  # opaque categorical; see above
+                "a": _num(rec.get("a")),
+                "b": _num(rec.get("b")),
+                "c": _num(rec.get("c")),
+                "alpha": _num(rec.get("alpha")),
+                "beta": _num(rec.get("beta")),
+                "gamma": _num(rec.get("gamma")),
+                "strunz_class": STRUNZ_CLASSES.get(strunz),
+                "density_calc": _num(rec.get("dcalc")),
+                "hardness_max": _num(rec.get("hmax")),
+                "source": "mindat",
+            }
+    return out
+
+
+def load_cif_features(path: str = CIF_FEATURES) -> dict[str, dict]:
+    """species (lowercased) -> coordination and bond geometry from AMCSD.
+
+    Produced by ``cif_features.py``, whose coordination numbers are
+    validated against textbook values for Diopside, Quartz, Pyrite,
+    Rutile, Forsterite and Calcite before the extraction is trusted.
+    """
+    if not os.path.exists(path):
+        return {}
+    raw = json.load(open(path))
+    return {k.lower(): dict(v, species=k, source="AMCSD") for k, v in raw.items()}

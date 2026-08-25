@@ -14,7 +14,11 @@ therefore measures generalisation to unseen minerals rather than
 memorisation, which is the whole reason the split cost 27% of the paper
 text.
 
-CORPUS SHAPE (v2): 19,369 weighted records / ~13.2M tokens. Paper
+CORPUS SHAPE (v3): 23,931 weighted records / ~14.2M tokens, adding the
+structure / polymorph / computed / libs_predicted / libs_temperature
+views. NOTE the eval SET changed with them, so v3 losses are NOT
+comparable to v2 numbers — the baseline is recomputed per corpus.
+(v2 was: 19,369 weighted / ~13.2M tokens.) Paper
 markdown is 91% by token; interconnects and reference material 5.4%.
 That ratio is the operator's deliberate choice for a representative
 first pass and the first thing to revisit if the model knows facts but
@@ -51,7 +55,9 @@ from transformers import (
 )
 
 MODEL = os.path.expanduser("~/models/OLMo-2-0425-1B")
-CORPUS = os.path.expanduser("~/corpora/rock-olmo-training/v2")
+CORPUS = os.path.expanduser(
+    os.environ.get("ROCK_OLMO_CORPUS", "~/corpora/rock-olmo-training/v3")
+)
 OUT = os.path.expanduser("~/models/olmo2-1b-spectra-lora")
 
 
@@ -114,6 +120,13 @@ def main() -> None:
     ap.add_argument("--eval-cap", type=int, default=400)
     ap.add_argument("--smoke", action="store_true", help="20 steps, tiny eval")
     ap.add_argument("--resume", default=None, help="checkpoint dir to resume from")
+    ap.add_argument(
+        "--baseline-only",
+        action="store_true",
+        help="evaluate the BASE model on this corpus eval set and stop; "
+        "the eval set moves with the corpus, so every run needs "
+        "its own baseline (see PROCEDURE.md 11)",
+    )
     args = ap.parse_args()
 
     print(f"[{time.strftime('%H:%M:%S')}] loading corpus", flush=True)
@@ -155,6 +168,29 @@ def main() -> None:
     model.config.use_cache = False
     model.enable_input_require_grads()
 
+    if args.baseline_only:
+        # The BASE model's loss on THIS corpus's eval set. Run 1 shipped a
+        # comparison against a baseline measured on a different eval set,
+        # and every number crossing that change was meaningless (§11). The
+        # eval set moves whenever the corpus gains a view type, so the
+        # baseline is re-measured per corpus rather than carried forward.
+        from torch.utils.data import DataLoader
+
+        model.eval()
+        coll = DataCollatorForLanguageModeling(tok, mlm=False)
+        dl = DataLoader(eval_ds, batch_size=args.batch, collate_fn=coll)
+        tot, n = 0.0, 0
+        with torch.no_grad():
+            for b in dl:
+                b = {k: v.to(model.device) for k, v in b.items()}
+                tot += float(model(**b).loss) * b["input_ids"].shape[0]
+                n += b["input_ids"].shape[0]
+        loss = tot / max(1, n)
+        print(f"\nBASE MODEL on {CORPUS}")
+        print(f"  eval records {n}   eval_loss {loss:.4f}   ppl {math.exp(loss):.2f}")
+        print("  ^ run 2 is compared ONLY to this, never to run 1's 1.8499/1.6692")
+        return
+
     # Attention + MLP projections. Targeting attention alone underfits a
     # domain shift this large; the MLP is where factual association
     # lives, and at 1B the extra parameters are cheap.
@@ -165,8 +201,13 @@ def main() -> None:
         bias="none",
         task_type="CAUSAL_LM",
         target_modules=[
-            "q_proj", "k_proj", "v_proj", "o_proj",
-            "gate_proj", "up_proj", "down_proj",
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "o_proj",
+            "gate_proj",
+            "up_proj",
+            "down_proj",
         ],
     )
     model = get_peft_model(model, lora)
@@ -216,8 +257,11 @@ def main() -> None:
     )
 
     base = trainer.evaluate()
-    print(f"[{time.strftime('%H:%M:%S')}] BASELINE eval_loss={base['eval_loss']:.4f} "
-          f"ppl={math.exp(min(20, base['eval_loss'])):.1f}", flush=True)
+    print(
+        f"[{time.strftime('%H:%M:%S')}] BASELINE eval_loss={base['eval_loss']:.4f} "
+        f"ppl={math.exp(min(20, base['eval_loss'])):.1f}",
+        flush=True,
+    )
 
     trainer.train(resume_from_checkpoint=args.resume)
 
@@ -227,8 +271,11 @@ def main() -> None:
         if "eval_loss" in h or "loss" in h
     ]
     final = trainer.evaluate()
-    print(f"[{time.strftime('%H:%M:%S')}] FINAL eval_loss={final['eval_loss']:.4f} "
-          f"ppl={math.exp(min(20, final['eval_loss'])):.1f}", flush=True)
+    print(
+        f"[{time.strftime('%H:%M:%S')}] FINAL eval_loss={final['eval_loss']:.4f} "
+        f"ppl={math.exp(min(20, final['eval_loss'])):.1f}",
+        flush=True,
+    )
     trainer.save_model(OUT)
     tok.save_pretrained(OUT)
     with open(os.path.join(OUT, "run.json"), "w") as fh:

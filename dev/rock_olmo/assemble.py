@@ -45,10 +45,13 @@ from reference_layer import (
     iter_ecostress,
     iter_rruff,
     load_asd_lines,
+    load_cif_features,
+    load_mindat_structure,
     pick_peaks,
     pick_troughs,
     read_ecostress_spectrum,
 )
+from wurm_layer import fold_name, iter_wurm
 from training_form import canonicalize
 
 CORPUS = os.path.expanduser("~/corpora/ouroboros-spectra")
@@ -57,7 +60,9 @@ DATASET = os.path.join(CORPUS, "databank", "dataset")
 #: Pack keys whose values are Raman/FTIR band positions, for the
 #: corroboration view. Matches the schema the repack converged on.
 _RAMAN_KEY = re.compile(r"raman.*(peak|band|wavenumber|shift)|(peak|band).*raman", re.I)
-_FTIR_KEY = re.compile(r"(ftir|infrared).*(peak|band|wavenumber)|(peak|band).*(ftir|infrared)", re.I)
+_FTIR_KEY = re.compile(
+    r"(ftir|infrared).*(peak|band|wavenumber)|(peak|band).*(ftir|infrared)", re.I
+)
 
 
 def stable_choice(seq: list, *parts: str) -> Any:
@@ -93,7 +98,9 @@ def load_ima() -> dict[str, str]:
     return out
 
 
-def _numbers(value: Any, out: list[float], lo: float = 100.0, hi: float = 4000.0) -> None:
+def _numbers(
+    value: Any, out: list[float], lo: float = 100.0, hi: float = 4000.0
+) -> None:
     if isinstance(value, dict):
         for v in value.values():
             _numbers(v, out, lo, hi)
@@ -133,7 +140,8 @@ def load_paper_reports(species_index: dict[str, str]) -> dict[str, list[dict]]:
             if not vals:
                 continue
             blob = json.dumps(
-                {"t": art.get("title", ""), "d": art.get("data") or {}}, ensure_ascii=False
+                {"t": art.get("title", ""), "d": art.get("data") or {}},
+                ensure_ascii=False,
             ).lower()
             citation = art.get("title") or art.get("paper_key", "")
             for low, name in lowered.items():
@@ -145,7 +153,8 @@ def load_paper_reports(species_index: dict[str, str]) -> dict[str, list[dict]]:
                             "paper": {
                                 "citation": citation[:120],
                                 "paper_key": art.get("paper_key", ""),
-                                "identifier": art.get("identifier") or art.get("doi", ""),
+                                "identifier": art.get("identifier")
+                                or art.get("doi", ""),
                             },
                         }
                     )
@@ -164,7 +173,9 @@ def load_reference_modalities(
         peaks = pick_peaks(rec["spectrum"])
         if not peaks:
             continue
-        slot = out.setdefault(species, {"modalities": {}, "provenance": {}, "facts": {}})
+        slot = out.setdefault(
+            species, {"modalities": {}, "provenance": {}, "facts": {}}
+        )
         # Keep the RICHEST record per species rather than the last one.
         prior = slot["modalities"].get("Raman")
         if prior is None or len(peaks) > len(prior):
@@ -189,7 +200,9 @@ def load_reference_modalities(
         species = (rec.get("species") or "").strip()
         if not species or (wanted and species not in wanted):
             continue
-        slot = out.setdefault(species, {"modalities": {}, "provenance": {}, "facts": {}})
+        slot = out.setdefault(
+            species, {"modalities": {}, "provenance": {}, "facts": {}}
+        )
         slot["facts"].setdefault("mineral_class", rec.get("mineral_class", ""))
         slot["facts"].setdefault("particle_size", rec.get("particle_size", ""))
         band = (
@@ -221,7 +234,11 @@ def load_reference_modalities(
 
 # ── sibling grouping (contrastive view) ──────────────────────────────
 def formula_siblings(
-    ima: dict[str, str], refmods: dict[str, dict], exclude: set[str] | None = None
+    ima: dict[str, str],
+    refmods: dict[str, dict],
+    exclude: set[str] | None = None,
+    structures: dict[str, dict] | None = None,
+    cifs: dict[str, dict] | None = None,
 ) -> dict[str, list[dict]]:
     """species -> co-members of its formula group that have spectra.
 
@@ -248,8 +265,19 @@ def formula_siblings(
         if len(members) < 2:
             continue
         for species in members:
+            # Structure rides along on each sibling. view_contrastive
+            # ignores it; view_polymorph needs it to say WHY two minerals
+            # of one composition have different spectra, which is the only
+            # part of the contrast that generalises to an unseen pair.
+            structures = structures or {}
+            cifs = cifs or {}
             out[species] = [
-                {"species": m, "peaks": refmods[m]["modalities"]["Raman"][:3]}
+                {
+                    "species": m,
+                    "peaks": refmods[m]["modalities"]["Raman"][:3],
+                    "structure": structures.get(m.lower()),
+                    "cif": cifs.get(m.lower()),
+                }
                 for m in sorted(members)
             ]
     return out
@@ -290,7 +318,9 @@ def select_reference_only(
     """
     ranked = []
     for species in candidates:
-        cls = (refmods.get(species, {}).get("facts", {}) or {}).get("mineral_class") or ""
+        cls = (refmods.get(species, {}).get("facts", {}) or {}).get(
+            "mineral_class"
+        ) or ""
         if not cls:
             cls = _implied_class(ima.get(species, ""))
         ranked.append((corpus_classes.get(cls, 0), cls, species))
@@ -320,25 +350,36 @@ SPLIT_HOLDOUT = "holdout"
 
 
 def _species_papers_path() -> str:
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "species_papers.json")
+    return os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "species_papers.json"
+    )
 
 
 def _names_any(text: str, lowered: dict[str, str]) -> bool:
     """Whether ``text`` names any of ``lowered``, on word boundaries."""
     low = (text or "").lower()
-    return any(
-        re.search(rf"(?<![a-z]){re.escape(k)}(?![a-z])", low) for k in lowered
-    )
+    return any(re.search(rf"(?<![a-z]){re.escape(k)}(?![a-z])", low) for k in lowered)
 
 
-def assemble(rruff_archive: str = "excellent_unoriented.zip", limit_species: int = 0) -> dict:
+def assemble(
+    rruff_archive: str = "excellent_unoriented.zip", limit_species: int = 0
+) -> dict:
     """Build the record stream. Deterministic end to end."""
     ima = load_ima()
     species_papers = json.load(open(_species_papers_path()))["papers"]
-    holdout = {s for picks in select_holdout(species_papers, ima).values() for s in picks}
+    holdout = {
+        s for picks in select_holdout(species_papers, ima).values() for s in picks
+    }
     refmods = load_reference_modalities(rruff_archive=rruff_archive)
+    structures = load_mindat_structure()
+    cifs = load_cif_features()
+    # Keyed on the diacritic-folded name: WURM is ASCII-only and IMA is
+    # not, so a raw lowercase join silently loses Åkermanite and friends.
+    computed = {fold_name(r["species"]): r for r in iter_wurm()}
     reports = load_paper_reports({s: ima.get(s, "") for s in species_papers})
-    siblings = formula_siblings(ima, refmods, exclude=holdout)
+    siblings = formula_siblings(
+        ima, refmods, exclude=holdout, structures=structures, cifs=cifs
+    )
     corpus_classes = collections.Counter(
         (refmods.get(s, {}).get("facts", {}) or {}).get("mineral_class") or "unknown"
         for s in species_papers
@@ -387,7 +428,9 @@ def assemble(rruff_archive: str = "excellent_unoriented.zip", limit_species: int
                 title = (entry.get("paper") or {}).get("citation") or ""
                 if _names_any(title, holdout_lower):
                     entry["paper"] = dict(
-                        entry["paper"], citation="a study in this corpus", citation_redacted=True
+                        entry["paper"],
+                        citation="a study in this corpus",
+                        citation_redacted=True,
                     )
         reported.sort(key=lambda r: abs(r["reported"] - r["reference"]))
         reported = reported[:MAX_CORROBORATIONS_PER_SPECIES]
@@ -399,6 +442,9 @@ def assemble(rruff_archive: str = "excellent_unoriented.zip", limit_species: int
                 "provenance": prov,
                 "siblings": siblings.get(species),
                 "reported": reported,
+                "structure": structures.get(species.lower()),
+                "cif": cifs.get(species.lower()),
+                "computed": computed.get(fold_name(species)),
             }
         )
         for view in views:
@@ -414,13 +460,23 @@ def assemble(rruff_archive: str = "excellent_unoriented.zip", limit_species: int
     if limit_species:
         paper_species = paper_species[:limit_species]
     for species in paper_species:
-        emit(species, SPLIT_HOLDOUT if species in holdout else SPLIT_TRAIN, "paper_backed")
+        emit(
+            species,
+            SPLIT_HOLDOUT if species in holdout else SPLIT_TRAIN,
+            "paper_backed",
+        )
 
     paper_train_views = sum(
-        1 for r in records if r["origin"] == "paper_backed" and r["split"] == SPLIT_TRAIN
+        1
+        for r in records
+        if r["origin"] == "paper_backed" and r["split"] == SPLIT_TRAIN
     )
-    ref_only = [s for s in sorted(refmods) if s not in species_papers and s not in holdout]
-    picked = select_reference_only(ref_only, refmods, ima, corpus_classes, budget=len(ref_only))
+    ref_only = [
+        s for s in sorted(refmods) if s not in species_papers and s not in holdout
+    ]
+    picked = select_reference_only(
+        ref_only, refmods, ima, corpus_classes, budget=len(ref_only)
+    )
     emitted = 0
     for species in picked:
         if emitted >= paper_train_views:
@@ -434,9 +490,13 @@ def assemble(rruff_archive: str = "excellent_unoriented.zip", limit_species: int
             "paper_backed": len(paper_species),
             "held_out": len(holdout & set(paper_species)),
             "reference_only_available": len(ref_only),
-            "reference_only_used": emitted and len(
-                {r["species"] for r in records if r["origin"] == "reference_only"
-                 and isinstance(r["species"], str)}
+            "reference_only_used": emitted
+            and len(
+                {
+                    r["species"]
+                    for r in records
+                    if r["origin"] == "reference_only" and isinstance(r["species"], str)
+                }
             ),
         },
         "holdout": sorted(holdout),

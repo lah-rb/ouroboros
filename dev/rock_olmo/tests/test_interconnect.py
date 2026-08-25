@@ -118,10 +118,42 @@ def test_all_view_names_are_declared():
         for v in build_views(
             dict(
                 _REC,
+                # Siblings carry structure so the polymorph view can fire:
+                # it deliberately stays silent when the members have no
+                # structure or do not actually differ structurally.
                 siblings=[
-                    {"species": "Antigorite", "peaks": [{"position_cm-1": 375.2}]},
-                    {"species": "Lizardite", "peaks": [{"position_cm-1": 389.0}]},
+                    {
+                        "species": "Antigorite",
+                        "peaks": [{"position_cm-1": 375.2}],
+                        "structure": {"crystal_system": "Monoclinic"},
+                        "cif": {"space_group_symbol": "C2/m"},
+                    },
+                    {
+                        "species": "Lizardite",
+                        "peaks": [{"position_cm-1": 389.0}],
+                        "structure": {"crystal_system": "Trigonal"},
+                        "cif": {"space_group_symbol": "P31m"},
+                    },
                 ],
+                structure={
+                    "crystal_system": "Monoclinic",
+                    "a": 5.3,
+                    "strunz_class": "silicate",
+                },
+                cif={
+                    "space_group_symbol": "C2/m",
+                    "coordination": {"Si": 4.0},
+                    "shortest_bond_a": 1.62,
+                    "shortest_bond_pair": "Si-O",
+                },
+                computed={
+                    "species": "Antigorite",
+                    "formula": "Mg3Si2O5(OH)4",
+                    "space_group_symbol": "C2/m",
+                    "bands": [
+                        {"position_cm-1": 375.0, "irrep": "Ag", "intensity_rel": 100.0}
+                    ],
+                },
                 reported=[
                     {
                         "reported": 375,
@@ -173,12 +205,25 @@ def test_pairs_beyond_tolerance_are_gated_out_entirely():
     it would teach a false equivalence."""
     assert within_tolerance(375, 382)
     assert not within_tolerance(375, 400)
-    rec = dict(_REC, reported=[
-        {"reported": 375, "reference": 400, "technique": "Raman",
-         "paper": {"citation": "X"}, "ref": {"source": "RRUFF"}},
-        {"reported": 375, "reference": 377, "technique": "Raman",
-         "paper": {"citation": "Y"}, "ref": {"source": "RRUFF"}},
-    ])
+    rec = dict(
+        _REC,
+        reported=[
+            {
+                "reported": 375,
+                "reference": 400,
+                "technique": "Raman",
+                "paper": {"citation": "X"},
+                "ref": {"source": "RRUFF"},
+            },
+            {
+                "reported": 375,
+                "reference": 377,
+                "technique": "Raman",
+                "paper": {"citation": "Y"},
+                "ref": {"source": "RRUFF"},
+            },
+        ],
+    )
     corr = [v for v in build_views(rec) if v["view"] == "corroboration"]
     assert len(corr) == 1
     assert "Y" in corr[0]["text"]

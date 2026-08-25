@@ -16,6 +16,9 @@ project's, not the framework's.
 | `~/corpora/mineral-refs/mindat/minerals_ima.jsonl` | IMA names, formulas, symbols (6,239 species) |
 | `~/corpora/mineral-refs/nist_asd/` | atomic emission lines, 92 elements |
 | `~/corpora/mineral-refs/sshade/` | molecular-ice band lists (separate domain) |
+| `~/corpora/mineral-refs/mindat/geomaterials.jsonl` | crystal system, cell, Strunz class, density, hardness (94.8% of our species) |
+| `~/corpora/mineral-refs/amcsd/` | 10,719 CIFs → coordination numbers and bond lengths (2,152 minerals) |
+| `~/corpora/mineral-refs/wurm/` | ab-initio Raman modes with symmetry labels (461 minerals; HTML **and** XML) |
 
 ## Modules
 
@@ -31,9 +34,31 @@ project's, not the framework's.
 - **`reference_layer.py`** — readers for RRUFF / ECOSTRESS / NIST ASD.
   Keeps FACT (catalogued) apart from DERIVED (our peak-pick of a RRUFF
   spectrum), because RRUFF publishes spectra, not peak lists.
-- **`interconnect.py`** — the five views: forward, inverse, cross-modal,
-  contrastive, corroboration. Oversampling is delivered as distinct
-  framings, not repeated copies.
+- **`interconnect.py`** — the eight views: forward, inverse, cross-modal,
+  contrastive, corroboration, **structure, polymorph, computed**.
+  Oversampling is delivered as distinct framings, not repeated copies.
+- **`cif_features.py`** — AMCSD CIF → coordination numbers, bond lengths,
+  bond-length spread, true space group. Uses pymatgen for symmetry
+  expansion; `--validate` checks coordination against textbook values for
+  six minerals before the extraction is trusted, because a missed
+  symmetry operation yields too few atoms and understates every
+  coordination number with no error raised.
+- **`wurm_layer.py`** — joins the two halves of the WURM mirror: the HTML
+  carries per-mode intensities and symmetry labels, the XML carries the
+  frequencies. Joined on mode index, and only when the mode COUNTS agree.
+- **`augmented_mlp.py` / `composition_mlp.py` / `retrieval_baseline.py`** —
+  the no-LLM controls. Any claim about what the language model
+  contributes is measured against these, not asserted.
+
+### Why structure is in the corpus at all
+
+Run 2 measured it. Everything the model learned it read off the chemical
+FORMULA; the mineral name was worse than useless (name-only scored below
+a constant-prompt control); and on polymorphs — same formula, different
+structure — every predictor sat at the unrelated-minerals floor. LoRA on
+the backbone changed nothing, which is the signature of a MISSING INPUT
+rather than missing capacity. Composition cannot encode bonding geometry
+and Raman frequency is bonding geometry. See PROCEDURE.md §13–§15.
 
 ## Running the tests
 
