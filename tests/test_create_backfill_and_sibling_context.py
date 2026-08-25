@@ -70,6 +70,84 @@ def test_uncovered_file_gets_backfill_goal(tmp_path):
     assert new.status == "incomplete"
 
 
+def test_a_design_goals_bare_filename_covers_the_absolute_report(tmp_path):
+    """THE regression (qwen3.8 polish run, 2026-08-25). Design goals carry the
+    architecture's spelling (`world.json`); file_ops reports the absolute path.
+    String equality called them different files and backfilled a second
+    structural goal over the file holding the entire game world — whose
+    description tells the agent to remove it if it does not belong."""
+    mission = _mission(
+        tmp_path,
+        [
+            GoalRecord(
+                description="Create world.json with content: …",
+                type="structural",
+                associated_files=["world.json"],
+            )
+        ],
+    )
+
+    added = _backfill_untracked_file_goals(
+        mission, _report([str(tmp_path / "world.json")])
+    )
+
+    assert added == 0
+    assert all(g.origin != "create_backfill" for g in mission.goals)
+
+
+def test_an_absolute_goal_covers_a_bare_report_too(tmp_path):
+    """The mismatch has to close in both directions — a goal filed by an
+    earlier backfill (absolute) against a later relative report."""
+    mission = _mission(
+        tmp_path,
+        [
+            GoalRecord(
+                description="g",
+                type="structural",
+                associated_files=[str(tmp_path / "loader.py")],
+            )
+        ],
+    )
+
+    added = _backfill_untracked_file_goals(mission, _report(["loader.py"]))
+
+    assert added == 0
+
+
+def test_backfill_is_idempotent_across_spellings(tmp_path):
+    """First report absolute, second bare: the prior backfill's signature must
+    still match, or the same file accretes a goal per spelling forever."""
+    mission = _mission(tmp_path, [])
+
+    first = _backfill_untracked_file_goals(
+        mission, _report([str(tmp_path / "stray.py")])
+    )
+    second = _backfill_untracked_file_goals(mission, _report(["stray.py"]))
+
+    assert (first, second) == (1, 0)
+    assert sum(1 for g in mission.goals if g.origin == "create_backfill") == 1
+
+
+def test_symbol_suffixed_paths_still_backfill(tmp_path):
+    """Normalization must not swallow the corrupted-symbol case: `x.py` being
+    covered says nothing about `x.py:sym`, which is a different artifact."""
+    mission = _mission(
+        tmp_path,
+        [
+            GoalRecord(
+                description="g", type="structural", associated_files=["inventory.py"]
+            )
+        ],
+    )
+
+    added = _backfill_untracked_file_goals(
+        mission, _report(["inventory.py:equip_item"])
+    )
+
+    assert added == 1
+    assert mission.goals[-1].associated_files == ["inventory.py:equip_item"]
+
+
 def test_backfill_only_for_file_ops_reports(tmp_path):
     """Artifact-producing flows (PDF downloads, runtime saves) must not
     accrete structural goals — the scraper e2e caught this on day one."""

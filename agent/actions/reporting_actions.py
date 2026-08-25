@@ -520,17 +520,54 @@ def _backfill_untracked_file_goals(mission: Any, report: Any) -> int:
     if not files:
         return 0
 
-    covered = {f for g in mission.goals for f in (g.associated_files or [])}
+    # PATHS ARE COMPARED NORMALIZED, NOT AS STRINGS (2026-08-25). Design
+    # goals carry the architecture's spelling — a bare `world.json` — while
+    # file_ops reports the absolute `/tmp/<run>/world.json`. Raw string
+    # equality called them different files, so the qwen3.8 polish run
+    # backfilled a second structural goal over a data file that already had
+    # one, and told the agent to "remove it if it should not exist" about the
+    # file that holds the entire game world. It self-closed there; an agent
+    # that took the instruction literally would have deleted the content.
+    #
+    # realpath, not just normpath: on macOS the working directory is handed
+    # in as /tmp/<run> while the same file resolves to /private/tmp/<run>, so
+    # normpath alone leaves the two spellings unequal. Symbol-suffixed paths
+    # ("inventory.py:equip_item") survive this untouched — they normalize to
+    # their own distinct key, which is what keeps them backfillable.
+    root = str(getattr(getattr(mission, "config", None), "working_directory", "") or "")
+
+    def _key(raw: Any) -> str:
+        text = str(raw).strip()
+        if not text:
+            return ""
+        if not os.path.isabs(text) and root:
+            text = os.path.join(root, text)
+        return os.path.realpath(os.path.normpath(text))
+
+    covered = {
+        _key(f)
+        for g in mission.goals
+        for f in (g.associated_files or [])
+        if str(f).strip()
+    }
     existing_sigs = {
         getattr(g, "finding_signature", "")
         for g in mission.goals
         if getattr(g, "finding_signature", "")
     }
+    # Prior backfills are keyed the same way, so a goal filed under one
+    # spelling is not re-filed under the other on a later report.
+    backfilled = {
+        _key(sig.split(":", 1)[1])
+        for sig in existing_sigs
+        if sig.startswith("create-backfill:") and ":" in sig
+    }
 
     added = 0
     for path in files:
+        key = _key(path)
         sig = f"create-backfill:{path}"
-        if not path or path in covered or sig in existing_sigs:
+        if not path or key in covered or key in backfilled or sig in existing_sigs:
             continue
         # Infrastructure (package markers, build/config, tests) is not
         # smuggled application code and is not in the architecture, so a
@@ -553,7 +590,8 @@ def _backfill_untracked_file_goals(mission: Any, report: Any) -> int:
                 finding_signature=sig,
             )
         )
-        covered.add(path)
+        covered.add(key)
+        backfilled.add(key)
         existing_sigs.add(sig)
         added += 1
         logger.info("Create-loophole backfill: goal added for untracked %s", path)
