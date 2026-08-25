@@ -43,6 +43,9 @@ polish_gate: #FlowDefinition & {
 		// KV, so without this the session itself would leave no artifact.
 		terminal_output:    {type: "string", from: "context.terminal_output",     optional: true}
 		polish_findings:    {type: "string", from: "context.polish_findings",    optional: true}
+		// The triage verdict: the same findings, rephrased as target state and
+		// each carrying its route. harvest prefers this over polish_findings.
+		triaged_findings:   {type: "string", from: "context.triaged_findings",   optional: true}
 		consumer_report:    {type: "string", from: "context.questionnaire_report", optional: true}
 		experience_summary: {type: "string", from: "context.experience_summary",  optional: true}
 	}
@@ -273,10 +276,74 @@ polish_gate: #FlowDefinition & {
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "true", transition: "gate_done"},
+					{condition: "true", transition: "triage_findings"},
 				]
 			}
 			publishes: ["polish_findings", "questionnaire_report"]
+		}
+
+		// THE FIRST PROJECT-AWARE STEP IN THIS FLOW. Everything above is blind
+		// on purpose — the consumer must not reason about the code, and the
+		// brief author must not see the mission objective. That protection is
+		// spent by now: the session is closed and the consumer is gone. What
+		// remains is a pipeline question (how does each complaint enter the
+		// work queue), and answering it blind is what produced goals phrased
+		// as complaints and consumed as specifications.
+		triage_findings: #StepDefinition & {
+			action:      "inference"
+			description: "Route each finding to a direct fix or a design pass"
+			context: {
+				required: ["polish_findings"]
+				optional: ["project_manifest"]
+			}
+			prompt_template: {
+				template:     "polish_gate/triage"
+				context_keys: ["consumer_findings", "existing_architecture", "project_listing"]
+				input_keys: []
+			}
+			pre_compute: [
+				{
+					formatter:  "format_polish_findings"
+					output_key: "consumer_findings"
+					params: source: {$ref: "context.polish_findings"}
+				},
+				{
+					formatter:  "format_existing_architecture"
+					output_key: "existing_architecture"
+					params: source: {$ref: "input.architecture", default: ""}
+				},
+				{
+					formatter:  "format_project_listing"
+					output_key: "project_listing"
+					params: source: {$ref: "context.project_manifest", default: ""}
+				},
+			]
+			// HIGH: routing decides whether a finding becomes one goal or a
+			// decomposition pass, and a wrong route either strands a compound
+			// complaint in the fix loop or spends a replan on a one-line fix —
+			// dev/REASONING_DEPTH_POLICY_2026-08-16.md §(f).
+			config: reasoning:   "high"
+			config: temperature: "t*0.3"
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "true", transition: "route_findings"},
+				]
+			}
+			publishes: ["inference_response"]
+		}
+
+		route_findings: #StepDefinition & {
+			action:      "route_polish_findings"
+			description: "Parse the triage verdict"
+			context: required: ["inference_response"]
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "true", transition: "gate_done"},
+				]
+			}
+			publishes: ["triaged_findings"]
 		}
 
 		gate_done: #StepDefinition & _templates.terminal_success

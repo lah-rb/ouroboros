@@ -358,6 +358,28 @@ def format_modality_sidecars(params: dict, namespaces: dict) -> str:
     return "\n\n".join(lines)
 
 
+def format_polish_findings(params: dict, namespaces: dict) -> str:
+    """The blind consumer findings, as a list the triage step can route.
+
+    Deliberately plain: triage decides the ROUTE and rewrites the wording, so
+    anything added here (indices, classes as headings) is shape it would have
+    to carry back out. The class rides along because a "quality" finding is
+    rarely a design question.
+    """
+    source = params.get("source")
+    findings = source if isinstance(source, list) else []
+    lines = []
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        text = str(finding.get("description") or finding.get("finding") or "").strip()
+        if not text:
+            continue
+        cls = str(finding.get("class", "") or "").strip().lower()
+        lines.append(f"- ({cls or 'functional'}) {text}")
+    return "\n".join(lines) if lines else "(the user reported nothing)"
+
+
 def format_project_listing(params: dict, namespaces: dict) -> str:
     manifest = params.get("source") or {}
     if not manifest:
@@ -844,6 +866,7 @@ PRE_COMPUTE_FORMATTERS: dict[str, Any] = {
     "format_mission_meta": format_mission_meta,
     "format_project_file_list": format_project_file_list,
     "format_project_listing": format_project_listing,
+    "format_polish_findings": format_polish_findings,
     "format_project_docs": format_project_docs,
     "format_questionnaire_report": format_questionnaire_report,
     "format_modality_sidecars": format_modality_sidecars,

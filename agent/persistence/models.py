@@ -1171,6 +1171,13 @@ class MissionState(BaseModel):
     # reopen_count pattern); NOT a CRDT counter — mission_doc.COUNTER_FIELDS
     # refuses fields it does not know.
     polish_entries: int = 0
+    # Signatures of consumer findings routed to a DESIGN pass rather than
+    # filed as goals. They become goals in replan, against the architecture,
+    # so nothing here carries a finding_signature to dedup against — without
+    # this list the same complaint would route to design on every later entry
+    # and spend a replan each time. Plain list, appended in place (the
+    # polish_entries pattern), never a CRDT set.
+    polish_designed: list[str] = Field(default_factory=list)
     # ── League run protocol (epoch v2.0, 2026-08-02) — both additive ──
     # The budget park now lands at the work→entry boundary, BEFORE the entry
     # flow books the finished flow's report; these tail-call inputs are

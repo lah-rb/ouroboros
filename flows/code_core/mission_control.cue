@@ -645,7 +645,7 @@ mission_control: #FlowDefinition & {
 					{condition: "true", transition: "harvest_polish_findings"},
 				]
 			}
-			publishes: ["polish_findings", "consumer_report", "experience_summary"]
+			publishes: ["polish_findings", "consumer_report", "experience_summary", "triaged_findings"]
 		}
 
 		// Books the entry whether or not anything was found: a consumer who
@@ -657,7 +657,7 @@ mission_control: #FlowDefinition & {
 			description: "Create/re-open goals from the consumer's experience"
 			context: {
 				required: ["mission"]
-				optional: ["polish_findings", "consumer_report", "experience_summary"]
+				optional: ["polish_findings", "consumer_report", "experience_summary", "triaged_findings"]
 			}
 			resolver: {
 				type: "rule"

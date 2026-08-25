@@ -226,7 +226,18 @@ async def action_harvest_polish_findings(step_input: StepInput) -> StepOutput:
     if not mission:
         return StepOutput(result={"done": True}, observations="No mission")
 
-    findings = _findings(step_input.context.get("polish_findings"))
+    # Prefer the TRIAGED findings: same findings, rephrased as target state
+    # and each carrying a route. Falls back to the blind conclude output when
+    # triage did not run (an older mission, or a flow set without the step) —
+    # those are all "fix", which is exactly the pre-triage behaviour.
+    triaged = step_input.context.get("triaged_findings")
+    findings = (
+        _findings(triaged)
+        if triaged
+        else _findings(step_input.context.get("polish_findings"))
+    )
+    designed = list(getattr(mission, "polish_designed", None) or [])
+    directives: list[str] = []
     existing = {
         str(getattr(g, "finding_signature", "") or ""): g
         for g in getattr(mission, "goals", [])
@@ -239,6 +250,18 @@ async def action_harvest_polish_findings(step_input: StepInput) -> StepOutput:
         if not text:
             continue
         sig = "polish:" + (_quality_finding_signature(finding) or text.lower()[:120])
+        if str(finding.get("route", "") or "").lower() == "design":
+            # Routed to a design pass. It becomes goals in replan, against the
+            # architecture, so no goal is filed here — but the signature IS
+            # recorded. Without that the finding carries no goal to dedup
+            # against and every later entry would route the same complaint to
+            # design again, spending a replan per entry forever.
+            if sig not in designed:
+                designed.append(sig)
+                directives.append(text)
+            else:
+                skipped += 1
+            continue
         prior = existing.get(sig)
         if prior is not None:
             if getattr(prior, "status", "") == "complete":
@@ -267,8 +290,27 @@ async def action_harvest_polish_findings(step_input: StepInput) -> StepOutput:
         existing[sig] = mission.goals[-1]
         created += 1
 
+    if directives:
+        # replan is FIRST in CODE_CORE_PHASES, so this is decomposed before
+        # any other work is dispatched, and it appends goals rather than
+        # replacing them. action_derive_directive_goals clears the directive,
+        # so each of these decomposes exactly once.
+        joined = "\n".join(f"- {d}" for d in directives)
+        prior_directive = str(getattr(mission, "pending_directive", "") or "").strip()
+        preamble = (
+            "A person used the finished product and reported the following. "
+            "Each line states what the product SHOULD do. Decompose them into "
+            "goals against the existing architecture:"
+        )
+        mission.pending_directive = (
+            f"{prior_directive}\n\n{preamble}\n{joined}"
+            if prior_directive
+            else f"{preamble}\n{joined}"
+        )
+    mission.polish_designed = designed
+
     mission.polish_entries = int(getattr(mission, "polish_entries", 0) or 0) + 1
-    landed = created + reopened
+    landed = created + reopened + len(directives)
     if landed:
         # Nothing a consumer asked for ships without the gate re-passing.
         mission.quality_verified = False
@@ -280,12 +322,14 @@ async def action_harvest_polish_findings(step_input: StepInput) -> StepOutput:
         result={
             "created": created,
             "reopened": reopened,
+            "designed": len(directives),
             "entry": mission.polish_entries,
         },
         observations=(
             f"Polish entry {mission.polish_entries}/{allowed}: "
             + (
                 f"{created} new + {reopened} reopened goal(s)"
+                f"{f', {len(directives)} to design' if directives else ''}"
                 f"{f', {skipped} already open' if skipped else ''}"
                 " — quality_verified cleared for re-gate"
                 if landed
@@ -293,4 +337,60 @@ async def action_harvest_polish_findings(step_input: StepInput) -> StepOutput:
             )
         ),
         context_updates={"mission": mission},
+    )
+
+
+_VALID_ROUTES = ("fix", "design")
+
+
+async def action_route_polish_findings(step_input: StepInput) -> StepOutput:
+    """Parse the triage verdict into routed findings.
+
+    Runs after the FIRST project-aware step in the polish flow. Each finding
+    comes back rephrased as the target state and carrying a route:
+
+      "fix"    — one clear change; becomes a goal exactly as before.
+      "design" — compound, structural, or contradicting the architecture;
+                 goes to replan for decomposition against it.
+
+    An absent, unknown or malformed route degrades to "fix", which is the
+    pre-triage behaviour: a finding that fails to route is still work, and the
+    fix loop is the path that has always carried it. Failing closed here would
+    silently drop a consumer's complaint, which is the one outcome this gate
+    exists to prevent.
+
+    Context: inference_response.  Publishes: triaged_findings.
+    """
+    raw = step_input.context.get("inference_response")
+    findings = _findings(raw)
+    routed: list[dict] = []
+    for finding in findings:
+        text = str(finding.get("description") or finding.get("finding") or "").strip()
+        if not text:
+            continue
+        route = str(finding.get("route", "") or "").strip().lower()
+        if route not in _VALID_ROUTES:
+            route = "fix"
+        cls = (
+            "quality"
+            if str(finding.get("class", "")).lower() == "quality"
+            else "functional"
+        )
+        routed.append({"description": text, "class": cls, "route": route})
+
+    n_design = sum(1 for f in routed if f["route"] == "design")
+    logger.info(
+        "polish triage: %d finding(s) — %d fix, %d design",
+        len(routed),
+        len(routed) - n_design,
+        n_design,
+    )
+    return StepOutput(
+        result={"count": len(routed), "design": n_design},
+        observations=(
+            f"triage: {len(routed) - n_design} fix, {n_design} design"
+            if routed
+            else "triage: no findings to route"
+        ),
+        context_updates={"triaged_findings": routed},
     )

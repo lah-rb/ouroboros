@@ -250,3 +250,198 @@ def test_a_repeated_finding_reopens_rather_than_duplicating():
     assert len(polish_goals) == 1, "a rephrased repeat must not spawn a second goal"
     assert polish_goals[0].status == "incomplete"
     assert m.polish_entries == 2
+
+
+# ── phase stacking: a reopen must not re-verify what it already earned ─
+
+
+def test_completing_at_a_phase_earns_the_flags_below_it():
+    from agent.flow_sets import CODE_CORE_PHASES, flags_satisfied_at
+
+    assert flags_satisfied_at("quality", CODE_CORE_PHASES) == [
+        "environment_verified",
+        "tests_verified",
+        "quality_verified",
+    ]
+    # Stopping at structural earns nothing — no flag rule sits at or below it.
+    assert flags_satisfied_at("structural", CODE_CORE_PHASES) == []
+    # test_suite earns environment and its own, but NOT quality above it.
+    assert "quality_verified" not in flags_satisfied_at("test_suite", CODE_CORE_PHASES)
+
+
+def test_an_unknown_or_empty_completed_phase_earns_nothing():
+    """A legacy mission carries completed_at_phase="" — it must not be read as
+    a licence to skip verification."""
+    from agent.flow_sets import CODE_CORE_PHASES, flags_satisfied_at
+
+    assert flags_satisfied_at("", CODE_CORE_PHASES) == []
+    assert flags_satisfied_at("nonsense", CODE_CORE_PHASES) == []
+
+
+def test_a_quality_completed_mission_reopened_at_polish_goes_straight_to_polish():
+    """The behaviour the seeding exists for.
+
+    Before it, this mission re-ran the quality gate whose fresh UX session
+    harvested four `untested:` goals for features it had already verified.
+    """
+    from agent.flow_sets import CODE_CORE_PHASES, flags_satisfied_at
+
+    m = _mission(top_phase="polish")
+    m.goals = [_done_goal()]
+    m.completed_at_phase = "quality"
+    # what `mission resume` now does
+    for flag in flags_satisfied_at(m.completed_at_phase, CODE_CORE_PHASES):
+        setattr(m, flag, True)
+
+    phase, _ = evaluate_phases(m, CODE_CORE_PHASES)
+    assert phase == "polish", "a quality-complete mission must not re-gate quality"
+
+
+def test_seeding_does_not_skip_a_phase_the_mission_never_reached():
+    """Reopened at polish having only completed at test_suite: quality is still
+    owed and must run before the consumer ever sees the build."""
+    from agent.flow_sets import CODE_CORE_PHASES, flags_satisfied_at
+
+    m = _mission(top_phase="polish")
+    m.goals = [_done_goal()]
+    m.completed_at_phase = "test_suite"
+    for flag in flags_satisfied_at(m.completed_at_phase, CODE_CORE_PHASES):
+        setattr(m, flag, True)
+
+    phase, _ = evaluate_phases(m, CODE_CORE_PHASES)
+    assert phase == "quality"
+
+
+# ── triage: complaint -> route ────────────────────────────────────────
+#
+# The consumer states a COMPLAINT; a goal description is read downstream as a
+# SPECIFICATION (diagnose renders it as "THE GOAL: <text>"). On the qwen3.8
+# polish run a model spent a 12,000-token turn unable to tell which it had
+# been handed — "If goal is desired behavior ... main is wrong. If goal is bug
+# report ... current code might be fixed?" — and the finding that caused it
+# carried four separate requirements in one sentence, which no single fix and
+# no single acceptance check could satisfy. Triage runs after the consumer is
+# gone, sees the architecture, rewrites to target state and routes.
+
+
+def _route(raw: str):
+    import asyncio
+
+    from agent.actions.polish_actions import action_route_polish_findings
+    from agent.models import StepInput
+
+    return asyncio.run(
+        action_route_polish_findings(
+            StepInput(context={"inference_response": raw}, params={})
+        )
+    )
+
+
+def test_triage_splits_fix_from_design():
+    out = _route(
+        '```json\n{"findings": ['
+        '{"description": "the help text names how to save", "class": "functional", "route": "fix"},'
+        '{"description": "death warns, keeps progress, and allows continuing", '
+        '"class": "functional", "route": "design"}]}\n```'
+    )
+    routed = out.context_updates["triaged_findings"]
+    assert [f["route"] for f in routed] == ["fix", "design"]
+    assert out.result["design"] == 1
+
+
+def test_an_unroutable_finding_degrades_to_fix():
+    """Failing closed would DROP a consumer's complaint — the one outcome this
+    gate exists to prevent. The fix loop has always carried these."""
+    out = _route(
+        '{"findings": [{"description": "the prose is flat", "class": "quality"}]}'
+    )
+    routed = out.context_updates["triaged_findings"]
+    assert routed[0]["route"] == "fix"
+
+
+def test_design_findings_become_a_directive_not_goals():
+    import asyncio
+
+    from agent.actions.polish_actions import action_harvest_polish_findings
+    from agent.models import StepInput
+
+    m = _mission(top_phase="polish")
+    m.quality_verified = True
+    triaged = [
+        {
+            "description": "the help text names how to save",
+            "class": "functional",
+            "route": "fix",
+        },
+        {
+            "description": "death warns, keeps progress, and allows continuing",
+            "class": "functional",
+            "route": "design",
+        },
+    ]
+    asyncio.run(
+        action_harvest_polish_findings(
+            StepInput(context={"mission": m, "triaged_findings": triaged}, params={})
+        )
+    )
+
+    filed = [g for g in m.goals if g.origin == "polish_gate"]
+    assert [g.description for g in filed] == ["the help text names how to save"]
+    assert "death warns, keeps progress" in m.pending_directive
+    assert len(m.polish_designed) == 1
+    assert m.quality_verified is False  # a directive is landed work too
+    assert m.polish_entries == 1
+
+
+def test_a_design_finding_is_not_re_routed_on_a_later_entry():
+    """It carries no goal to dedup against, so without the signature list the
+    same complaint would spend a replan on every later entry, forever."""
+    import asyncio
+
+    from agent.actions.polish_actions import action_harvest_polish_findings
+    from agent.models import StepInput
+
+    m = _mission(top_phase="polish")
+    triaged = [
+        {
+            "description": "death warns and keeps progress",
+            "class": "functional",
+            "route": "design",
+        }
+    ]
+    for _ in range(2):
+        m.pending_directive = ""  # replan consumed it between entries
+        asyncio.run(
+            action_harvest_polish_findings(
+                StepInput(
+                    context={"mission": m, "triaged_findings": triaged}, params={}
+                )
+            )
+        )
+
+    assert len(m.polish_designed) == 1
+    assert m.pending_directive == "", "the repeat must not raise a second directive"
+    assert m.polish_entries == 2
+
+
+def test_untriaged_findings_still_land_as_before():
+    """A mission that predates triage, or a flow set without the step, must
+    behave exactly as it did — every finding a fix goal."""
+    import asyncio
+
+    from agent.actions.polish_actions import action_harvest_polish_findings
+    from agent.models import StepInput
+
+    m = _mission(top_phase="polish")
+    findings = (
+        '[{"description": "the help text never mentions save", "class": "functional"}]'
+    )
+    asyncio.run(
+        action_harvest_polish_findings(
+            StepInput(context={"mission": m, "polish_findings": findings}, params={})
+        )
+    )
+    assert [g.description for g in m.goals if g.origin == "polish_gate"] == [
+        "the help text never mentions save"
+    ]
+    assert not m.pending_directive

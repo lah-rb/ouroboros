@@ -198,6 +198,7 @@ def build_action_registry() -> ActionRegistry:
     # ── Polish phase (rank 60) ────────────────────────────────────
     from agent.actions.polish_actions import (
         action_harvest_polish_findings,
+        action_route_polish_findings,
         action_mark_quality_verified,
         action_split_consumer_brief,
         action_prepare_questionnaire,
@@ -502,6 +503,7 @@ def build_action_registry() -> ActionRegistry:
     registry.register("prepare_questionnaire", action_prepare_questionnaire)
     registry.register("record_answer", action_record_answer)
     registry.register("harvest_polish_findings", action_harvest_polish_findings)
+    registry.register("route_polish_findings", action_route_polish_findings)
     registry.register("split_consumer_brief", action_split_consumer_brief)
     registry.register("quality_sweep_next", action_quality_sweep_next)
     registry.register("warning_sweep_next", action_warning_sweep_next)

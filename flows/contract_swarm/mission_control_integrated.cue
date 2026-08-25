@@ -556,7 +556,7 @@ mission_control_integrated: #FlowDefinition & {
 					{condition: "true", transition: "harvest_polish_findings"},
 				]
 			}
-			publishes: ["polish_findings", "consumer_report", "experience_summary"]
+			publishes: ["polish_findings", "consumer_report", "experience_summary", "triaged_findings"]
 		}
 
 		harvest_polish_findings: #StepDefinition & {
@@ -564,7 +564,7 @@ mission_control_integrated: #FlowDefinition & {
 			description: "Create/re-open goals from the consumer's experience"
 			context: {
 				required: ["mission"]
-				optional: ["polish_findings", "consumer_report", "experience_summary"]
+				optional: ["polish_findings", "consumer_report", "experience_summary", "triaged_findings"]
 			}
 			resolver: {
 				type: "rule"

@@ -9606,7 +9606,8 @@
         "publishes": [
           "polish_findings",
           "consumer_report",
-          "experience_summary"
+          "experience_summary",
+          "triaged_findings"
         ],
         "resolver": {
           "type": "rule",
@@ -9629,7 +9630,8 @@
           "optional": [
             "polish_findings",
             "consumer_report",
-            "experience_summary"
+            "experience_summary",
+            "triaged_findings"
           ]
         },
         "params": {},
@@ -10656,6 +10658,11 @@
         "from": "context.polish_findings",
         "optional": true
       },
+      "triaged_findings": {
+        "type": "string",
+        "from": "context.triaged_findings",
+        "optional": true
+      },
       "consumer_report": {
         "type": "string",
         "from": "context.questionnaire_report",
@@ -11055,13 +11062,110 @@
           "rules": [
             {
               "condition": "true",
-              "transition": "gate_done"
+              "transition": "triage_findings"
             }
           ]
         },
         "publishes": [
           "polish_findings",
           "questionnaire_report"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "triage_findings": {
+        "action": "inference",
+        "description": "Route each finding to a direct fix or a design pass",
+        "context": {
+          "required": [
+            "polish_findings"
+          ],
+          "optional": [
+            "project_manifest"
+          ]
+        },
+        "params": {},
+        "prompt_template": {
+          "template": "polish_gate/triage",
+          "context_keys": [
+            "consumer_findings",
+            "existing_architecture",
+            "project_listing"
+          ],
+          "input_keys": []
+        },
+        "pre_compute": [
+          {
+            "formatter": "format_polish_findings",
+            "output_key": "consumer_findings",
+            "params": {
+              "source": {
+                "$ref": "context.polish_findings"
+              }
+            }
+          },
+          {
+            "formatter": "format_existing_architecture",
+            "output_key": "existing_architecture",
+            "params": {
+              "source": {
+                "$ref": "input.architecture",
+                "default": ""
+              }
+            }
+          },
+          {
+            "formatter": "format_project_listing",
+            "output_key": "project_listing",
+            "params": {
+              "source": {
+                "$ref": "context.project_manifest",
+                "default": ""
+              }
+            }
+          }
+        ],
+        "config": {
+          "temperature": "t*0.3",
+          "reasoning": "high"
+        },
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "route_findings"
+            }
+          ]
+        },
+        "publishes": [
+          "inference_response"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "route_findings": {
+        "action": "route_polish_findings",
+        "description": "Parse the triage verdict",
+        "context": {
+          "required": [
+            "inference_response"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "gate_done"
+            }
+          ]
+        },
+        "publishes": [
+          "triaged_findings"
         ],
         "effects": [],
         "terminal": false
@@ -18688,7 +18792,8 @@
         "publishes": [
           "polish_findings",
           "consumer_report",
-          "experience_summary"
+          "experience_summary",
+          "triaged_findings"
         ],
         "resolver": {
           "type": "rule",
@@ -18711,7 +18816,8 @@
           "optional": [
             "polish_findings",
             "consumer_report",
-            "experience_summary"
+            "experience_summary",
+            "triaged_findings"
           ]
         },
         "params": {},
@@ -19989,7 +20095,8 @@
         "publishes": [
           "polish_findings",
           "consumer_report",
-          "experience_summary"
+          "experience_summary",
+          "triaged_findings"
         ],
         "resolver": {
           "type": "rule",
@@ -20012,7 +20119,8 @@
           "optional": [
             "polish_findings",
             "consumer_report",
-            "experience_summary"
+            "experience_summary",
+            "triaged_findings"
           ]
         },
         "params": {},
@@ -21370,7 +21478,8 @@
         "publishes": [
           "polish_findings",
           "consumer_report",
-          "experience_summary"
+          "experience_summary",
+          "triaged_findings"
         ],
         "resolver": {
           "type": "rule",
@@ -21393,7 +21502,8 @@
           "optional": [
             "polish_findings",
             "consumer_report",
-            "experience_summary"
+            "experience_summary",
+            "triaged_findings"
           ]
         },
         "params": {},
