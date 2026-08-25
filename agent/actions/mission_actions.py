@@ -15,6 +15,7 @@ from collections import Counter
 from typing import Any
 
 from agent import languages
+from agent.loader import load_prompt_text
 from agent.models import StepInput, StepOutput
 from agent.actions.pipeline_actions import _cap_diagnostic
 from agent.actions.reporting_actions import (
@@ -4416,6 +4417,76 @@ def _fileops_dispatch_from_quality_diagnosis(
     }
 
 
+_UNTESTED_MARKER = "untested:"
+_COVERED_GOAL_TYPES = ("functional", "structural")
+
+
+async def _untested_already_covered(effects: Any, mission: Any, text: str) -> bool:
+    """Does a COMPLETED goal already establish the behaviour a coverage
+    finding says was never exercised?
+
+    A SIGNATURE CANNOT ANSWER THIS. `_quality_finding_signature` anchors on
+    code identifiers when the text names any and falls back to normalized
+    prose when it does not. A coverage finding names no code, so it always
+    keys on prose ("the drop command was not exercised by the ux session"); a
+    design goal names its module, so it always keys on anchors ("engine.py").
+    The two keys live in different spaces and can never collide, so a
+    completed goal has never been able to suppress one of these — the
+    duplicate survived every lexical defence we had.
+
+    Live cost (qwen3.8 polish run, 2026-08-25): a re-gate after polish entry 1
+    harvested `untested: the drop command…`, `untested: using a healing item
+    during active combat…` and `untested: saving and loading NPC dialogue
+    progression…` against a mission whose design goals had built and verified
+    all three. Earlier, on the muse tier arm, one such finding drove three
+    repair rounds over ~45k tokens rewriting defect-free files.
+
+    So ask the model, once per candidate, with thinking OFF: same behaviour or
+    not. Short prompt, one word back.
+
+    FAILS OPEN. Any error, any unparseable answer, no effects at all — the
+    goal is created, which is exactly today's behaviour. A coverage gap that
+    is real and dropped is invisible; a duplicate that survives is merely
+    expensive, and the probe path still gets a shot at it.
+    """
+    if effects is None:
+        return False
+    completed = [
+        str(getattr(g, "description", "") or "").strip()
+        for g in (getattr(mission, "goals", None) or [])
+        if getattr(g, "status", "") == "complete"
+        and getattr(g, "type", "") in _COVERED_GOAL_TYPES
+    ]
+    completed = [c for c in completed if c]
+    if not completed:
+        return False
+    subject = text.strip()
+    if subject.lower().startswith(_UNTESTED_MARKER):
+        subject = subject[len(_UNTESTED_MARKER) :].strip()
+    try:
+        prompt = load_prompt_text("quality_gate/untested_equivalence").format(
+            finding=subject,
+            completed_goals="\n".join(f"  - {c[:160]}" for c in completed),
+        )
+        # none: the question is a comparison, not a deliberation, and this
+        # runs once per candidate inside a gate that is already expensive.
+        res = await effects.run_inference(prompt, {"reasoning": "none"})
+    except Exception:  # noqa: BLE001 — a dedup that breaks must not eat findings
+        logger.debug(
+            "untested equivalence check failed — keeping the finding", exc_info=True
+        )
+        return False
+    answer = (getattr(res, "text", "") or "").strip().upper()
+    if "COVERED" in answer and "NEW" not in answer:
+        logger.info(
+            "Quality harvest: coverage finding already established by a "
+            "completed goal — not filing. finding=%s",
+            subject[:90],
+        )
+        return True
+    return False
+
+
 async def action_harvest_quality_findings(step_input: StepInput) -> StepOutput:
     """Turn quality-gate findings into goals — one per finding, classified by the
     summarize ``class``. Reached from dispatch_quality_gate on failure.
@@ -4649,6 +4720,17 @@ async def action_harvest_quality_findings(step_input: StepInput) -> StepOutput:
             {"description": _quality_finding_text(task)}
         )
         if refuted_counts.get(text_sig, 0) >= 2:
+            suppressed += 1
+            continue
+        # Coverage findings only, and only when nothing already tracks this
+        # signature: an existing goal is handled by the reopen/skip branches
+        # below, which already know what to do with it.
+        _text = _quality_finding_text(task)
+        if (
+            _text.strip().lower().startswith(_UNTESTED_MARKER)
+            and sig not in by_sig
+            and await _untested_already_covered(effects, mission, _text)
+        ):
             suppressed += 1
             continue
         cls = (

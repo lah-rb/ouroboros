@@ -1,0 +1,31 @@
+# Prompt template: quality_gate/untested_equivalence
+#
+# One question, one word back. Deliberately tiny: this runs once per candidate
+# coverage finding, with thinking OFF, and its whole job is to answer something
+# a signature match structurally cannot.
+#
+# WHY A SIGNATURE CANNOT DO THIS: _quality_finding_signature anchors on code
+# identifiers when the text names any, and falls back to normalized prose when
+# it does not. A coverage finding names no code, so it always keys on prose
+# ("the drop command was not exercised by the ux session"); a design goal names
+# its module, so it always keys on anchors ("engine.py"). The two keys live in
+# different spaces and can never collide, however the prose is tuned.
+
+id: quality_gate/untested_equivalence
+content: |
+  A test pass reported that it did not exercise this behaviour:
+
+    {finding}
+
+  These behaviours have already been built and verified in this project:
+
+  {completed_goals}
+
+  Is the unexercised behaviour one of the verified ones above — the same
+  behaviour described in different words?
+
+  Answer COVERED if a verified item above already establishes that this
+  behaviour works. Answer NEW if nothing above covers it, or if the items
+  above only touch it in passing without establishing it.
+
+  Reply with exactly one word: COVERED or NEW.
