@@ -391,6 +391,18 @@ class ModelConfig(BaseModel):
     # (mtmd_init_from_file binds the MODEL), so the cost is KV only:
     # vision_n_ctx x kv_bytes_per_token x width.
     vision_pool_size: int = 1
+    # ── BATCHED VISION (2026-08-26 build; dev/BATCHED_VISION doc) ──────
+    # Route vision requests through the batched multi-seq text engine:
+    # image embeddings are encoded once (process-wide mtmd context) and
+    # decoded onto an ordinary working seat's seq, so N vision streams
+    # cost KV only — no per-stream 1.2 GiB compute buffer. Requires
+    # decode_mode: batched. The dedicated pool path stays as the
+    # fallback and serves whenever this is false or an install fails.
+    vision_batched: bool = False
+    # Client-side cap on concurrent batched-vision streams (a semaphore
+    # in run_vision_completion). Seats are the hard bound; this keeps
+    # vision from starving text lanes of seats.
+    vision_batched_max_streams: int = 3
     # Offload the mtmd projector to the GPU. TRUE IS NOT "the model's GPU":
     # the handler's signature is (mmproj_path, verbose, use_gpu, ...) with no
     # device index anywhere, so mtmd allocates on the DEFAULT device — device

@@ -1,0 +1,194 @@
+"""Batched-vision install: the multimodal prefix machinery.
+
+Pins the contracts probe_vision_kv_integrity.py proved on hardware
+(2026-08-26, dev/BATCHED_VISION_2026-08-26.md): text and image rows land
+on the SEAT's seq at sequential positions with no logits requested;
+image rows appear in slot.input_ids only as the negative MEDIA_SENTINEL
+(never a real id — a sentinel that reaches detokenize or a replay must
+fail loudly, not decode as garbage); has_media marks the seat
+non-snapshottable; prepare_seat clears the mark and serves the synthetic
+EMPTY vision persona head without touching any band seq; and the install
+orchestrator enforces the position law for atomic (M-RoPE-class)
+installs instead of silently corrupting occupancy.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from concurrent.futures import Future
+
+import pytest
+
+from inference.batched_engine import BatchedEngine, PersonaHead, SeqSlot
+from inference.vision_batched import (
+    MediaChunk,
+    SplitPrompt,
+    VisionInstallError,
+    install_multimodal_prefix,
+)
+from tests.test_batched_engine import FakeCtx, _engine_with
+
+
+def _mk_engine(decode_script=None):
+    ctx = FakeCtx(decode_script=decode_script or [0] * 64)
+    eng = _engine_with(ctx, samplers={}, n_batch=8, seats=2)
+    return eng, ctx
+
+
+def _bare_slot(seq=0):
+    s = SeqSlot(seq=seq, _n_ctx=4096)
+    s.n_tokens = 0
+    s.input_ids = []
+    return s
+
+
+# ── eval_tokens_on_slot ──────────────────────────────────────────────
+
+
+def test_text_install_rows_positions_and_chunking():
+    eng, ctx = _mk_engine()
+    slot = _bare_slot(seq=1)
+    toks = list(range(100, 119))  # 19 tokens at n_batch 8 -> 3 decodes
+    eng.eval_tokens_on_slot(slot, toks)
+    assert slot.n_tokens == 19
+    assert slot.input_ids == toks
+    assert slot.has_media is False
+    assert len(ctx.decoded_batches) == 3
+    flat = [r for b in ctx.decoded_batches for r in b]
+    assert [r[0] for r in flat] == toks
+    assert [r[1] for r in flat] == list(range(19))  # sequential positions
+    assert all(r[2] == (1,) for r in flat)  # the SEAT's seq
+    assert not any(r[3] for r in flat)  # no logits during install
+
+
+def test_text_install_decode_failure_raises_and_stops():
+    eng, ctx = _mk_engine(decode_script=[0, 2])
+    slot = _bare_slot()
+    with pytest.raises(RuntimeError, match="text decode ret=2"):
+        eng.eval_tokens_on_slot(slot, list(range(16)))
+    # the first sub-batch landed; the second did not book anything
+    assert slot.n_tokens == 8
+    assert len(slot.input_ids) == 8
+
+
+# ── eval_embd_on_slot ────────────────────────────────────────────────
+
+
+def test_embd_install_sentinels_and_media_mark():
+    np = pytest.importorskip("numpy")
+    eng, ctx = _mk_engine()
+    slot = _bare_slot(seq=1)
+    slot.n_tokens = 5  # text1 already installed
+    slot.input_ids = [9] * 5
+    n_embd, n_rows = 16, 11  # 11 rows at n_batch 8 -> 2 sub-batches
+    embd = np.arange(n_rows * n_embd, dtype=np.float32)
+    eng.eval_embd_on_slot(slot, embd, n_rows, n_embd)
+    assert slot.n_tokens == 16
+    assert slot.input_ids[:5] == [9] * 5
+    assert slot.input_ids[5:] == [BatchedEngine.MEDIA_SENTINEL] * n_rows
+    assert all(t < 0 for t in slot.input_ids[5:])  # never a real vocab id
+    assert slot.has_media is True
+    # the real LlamaBatch holds the LAST sub-batch: 3 rows at pos 13..15
+    raw = eng._embd_batch.batch
+    assert raw.n_tokens == 3
+    assert [raw.pos[j] for j in range(3)] == [13, 14, 15]
+    assert [raw.seq_id[j][0] for j in range(3)] == [1, 1, 1]
+    assert [raw.logits[j] for j in range(3)] == [0, 0, 0]
+
+
+# ── prepare_seat interplay ───────────────────────────────────────────
+
+
+def test_prepare_seat_clears_media_and_serves_empty_vision_head():
+    eng, ctx = _mk_engine()
+    eng._persona_heads["vision"] = PersonaHead(name="vision", seq=-1, tokens=[])
+    slot = _bare_slot(seq=0)
+    slot.has_media = True
+    slot.input_ids = [BatchedEngine.MEDIA_SENTINEL] * 4
+    slot.n_tokens = 4
+    eng.prepare_seat(slot, "vision")
+    assert slot.has_media is False
+    assert slot.n_tokens == 0 and slot.input_ids == []
+    # the empty head must never memory_seq_cp from its (fake) seq -1
+    assert not any(src == -1 for src, *_ in ctx.seq_cp_calls)
+
+
+# ── install orchestrator ─────────────────────────────────────────────
+
+
+class _InlineEngine:
+    """control() executes the fn inline and returns a done Future —
+    the decode-thread contract without the thread."""
+
+    MEDIA_SENTINEL = BatchedEngine.MEDIA_SENTINEL
+
+    def __init__(self):
+        self.ops = []
+        self._llama = None
+
+    def control(self, fn):
+        fut: Future = Future()
+        try:
+            self.ops.append(fn)
+            fut.set_result(fn())
+        except Exception as exc:  # noqa: BLE001 — mirror engine behaviour
+            fut.set_exception(exc)
+        return fut
+
+    def eval_tokens_on_slot(self, slot, tokens):
+        slot.input_ids.extend(tokens)
+        slot.n_tokens += len(tokens)
+
+    def eval_embd_on_slot(self, slot, embd, n_rows, n_embd):
+        slot.input_ids.extend([self.MEDIA_SENTINEL] * n_rows)
+        slot.n_tokens += n_rows
+        slot.has_media = True
+
+
+class _FakeEncoder:
+    def __init__(self, atomic_delta=None):
+        self.encoded = []
+        self.atomic_delta = atomic_delta
+
+    def encode(self, chunk, n_embd_inp):
+        self.encoded.append(chunk)
+        return b"embd"  # opaque; inline engine ignores it
+
+    def decode_image_atomic(self, lctx, chunk, embd, n_past, seq_id, n_batch):
+        delta = self.atomic_delta if self.atomic_delta is not None else chunk.n_tokens
+        return n_past + delta
+
+
+def _chunk(n_tokens, atomic=False):
+    ch = MediaChunk(ptr=object(), n_tokens=n_tokens, needs_atomic=atomic)
+    ch._freed = True  # no real C pointer to free
+    return ch
+
+
+def test_install_orchestrates_text_then_embd_then_position():
+    eng = _InlineEngine()
+    slot = _bare_slot(seq=1)
+    split = SplitPrompt(pre=[[5, 6, 7], _chunk(10), [8, 9]], text2=[1])
+    asyncio.run(install_multimodal_prefix(eng, _FakeEncoder(), slot, split, 16, 8))
+    assert slot.n_tokens == 15
+    assert slot.input_ids[:3] == [5, 6, 7]
+    assert slot.input_ids[3:13] == [BatchedEngine.MEDIA_SENTINEL] * 10
+    assert slot.input_ids[13:] == [8, 9]
+    assert slot.has_media is True
+
+
+def test_atomic_install_enforces_the_position_law():
+    """An M-RoPE-class model whose new_n_past diverges from the token
+    count must FAIL the install (fall back to the pool path) — silently
+    accepting it would under-count occupancy exactly like the 2026-08-25
+    free-cell inflation."""
+    eng = _InlineEngine()
+    eng._llama = type("L", (), {"_ctx": object()})()
+    slot = _bare_slot(seq=1)
+    split = SplitPrompt(pre=[_chunk(10, atomic=True)], text2=[1])
+    with pytest.raises(VisionInstallError, match="position law"):
+        asyncio.run(
+            install_multimodal_prefix(
+                eng, _FakeEncoder(atomic_delta=7), slot, split, 16, 8
+            )
+        )

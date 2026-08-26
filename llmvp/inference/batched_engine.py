@@ -210,6 +210,12 @@ class SeqSlot:
     n_tokens: int = 0  # decoded position (== static head len when fresh)
     static_len: int = 0
     input_ids: List[int] = field(default_factory=list)
+    # True once a multimodal install has decoded image EMBEDDING rows into
+    # this seq. input_ids then holds negative sentinels for those rows —
+    # length-correct for every rollback/purge path, but NOT replayable:
+    # session snapshot capture must refuse such a seat (the sentinels
+    # would restore as real token ids and decode as garbage).
+    has_media: bool = False
     pinned: bool = False  # held by a session between turns
     dead: bool = False  # context rebuilt underneath this seat
     # Lease stamp (monotonic) set at acquire, cleared at release — read by
@@ -516,6 +522,8 @@ class BatchedEngine:
         self._streams: Dict[str, StreamState] = {}
         self._waiting: List[StreamRequest] = []  # admitted when a seat frees
         self._batch: Any = None  # own LlamaBatch, lazily allocated
+        self._embd_batch: Any = None  # lazy; batched-vision installs only
+        self._embd_batch_width = 0
 
         self._join_inbox: List[StreamRequest] = []
         self._control_inbox: List[tuple] = []  # (fn, Future)
@@ -1436,6 +1444,7 @@ class BatchedEngine:
         slot.static_len = head.n_tokens
         slot.n_tokens = head.n_tokens
         slot.input_ids = list(head.tokens)
+        slot.has_media = False
         slot._needs_context_refresh = False
         slot._last_completion_tokens = None
 
@@ -1479,6 +1488,7 @@ class BatchedEngine:
         slot.n_tokens = 0
         slot.static_len = 0
         slot.input_ids = []
+        slot.has_media = False
         slot.pinned = False
 
     def window_seat_sync(self, slot: SeqSlot, n_keep: int) -> int:
@@ -1570,6 +1580,103 @@ class BatchedEngine:
             slot.seq,
             pin.n_tokens,
         )
+
+    # -- multimodal install (batched vision) -----------------------------
+    #
+    # DECODE-THREAD ONLY: both helpers are control-op BODIES — callers wrap
+    # them in self.control(...) and never touch the context themselves.
+    # They install a multimodal prefix onto a seat BEFORE admission, so
+    # every row they add sits below any stream's rollback mark by
+    # construction (pressure rollback can never cross an image row).
+
+    #: input_ids placeholder for image-embedding rows. Negative on purpose:
+    #: it can never collide with a real vocab id, and anything that tries
+    #: to detokenize or replay it fails loudly instead of silently.
+    MEDIA_SENTINEL = -101
+
+    def eval_tokens_on_slot(self, slot: SeqSlot, tokens: List[int]) -> None:
+        """Decode plain text tokens onto a seat's seq (≤ n_batch per call).
+
+        Unlike the prefill interleave this bypasses stream machinery
+        entirely — it exists for the batched-vision install, where the
+        text segments AROUND an image must land on the seq before the
+        generation stream is admitted."""
+        batch = self._ensure_batch()
+        pos = slot.n_tokens
+        i = 0
+        while i < len(tokens):
+            take = tokens[i : i + self._n_batch]
+            batch.reset()
+            for tok in take:
+                batch.add_token(int(tok), pos, [slot.seq], False)
+                pos += 1
+            ret = self._llama._ctx.decode(batch)
+            if ret != 0:
+                raise RuntimeError(
+                    f"vision install: text decode ret={ret} at pos {pos} "
+                    f"on seq {slot.seq}"
+                )
+            slot.input_ids.extend(int(t) for t in take)
+            slot.n_tokens = pos
+            i += len(take)
+
+    def eval_embd_on_slot(
+        self, slot: SeqSlot, embd: Any, n_rows: int, n_embd: int
+    ) -> None:
+        """Decode pre-encoded image embeddings onto a seat's seq.
+
+        `embd` is a C-contiguous float32 numpy buffer of n_rows x n_embd
+        (copied OUT of mtmd scratch by the caller). Rows land in
+        ≤ n_batch sub-batches, sequential positions, logits=False. Legal
+        only for models needing neither non-causal attention nor M-RoPE
+        for image decode (the caller checks; others take the atomic mtmd
+        helper). The payload lands via one memmove per sub-batch —
+        add_embeddings' per-element Python loop costs seconds at this
+        size (2.6M floats per 512-row sub-batch)."""
+        import ctypes
+
+        if self._embd_batch is None or self._embd_batch_width != int(n_embd):
+            from llama_cpp import internals
+
+            if self._embd_batch is not None:
+                self._embd_batch.close()
+            self._embd_batch = internals.LlamaBatch(
+                n_tokens=self._n_batch,
+                embd=int(n_embd),
+                n_seq_max=self._seq_map.n_seq_max,
+            )
+            self._embd_batch_width = int(n_embd)
+        batch = self._embd_batch
+        base = embd.ctypes.data
+        fsize = 4  # float32
+        pos = slot.n_tokens
+        row = 0
+        while row < n_rows:
+            take = min(self._n_batch, n_rows - row)
+            batch.reset()
+            raw = batch.batch
+            ctypes.memmove(
+                raw.embd,
+                base + row * n_embd * fsize,
+                take * n_embd * fsize,
+            )
+            for j in range(take):
+                raw.pos[j] = pos + j
+                raw.n_seq_id[j] = 1
+                raw.seq_id[j][0] = slot.seq
+                raw.logits[j] = 0
+            raw.n_tokens = take
+            ret = self._llama._ctx.decode(batch)
+            if ret != 0:
+                raise RuntimeError(
+                    f"vision install: embd decode ret={ret} at pos {pos} "
+                    f"on seq {slot.seq}"
+                )
+            pos += take
+            row += take
+        slot.input_ids.extend([self.MEDIA_SENTINEL] * n_rows)
+        slot.n_tokens = pos
+        slot.has_media = True
 
     def install_head_sync(self, slot: SeqSlot, head: PersonaHead) -> None:
         """Whole-seq replace of a seat's content with a pinned head (persona

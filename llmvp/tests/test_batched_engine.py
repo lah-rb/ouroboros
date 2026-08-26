@@ -221,7 +221,14 @@ class FakeCtx:
         self.seq_add_calls = []
 
     def decode(self, batch):
-        self.decoded_batches.append(list(batch.rows))
+        # A REAL LlamaBatch (the engine's lazy embd batch for vision
+        # installs) has no .rows; record its row count instead so embd
+        # decodes still register as decode calls.
+        self.decoded_batches.append(
+            list(batch.rows)
+            if hasattr(batch, "rows")
+            else [("embd", int(batch.batch.n_tokens))]
+        )
         if self.decode_script:
             code = self.decode_script.pop(0)
             if isinstance(code, Exception):

@@ -1290,6 +1290,15 @@ class LlamaCppBackend(BaseBackend):
         seq_map = self._batched_seq_map()
 
         heads: Dict[str, PersonaHead] = {}
+        if bool(getattr(self.config.model, "vision_batched", False)):
+            # BATCHED VISION: a synthetic persona with an EMPTY head.
+            # prepare_seat skips the memory_seq_cp entirely when a head
+            # holds zero tokens, so no band seq is consumed (seq=-1 is
+            # never dereferenced) and the seq map is untouched — a vision
+            # stream starts from a genuinely bare seq and its whole
+            # prompt (rendered by the FAMILY renderer, not SOUL.md) is
+            # installed by inference/vision_batched.py.
+            heads["vision"] = PersonaHead(name="vision", seq=-1, tokens=[])
         for persona, head_seq in seq_map.persona_seqs.items():
             tokens = list(get_static_tokens(persona, config=self.config))
             started = time.perf_counter()
@@ -2941,6 +2950,16 @@ class LlamaCppBackend(BaseBackend):
             # signal to purge — never silent eviction.
             raise RuntimeError(
                 f"snapshot capacity ({len(smap.snap_seqs)}) reached — purge one first"
+            )
+        if getattr(seat, "has_media", False):
+            # A multimodal install left image-embedding rows on this seq;
+            # input_ids holds NEGATIVE sentinels for them. A snapshot's
+            # dyn_tokens would capture those sentinels and a later restore
+            # would replay them as real token ids — silent garbage. Vision
+            # seats are stateless single turns by design; refuse loudly.
+            raise RuntimeError(
+                "refusing to snapshot a seat holding media rows "
+                f"(seq {seat.seq}); vision streams are not session-resumable"
             )
         snap_seq = free[0]
         n_tokens = int(seat.n_tokens)
