@@ -5406,6 +5406,11 @@ class LlamaCppBackend(BaseBackend):
             # so dashboards/soaks see the outage without new fields.
             engine_health = self._engine.health()
             info["batched_engine"] = engine_health
+        stats = getattr(self, "_vision_batched_stats", None)
+        if stats:
+            # health() is the free dict — NEVER capacity_fields() (a frozen
+            # snapshot; an unknown key silently kills every publish).
+            info["vision_batched"] = dict(stats)
             if engine_health.get("engine_fatal"):
                 info["status"] = "error"
 

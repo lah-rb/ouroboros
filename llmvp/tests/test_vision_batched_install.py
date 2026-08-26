@@ -15,6 +15,7 @@ installs instead of silently corrupting occupancy.
 from __future__ import annotations
 
 import asyncio
+import base64
 from concurrent.futures import Future
 
 import pytest
@@ -192,3 +193,99 @@ def test_atomic_install_enforces_the_position_law():
                 eng, _FakeEncoder(atomic_delta=7), slot, split, 16, 8
             )
         )
+
+
+# ── run_vision_completion routing (P2) ───────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_flag_off_never_touches_the_batched_path(monkeypatch):
+    """vision_batched=False must leave the pool path as the ONLY path —
+    the cousin of test_vision_path's inertness golden."""
+    from core import inference as ci
+
+    called = {"batched": 0}
+
+    async def _boom(*a, **k):
+        called["batched"] += 1
+        raise AssertionError("batched path entered with the flag off")
+
+    monkeypatch.setattr(ci, "_run_vision_batched", _boom)
+
+    class _Cfg:
+        vision_batched = False
+        mmproj_path = ""
+        family = "muse-glimmer"
+        name = "test"
+
+    # No mmproj configured -> the pool path's own guard raises RuntimeError
+    # BEFORE any batched consideration; the batched fn must stay uncalled.
+    class _Backend:
+        config = type("C", (), {"model": _Cfg()})()
+
+    async def _gb(model=None):
+        return _Backend()
+
+    monkeypatch.setattr(ci, "_get_backend", _gb)
+    with pytest.raises(RuntimeError, match="vision is not configured"):
+        await ci.run_vision_completion(
+            messages=[{"role": "user", "content": [{"type": "text", "text": "x"}]}]
+        )
+    assert called["batched"] == 0
+
+
+@pytest.mark.asyncio
+async def test_batched_failure_falls_back_to_pool(monkeypatch):
+    """A None from the batched helper must fall THROUGH to the pool path
+    (here: reach the pool path's intake and fail on its own terms), never
+    surface a batched-shaped error."""
+    from core import inference as ci
+
+    seen = {"batched": 0}
+
+    async def _none(*a, **k):
+        seen["batched"] += 1
+        return None
+
+    monkeypatch.setattr(ci, "_run_vision_batched", _none)
+
+    class _Cfg:
+        vision_batched = True
+        mmproj_path = "/nonexistent/mmproj.gguf"
+        family = "muse-glimmer"
+        name = "test"
+        vision_image_roots = []
+        vision_max_image_bytes = 1024
+
+    class _Gen:
+        max_tokens_default = 32
+        temperature_default = 0.0
+
+    class _Backend:
+        config = type("C", (), {"model": _Cfg(), "generation": _Gen()})()
+
+    async def _gb(model=None):
+        return _Backend()
+
+    def _sentinel(*a, **k):
+        raise RuntimeError("pool-path-reached")
+
+    _Backend.acquire_vision_instance = _sentinel
+    monkeypatch.setattr(ci, "_get_backend", _gb)
+    # A tiny valid data URI gets past intake; the batched helper returns
+    # None; the request must then reach the POOL path's checkout (our
+    # sentinel) — proving fall-through, not error surfacing.
+    uri = "data:image/png;base64," + base64.b64encode(b"png?").decode()
+    with pytest.raises(RuntimeError, match="pool-path-reached"):
+        await ci.run_vision_completion(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "x"},
+                        {"type": "image_url", "image_url": {"url": uri}},
+                    ],
+                }
+            ]
+        )
+    assert seen["batched"] == 1
