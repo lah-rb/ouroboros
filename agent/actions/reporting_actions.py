@@ -512,7 +512,7 @@ def _backfill_untracked_file_goals(mission: Any, report: Any) -> int:
 
     Returns the number of goals added.
     """
-    from agent.persistence.models import GoalRecord
+    from agent.goal_factory import structural_goal
 
     if getattr(report, "flow", "") != "file_ops":
         return 0
@@ -577,14 +577,13 @@ def _backfill_untracked_file_goals(mission: Any, report: Any) -> int:
         if is_infrastructure_file(path):
             continue
         mission.goals.append(
-            GoalRecord(
+            structural_goal(
                 description=(
                     f"{path} was written without a planned goal (no structural "
                     f"goal covers it). Review it against the mission "
                     f"architecture: bring it to gate standard if it belongs, "
                     f"or remove it if it should not exist."
                 ),
-                type="structural",
                 associated_files=[path],
                 origin="create_backfill",
                 finding_signature=sig,

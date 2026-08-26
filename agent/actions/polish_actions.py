@@ -20,7 +20,7 @@ import logging
 from typing import Any
 
 from agent.models import StepInput, StepOutput
-from agent.persistence.models import GoalRecord
+from agent.goal_factory import functional_goal, quality_goal
 
 logger = logging.getLogger(__name__)
 
@@ -294,11 +294,14 @@ async def action_harvest_polish_findings(step_input: StepInput) -> StepOutput:
             if str(finding.get("class", "")).lower() == "quality"
             else "functional"
         )
+        # Through the factory: functional polish goals now carry
+        # interaction_mode="exploratory" like their quality_gate siblings —
+        # behaviour-identical at every read site (only "deterministic" is
+        # ever tested) but no longer a creation-site divergence.
+        _mk = functional_goal if cls == "functional" else quality_goal
         mission.goals.append(
-            GoalRecord(
+            _mk(
                 description=text,
-                type=cls,
-                status="incomplete",
                 origin="polish_gate",
                 finding_signature=sig,
             )

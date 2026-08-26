@@ -17,6 +17,7 @@ from typing import Any
 from agent import languages
 from agent.loader import load_prompt_text
 from agent.models import StepInput, StepOutput
+from agent.goal_factory import functional_goal, quality_goal, structural_goal
 from agent.actions.pipeline_actions import _cap_diagnostic
 from agent.actions.reporting_actions import (
     is_infrastructure_file,
@@ -188,7 +189,7 @@ async def action_handle_events(step_input: StepInput) -> StepOutput:
     # here because that reloads mission from disk, losing our status edits.
     goals_added = 0
     if user_messages:
-        from agent.persistence.models import GoalRecord, NoteRecord
+        from agent.persistence.models import NoteRecord
 
         existing_descs = {g.description.strip().lower() for g in mission.goals}
         for msg, as_goal in user_messages:
@@ -208,15 +209,7 @@ async def action_handle_events(step_input: StepInput) -> StepOutput:
                     msg[:60],
                 )
                 continue
-            mission.goals.append(
-                GoalRecord(
-                    description=msg,
-                    type="functional",
-                    status="incomplete",
-                    origin="directive",
-                    interaction_mode="exploratory",
-                )
-            )
+            mission.goals.append(functional_goal(description=msg, origin="directive"))
             existing_descs.add(msg.strip().lower())
             goals_added += 1
             logger.info("Operator goal added via message: %s", msg[:80])
@@ -1007,7 +1000,6 @@ async def action_derive_project_goals(step_input: StepInput) -> StepOutput:
         )
 
     # Import persistence model
-    from agent.persistence.models import GoalRecord
 
     # Access mission as dict or object
     # `_arch_src` is bound in BOTH branches so the transient filter below has
@@ -1082,9 +1074,8 @@ async def action_derive_project_goals(step_input: StepInput) -> StepOutput:
         if not file_path:
             continue
 
-        goal = GoalRecord(
+        goal = structural_goal(
             description=responsibility or f"Implement {file_path}",
-            type="structural",
             associated_files=[file_path],
         )
         goals.append(goal)
@@ -1214,9 +1205,8 @@ async def action_derive_project_goals(step_input: StepInput) -> StepOutput:
                 existing_goal.description = description
             continue
 
-        goal = GoalRecord(
+        goal = structural_goal(
             description=description,
-            type="structural",
             associated_files=[d["file_path"]],
         )
         goals.append(goal)
@@ -1308,10 +1298,7 @@ async def action_derive_project_goals(step_input: StepInput) -> StepOutput:
                     for desc in functional_goals:
                         if isinstance(desc, str) and desc.strip():
                             goals.append(
-                                GoalRecord(
-                                    description=desc.strip(),
-                                    type="functional",
-                                )
+                                functional_goal(description=desc, origin="design")
                             )
                 else:
                     logger.warning(
@@ -1337,9 +1324,9 @@ async def action_derive_project_goals(step_input: StepInput) -> StepOutput:
         )
 
     if run_command:
-        startup_goal = GoalRecord(
+        startup_goal = functional_goal(
             description="Program starts cleanly and exits without errors",
-            type="functional",
+            origin="design",
             interaction_mode="deterministic",
         )
         # Insert before other functional goals
@@ -1391,7 +1378,7 @@ async def action_derive_directive_goals(step_input: StepInput) -> StepOutput:
     Publishes: mission
     """
     from agent.llm_json import parse_llm_json
-    from agent.persistence.models import GoalRecord, ModuleSpec
+    from agent.persistence.models import ModuleSpec
 
     effects = step_input.effects
     mission = step_input.context.get("mission")
@@ -1452,11 +1439,10 @@ async def action_derive_directive_goals(step_input: StepInput) -> StepOutput:
             if file_path not in arch.creation_order:
                 arch.creation_order.append(file_path)
         mission.goals.append(
-            GoalRecord(
+            structural_goal(
                 description=str(
                     entry.get("responsibility") or f"Implement {file_path}"
                 ),
-                type="structural",
                 associated_files=[file_path],
                 origin="directive",
                 finding_signature=sig,
@@ -1480,14 +1466,12 @@ async def action_derive_directive_goals(step_input: StepInput) -> StepOutput:
             continue
         full_desc = desc if not placement else f"{desc}\n\nPlacement: {placement}"
         mission.goals.append(
-            GoalRecord(
+            functional_goal(
                 description=full_desc,
-                type="functional",
                 origin="directive",
                 # Repair goals are FIXES to existing code (diagnose-first);
                 # only a greenfield directive builds an absent capability.
                 capability_absent=not repair,
-                interaction_mode="exploratory",
                 finding_signature=sig,
             )
         )
@@ -4500,7 +4484,6 @@ async def action_harvest_quality_findings(step_input: StepInput) -> StepOutput:
     Result: ``harvested`` (-> check_phase routes the new goals to their sweeps)
     or ``done`` (gate failed but produced no findings -> finalize).
     """
-    from agent.persistence.models import GoalRecord
 
     effects = step_input.effects
     mission = step_input.context.get("mission")
@@ -4660,14 +4643,12 @@ async def action_harvest_quality_findings(step_input: StepInput) -> StepOutput:
         else:
             reopened = False
             mission.goals.append(
-                GoalRecord(
+                quality_goal(
                     # 200 chars truncated a two-defect manifest report to the
                     # first defect and half a sentence. This description IS the
                     # diagnosis brief — the only channel to the model — so it
                     # gets room for a deterministic check's full finding.
                     description=f"Quality gate failed: {reason[:900]}",
-                    type="quality",
-                    status="incomplete",
                     origin="quality_gate",
                     finding_signature=sig,
                 )
@@ -4784,14 +4765,12 @@ async def action_harvest_quality_findings(step_input: StepInput) -> StepOutput:
         # _deterministic_shape_tasks); associating it lets the diagnose seed
         # surface the data instead of losing the link (files=[] → code-only).
         task_file = task.get("file", "") if isinstance(task, dict) else ""
+        _mk = functional_goal if cls == "functional" else quality_goal
         mission.goals.append(
-            GoalRecord(
+            _mk(
                 description=_quality_finding_text(task) or "quality finding",
-                type=cls,
-                status="incomplete",
                 origin="quality_gate",
                 finding_signature=sig,
-                interaction_mode="exploratory" if cls == "functional" else None,
                 repro_commands=repro,
                 verification_evidence=evidence,
                 associated_files=[task_file] if task_file else [],
@@ -5221,7 +5200,6 @@ async def action_run_test_suite_gate(step_input: StepInput) -> StepOutput:
     Context: mission (required). Publishes: mission.
     """
     from agent.actions.pipeline_actions import _parse_pytest_output, derive_repair_tests
-    from agent.persistence.models import GoalRecord
 
     effects = step_input.effects
     mission = step_input.context.get("mission")
@@ -5364,10 +5342,8 @@ async def action_run_test_suite_gate(step_input: StepInput) -> StepOutput:
                 reopened += 1
             continue
         mission.goals.append(
-            GoalRecord(
+            functional_goal(
                 description=f"Fix failing test: {node}",
-                type="functional",
-                status="incomplete",
                 origin="test_gate",
                 finding_signature=sig,
                 repro_commands=[f"python -m pytest -q {node}"],
