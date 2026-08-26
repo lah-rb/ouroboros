@@ -2135,8 +2135,11 @@ async def action_gate_goal_acceptance(step_input: StepInput) -> StepOutput:
     # acceptance_grounded because reconcile RESETS grounded on any disarm — an
     # unrelated derived check wearing out would otherwise re-arm derivation on a
     # goal that already has a real test.
-    needs = not bool(getattr(goal, "acceptance_grounded", False)) and not bool(
-        getattr(goal, "authored_test", None)
+    needs = (
+        not bool(getattr(goal, "acceptance_grounded", False))
+        and not bool(getattr(goal, "authored_test", None))
+        and int(getattr(goal, "acceptance_derive_attempts", 0) or 0)
+        < _ACCEPTANCE_DERIVE_MAX
     )
     return StepOutput(
         result={"has_checks": bool(checks), "needs_derive": needs},
@@ -2164,9 +2167,12 @@ async def action_store_goal_acceptance(step_input: StepInput) -> StepOutput:
     SyntaxError command, a missing binary, a mis-grounded grep — is dropped
     and logged. This is why no error-vs-fail classification is needed: a
     broken/mis-grounded check simply fails the known-good state and never
-    gets armed. One-shot: acceptance_grounded is set even when all
-    candidates are dropped (the evaluator judges alone thereafter — never
-    vacuous), so we never re-pay the derivation inference.
+    gets armed. Grounding is claimed ONLY when at least one check armed:
+    an empty result counts an attempt instead, and derivation re-arms
+    after the next pass up to _ACCEPTANCE_DERIVE_MAX (grounding on empty
+    dressed verdict-only goals as verified — every goal the next consumer
+    entry re-reported on the qwen3.8 campaign was grounded-empty, and none
+    of the check-carrying ones were).
 
     Context: mission, inference_response.  Inputs: goal_id.
     Publishes: mission, goal_acceptance_checks.
@@ -2229,20 +2235,43 @@ async def action_store_goal_acceptance(step_input: StepInput) -> StepOutput:
             seen.add(c["command"])
             added += 1
     goal.acceptance_checks = merged
-    goal.acceptance_grounded = True
+    if merged:
+        goal.acceptance_grounded = True
+        obs = (
+            f"goal-acceptance: {len(merged)} check(s) "
+            f"(+{added} grounded, {dropped} dropped as non-passing)"
+        )
+    else:
+        # NOT grounded. Claiming grounding on zero checks dressed verdict-only
+        # goals as verified — the durable vacuous-verification rule applied to
+        # grounding. Count the attempt instead; the gate re-arms derivation
+        # after the NEXT pass until _ACCEPTANCE_DERIVE_MAX, then the evaluator
+        # judges alone exactly as before — but the record shows it.
+        goal.acceptance_derive_attempts = (
+            int(getattr(goal, "acceptance_derive_attempts", 0) or 0) + 1
+        )
+        obs = (
+            f"goal-acceptance: derivation produced NO armed checks "
+            f"({dropped} dropped) — not grounding; attempt "
+            f"{goal.acceptance_derive_attempts}/{_ACCEPTANCE_DERIVE_MAX}, "
+            f"evaluator judges alone this pass"
+        )
+        logger.warning(obs)
     if effects:
         await effects.save_mission(mission)
     return StepOutput(
         result={"criteria_count": len(merged)},
-        observations=(
-            f"goal-acceptance: {len(merged)} check(s) "
-            f"(+{added} grounded, {dropped} dropped as non-passing)"
-        ),
+        observations=obs,
         context_updates={"mission": mission, "goal_acceptance_checks": merged},
     )
 
 
 _ACCEPTANCE_DISARM_K = 2  # behavior-refutes-check disarm threshold (cf _SHAPE_REFUTE_K)
+# Empty-derivation ceiling: a model that produced zero armed checks twice —
+# from two DIFFERENT passing sessions — will not on the third try, and each
+# try is an expensive inference (measured up to 27k output tokens). Past the
+# cap the evaluator judges alone, as before, but the goal record says so.
+_ACCEPTANCE_DERIVE_MAX = 2
 # An AUTHORED test is never disarmed — at this many contradictions it is
 # demoted to advisory and the dispute is raised as a warning. Higher than the
 # disarm threshold because a check with a verified negative control deserves

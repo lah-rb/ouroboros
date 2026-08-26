@@ -51,7 +51,7 @@ sections:
 
       These checks are a SCREEN layered under a separate behavioral evaluator
       that judges the session itself — you do NOT have to prove the behavior
-      correct, only pin the durable artifacts/state the goal requires. Seven
+      correct, only pin the durable artifacts/state the goal requires. These
       rules keep the screen safe (a failing check VETOES an otherwise-passing
       evaluation, so a wrong check is the only way to harm a correct result):
 
@@ -161,10 +161,24 @@ sections:
          ✅ (nothing — the save is transient; the evaluator judges the save/load
             behaviour from the session)
 
-      Most purely-behavioral goals (interactive flows, conversational
-      output) have NO robust shell-checkable end-state — for those return
-      {"checks": []}; adding nothing is correct and the evaluator judges
-      alone. An empty array always beats a vacuous check.
+      AN INTERACTIVE PROGRAM IS STILL CHECKABLE — drive it non-interactively.
+      Pipe a scripted input sequence into the program, bound the run with
+      `timeout`, and assert on what it prints, grounding every asserted
+      string in the session block verbatim (rule 7). Use the shortest input
+      sequence that reaches the behaviour. The check must OWN every
+      precondition: rule 9 forbids ASSUMING a runtime file exists, not
+      CREATING one — a check may write the state file it needs itself, then
+      exercise the behaviour against it.
+         ✅ scripted run, asserts on output the session showed:
+            {"command": "printf '\nlook\nquit\n' | timeout 30 python main.py | grep -qF 'Exits:'", "description": "the room description lists exits"}
+         ✅ owns its fixture, then exercises load (never assumes the file):
+            {"command": "python -c \"import json,subprocess,sys; json.dump({'room':'gate','hp':30}, open('accept_probe_save.json','w')); r=subprocess.run([sys.executable,'main.py'],input='\\nload accept_probe_save.json\\nquit\\n',capture_output=True,text=True,timeout=30); sys.exit(0 if 'gate' in r.stdout.lower() else 1)\"", "description": "loading a save restores the recorded room"}
+
+      Return {"checks": []} only when nothing observable separates pass from
+      fail even under a scripted run — an empty array beats a vacuous or
+      rigged check, but an interactive goal is NOT empty by default: goals
+      whose checks were derived have survived regressions that verdict-only
+      goals were re-reported on.
 
   - id: output_format
     content: |

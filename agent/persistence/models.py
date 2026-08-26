@@ -379,6 +379,15 @@ class GoalRecord(BaseModel):
     # pre-port behavior). acceptance_grounded is the one-shot guard.
     acceptance_checks: list[dict] = Field(default_factory=list)
     acceptance_grounded: bool = False
+    # Derivation attempts that ended with ZERO armed checks (nothing parsed,
+    # or every candidate dropped by the validate-on-create probe). Grounding
+    # used to be claimed even then ("the evaluator judges alone thereafter"),
+    # which dressed verdict-only goals as verified: on the qwen3.8 polish
+    # campaign every goal a later consumer entry re-reported was grounded-
+    # empty, and none of the check-carrying ones were. Now an empty derive
+    # does NOT ground; it increments this counter, and the gate stops asking
+    # at the cap — the same terminal state, reached honestly and visibly.
+    acceptance_derive_attempts: int = 0
     # Set ONLY when the regression sweep reopened this goal because a required
     # acceptance check actually FAILED — never by the pre-emptive structural
     # reopen. It is the in-episode proof of discrimination that

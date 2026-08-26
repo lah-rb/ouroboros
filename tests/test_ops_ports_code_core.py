@@ -304,7 +304,10 @@ async def test_store_acceptance_merges_tighten_only_and_one_shots():
     assert cmds == ["test -f a", "test -s save.json"]  # prior kept, dup dropped
     assert goal.acceptance_grounded is True
     assert out.result["criteria_count"] == 2
-    # One-shot even on an empty parse (optional tightener, unlike ops' DoD).
+    # An empty parse does NOT ground (grounding on zero checks dressed
+    # verdict-only goals as verified — the vacuous-verification rule applied
+    # to grounding). The cost bound the old one-shot bought lives in
+    # acceptance_derive_attempts now: bounded retry, then evaluator-alone.
     g2 = _functional_goal()
     await action_store_goal_acceptance(
         _si(
@@ -314,7 +317,8 @@ async def test_store_acceptance_merges_tighten_only_and_one_shots():
             inference_response="junk",
         )
     )
-    assert g2.acceptance_grounded is True and g2.acceptance_checks == []
+    assert g2.acceptance_grounded is False and g2.acceptance_checks == []
+    assert g2.acceptance_derive_attempts == 1
 
 
 @pytest.mark.asyncio
@@ -345,10 +349,11 @@ async def test_store_acceptance_validates_and_drops_broken():
 
 
 @pytest.mark.asyncio
-async def test_store_acceptance_all_broken_empty_but_grounded():
+async def test_store_acceptance_all_broken_counts_an_attempt():
     # Every candidate fails the probe (unconfigured MockEffects → rc 127):
-    # nothing is armed, but the goal is still grounded one-shot so the
-    # evaluator judges alone thereafter (never re-derives, never vacuous).
+    # nothing is armed. This used to ground anyway ("evaluator judges alone
+    # thereafter"); now it spends a derive attempt — bounded retry, and the
+    # goal record shows verdict-only instead of wearing a verified flag.
     goal = _functional_goal()
     resp = (
         '```json\n{"checks": ['
@@ -364,7 +369,8 @@ async def test_store_acceptance_all_broken_empty_but_grounded():
         )
     )
     assert goal.acceptance_checks == []
-    assert goal.acceptance_grounded is True
+    assert goal.acceptance_grounded is False
+    assert goal.acceptance_derive_attempts == 1
     assert out.result["criteria_count"] == 0
 
 
@@ -947,3 +953,97 @@ class TestEvaluationModeRouter:
         problem = next(s for s in step["turn"]["sections"] if s["type"] == "problem")
         assert problem["ref"] == {"$ref": "context.eval_objective"}
         assert step["pre_compute"][0]["formatter"] == "strip_test_guidance"
+
+
+# ── grounded-empty: the verification gap (2026-08-26) ─────────────────
+#
+# Grounding used to be claimed even when derivation produced zero armed
+# checks ("the evaluator judges alone thereafter"), which dressed
+# verdict-only goals as verified. Measured on the qwen3.8 polish campaign:
+# every goal the next consumer entry re-reported was grounded-empty; none
+# of the check-carrying goals were. The derive prompt itself caused the
+# empties — its closing paragraph told the model interactive flows have "NO
+# robust shell-checkable end-state", and the model's CoT quoted the hint
+# and returned {"checks": []} deliberately.
+
+
+@pytest.mark.asyncio
+async def test_empty_derivation_rearms_until_the_cap():
+    goal = _functional_goal()
+    m = _mission([goal])
+    fx = MockEffects(mission=m)
+
+    # First empty derive: not grounded, one attempt spent, gate re-arms.
+    await action_store_goal_acceptance(
+        _si(
+            MockEffects(),
+            inputs={"goal_id": goal.id},
+            mission=m,
+            inference_response='{"checks": []}',
+        )
+    )
+    out = await action_gate_goal_acceptance(_si(fx, inputs={"goal_id": goal.id}))
+    assert goal.acceptance_derive_attempts == 1
+    assert out.result["needs_derive"] is True, "one empty try must not end it"
+
+    # Second empty derive: cap reached, gate stops asking — evaluator-alone,
+    # the same terminal state as the old one-shot, reached honestly.
+    await action_store_goal_acceptance(
+        _si(
+            MockEffects(),
+            inputs={"goal_id": goal.id},
+            mission=m,
+            inference_response='{"checks": []}',
+        )
+    )
+    out2 = await action_gate_goal_acceptance(_si(fx, inputs={"goal_id": goal.id}))
+    assert goal.acceptance_derive_attempts == 2
+    assert goal.acceptance_grounded is False
+    assert out2.result["needs_derive"] is False
+
+
+@pytest.mark.asyncio
+async def test_a_later_successful_derive_still_grounds():
+    """The retry has to be worth having: an empty first pass followed by a
+    real derivation on the second grounds normally."""
+    goal = _functional_goal()
+    m = _mission([goal])
+    await action_store_goal_acceptance(
+        _si(
+            MockEffects(),
+            inputs={"goal_id": goal.id},
+            mission=m,
+            inference_response='{"checks": []}',
+        )
+    )
+    assert goal.acceptance_grounded is False
+    await action_store_goal_acceptance(
+        _si(
+            MockEffects(commands={"/bin/sh": CommandResult(0, "", "", "/bin/sh")}),
+            inputs={"goal_id": goal.id},
+            mission=m,
+            inference_response='```json\n{"checks": [{"command": "test -s data/rooms.json", "description": "room table ships"}]}\n```',
+        )
+    )
+    assert goal.acceptance_grounded is True
+    assert len(goal.acceptance_checks) == 1
+
+
+def test_derive_prompt_no_longer_blesses_empty_for_interactive():
+    """Pin option B: the closing paragraph that told the model interactive
+    flows have no shell-checkable end-state is gone, and the scripted-stdin
+    pattern (the one the authored-test arm proves works) is present. The
+    model's own CoT quoted the old hint verbatim before returning empty."""
+    import io as _io
+
+    import yaml
+
+    d = yaml.safe_load(
+        _io.open("prompts/interact/derive_goal_acceptance.yaml", encoding="utf-8")
+    )
+    txt = "".join(sec["content"] for sec in d["sections"])
+    assert "NO robust shell-checkable end-state" not in txt
+    assert "STILL CHECKABLE" in txt
+    assert "printf" in txt  # the scripted-run example
+    # and the count-drift fix: rule lists never carry a spelled count
+    assert "Seven rules" not in txt
