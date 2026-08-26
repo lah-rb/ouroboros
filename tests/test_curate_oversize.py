@@ -199,3 +199,35 @@ async def test_drain_transient_fault_still_declines_without_booking():
     assert bank["p1"]["extraction_status"] == "extracted"  # NOT booked
     assert "review_status" not in bank["p1"]
     assert not _CURATE_CLAIMS
+
+
+# ── fig review outage guard ──────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_fig_review_dead_server_declines_instead_of_booking():
+    """Zero tool reports + unreachable server = decline, never a verdict.
+    The tool exits empty when every vision call fails to connect; booking
+    'no report from tool' mass-marked 965 papers on 08-22 and 437 on
+    08-26. A dead server must cost a round, not the batch's papers."""
+    from agent.actions.curation_actions import action_fig_review_batch
+
+    class _DeadServer(MockEffects):
+        async def run_command(self, *a, **k):  # noqa: D102
+            class _R:
+                stdout = ""  # tool produced no reports
+                timed_out = False
+                return_code = 1
+
+            return _R()
+
+        async def inference_pool_health(self):  # noqa: D102
+            raise ConnectionError("server down")
+
+    fx = _DeadServer(files=_bank_files([_rec("p1", figure_count=4)], {"p1": "x"}))
+    si = _si(fx)
+    si.inputs.update({"paper_keys": ["p1"], "working_directory": "/tmp/x"})
+    out = await action_fig_review_batch(si)
+    assert "unreachable" in (out.result or {}).get("reason", "")
+    bank = await read_databank(fx)
+    assert bank["p1"].get("figtext_status") is None  # NOT booked failed

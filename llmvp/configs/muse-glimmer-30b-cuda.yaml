@@ -98,6 +98,16 @@ model:
   # of the pre-split era. Rung 2 if this still aborts: pool 1 @ 24576.
   vision_n_ctx: 8192
   vision_pool_size: 2
+  # n_batch 2048 -> 1024 (2026-08-26, second fault of the leg): the text
+  # graph's CUDA1 compute buffer scales with n_batch, and a 1,174.94 MiB
+  # reserve during an ordinary text admission OOM'd the ~1.0 GiB CUDA1
+  # margin left beside two vision contexts + projector (GGML assert =
+  # process death). Earlier 204/72 MiB failures show the margin was
+  # hairline from boot. Halving n_batch halves that buffer on BOTH
+  # devices (~0.6 GiB freed on CUDA1); prefill throughput pays (~2x
+  # chunks) but this leg is vision-bound and the text queues are
+  # drained. Next rung if it faults again: tensor_split [44, 8].
+  n_batch: 1024
   # PROJECTOR ON THE 3060. GPU0 holds weights + the batched cell and has
   # ~2.9 GiB slack; the vision graph needs its KV (0.85 GiB) AND a compute
   # buffer (measured 1.18 GiB at reserve, 2026-08-16) — adding the ~1.3 GiB

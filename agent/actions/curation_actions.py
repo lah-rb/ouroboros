@@ -1553,6 +1553,30 @@ async def action_fig_review_batch(step_input):
 
     from agent.actions.extraction_actions import is_toolchain_fault
 
+    if not reports:
+        # ZERO reports is the shape of a DEAD SERVER, not of bad figures:
+        # the tool exits with nothing when every vision call fails to
+        # connect. Booking "no report from tool" here mass-marked 965
+        # papers figtext_failed on the 08-22 port day and 437 more during
+        # the 2026-08-26 server fault — both mass-heals. Probe the server:
+        # if it is unreachable, decline the round with NOTHING booked
+        # (claims release in the caller's finally) and let the sweep
+        # retry when the server returns. A reachable server with zero
+        # reports still books below — a permanently absent tool must not
+        # spin forever (the curator e2e pins that).
+        alive = False
+        try:
+            alive = bool(await effects.inference_pool_health())
+        except Exception:  # noqa: BLE001 — unreachable is the signal
+            alive = False
+        if not alive:
+            summary = {"status": "failed", "reason": "server unreachable — declined"}
+            return StepOutput(
+                result=summary,
+                observations="Fig review declined: server unreachable, nothing booked",
+                context_updates={"figtext_summary": summary},
+            )
+
     databank = await read_databank(effects)
     updates, done, failed, skipped, partial = [], 0, 0, 0, 0
     for k in keys:
