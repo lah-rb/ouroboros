@@ -71,7 +71,13 @@ model:
   # their KV + the projector + the first context. Two layers back to the
   # 3090 free ~0.9 GiB on the 3060 (2 x [0.32 weights + 0.13 KV]) — and
   # less on the slow card is the direction the bandwidth tax prefers.
-  tensor_split: [42, 10]
+  # THIRD fault settled the ladder (2026-08-26): the same 1,174.94 MiB
+  # CUDA1 graph re-reserve failed AGAIN after n_batch 1024 — the buffer
+  # is not n_batch-scaled; it is transient headroom llama.cpp demands on
+  # the split device whenever the live graph outgrows the boot reserve.
+  # No amount of static arithmetic beside TWO vision contexts leaves
+  # ~1.2 GiB of slack on a 12 GB card. Back to the EXACTLY proven rung.
+  tensor_split: [40, 12]
   probe_verified_weights_bytes: 19653957984
   probe_verified_n_ctx: 91136
   # The base declares vision_n_ctx 131072 — an M1 sizing (7 GB of lazy KV
@@ -97,17 +103,16 @@ model:
   # not — figure answers peak ~1.6k tokens and 8192 served every figure
   # of the pre-split era. Rung 2 if this still aborts: pool 1 @ 24576.
   vision_n_ctx: 8192
-  vision_pool_size: 2
-  # n_batch 2048 -> 1024 (2026-08-26, second fault of the leg): the text
-  # graph's CUDA1 compute buffer scales with n_batch, and a 1,174.94 MiB
-  # reserve during an ordinary text admission OOM'd the ~1.0 GiB CUDA1
-  # margin left beside two vision contexts + projector (GGML assert =
-  # process death). Earlier 204/72 MiB failures show the margin was
-  # hairline from boot. Halving n_batch halves that buffer on BOTH
-  # devices (~0.6 GiB freed on CUDA1); prefill throughput pays (~2x
-  # chunks) but this leg is vision-bound and the text queues are
-  # drained. Next rung if it faults again: tensor_split [44, 8].
-  n_batch: 1024
+  # POOL OF TWO RETIRED after three process deaths in two hours (one at
+  # build, two at the text graph's CUDA1 re-reserve into the margin the
+  # second context consumed). The 08-22 proven leg ran pool 1 — no
+  # proven rung ever included 2. Parallel figtext survives at the LANE
+  # level: two lanes pipeline render/b64/http against the single server
+  # context. TRUE 2x needs VRAM this rig does not have — which is the
+  # second-3060 purchase question, now with three data points.
+  vision_pool_size: 1
+  # n_batch stays at the base's 2048: the 1024 experiment did not change
+  # the failing 1,174.94 MiB re-reserve by one byte — wrong lever.
   # PROJECTOR ON THE 3060. GPU0 holds weights + the batched cell and has
   # ~2.9 GiB slack; the vision graph needs its KV (0.85 GiB) AND a compute
   # buffer (measured 1.18 GiB at reserve, 2026-08-16) — adding the ~1.3 GiB
