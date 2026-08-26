@@ -170,3 +170,77 @@ class TestOcrSelectionHonoursContentPriority:
             assert set(select_ocr_batch(bank, 2)) == {"a", "b"}
         finally:
             _OCR_CLAIMS.clear()
+
+
+class TestAColdSecondaryIsWarmedNotSilentlySkipped:
+    """paddle-ocr-vl is a RESIDENT SECONDARY: it does not come up with the
+    server, the first request warms it while itself failing 'is not hot',
+    and every paper in that window falls through as `unknown`. Safe, but
+    silent — the gate looks like it is working while doing nothing, and on
+    2026-08-25 that produced a wrong conclusion about a prompt fix."""
+
+    @staticmethod
+    def _res(error=None, text=""):
+        class _R:
+            pass
+
+        r = _R()
+        r.error = error
+        r.text = text
+        return r
+
+    @pytest.mark.asyncio
+    async def test_a_not_hot_error_is_retried_once(self, monkeypatch, tmp_path):
+        from agent.actions import preocr_triage as pt
+
+        calls = []
+
+        class FX:
+            working_directory = str(tmp_path)
+
+            async def run_vision(self, prompt, path, **kw):
+                calls.append(kw.get("model"))
+                if len(calls) == 1:
+                    return TestAColdSecondaryIsWarmedNotSilentlySkipped._res(
+                        error="model 'paddle-ocr-vl' is a local config but is "
+                        "not hot — run loadModel first"
+                    )
+                return TestAColdSecondaryIsWarmedNotSilentlySkipped._res(text="A" * 400)
+
+            async def run_inference(self, prompt, cfg=None):
+                return TestAColdSecondaryIsWarmedNotSilentlySkipped._res(
+                    text="TYPE: research\nTECHNIQUE: raman\nGEOLOGICAL: yes"
+                )
+
+        async def _render(effects, pdf_rel, out_rel):
+            return True, ""
+
+        monkeypatch.setattr(pt, "render_first_page", _render)
+        v = await pt.triage_one(FX(), "k", "a.pdf")
+
+        assert len(calls) == 2, "a cold secondary must be retried, not skipped"
+        assert v["verdict"] == "ok"
+        assert v["bin"] == "raman"
+
+    @pytest.mark.asyncio
+    async def test_a_persistent_error_still_falls_through_safely(
+        self, monkeypatch, tmp_path
+    ):
+        """Two failures must not become a skip. Doubt keeps the paper."""
+        from agent.actions import preocr_triage as pt
+
+        class FX:
+            working_directory = str(tmp_path)
+
+            async def run_vision(self, prompt, path, **kw):
+                return TestAColdSecondaryIsWarmedNotSilentlySkipped._res(
+                    error="model 'paddle-ocr-vl' is not hot"
+                )
+
+        async def _render(effects, pdf_rel, out_rel):
+            return True, ""
+
+        monkeypatch.setattr(pt, "render_first_page", _render)
+        v = await pt.triage_one(FX(), "k", "a.pdf")
+        assert v["verdict"] == "unknown"
+        assert v["priority"] == pt.PRIO_NORMAL

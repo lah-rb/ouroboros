@@ -52,7 +52,6 @@ from __future__ import annotations
 import logging
 import os
 import re
-from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +75,14 @@ PRIO_LOW = 2  # a review/report: still processed, just later
 
 _OCR_PROMPT = "Transcribe all text on this page in reading order. Text only."
 
+#: The geological question names MATERIALS, not object types, because the
+#: first live batch removed three papers whose subject was a mineral phase
+#: inside a non-geological object: two Vermeer pigment studies from Heritage
+#: Science and an FTIR crystallinity study of burned bone (apatite). The
+#: model was answering on the OBJECT — a painting, a skeleton — rather than
+#: what was measured. 3 of 19 removals, all in that one class; cultural
+#: heritage is the corpus's LARGEST bin at 28%, so it is the worst class to
+#: be wrong about.
 _TRIAGE_PROMPT = """You are triaging a scientific paper before it is processed.
 
 Below is the text of its FIRST PAGE.
@@ -85,8 +92,17 @@ Decide three things:
   REVIEW / overview / preface / editorial / annual report / instrument
   description that reports no new measurements of its own?
 - What is the main measurement technique, if any?
-- Is the subject matter minerals, rocks, ores, pigments, ceramics, glass,
-  soils, meteorites or planetary surfaces?
+- Does the paper measure a MINERAL OR INORGANIC MATERIAL? Judge the
+  MATERIAL BEING MEASURED, not the kind of object it came from. Say yes for
+  minerals, rocks, ores, soils, meteorites and planetary surfaces, and ALSO
+  for the mineral content of other objects:
+    * pigments and paint layers in paintings, murals or manuscripts
+    * ceramics, porcelain, glass, glazes, plaster, mortar and building stone
+    * bone, teeth, shell and coral (apatite, calcite — mineral phases)
+    * corrosion products, patinas, ores and slags
+  Say no when the material itself is organic or synthetic with no mineral
+  phase — polymers, textiles, dyes, oils, biological tissue, pharmaceuticals
+  — and no for software, statistics, instrumentation and networking papers.
 
 End your reply with exactly these three lines and nothing after them:
 TYPE: research|review|unclear
@@ -182,21 +198,36 @@ async def triage_one(effects, paper_key: str, pdf_rel: str) -> dict:
             "reason": f"render failed: {note}",
         }
 
-    try:
-        ocr = await effects.run_vision(
-            _OCR_PROMPT,
-            os.path.join(getattr(effects, "working_directory", ""), out_rel),
-            model=OCR_MODEL,
-            max_tokens=1600,
-            temperature=0.0,
-        )
-    except Exception as e:  # noqa: BLE001
-        return {
-            "verdict": "unknown",
-            "bin": "",
-            "priority": PRIO_NORMAL,
-            "reason": f"ocr error: {e}"[:140],
-        }
+    png_abs = os.path.join(getattr(effects, "working_directory", ""), out_rel)
+    ocr = None
+    for attempt in (1, 2):
+        try:
+            ocr = await effects.run_vision(
+                _OCR_PROMPT,
+                png_abs,
+                model=OCR_MODEL,
+                max_tokens=1600,
+                temperature=0.0,
+            )
+        except Exception as e:  # noqa: BLE001
+            return {
+                "verdict": "unknown",
+                "bin": "",
+                "priority": PRIO_NORMAL,
+                "reason": f"ocr error: {e}"[:140],
+            }
+        err = str(getattr(ocr, "error", "") or "")
+        # A RESIDENT SECONDARY IS COLD AFTER EVERY SERVER BOUNCE. paddle does
+        # not come up with LLMVP: it loads on demand, and the FIRST request
+        # warms it while itself failing "is not hot". Left unhandled that is
+        # a silent window of no-ops after each restart — every paper falls
+        # through as `unknown`, the gate looks like it is working, and it is
+        # doing nothing. It cost a wrong conclusion about a prompt fix on
+        # 2026-08-25. Retry once; the second call lands on a warm model.
+        if attempt == 1 and "not hot" in err.lower():
+            logger.info("🚦 %s was cold — that call warmed it, retrying", OCR_MODEL)
+            continue
+        break
     page = (getattr(ocr, "text", "") or "").strip()
     if getattr(ocr, "error", None) or len(page) < 120:
         # Too little text to judge on. Fall THROUGH to OCR: a page that
