@@ -39,7 +39,11 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from agent.actions.scholarly_actions import append_records, read_databank  # noqa: E402
+from agent.actions.scholarly_actions import (  # noqa: E402
+    append_extraction_records,
+    append_records,
+    read_databank,
+)
 from agent.effects.local import LocalEffects  # noqa: E402
 
 ROOT = os.path.expanduser("~/corpora/ouroboros-spectra")
@@ -129,13 +133,27 @@ async def main() -> int:
         merged["figtext_progress"] = ""
         merged["failure_reason"] = ""
         rows.append(merged)
-    for key, rec in closed:
-        merged = dict(rec)
-        merged["paper_key"] = key
-        merged["failure_reason"] = PORT_MARK
-        rows.append(merged)
     if rows:
         await append_records(fx, rows)
+    # The stamp goes to the EXTRACTION sidecar, not papers.jsonl:
+    # failure_reason is an extraction-owned field, so the sidecar shadows
+    # the papers side on read — a papers-side stamp is invisible in the
+    # merged view (discovered when the first stamping pass re-stamped).
+    # FULL merged records, exactly as on the papers side: the sidecar is
+    # ALSO last-row-replaces per key, and a stamp-only row wiped the
+    # extraction fields of 357 records on 2026-08-26 (healed from
+    # history the same day). append_extraction_records filters a merged
+    # record to the owned fields — that filter is what makes passing the
+    # whole record safe, and passing less than the whole record is what
+    # is NOT safe.
+    if closed:
+        await append_extraction_records(
+            fx,
+            [
+                {**dict(rec), "paper_key": key, "failure_reason": PORT_MARK}
+                for key, rec in closed
+            ],
+        )
     print(
         f"\nre-armed {len(hits)} records; stamped {len(closed)} reviewed "
         "rows with the port-day marker"
