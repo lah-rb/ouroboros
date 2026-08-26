@@ -62,6 +62,46 @@ P4-P4. VRAM delta ≤ ~1.3 GB (mtmd ctx + embd scratch); zero ggml aborts
   mtmd-thread knobs included.
 - Outputs in llmvp/probe_out/*.jsonl.
 
+## P3 quality gate — CLOSED (2026-08-26 ~17:00)
+
+Blind pairwise per the VL-bake-off method (10 corpus figures, both
+paths at temp 0 / 700 tok, hash-derived A/B shuffle per figure, one
+blind judging agent scoring fidelity + fabrications, keymap applied in
+exactly one place):
+
+  preferred: batched 4, pool 2, tie 4
+  fabrications: batched 3, pool 4  (both shared 2: a CAS number and an
+  NH3->NH4 misread — model-level, path-independent)
+  empty/truncated-at-zero outputs: none on either side
+
+The judge twice flagged the POOL side for trailing meta/OCR leakage —
+the forced content channel makes the batched output cleaner. Latency on
+the same 10 pairs: 212s vs 332s total (batched 1.56x) under concurrent
+campaign load. GATE: within-one-letter equivalence exceeded (batched is
+slightly PREFERRED); fabrications not increased. Batched path stands.
+
+## P4 soak — running
+
+Flag flipped ~15:35; the campaign's own fig lanes are the soak load.
+First 21 min: ~217 figs/h campaign-pure (~274 mixed with the A/B), zero
+fallbacks, zero install failures, at max_streams 2. Baseline was 168.
+
 ## Build log
 
-- (P1 begins after this commit.)
+- P1 (8fbffef): engine install helpers (eval_tokens_on_slot /
+  eval_embd_on_slot, memmove embd feed, MEDIA_SENTINEL, has_media +
+  snapshot refusal), inference/vision_batched.py (MtmdEncoder,
+  split_prompt, family-renderer prompt, async install orchestrator with
+  the position law enforced), config flags + empty vision persona.
+- P2 (d7439a4): run_vision_completion routing switch; fallback-to-pool
+  is the contract (any batched failure = pool answer, never a new error
+  shape); semaphore cap; counters in backend health dict (NOT surfaced
+  over GraphQL — the typed HealthStatus is flat; soak instrument is the
+  server log's fallback warnings + databank figs/h).
+- P3a (bb0617d): first live request leaked ` to=self` — the bare
+  generation head lets a channel family choose; the head now forces the
+  content channel (schema-reconstructed). Live A/B canary after fix:
+  clean description, 21s/300tok batched vs 34s pool (single request
+  1.6-1.9x). Flag ON at max_streams 2 — THE CAMPAIGN'S FIG LANES ROUTE
+  BATCHED FROM THIS BOOT (P4 soak start ~15:35). First 9-pair A/B:
+  batched faster in 9/9 (e.g. 17.0s vs 41.2s at equal budgets).
