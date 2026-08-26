@@ -445,3 +445,49 @@ def test_untriaged_findings_still_land_as_before():
         "the help text never mentions save"
     ]
     assert not m.pending_directive
+
+
+def test_the_formatter_accepts_the_raw_string_conclude_emits():
+    """THE no-op. polish_findings is carried through as the raw fenced JSON
+    string, not a parsed list. Taking only lists handed triage an empty set,
+    so it reported "the user reported nothing" and harvest silently fell back
+    to untriaged filing — the step ran, logged, and did nothing."""
+    from agent.formatters import format_polish_findings
+
+    raw = (
+        '```json\n{"findings": [{"description": "the help text never mentions '
+        'save", "class": "functional"}]}\n```'
+    )
+    out = format_polish_findings({"source": raw}, {})
+    assert "the help text never mentions save" in out
+    assert "reported nothing" not in out
+
+
+def test_an_empty_triage_falls_back_loudly(caplog):
+    """The fallback must stay — never drop a consumer's findings — but it must
+    be visible, or a broken triage is indistinguishable from a clean run."""
+    import asyncio
+    import logging
+
+    from agent.actions.polish_actions import action_harvest_polish_findings
+    from agent.models import StepInput
+
+    m = _mission(top_phase="polish")
+    findings = (
+        '[{"description": "the help text never mentions save", "class": "functional"}]'
+    )
+    with caplog.at_level(logging.WARNING):
+        asyncio.run(
+            action_harvest_polish_findings(
+                StepInput(
+                    context={
+                        "mission": m,
+                        "polish_findings": findings,
+                        "triaged_findings": [],
+                    },
+                    params={},
+                )
+            )
+        )
+    assert [g for g in m.goals if g.origin == "polish_gate"], "findings must survive"
+    assert any("UNTRIAGED" in r.message for r in caplog.records)

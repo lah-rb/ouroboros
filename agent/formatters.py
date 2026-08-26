@@ -366,7 +366,17 @@ def format_polish_findings(params: dict, namespaces: dict) -> str:
     to carry back out. The class rides along because a "quality" finding is
     rarely a design question.
     """
+    # polish_findings arrives as the RAW FENCED JSON STRING conclude emitted,
+    # not a parsed list — the gate's returns carry it through verbatim and
+    # harvest parses it at the far end. Taking only lists here handed triage
+    # an empty set, so it faithfully reported "the user reported nothing" and
+    # harvest fell back to the untriaged findings: the whole step became a
+    # silent no-op on its first live entry (2026-08-26).
     source = params.get("source")
+    if isinstance(source, str):
+        from agent.actions.polish_actions import _findings as _parse_findings
+
+        source = _parse_findings(source)
     findings = source if isinstance(source, list) else []
     lines = []
     for finding in findings:

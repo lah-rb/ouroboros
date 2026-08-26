@@ -231,11 +231,27 @@ async def action_harvest_polish_findings(step_input: StepInput) -> StepOutput:
     # triage did not run (an older mission, or a flow set without the step) —
     # those are all "fix", which is exactly the pre-triage behaviour.
     triaged = step_input.context.get("triaged_findings")
-    findings = (
-        _findings(triaged)
-        if triaged
-        else _findings(step_input.context.get("polish_findings"))
-    )
+    blind = _findings(step_input.context.get("polish_findings"))
+    if triaged:
+        findings = _findings(triaged)
+    else:
+        findings = blind
+        if blind:
+            # The fallback is CORRECT — never drop a consumer's findings
+            # because a routing step failed — but it must not be quiet. On the
+            # first live entry a formatter bug fed triage an empty list, it
+            # truthfully reported "the user reported nothing", and this
+            # fallback filed the untriaged complaints exactly as before. The
+            # gate looked healthy from every angle: the step ran, it logged,
+            # the goals landed. WARNING, because "triage ran and found
+            # nothing" and "triage produced nothing usable" are the same shape
+            # from outside, and only one of them is fine.
+            logger.warning(
+                "polish harvest: triage produced no routed findings but "
+                "conclude reported %d — filing them UNTRIAGED (complaint "
+                "phrasing, no design routing). Check the triage step.",
+                len(blind),
+            )
     designed = list(getattr(mission, "polish_designed", None) or [])
     directives: list[str] = []
     existing = {
