@@ -65,7 +65,13 @@ model:
   # the single-card layout; this leg overrides both). [40,12] is the rung
   # that probed clean AND ran the full 08-22 leg — do not re-ladder.
   split_mode: layer
-  tensor_split: [40, 12]
+  # [40,12] -> [42,10] (2026-08-26, first boot of this leg): at [40,12]
+  # the SECOND vision context's compute buffer (1,335 MiB, ggml abort =
+  # process death, not an error) did not fit CUDA1 beside 12 layers +
+  # their KV + the projector + the first context. Two layers back to the
+  # 3090 free ~0.9 GiB on the 3060 (2 x [0.32 weights + 0.13 KV]) — and
+  # less on the slow card is the direction the bandwidth tax prefers.
+  tensor_split: [42, 10]
   probe_verified_weights_bytes: 19653957984
   probe_verified_n_ctx: 91136
   # The base declares vision_n_ctx 131072 — an M1 sizing (7 GB of lazy KV
@@ -86,7 +92,11 @@ model:
   # one. Two contexts: KV 2 x 0.64 GiB (12,288 x 52 KB) + per-context
   # compute buffer (~1.18 GiB measured 2026-08-16). OOM fallback ladder,
   # in order: pool 2 @ 8192, then pool 1 @ 24576 (the pre-split plan).
-  vision_n_ctx: 12288
+  # 12288 -> 8192 on the same first boot (rung 1 of the documented
+  # ladder): the pool of TWO is the throughput feature, the window is
+  # not — figure answers peak ~1.6k tokens and 8192 served every figure
+  # of the pre-split era. Rung 2 if this still aborts: pool 1 @ 24576.
+  vision_n_ctx: 8192
   vision_pool_size: 2
   # PROJECTOR ON THE 3060. GPU0 holds weights + the batched cell and has
   # ~2.9 GiB slack; the vision graph needs its KV (0.85 GiB) AND a compute
