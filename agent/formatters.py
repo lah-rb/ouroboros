@@ -390,6 +390,32 @@ def format_polish_findings(params: dict, namespaces: dict) -> str:
     return "\n".join(lines) if lines else "(the user reported nothing)"
 
 
+def format_verified_behaviours(params: dict, namespaces: dict) -> str:
+    """Completed behavioural goals, as triage's contention reference.
+
+    Behavioural only (functional/quality) and complete only: structural goals
+    describe modules — the architecture block already covers them — and an
+    incomplete goal commits the product to nothing yet. Without this list the
+    settled-behaviour half of triage's contention trigger has nothing to check
+    against, which is how "checkpoint near the boss" routed fix and broke the
+    authored test pinning "continues from the point of death"."""
+    source = params.get("source")
+    goals = source if isinstance(source, list) else []
+    lines: list[str] = []
+    for g in goals:
+        if isinstance(g, dict):
+            status, gtype, desc = g.get("status"), g.get("type"), g.get("description")
+        else:
+            status = getattr(g, "status", "")
+            gtype = getattr(g, "type", "")
+            desc = getattr(g, "description", "")
+        if status == "complete" and gtype in ("functional", "quality"):
+            text = str(desc or "").strip()
+            if text:
+                lines.append(f"- {text[:160]}")
+    return "\n".join(lines) if lines else "(none verified yet)"
+
+
 def format_project_listing(params: dict, namespaces: dict) -> str:
     manifest = params.get("source") or {}
     if not manifest:
@@ -877,6 +903,7 @@ PRE_COMPUTE_FORMATTERS: dict[str, Any] = {
     "format_project_file_list": format_project_file_list,
     "format_project_listing": format_project_listing,
     "format_polish_findings": format_polish_findings,
+    "format_verified_behaviours": format_verified_behaviours,
     "format_project_docs": format_project_docs,
     "format_questionnaire_report": format_questionnaire_report,
     "format_modality_sidecars": format_modality_sidecars,

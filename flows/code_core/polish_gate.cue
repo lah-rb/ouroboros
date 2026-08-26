@@ -52,7 +52,7 @@ polish_gate: #FlowDefinition & {
 
 	input: {
 		required: ["working_directory", "mission_id"]
-		optional: ["architecture_run_command", "architecture"]
+		optional: ["architecture_run_command", "architecture", "mission_goals"]
 	}
 
 	defaults: config: temperature: "t*0.5"
@@ -298,7 +298,7 @@ polish_gate: #FlowDefinition & {
 			}
 			prompt_template: {
 				template:     "polish_gate/triage"
-				context_keys: ["consumer_findings", "existing_architecture", "project_listing"]
+				context_keys: ["consumer_findings", "existing_architecture", "verified_behaviours", "project_listing"]
 				input_keys: []
 			}
 			pre_compute: [
@@ -311,6 +311,11 @@ polish_gate: #FlowDefinition & {
 					formatter:  "format_existing_architecture"
 					output_key: "existing_architecture"
 					params: source: {$ref: "input.architecture", default: ""}
+				},
+				{
+					formatter:  "format_verified_behaviours"
+					output_key: "verified_behaviours"
+					params: source: {$ref: "input.mission_goals", default: ""}
 				},
 				{
 					formatter:  "format_project_listing"

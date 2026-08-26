@@ -15,7 +15,15 @@
 # Pre-computed context:
 #   consumer_findings     — what the blind conclude step extracted
 #   existing_architecture — the modules and data shapes as designed
+#   verified_behaviours   — completed behavioural goals (contention reference)
 #   project_listing       — the files as they sit on disk
+#
+# The contention trigger exists because per-item routing missed a live case
+# (2026-08-26): "continue from a checkpoint near the boss" was individually
+# clean, routed fix, and its fix broke the authored test pinning the already-
+# verified "warns and continues from the point of death". Each was simple
+# alone; together they were a product decision — made by edit order instead
+# of by design.
 
 id: polish_gate/triage
 description: "Route consumer findings to a direct fix or a design pass"
@@ -43,14 +51,23 @@ sections:
     "design" — the finding cannot become one honest work item. Send it here
     when it carries several separate complaints that need separate repairs and
     separate checks; when satisfying it means changing how the project is
-    STRUCTURED rather than fixing behaviour inside the current structure; or
-    when what the user wants contradicts the architecture, so someone has to
-    decide what the product should be before anyone can change it. These go to
-    a design pass that decomposes them against the architecture.
+    STRUCTURED rather than fixing behaviour inside the current structure; when
+    what the user wants contradicts the architecture, so someone has to decide
+    what the product should be before anyone can change it; or when it pulls
+    against another finding in this list, or against a behaviour the product
+    already commits to (listed below), so that satisfying both means deciding
+    what the product should do. Two findings that are each simple alone but
+    disagree about the same behaviour are ONE design question, not two fixes —
+    route both, and say in each description that they belong together. These
+    go to a design pass that decomposes and reconciles them against the
+    architecture.
 
     Choose "design" because the finding genuinely needs decomposition, not
     because it is large or awkwardly worded. A finding you can restate as one
-    clear desired behaviour is a "fix", however unhappy the user was.
+    clear desired behaviour is a "fix", however unhappy the user was — unless
+    another finding, or a behaviour already committed to, pulls the same
+    mechanism the other way. Contention is resolved by design, not by
+    whichever fix happens to land last.
 
     THE DESCRIPTION YOU WRITE IS READ AS THE TARGET STATE, NOT THE COMPLAINT.
     Downstream steps render it under the heading "THE GOAL", so a description
@@ -99,6 +116,11 @@ sections:
   content: |
     How this project is built:
     {context.existing_architecture}
+- id: verified
+  content: |
+    Behaviours the product already commits to — each verified in play. A
+    finding that pulls against one of these is contention, not a simple fix:
+    {context.verified_behaviours}
 - id: listing
   content: |
     The files as they sit on disk:

@@ -9600,6 +9600,10 @@
           "architecture": {
             "$ref": "context.mission.architecture",
             "default": ""
+          },
+          "mission_goals": {
+            "$ref": "context.mission.goals",
+            "default": ""
           }
         },
         "params": {},
@@ -10682,7 +10686,8 @@
       ],
       "optional": [
         "architecture_run_command",
-        "architecture"
+        "architecture",
+        "mission_goals"
       ]
     },
     "defaults": {
@@ -11090,6 +11095,7 @@
           "context_keys": [
             "consumer_findings",
             "existing_architecture",
+            "verified_behaviours",
             "project_listing"
           ],
           "input_keys": []
@@ -11110,6 +11116,16 @@
             "params": {
               "source": {
                 "$ref": "input.architecture",
+                "default": ""
+              }
+            }
+          },
+          {
+            "formatter": "format_verified_behaviours",
+            "output_key": "verified_behaviours",
+            "params": {
+              "source": {
+                "$ref": "input.mission_goals",
                 "default": ""
               }
             }
@@ -18786,6 +18802,10 @@
           "architecture": {
             "$ref": "context.mission.architecture",
             "default": ""
+          },
+          "mission_goals": {
+            "$ref": "context.mission.goals",
+            "default": ""
           }
         },
         "params": {},
@@ -20088,6 +20108,10 @@
           },
           "architecture": {
             "$ref": "context.mission.architecture",
+            "default": ""
+          },
+          "mission_goals": {
+            "$ref": "context.mission.goals",
             "default": ""
           }
         },
@@ -21471,6 +21495,10 @@
           },
           "architecture": {
             "$ref": "context.mission.architecture",
+            "default": ""
+          },
+          "mission_goals": {
+            "$ref": "context.mission.goals",
             "default": ""
           }
         },

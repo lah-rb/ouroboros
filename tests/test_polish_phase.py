@@ -491,3 +491,30 @@ def test_an_empty_triage_falls_back_loudly(caplog):
         )
     assert [g for g in m.goals if g.origin == "polish_gate"], "findings must survive"
     assert any("UNTRIAGED" in r.message for r in caplog.records)
+
+
+def test_triage_contention_reference_lists_only_verified_behaviours():
+    """The settled-behaviour half of triage's contention trigger checks
+    against this list. Structural goals stay out (the architecture block
+    already covers modules) and incomplete goals stay out (the product has
+    committed to nothing an unfinished goal describes)."""
+    from agent.formatters import format_verified_behaviours
+
+    goals = [
+        GoalRecord(
+            description="player can drop items", type="functional", status="complete"
+        ),
+        GoalRecord(
+            description="death warns before restarting",
+            type="functional",
+            status="complete",
+        ),
+        GoalRecord(description="wip behaviour", type="functional", status="incomplete"),
+        GoalRecord(description="engine module", type="structural", status="complete"),
+    ]
+    out = format_verified_behaviours({"source": goals}, {})
+    assert "player can drop items" in out
+    assert "death warns before restarting" in out
+    assert "wip behaviour" not in out
+    assert "engine module" not in out
+    assert format_verified_behaviours({"source": ""}, {}) == "(none verified yet)"

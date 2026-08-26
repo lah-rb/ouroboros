@@ -591,6 +591,7 @@ mission_control_contracted: #FlowDefinition & {
 				mission_id:               {$ref: "input.mission_id"}
 				architecture_run_command: {$ref: "context.mission.architecture.run_command", default: ""}
 				architecture:             {$ref: "context.mission.architecture", default: ""}
+				mission_goals:            {$ref: "context.mission.goals", default: ""}
 			}
 			resolver: {
 				type: "rule"
