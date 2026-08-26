@@ -304,12 +304,32 @@ def render_vision_prompt(
         raise VisionInstallError(
             f"marker count {user_text.count(marker)} != images {n_images}"
         )
-    r = FormatRenderer(load_schema(family))
+    schema = load_schema(family)
+    r = FormatRenderer(schema)
     parts = []
     if system_text:
         parts.append(r.render_system(system_text))
     parts.append(r.render_user(user_text))
-    parts.append(r.render_generation_prompt(reasoning))
+    gen = r.render_generation_prompt(reasoning)
+    # FORCE THE CONTENT CHANNEL for channel-thinking families (muse):
+    # the bare generation head lets the model open ` to=self` and spend
+    # the whole budget reasoning — the first live batched request leaked
+    # exactly that. The dedicated pool path never had the problem only
+    # because the GGUF template it renders with closes the channel
+    # itself. Reconstructed from the same schema fields vision_text's
+    # _channel_heads uses, so the string matches byte for byte. The
+    # reasoning dial is structurally inert on this path as a result —
+    # figure description is content work.
+    th = getattr(schema, "thinking", None)
+    if (
+        th is not None
+        and getattr(th, "style", "") == "channel"
+        and th.channel_token
+        and th.content_channel
+        and not gen.rstrip().endswith(schema.tokens.msg_content)
+    ):
+        gen = gen + f"{th.channel_token}{th.content_channel}{schema.tokens.msg_content}"
+    parts.append(gen)
     return "".join(parts)
 
 
