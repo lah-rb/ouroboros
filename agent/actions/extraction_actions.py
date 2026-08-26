@@ -1764,9 +1764,13 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
                     f"span={rep.get('span_pass_rate', 0):.2f})"
                 )
             else:
-                reason = "no report from toolchain" + (
-                    " (command timed out)" if result.timed_out else ""
-                )
+                # `detail` is _extract_one's explanation for the missing
+                # report ("timed out", "exit N", "exited cleanly with no
+                # output"). The previous line referenced `result.timed_out`
+                # — a name that does not exist in this scope, so every trip
+                # through this branch raised NameError instead of booking
+                # the failure reason (found by ruff F821, 2026-08-26).
+                reason = "no report from toolchain" + (f" ({detail})" if detail else "")
             # WHAT THE RUN PRODUCED IS RECORDED EVEN WHEN THE GATE REJECTS IT.
             # figure_count used to be written only on the success path, so a
             # rejected paper carried figure_count=0 while its figures sat on
