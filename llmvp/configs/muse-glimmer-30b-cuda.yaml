@@ -48,36 +48,7 @@ model:
   # metrics live in ~/tools/ouroboros-ops/LAYER_SPLIT_EXPERIMENT.md —
   # [40,12]@131072 was the stable rung, 80.9 completions/h over 5.5 h,
   # zero faults. Re-apply it whenever paddle next drains.
-  # ── FIGTEXT CAMPAIGN LEG (2026-08-26, operator-directed) ───────────
-  # Paddle has drained (OCR queue ~48 and falling) — the precondition the
-  # 08-22 close-out named for re-applying the split. Goal this leg is NOT
-  # curate (queue: 28) but FIGURE DESCRIPTION throughput: ~30k figures
-  # (12.1k standing + 18.5k re-armed accepted cohort) at ~37 s/figure on
-  # one vision context. The split frees 3090 VRAM for a vision POOL.
-  # Geometry (1 KB/tok/layer, 52 layers, weights 19.65 GB):
-  #   3090: 40/52 weights 15.1 + text KV 5.24 (131,072 x 40 KB) + buffers
-  #   3060: 12/52 weights  4.5 + text KV 1.57 + projector 1.3 + vision
-  # Proven rung [40,12] @ 131,072: 5.5 h live, zero faults, 80.9
-  # completions/h (LAYER_SPLIT_EXPERIMENT.md). Paddle must NOT be loaded
-  # while split (OCR lane disabled via OUROBOROS_OCR_DRAIN_PDFS=0).
-  n_ctx: 131072
-  # Deterministic placement (base pins main_gpu 0 / split_mode none for
-  # the single-card layout; this leg overrides both). [40,12] is the rung
-  # that probed clean AND ran the full 08-22 leg — do not re-ladder.
-  split_mode: layer
-  # [40,12] -> [42,10] (2026-08-26, first boot of this leg): at [40,12]
-  # the SECOND vision context's compute buffer (1,335 MiB, ggml abort =
-  # process death, not an error) did not fit CUDA1 beside 12 layers +
-  # their KV + the projector + the first context. Two layers back to the
-  # 3090 free ~0.9 GiB on the 3060 (2 x [0.32 weights + 0.13 KV]) — and
-  # less on the slow card is the direction the bandwidth tax prefers.
-  # THIRD fault settled the ladder (2026-08-26): the same 1,174.94 MiB
-  # CUDA1 graph re-reserve failed AGAIN after n_batch 1024 — the buffer
-  # is not n_batch-scaled; it is transient headroom llama.cpp demands on
-  # the split device whenever the live graph outgrows the boot reserve.
-  # No amount of static arithmetic beside TWO vision contexts leaves
-  # ~1.2 GiB of slack on a 12 GB card. Back to the EXACTLY proven rung.
-  tensor_split: [40, 12]
+  n_ctx: 65536
   probe_verified_weights_bytes: 19653957984
   probe_verified_n_ctx: 91136
   # The base declares vision_n_ctx 131072 — an M1 sizing (7 GB of lazy KV
@@ -92,27 +63,7 @@ model:
   # Vision grows 8192 -> 24576 with the freed 3090 VRAM (the 8192 cap
   # existed only because the un-split 3090 could not hold more beside
   # the 65k text pool).
-  # Campaign leg: 8192 -> 12288, and a POOL OF TWO (vision_pool_size
-  # below) instead of one bigger window — figure work peaks ~1.6k answer
-  # + split-panel image tokens, so parallel modest windows beat one large
-  # one. Two contexts: KV 2 x 0.64 GiB (12,288 x 52 KB) + per-context
-  # compute buffer (~1.18 GiB measured 2026-08-16). OOM fallback ladder,
-  # in order: pool 2 @ 8192, then pool 1 @ 24576 (the pre-split plan).
-  # 12288 -> 8192 on the same first boot (rung 1 of the documented
-  # ladder): the pool of TWO is the throughput feature, the window is
-  # not — figure answers peak ~1.6k tokens and 8192 served every figure
-  # of the pre-split era. Rung 2 if this still aborts: pool 1 @ 24576.
   vision_n_ctx: 8192
-  # POOL OF TWO RETIRED after three process deaths in two hours (one at
-  # build, two at the text graph's CUDA1 re-reserve into the margin the
-  # second context consumed). The 08-22 proven leg ran pool 1 — no
-  # proven rung ever included 2. Parallel figtext survives at the LANE
-  # level: two lanes pipeline render/b64/http against the single server
-  # context. TRUE 2x needs VRAM this rig does not have — which is the
-  # second-3060 purchase question, now with three data points.
-  vision_pool_size: 1
-  # n_batch stays at the base's 2048: the 1024 experiment did not change
-  # the failing 1,174.94 MiB re-reserve by one byte — wrong lever.
   # PROJECTOR ON THE 3060. GPU0 holds weights + the batched cell and has
   # ~2.9 GiB slack; the vision graph needs its KV (0.85 GiB) AND a compute
   # buffer (measured 1.18 GiB at reserve, 2026-08-16) — adding the ~1.3 GiB
@@ -156,7 +107,4 @@ resources:
   # 8 -> 6 with the pool back at 65,536 (2026-08-22): the 8th and 7th
   # seat were funded by the split's 131k cells; on the reverted pool the
   # proven plateau is 6 (see LAYER_SPLIT_EXPERIMENT.md close-out).
-  # 6 -> 8 for the figtext-campaign split leg: the 131k pool funds the
-  # 7th/8th seat exactly as it did on 08-22 (seats exhausted 88% of
-  # ticks, cells median 35k free). Revert to 6 with the pool.
-  max_concurrent_requests: 8
+  max_concurrent_requests: 6
