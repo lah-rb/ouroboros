@@ -79,6 +79,15 @@ _TERMINAL_EXTRACTION = (
     # reference lists feed citation mining, so they stay in the queue at
     # low priority.
     "extract_off_topic",
+    # The curate stage's park for a doc whose DEEPEST compression still
+    # exceeds the engine's per-stream seat (measured script-aware, or
+    # refused by the engine itself at admission). Terminal HERE so the OCR
+    # sweep never re-selects a paper whose markdown already exists — the
+    # problem is curation geometry, not extraction. A REVIEW QUEUE like the
+    # two above: reason recorded, clearable by hand. Distinct from
+    # extract_oversize (a PDF too big to OCR), which the book lane segments;
+    # this status must NOT be picked up by that lane.
+    "curate_oversize",
 )
 
 # QUALITY POLICY — recalibrated 2026-08-14 against blind judgement.

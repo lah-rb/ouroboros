@@ -905,6 +905,65 @@ _CURATE_AGING_ROUNDS = 25
 # rungs it would double-charge for siblings that free_cells already counts.
 _CURATE_DEGRADED_RESERVE_TOKENS = 36_000
 _CURATE_CHARS_PER_TOKEN = 3.3
+# SCRIPT-AWARE SIZING. 3.3 chars/token is a LATIN ratio. CJK text runs
+# ~1.4 chars/token (back-solved from the 2026-08-26 incident: a 139,705-char
+# doc at 49% CJK admitted at 70,868 tokens against a 65,536-token seat), so a
+# char-only fit test under-counts a Japanese doc ~2.4x. One such paper — a
+# museum-programming survey mis-tagged as LIBS — burned 208 of 419 curate
+# rounds in half a day: selected (fits by chars), refused at admission
+# (over-seat in tokens), declined as a transient, re-selected. Sizes, ladder
+# fits and claim reservations therefore all go through _estimate_doc_tokens;
+# comparisons stay in char units via _effective_chars (tokens x 3.3), so a
+# Latin doc sizes exactly as before.
+_CURATE_CJK_CHARS_PER_TOKEN = 1.4
+_CURATE_CYRILLIC_CHARS_PER_TOKEN = 2.2  # estimate; refine when measured
+_CJK_CHAR_RE = re.compile(r"[\u3000-\u9fff\uac00-\ud7af\uf900-\ufaff\uff00-\uffef]")
+_CYRILLIC_CHAR_RE = re.compile(r"[\u0400-\u04ff]")
+
+# Mirrors the engine's per-stream seat (n_ctx_seq). Read ONLY by the
+# oversize park rule; a wrong value cannot corrupt anything — too small
+# parks papers a human can un-park (clear the status), too large leaves the
+# admission-fault backstop in the drain to catch what selection lets through.
+_CURATE_SEAT_TOKENS = int(os.environ.get("OUROBOROS_CURATE_SEAT_TOKENS", "") or 65_536)
+# Park only when the floor is CLEARLY over the seat. A corpus dry-run
+# (2026-08-26, 155 pending) found ~100 papers with floors over the seat —
+# mostly big Latin theses/monographs already starving silently under the
+# char model. For docs within estimator noise of the boundary, a wrong park
+# loses a paper while a wrong starve merely keeps the status quo — so the
+# unsure band starves (recoverable any time budgets or geometry grow) and
+# only the sure band parks. Same authority principle as pre-OCR triage:
+# never a terminal verdict on an unsure judgement.
+_CURATE_OVERSIZE_PARK_MARGIN = 1.1
+
+# The engine's admission refusal for a prompt larger than one seat. This
+# text arriving as a transport fault is DETERMINISTIC — replaying the same
+# doc refuses the same way — so it must never take the decline-and-reselect
+# path built for transients (which is otherwise correct: every one-time
+# transport faulter from the 2026-08-25 run was later accepted).
+_CURATE_OVERSIZE_FAULT_MARKER = "exceeds the model's per-stream context limit"
+
+
+def _estimate_doc_tokens(text: str) -> int:
+    """Script-aware token estimate for a curator doc."""
+    cjk = len(_CJK_CHAR_RE.findall(text))
+    cyr = len(_CYRILLIC_CHAR_RE.findall(text))
+    other = len(text) - cjk - cyr
+    return int(
+        cjk / _CURATE_CJK_CHARS_PER_TOKEN
+        + cyr / _CURATE_CYRILLIC_CHARS_PER_TOKEN
+        + other / _CURATE_CHARS_PER_TOKEN
+    )
+
+
+def _effective_chars(text: str) -> int:
+    """Doc size in the char units a char-denominated budget compares against.
+
+    For Latin text this equals len(text) to within rounding; for CJK-heavy
+    text it inflates to the doc's true token cost x 3.3.
+    """
+    return int(_estimate_doc_tokens(text) * _CURATE_CHARS_PER_TOKEN)
+
+
 # Non-doc cost of ONE curate turn, in tokens. The review and pack turns are
 # SEQUENTIAL and stateless, so the peak is one of them: the pack answer
 # (8,192 — the ENGINE charges max_tokens at admission, not what is actually
@@ -1057,11 +1116,11 @@ async def _curate_doc_sizes(effects, paper_key: str) -> tuple[int, int]:
     asks — "can this ever fit?" and "how big will it be at this budget?" —
     without the answer depending on the budget it was measured under.
     """
-    raw = len(await _build_doc_for(effects, paper_key, 0))  # 0 => raw form
+    raw = _effective_chars(await _build_doc_for(effects, paper_key, 0))  # raw form
     if raw <= 0:
         return 0, 0
     # An unmeetable budget forces the walk to the deepest rung.
-    floor = len(await _build_doc_for(effects, paper_key, 1))
+    floor = _effective_chars(await _build_doc_for(effects, paper_key, 1))
     return raw, min(raw, floor)
 
 
@@ -1085,6 +1144,22 @@ async def select_curate_paper(
             sizes = await _curate_doc_sizes(effects, key)
             _CURATE_DOC_CACHE[key] = sizes
         raw_chars, floor_chars = sizes
+        # A floor over the SEAT can never run at any budget: park it in a
+        # visible review queue instead of letting it starve (or worse,
+        # select-fault-reselect — the 2026-08-26 poison-pill loop).
+        floor_tokens = int(floor_chars / _CURATE_CHARS_PER_TOKEN)
+        if floor_chars > 0 and floor_tokens > int(
+            (_CURATE_SEAT_TOKENS - _CURATE_TURN_OVERHEAD_TOKENS)
+            * _CURATE_OVERSIZE_PARK_MARGIN
+        ):
+            await _book_curate_oversize(
+                effects,
+                key,
+                f"curation: doc floor ~{floor_tokens:,} tokens exceeds the "
+                f"{_CURATE_SEAT_TOKENS:,}-token seat even at deepest "
+                "compression; review by hand",
+            )
+            continue
         # Eligible if the DEEPEST compression fits; ordered by what this
         # budget will actually produce.
         if not (0 < floor_chars <= budget_chars):
@@ -1101,7 +1176,7 @@ async def select_curate_paper(
         return "", ""
     _, _, _, key = min(sized)
     doc = await _build_doc_for(effects, key, budget_chars)
-    if len(doc) > budget_chars:  # doc changed since caching (e.g. new en.md)
+    if _effective_chars(doc) > budget_chars:  # doc changed since caching
         _CURATE_DOC_CACHE[key] = await _curate_doc_sizes(effects, key)
         return "", ""
     _CURATE_STARVED.pop(key, None)
@@ -1111,6 +1186,31 @@ async def select_curate_paper(
 
 def release_curate_keys(keys: list[str]) -> None:
     _CURATE_CLAIMS.difference_update(keys)
+
+
+async def _book_curate_oversize(effects, paper_key: str, reason: str) -> None:
+    """Park a paper the curate seat can never hold — a REVIEW QUEUE, not a
+    rejection, following the extract_off_topic precedent: status + reason in
+    the extraction sidecar, listable and clearable by hand. A booking
+    failure must never break selection or the drain."""
+    from agent.actions.scholarly_actions import append_extraction_records
+
+    try:
+        await append_extraction_records(
+            effects,
+            [
+                {
+                    "paper_key": paper_key,
+                    "extraction_status": "curate_oversize",
+                    "failure_reason": reason[:300],
+                }
+            ],
+        )
+        logger.warning("curate oversize: parked %s — %s", paper_key, reason[:160])
+    except Exception:  # noqa: BLE001 — a park must not break the lane
+        logger.exception("failed to book curate_oversize for %s", paper_key)
+    _CURATE_DOC_CACHE.pop(paper_key, None)
+    _CURATE_STARVED.pop(paper_key, None)
 
 
 async def _curate_turn(effects, prompt: str, max_tokens: int):
@@ -1294,13 +1394,22 @@ async def action_curate_drain_batch(step_input):
             # must not hold a 55k claim for the length of the unit, or the
             # "several small docs give us parallelism" half of the design
             # never happens — the first lane would sit on the whole pool.
-            claim.resize(
-                int(len(doc) / _CURATE_CHARS_PER_TOKEN) + _CURATE_TURN_OVERHEAD_TOKENS
-            )
+            claim.resize(_estimate_doc_tokens(doc) + _CURATE_TURN_OVERHEAD_TOKENS)
         try:
             try:
                 state = await _curate_stateless(effects, key, doc)
             except _CurateTransportFault as e:
+                if _CURATE_OVERSIZE_FAULT_MARKER in str(e):
+                    # The engine's own verdict that this doc can never fit a
+                    # seat — deterministic, so re-selection is a loop, not a
+                    # retry. Backstop for docs the estimator under-counts.
+                    await _book_curate_oversize(
+                        effects,
+                        key,
+                        "curation: engine refused the prompt as over-seat "
+                        f"({str(e)[:160]}); review by hand",
+                    )
+                    continue
                 logger.warning("curate drain transport fault on %s: %s", key, e)
                 return _summary_out(outcomes, f"transport fault ({str(e)[:120]})")
             except Exception:  # noqa: BLE001 — code faults must not burn papers
@@ -1640,7 +1749,7 @@ async def _build_doc_for(
     if budget_chars is None:
         budget_chars = await _curate_doc_budget_chars(effects)
     doc = build_curator_doc(md, figtext)
-    if budget_chars <= 0 or len(doc) <= budget_chars:
+    if budget_chars <= 0 or _effective_chars(doc) <= budget_chars:
         _DOC_FORMS[paper_key] = "raw"
         return doc
     import asyncio
@@ -1653,7 +1762,7 @@ async def _build_doc_for(
         # recovery would read the stall as a server wedge).
         compressed = await loop.run_in_executor(None, compress_rung, md, rung)
         doc = build_curator_doc(compressed, figtext)
-        if len(doc) <= budget_chars:
+        if _effective_chars(doc) <= budget_chars:
             _DOC_FORMS[paper_key] = rung
             return doc
     # Still over: return the deepest form; selection skips it (> budget)

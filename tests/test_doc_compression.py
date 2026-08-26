@@ -115,7 +115,9 @@ async def test_build_doc_for_compresses_only_past_budget(tmp_path):
     raw = await ca._build_doc_for(fx, "k", budget_chars=10**9)
     assert ca._DOC_FORMS["k"] == "raw"
     assert _PROSE in raw
-    small = await ca._build_doc_for(fx, "k", budget_chars=len(raw) - 1)
+    # The fit boundary is in EFFECTIVE chars (script-aware tokens x 3.3),
+    # which for Latin text sits a rounding hair below len(raw).
+    small = await ca._build_doc_for(fx, "k", budget_chars=ca._effective_chars(raw) - 1)
     assert ca._DOC_FORMS["k"] in ("tables", "gentle", "full")
     assert len(small) < len(raw)
     assert fig_tag_count(small) == fig_tag_count(raw)
