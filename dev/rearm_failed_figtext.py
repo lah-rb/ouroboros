@@ -15,8 +15,11 @@ and the pack): clear figtext_status/figtext_progress so _fig_pending
 selects them again. 25 papers, 1,992 figures (~20h of vision at the
 measured ~37s/figure) on the 2026-08-26 dry run.
 
-The 1,051 already-reviewed-md-only papers are LEFT ALONE — their
-verdicts stand. The 623 of them that were ACCEPTED have packs built
+The already-reviewed-md-only papers KEEP figtext_failed (clearing it
+would re-arm decided papers — _fig_pending does not read review_status)
+but their failure_reason is canonicalized to name the port-day artifact,
+so every failure row in the databank self-describes its true cause and
+NEW failures stand out. The 623 ACCEPTED among them have packs built
 without figure text; re-describing and repacking that cohort is a
 separate, operator-sized decision (~15-20k figures), not this script.
 
@@ -64,18 +67,38 @@ async def main() -> int:
 
     fx = LocalEffects(args.root)
     bank = await read_databank(fx)
-    hits = []
+    PORT_MARK = (
+        "fig_review: mass failure 2026-08-22 (cross-machine port, tool "
+        "produced no reports); reviewed md-only, verdict stands"
+    )
+    hits, closed = [], []
     for key, rec in bank.items():
         if rec.get("figtext_status") != "figtext_failed":
             continue
         if rec.get("review_status"):
-            continue  # reviewed md-only; the verdict stands
-        if rec.get("extraction_status") not in ("extracted", "extract_unverified"):
+            # Reviewed md-only: keep the terminal status, but stamp the
+            # true historical cause over whatever stale reason later
+            # appends left behind — the failure list then reads clean.
+            if rec.get("failure_reason") != PORT_MARK:
+                closed.append((key, rec))
+            continue
+        if rec.get("extraction_status") not in (
+            "extracted",
+            "extract_unverified",
+            # Routed to translation (route_legacy_cjk_to_translation.py):
+            # clearing figtext now is inert — _fig_pending requires a
+            # usable status — and arms the fig pass for the moment the
+            # translation drain books the paper back to "extracted".
+            "extract_lingual",
+        ):
             continue
         hits.append((key, rec))
 
     figs = sum(int(r.get("figure_count") or 0) for _, r in hits)
-    print(f"scanned {len(bank):,} records; {len(hits)} to re-arm ({figs:,} figures)")
+    print(
+        f"scanned {len(bank):,} records; {len(hits)} to re-arm "
+        f"({figs:,} figures); {len(closed)} reviewed rows to stamp"
+    )
     for key, rec in sorted(hits, key=lambda kr: int(kr[1].get("figure_count") or 0)):
         print(f"  {int(rec.get('figure_count') or 0):>4} figs  {key[:64]}")
     if args.dry_run:
@@ -90,9 +113,17 @@ async def main() -> int:
         merged["figtext_progress"] = ""
         merged["failure_reason"] = ""
         rows.append(merged)
+    for key, rec in closed:
+        merged = dict(rec)
+        merged["paper_key"] = key
+        merged["failure_reason"] = PORT_MARK
+        rows.append(merged)
     if rows:
         await append_records(fx, rows)
-    print(f"\nre-armed {len(rows)} records; the figtext lane re-selects them")
+    print(
+        f"\nre-armed {len(hits)} records; stamped {len(closed)} reviewed "
+        "rows with the port-day marker"
+    )
     return 0
 
 
