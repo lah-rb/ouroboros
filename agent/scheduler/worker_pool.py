@@ -36,8 +36,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
 
 from agent.scheduler.capacity_claim import Claim, claim_scope
 
@@ -84,7 +84,12 @@ DEFAULT_LANE_MAX_INFLIGHT: Dict[str, int] = {
     # 5 leaves one seat for the acquire flow's catalog turns; the
     # engine's admission remains the correctness backstop.
     "text_seat": 7,  # tracks the 8-seat engine (one seat spare for catalog turns)
-    "vision_ctx": 1,
+    # 1 -> 2 (2026-08-26 figtext campaign): the server now holds a POOL of
+    # two vision contexts (vision_pool_size: 2, muse-glimmer-30b-cuda) —
+    # two concurrent figure streams pipeline image-encode on the 3060
+    # projector against decode on the split model. With one context this
+    # cap was correct: a second request only queued at the server.
+    "vision_ctx": 2,
     "paddle": 1,
     "network": 1,
 }
@@ -543,6 +548,17 @@ def lanes_for_scraper() -> List[Lane]:
         # 0.068 — effectively free against text).
         Lane(
             name="figtext",
+            flow="figtext_drain",
+            resource="vision_ctx",
+            est_kv=0,
+            seats=0,
+        ),
+        # Second figtext lane (2026-08-26 campaign): same drain, and safe
+        # by the same construction as curate2 — _FIGTEXT_CLAIMS is shared
+        # in-process, so the lanes claim disjoint papers; each round's
+        # tool process feeds one of the two server-side vision contexts.
+        Lane(
+            name="figtext2",
             flow="figtext_drain",
             resource="vision_ctx",
             est_kv=0,

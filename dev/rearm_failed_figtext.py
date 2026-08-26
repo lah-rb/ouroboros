@@ -50,6 +50,19 @@ async def main() -> int:
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--root", default=ROOT)
     ap.add_argument("--force", action="store_true", help="run beside a live mission")
+    ap.add_argument(
+        "--accepted",
+        action="store_true",
+        help=(
+            "ALSO re-arm the accepted-md-only cohort (the 624): their "
+            "figure sets are complete on disk (verified 2026-08-26: "
+            "624/624 full PNG sets, 624/624 anchored markdown) and only "
+            "the descriptions are missing. Clearing figtext_failed sends "
+            "them through the fig pass; repack is booked separately once "
+            "descriptions exist. Operator-gated because it is ~18.5k "
+            "figures of vision work."
+        ),
+    )
     args = ap.parse_args()
 
     if not args.dry_run and not args.force:
@@ -76,6 +89,9 @@ async def main() -> int:
         if rec.get("figtext_status") != "figtext_failed":
             continue
         if rec.get("review_status"):
+            if args.accepted and rec.get("review_status") == "accepted":
+                hits.append((key, rec))  # campaign: describe, repack later
+                continue
             # Reviewed md-only: keep the terminal status, but stamp the
             # true historical cause over whatever stale reason later
             # appends left behind — the failure list then reads clean.

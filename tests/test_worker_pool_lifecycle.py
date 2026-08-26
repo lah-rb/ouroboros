@@ -73,6 +73,7 @@ async def test_a_v2_mission_starts_lanes_and_stops_them_cleanly():
         assert {ln.name for ln in pool.lanes} == {
             "ocr",
             "figtext",
+            "figtext2",  # second vision lane, 2026-08-26 figtext campaign
             "curate",
             "curate2",
             "curate3",
