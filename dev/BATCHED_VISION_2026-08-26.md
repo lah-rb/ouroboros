@@ -80,7 +80,37 @@ the same 10 pairs: 212s vs 332s total (batched 1.56x) under concurrent
 campaign load. GATE: within-one-letter equivalence exceeded (batched is
 slightly PREFERRED); fabrications not increased. Batched path stands.
 
-## P4 soak — running
+## P4 soak — CLOSED (2026-08-26 21:40, 354 min ≥ the 6 h window)
+
+Verdicts against the pre-registered predictions:
+
+P4-P1 (encode tax < 10% of text lanes): PASS by observation — text
+      turns ran normally throughout (catalog/biblio streams at ~33
+      tok/s in the log); the adversarial continuous-encode tax never
+      materialises at real one-encode-per-figure duty.
+P4-P2 (3 streams ≥ 2.2x): EXCEEDED AT TWO — 420 figs/h campaign-pure
+      over 354 min (2503 serves) = 2.47x the 168/h baseline, ABOVE the
+      revised 250-380 band, with max_streams still 2.
+P4-P3 (serialization S ≤ 0.40): not separately measured — superseded by
+      the direct end-to-end rate; the modality-mix bench recreation
+      stays queued as optional follow-up.
+P4-P4 (VRAM + faults): PASS — 3090 flat at ~23.2-23.6/24.6 GiB, 3060
+      holds the projector alone (5.4 GiB); ZERO ggml/CUDA faults, zero
+      latch recoveries, zero seq wedges across the window.
+
+Residual: 2 of ~2,400 installs (19:15:37/:39) hit a seq holding 2,784
+stale KV positions against an empty slot — llama_decode refused, both
+requests pool-fallback self-healed, no recurrence. Root cause open;
+the CLASS is closed by the install preflight guard (dc7f18f: verify
+memory_seq_pos_max agrees with the slot before row one, scrub loudly),
+live from the P5 ramp bounce.
+
+## P5 ramp
+
+- Step 1 (21:40): max_streams 2 -> 3, server bounce (activates the
+  preflight guard). Gate to hold: figs/h not below 415, zero faults
+  over ≥ 1 h.
+
 
 Flag flipped ~15:35; the campaign's own fig lanes are the soak load.
 First 21 min: ~217 figs/h campaign-pure (~274 mixed with the A/B), zero

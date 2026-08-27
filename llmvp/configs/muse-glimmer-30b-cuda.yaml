@@ -70,7 +70,9 @@ model:
   # P5 ramp: raise max_streams 1 -> 2 -> 3 watching figs/h, install p95
   # and vision_fallbacks in health.
   vision_batched: true
-  vision_batched_max_streams: 2
+  # 2 -> 3 (P5 ramp step 1, 2026-08-26 21:40; 2-stream soak closed at
+  # 415 figs/h, zero faults over 6 h).
+  vision_batched_max_streams: 3
   # PROJECTOR ON THE 3060. GPU0 holds weights + the batched cell and has
   # ~2.9 GiB slack; the vision graph needs its KV (0.85 GiB) AND a compute
   # buffer (measured 1.18 GiB at reserve, 2026-08-16) — adding the ~1.3 GiB
