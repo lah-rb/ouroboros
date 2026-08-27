@@ -1371,6 +1371,10 @@ async def _run_vision_batched(
                 reasoning=reasoning,
             )
             instance = await backend.acquire_instance(persona="vision")
+            # Visible to the seat reaper for the whole install window —
+            # without this the reaper reclaims the seat mid-install (19
+            # double-checkouts on 2026-08-27; see _seat_reaper_sweep).
+            backend._vision_installing.add(id(instance))
             split = await run_in_threadpool(
                 encoder.split_prompt,
                 prompt_text,
@@ -1423,6 +1427,7 @@ async def _run_vision_batched(
         finally:
             stats["active"] -= 1
             if instance is not None:
+                backend._vision_installing.discard(id(instance))
                 # A partial install leaves media KV on the seq; prepare_seat
                 # through the engine strips it back to the bare vision head
                 # before the seat returns to the pool.

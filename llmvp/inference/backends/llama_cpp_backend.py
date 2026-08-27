@@ -432,6 +432,10 @@ class LlamaCppBackend(BaseBackend):
         # (GC-finalized consumer) is ignored instead of double-requeueing.
         self._seat_reaper_task: Optional[asyncio.Task] = None
         self._reaper_reclaimed: set = set()
+        # Seats currently inside a batched-vision install window (acquire ->
+        # stream submit). Mutated only on the event loop (core/inference);
+        # read by the reaper sweep on the same loop.
+        self._vision_installing: set = set()
         self._refresh_interval = int(
             getattr(getattr(config, "model", None), "context_refresh_interval", 75)
             or 75
@@ -2040,14 +2044,29 @@ class LlamaCppBackend(BaseBackend):
             )
         except Exception:  # noqa: BLE001 — engine busy/parked, try next sweep
             return
+        # THIRD LIVE STATE (2026-08-27 01:00-02:30, 19 false reclaims): a
+        # batched-vision seat between acquire and stream submit — encode +
+        # multimodal install, seconds to a minute under the encode lock —
+        # has no StreamState and no _waiting entry. Same class as the
+        # 2026-08-19 parked-admission wedge above; same fix shape: union
+        # the installing registry (event-loop-mutated, race-free here).
+        live = live | set(getattr(self, "_vision_installing", ()) or ())
         now = time.monotonic()
         for seat in list(self._engine_seats):
             leased = getattr(seat, "_leased_at", None)
             if leased is None or seat.pinned or id(seat) in live:
                 strikes.pop(id(seat), None)
                 continue
-            strikes[id(seat)] = strikes.get(id(seat), 0) + 1
-            if strikes[id(seat)] < 2:
+            # STRIKES ARE PER LEASE, not per seat: tonight's captures show
+            # "leased 2s — reclaiming" because a fresh lease inherited the
+            # PREVIOUS lease's strike. Key the count to the lease timestamp
+            # and reset when it changes.
+            prev = strikes.get(id(seat))
+            if prev is None or prev[0] != leased:
+                strikes[id(seat)] = (leased, 1)
+                continue
+            strikes[id(seat)] = (leased, prev[1] + 1)
+            if strikes[id(seat)][1] < 2:
                 continue
             strikes.pop(id(seat), None)
             log.warning(
