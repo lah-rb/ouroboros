@@ -116,6 +116,16 @@ Flag flipped ~15:35; the campaign's own fig lanes are the soak load.
 First 21 min: ~217 figs/h campaign-pure (~274 mixed with the A/B), zero
 fallbacks, zero install failures, at max_streams 2. Baseline was 168.
 
+## P5 step-2 verdict (2026-08-27 08:45)
+
+4 streams measured FLAT: 532 figs/h over 41 min vs 510-600 at 3 —
+the 3090's decode bandwidth is the wall (encode duty measured 21-26%
+on the 3060, ceiling 4-5x away). Reverted to 3 streams per the
+pre-registered rule; the four fig LANES stay (they saturate 3 streams
+through tool-overhead gaps). Standing configuration: 3 streams / 4
+lanes ≈ 540-600 figs/h, 3.2-3.6x baseline. Next real multiplier: a
+second GPU hosting the projector + a second decode context.
+
 ## Build log
 
 - P1 (8fbffef): engine install helpers (eval_tokens_on_slot /
