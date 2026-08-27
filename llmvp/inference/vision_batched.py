@@ -353,6 +353,34 @@ async def install_multimodal_prefix(
     import asyncio
 
     loop = asyncio.get_running_loop()
+
+    def _preflight():
+        # SEAT/KV AGREEMENT GUARD (2026-08-26 19:15 incident): two installs
+        # hit a seq holding 2,784 stale KV positions while slot.n_tokens
+        # said 0 — llama_decode refused ("positions must be consecutive")
+        # and the requests fell back to the pool. Root cause not yet
+        # pinned (prepare_seat rm-alls on acquire, so SOMETHING re-
+        # populated or never cleared the seq); this guard closes the
+        # whole class: verify the seq's KV agrees with the slot before
+        # writing row one, scrub loudly if not.
+        ctx = engine._llama._ctx
+        mx = ctx.memory_seq_pos_max(slot.seq)
+        expect = slot.n_tokens - 1
+        if mx != expect:
+            log.warning(
+                "vision install preflight: seq %d KV pos_max=%d but slot "
+                "expects %d — scrubbing stale KV (see 2026-08-26 19:15 "
+                "race in dev/BATCHED_VISION doc)",
+                slot.seq,
+                mx,
+                expect,
+            )
+            ctx.memory_seq_rm(slot.seq, 0, -1)
+            slot.n_tokens = 0
+            slot.input_ids = []
+            slot.has_media = False
+
+    await asyncio.wrap_future(engine.control(_preflight))
     for seg in split.pre:
         if isinstance(seg, MediaChunk):
             embd = await loop.run_in_executor(None, encoder.encode, seg, n_embd_inp)

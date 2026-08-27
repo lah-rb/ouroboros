@@ -123,9 +123,19 @@ class _InlineEngine:
 
     MEDIA_SENTINEL = BatchedEngine.MEDIA_SENTINEL
 
+    class _MemCtx:
+        """Just enough context for the install preflight: an empty seq."""
+
+        def memory_seq_pos_max(self, seq):
+            return -1
+
+        def memory_seq_rm(self, seq, p0, p1):
+            return True
+
     def __init__(self):
         self.ops = []
-        self._llama = None
+        self._llama = type("L", (), {})()
+        self._llama._ctx = self._MemCtx()
 
     def control(self, fn):
         fut: Future = Future()
@@ -184,7 +194,6 @@ def test_atomic_install_enforces_the_position_law():
     accepting it would under-count occupancy exactly like the 2026-08-25
     free-cell inflation."""
     eng = _InlineEngine()
-    eng._llama = type("L", (), {"_ctx": object()})()
     slot = _bare_slot(seq=1)
     split = SplitPrompt(pre=[_chunk(10, atomic=True)], text2=[1])
     with pytest.raises(VisionInstallError, match="position law"):
@@ -289,3 +298,25 @@ async def test_batched_failure_falls_back_to_pool(monkeypatch):
             ]
         )
     assert seen["batched"] == 1
+
+
+def test_install_preflight_scrubs_disagreeing_kv():
+    """The 2026-08-26 19:15 race: a seq holding stale KV while the slot
+    reads empty must be scrubbed BEFORE row one, never decoded onto."""
+    eng = _InlineEngine()
+    scrubbed = {"n": 0}
+
+    class _DirtyCtx(_InlineEngine._MemCtx):
+        def memory_seq_pos_max(self, seq):
+            return 2783 if scrubbed["n"] == 0 else -1
+
+        def memory_seq_rm(self, seq, p0, p1):
+            scrubbed["n"] += 1
+            return True
+
+    eng._llama._ctx = _DirtyCtx()
+    slot = _bare_slot(seq=4)
+    split = SplitPrompt(pre=[[5, 6], _chunk(3)], text2=[1])
+    asyncio.run(install_multimodal_prefix(eng, _FakeEncoder(), slot, split, 16, 8))
+    assert scrubbed["n"] == 1  # stale KV removed before any install row
+    assert slot.n_tokens == 5  # 2 text + 3 media, from a clean base
