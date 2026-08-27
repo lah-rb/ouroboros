@@ -89,7 +89,7 @@ DEFAULT_LANE_MAX_INFLIGHT: Dict[str, int] = {
     # two concurrent figure streams pipeline image-encode on the 3060
     # projector against decode on the split model. With one context this
     # cap was correct: a second request only queued at the server.
-    "vision_ctx": 2,
+    "vision_ctx": 3,  # tracks vision_batched_max_streams
     "paddle": 1,
     "network": 1,
 }
@@ -559,6 +559,18 @@ def lanes_for_scraper() -> List[Lane]:
         # tool process feeds one of the two server-side vision contexts.
         Lane(
             name="figtext2",
+            flow="figtext_drain",
+            resource="vision_ctx",
+            est_kv=0,
+            seats=0,
+        ),
+        # Third lane (P5 ramp, 2026-08-26 22:05): with the server at
+        # vision_batched_max_streams 3, TWO lanes were the limiter — each
+        # sends one figure at a time, so effective concurrency was 2 and
+        # the third engine stream idled (427 vs 420 figs/h). Same shared-
+        # claims construction; the server semaphore is the ceiling.
+        Lane(
+            name="figtext3",
             flow="figtext_drain",
             resource="vision_ctx",
             est_kv=0,
