@@ -1572,6 +1572,12 @@ async def action_systemic_scan(step_input: StepInput) -> StepOutput:
 # (start_diagnosis_session) surfaces the stored hits every later diagnose.
 
 
+# One more than the quarantine's 3 contradictions (operator: "larger than
+# what a single quarantine requires"): a loop that outlasts the strongest
+# existing wear-out bound has earned the environment-suspicion escalation.
+_RETEST_STREAK_ESCALATE = 4
+
+
 async def action_goal_search_gate(step_input: StepInput) -> StepOutput:
     """Gate the stuck-goal ESCALATION (operator, 2026-08-07: the deep_search
     web hop is replaced by the full escalate flow — its original intent).
@@ -1604,12 +1610,86 @@ async def action_goal_search_gate(step_input: StepInput) -> StepOutput:
         )
     attempts = len(getattr(goal, "failed_attempts", None) or [])
     last_at = int(getattr(goal, "last_escalation_attempts", 0) or 0)
+    # ── RETEST-STREAK TRIGGER (operator rule, 2026-08-28) ────────────
+    # Honest retest verdicts never append to failed_attempts, so the
+    # attempts cadence below is structurally blind to a retest loop: the
+    # tmp_cleaner incident ran 15 rounds of diagnose-certifies-correct →
+    # interact-passes → sweep-reopens on ONE goal without this gate ever
+    # firing. A streak of consecutive honored retests longer than a
+    # quarantine (3 contradictions) fingerprints a check/harness fault, not
+    # code — escalate with that framing instead of re-diagnosing the code.
+    streak = int(getattr(goal, "retest_streak", 0) or 0)
+    if streak >= _RETEST_STREAK_ESCALATE:
+        goal.escalation_count = int(getattr(goal, "escalation_count", 0) or 0) + 1
+        goal.last_escalation_attempts = attempts
+        goal.retest_streak = 0  # the escalation consumes the signal
+        if effects:
+            try:
+                await effects.save_mission(mission)
+            except Exception:  # noqa: BLE001 - gate must not die on a save
+                logger.debug("goal-escalation: save failed", exc_info=True)
+        check_cmds = [
+            str(c.get("command"))[:140]
+            for c in (getattr(goal, "acceptance_checks", None) or [])
+            if c.get("required", True)
+        ]
+        # The sweep's reopen note carries the check's rc + stderr tail — the
+        # only durable copy of WHY the check fails. Newest matching note wins.
+        note_tag = goal.finding_signature or goal.id
+        last_failure = ""
+        for n in reversed(getattr(mission, "notes", None) or []):
+            if (
+                getattr(n, "source_flow", "") == "regression_sweep_next"
+                and note_tag in (getattr(n, "tags", None) or [])
+                and "stderr=" in str(getattr(n, "content", ""))
+            ):
+                last_failure = str(n.content)[:400]
+                break
+        evidence = (
+            f"Goal (functional): {goal.description.strip()}\n\n"
+            f"SUSPECTED BROAD ENVIRONMENT / HARNESS FAILURE. This goal has "
+            f"now been re-verified {streak} consecutive times: each "
+            f"diagnosis honestly certified the code correct (retest "
+            f"verdict), each behavioural session PASSED, and no code change "
+            f"occurred — yet its required acceptance check keeps failing "
+            f"and the regression sweep keeps reopening it. Working code "
+            f"plus a persistently red check with no edits in between means "
+            f"the CHECK or the HARNESS it runs on is broken, not the code.\n"
+        )
+        if check_cmds:
+            evidence += "The check(s): " + "; ".join(check_cmds) + "\n"
+        if last_failure:
+            evidence += f"Last recorded check failure: {last_failure}\n"
+        evidence += (
+            "Run the check by hand and read its error before anything else. "
+            "If the interpreter/venv cannot run it (missing module, broken "
+            "venv), the repair is an environment fix, never a code edit."
+        )
+        expected = (
+            "The goal's acceptance check runs and passes, or the specific "
+            "harness/environment fault preventing it from running is "
+            "identified and named."
+        )
+        return StepOutput(
+            result={"should_search": True},
+            observations=(
+                f"goal-escalation: RETEST-STREAK escalation (streak={streak}, "
+                f"escalation #{goal.escalation_count}) — suspecting the "
+                f"environment, not the code"
+            ),
+            context_updates={
+                "mission": mission,
+                "search_brief": evidence[:4000],
+                "expected_outcome": expected[:1000],
+                "force_consult": goal.escalation_count >= 3,
+            },
+        )
     if attempts < 2 or attempts - last_at < 2:
         return StepOutput(
             result={"should_search": False},
             observations=(
                 f"goal-escalation: skip (attempts={attempts}, "
-                f"last_escalation_at={last_at})"
+                f"last_escalation_at={last_at}, retest_streak={streak})"
             ),
         )
 

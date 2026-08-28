@@ -679,6 +679,50 @@ mission_control_swarm: #FlowDefinition & {
 			}
 			resolver: {
 				type: "rule"
+				rules: [
+					// Identical failures across >= 3 distinct goals in one
+					// wave: ONE shared fault (env, or one edit breaking
+					// everything the same way). Escalate the SHARED cause
+					// before any per-goal dispatch — the tmp_cleaner incident
+					// burned a night of per-goal diagnosis on a gutted venv.
+					{condition: "result.common_cause == true", transition: "dispatch_env_escalation"},
+					{condition: "true", transition: "check_phase"},
+				]
+			}
+			publishes: ["mission", "env_failure_evidence", "env_expected_outcome", "env_affected_goal_ids"]
+		}
+
+		// Direct escalate dispatch for a common-cause failure (operator
+		// ruling 2026-08-28, chosen over the WarningRecord route). Escalation
+		// reads/runs but never writes; its summary is landed on every
+		// affected goal's search_findings by store_env_escalation, so each
+		// subsequent diagnose opens knowing what escalate found.
+		dispatch_env_escalation: #StepDefinition & {
+			action:      "flow"
+			description: "Escalate a common-cause (environment-suspect) failure"
+			flow:        "escalate"
+			context: required: ["env_failure_evidence", "env_expected_outcome"]
+			input_map: {
+				failure_evidence: {$ref: "context.env_failure_evidence"}
+				expected_outcome: {$ref: "context.env_expected_outcome"}
+				invoking_flow:    "regression_sweep (common-cause failure)"
+			}
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "store_env_escalation"}]
+			}
+			publishes: ["escalation_summary"]
+		}
+
+		store_env_escalation: #StepDefinition & {
+			action:      "store_env_escalation_findings"
+			description: "Write the escalation's findings onto the affected goals"
+			context: {
+				required: ["mission"]
+				optional: ["escalation_summary", "env_affected_goal_ids"]
+			}
+			resolver: {
+				type: "rule"
 				rules: [{condition: "true", transition: "check_phase"}]
 			}
 			publishes: ["mission"]

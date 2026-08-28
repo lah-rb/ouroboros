@@ -9757,6 +9757,79 @@
           "type": "rule",
           "rules": [
             {
+              "condition": "result.common_cause == true",
+              "transition": "dispatch_env_escalation"
+            },
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [
+          "mission",
+          "env_failure_evidence",
+          "env_expected_outcome",
+          "env_affected_goal_ids"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "dispatch_env_escalation": {
+        "action": "flow",
+        "description": "Escalate a common-cause (environment-suspect) failure",
+        "config": {},
+        "context": {
+          "required": [
+            "env_failure_evidence",
+            "env_expected_outcome"
+          ],
+          "optional": []
+        },
+        "effects": [],
+        "flow": "escalate",
+        "input_map": {
+          "failure_evidence": {
+            "$ref": "context.env_failure_evidence"
+          },
+          "expected_outcome": {
+            "$ref": "context.env_expected_outcome"
+          },
+          "invoking_flow": "regression_sweep (common-cause failure)"
+        },
+        "params": {},
+        "publishes": [
+          "escalation_summary"
+        ],
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "store_env_escalation"
+            }
+          ]
+        },
+        "terminal": false
+      },
+      "store_env_escalation": {
+        "action": "store_env_escalation_findings",
+        "description": "Write the escalation's findings onto the affected goals",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "escalation_summary",
+            "env_affected_goal_ids"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
               "condition": "true",
               "transition": "check_phase"
             }
@@ -18959,6 +19032,79 @@
           "type": "rule",
           "rules": [
             {
+              "condition": "result.common_cause == true",
+              "transition": "dispatch_env_escalation"
+            },
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [
+          "mission",
+          "env_failure_evidence",
+          "env_expected_outcome",
+          "env_affected_goal_ids"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "dispatch_env_escalation": {
+        "action": "flow",
+        "description": "Escalate a common-cause (environment-suspect) failure",
+        "config": {},
+        "context": {
+          "required": [
+            "env_failure_evidence",
+            "env_expected_outcome"
+          ],
+          "optional": []
+        },
+        "effects": [],
+        "flow": "escalate",
+        "input_map": {
+          "failure_evidence": {
+            "$ref": "context.env_failure_evidence"
+          },
+          "expected_outcome": {
+            "$ref": "context.env_expected_outcome"
+          },
+          "invoking_flow": "regression_sweep (common-cause failure)"
+        },
+        "params": {},
+        "publishes": [
+          "escalation_summary"
+        ],
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "store_env_escalation"
+            }
+          ]
+        },
+        "terminal": false
+      },
+      "store_env_escalation": {
+        "action": "store_env_escalation_findings",
+        "description": "Write the escalation's findings onto the affected goals",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "escalation_summary",
+            "env_affected_goal_ids"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
               "condition": "true",
               "transition": "check_phase"
             }
@@ -20258,6 +20404,79 @@
           ],
           "optional": [
             "last_goal_id"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.common_cause == true",
+              "transition": "dispatch_env_escalation"
+            },
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [
+          "mission",
+          "env_failure_evidence",
+          "env_expected_outcome",
+          "env_affected_goal_ids"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "dispatch_env_escalation": {
+        "action": "flow",
+        "description": "Escalate a common-cause (environment-suspect) failure",
+        "config": {},
+        "context": {
+          "required": [
+            "env_failure_evidence",
+            "env_expected_outcome"
+          ],
+          "optional": []
+        },
+        "effects": [],
+        "flow": "escalate",
+        "input_map": {
+          "failure_evidence": {
+            "$ref": "context.env_failure_evidence"
+          },
+          "expected_outcome": {
+            "$ref": "context.env_expected_outcome"
+          },
+          "invoking_flow": "regression_sweep (common-cause failure)"
+        },
+        "params": {},
+        "publishes": [
+          "escalation_summary"
+        ],
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "store_env_escalation"
+            }
+          ]
+        },
+        "terminal": false
+      },
+      "store_env_escalation": {
+        "action": "store_env_escalation_findings",
+        "description": "Write the escalation's findings onto the affected goals",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "escalation_summary",
+            "env_affected_goal_ids"
           ]
         },
         "params": {},
@@ -21645,6 +21864,79 @@
           ],
           "optional": [
             "last_goal_id"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.common_cause == true",
+              "transition": "dispatch_env_escalation"
+            },
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [
+          "mission",
+          "env_failure_evidence",
+          "env_expected_outcome",
+          "env_affected_goal_ids"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "dispatch_env_escalation": {
+        "action": "flow",
+        "description": "Escalate a common-cause (environment-suspect) failure",
+        "config": {},
+        "context": {
+          "required": [
+            "env_failure_evidence",
+            "env_expected_outcome"
+          ],
+          "optional": []
+        },
+        "effects": [],
+        "flow": "escalate",
+        "input_map": {
+          "failure_evidence": {
+            "$ref": "context.env_failure_evidence"
+          },
+          "expected_outcome": {
+            "$ref": "context.env_expected_outcome"
+          },
+          "invoking_flow": "regression_sweep (common-cause failure)"
+        },
+        "params": {},
+        "publishes": [
+          "escalation_summary"
+        ],
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "store_env_escalation"
+            }
+          ]
+        },
+        "terminal": false
+      },
+      "store_env_escalation": {
+        "action": "store_env_escalation_findings",
+        "description": "Write the escalation's findings onto the affected goals",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "escalation_summary",
+            "env_affected_goal_ids"
           ]
         },
         "params": {},

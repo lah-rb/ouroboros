@@ -369,7 +369,7 @@ async def test_bidirectional_same_batch():
 
     assert reopened_g.status == "complete"
     assert complete_g.status == "incomplete"
-    assert out.result == {"reopened": 1, "autocompleted": 1}
+    assert out.result == {"reopened": 1, "autocompleted": 1, "common_cause": False}
     assert len(fx.calls_to("save_mission")) == 1
 
 
@@ -679,3 +679,121 @@ async def test_flush_failure_never_aborts_the_sweep(monkeypatch):
 
     assert out.result["reopened"] == 0  # probed anyway, and it passed
     assert beta.status == "complete"
+
+
+# ── common-cause detector (2026-08-28) ────────────────────────────────
+#
+# The tmp_cleaner incident: a gutted .venv made every pytest-based check
+# fail with the same stderr line; the sweep read 15 unrunnable checks as 15
+# regressions; recovery-by-quarantine would have taken ≈225 cycles.
+# Identical failures across >= 3 distinct goals in one wave is ONE fault —
+# publish an escalation brief instead of only reopening.
+
+
+def _failing(cmd: str, stderr: str = "No module named pytest") -> CommandResult:
+    return CommandResult(return_code=1, stdout="", stderr=stderr, command=cmd)
+
+
+@pytest.mark.asyncio
+async def test_three_identical_failures_flag_a_common_cause():
+    goals = [_goal(f"g{i}", [_check(f"run_check_{i}")]) for i in range(3)]
+    m = _mission(goals)
+    fx = MockEffects(
+        commands={_wrap(f"run_check_{i}"): _failing(f"run_check_{i}") for i in range(3)}
+    )
+
+    out = await action_regression_sweep(_si(m, fx))
+
+    assert out.result["common_cause"] is True
+    ev = out.context_updates["env_failure_evidence"]
+    assert "No module named pytest" in ev
+    assert "SHARED cause" in ev
+    assert sorted(out.context_updates["env_affected_goal_ids"]) == ["g0", "g1", "g2"]
+    # honesty preserved: the goals still reopen
+    assert all(g.status == "incomplete" for g in goals)
+    # and the signature is remembered so the next wave does not re-fire
+    assert len(m.common_cause_seen) == 1
+
+
+@pytest.mark.asyncio
+async def test_two_identical_failures_do_not_flag():
+    """Two goals can legitimately share a defect; three sharing a
+    byte-identical failure line have a common cause."""
+    goals = [_goal(f"g{i}", [_check(f"run_check_{i}")]) for i in range(2)]
+    m = _mission(goals)
+    fx = MockEffects(
+        commands={_wrap(f"run_check_{i}"): _failing(f"run_check_{i}") for i in range(2)}
+    )
+
+    out = await action_regression_sweep(_si(m, fx))
+
+    assert out.result["common_cause"] is False
+    assert "env_failure_evidence" not in out.context_updates
+
+
+@pytest.mark.asyncio
+async def test_mixed_signatures_do_not_flag():
+    goals = [_goal(f"g{i}", [_check(f"run_check_{i}")]) for i in range(3)]
+    m = _mission(goals)
+    fx = MockEffects(
+        commands={
+            _wrap(f"run_check_{i}"): _failing(
+                f"run_check_{i}", stderr=f"distinct error {i}"
+            )
+            for i in range(3)
+        }
+    )
+
+    out = await action_regression_sweep(_si(m, fx))
+
+    assert out.result["common_cause"] is False
+
+
+@pytest.mark.asyncio
+async def test_listed_signature_does_not_refire_and_rearms_on_recovery():
+    """One escalate session per signature — but recovery un-lists it so a
+    future recurrence escalates again."""
+    goals = [_goal(f"g{i}", [_check(f"run_check_{i}")]) for i in range(3)]
+    m = _mission(goals)
+    failing = {_wrap(f"run_check_{i}"): _failing(f"run_check_{i}") for i in range(3)}
+
+    out1 = await action_regression_sweep(_si(m, MockEffects(commands=failing)))
+    assert out1.result["common_cause"] is True
+
+    # second wave, fault persists (goals now incomplete + reopened → the
+    # checks run in the recomplete direction and still fail identically)
+    out2 = await action_regression_sweep(_si(m, MockEffects(commands=failing)))
+    assert out2.result["common_cause"] is False, "same signature must not re-fire"
+    assert len(m.common_cause_seen) == 1
+
+    # recovery wave: everything passes → signature un-listed
+    passing = {_wrap(f"run_check_{i}"): _cmd(0) for i in range(3)}
+    out3 = await action_regression_sweep(_si(m, MockEffects(commands=passing)))
+    assert m.common_cause_seen == []
+    assert out3.result["common_cause"] is False
+
+
+@pytest.mark.asyncio
+async def test_collision_held_rows_do_not_count_toward_common_cause():
+    """The detector runs after the confirm block: a red that passes alone is
+    a collision, its row is rewritten green, and it must not feed the
+    signature map."""
+    goals = [_goal(f"g{i}", [_check(f"flaky_{i}")]) for i in range(3)]
+    m = _mission(goals)
+
+    class _AllFlaky(MockEffects):
+        def __init__(self):
+            super().__init__()
+            self.seen: dict[str, int] = {}
+
+        async def run_command(self, command, working_dir=None, timeout=30):
+            cmd = " ".join(command)
+            self.seen[cmd] = self.seen.get(cmd, 0) + 1
+            if self.seen[cmd] == 1:
+                return CommandResult(1, "", "clobbered", cmd)
+            return CommandResult(0, "", "", cmd)
+
+    out = await action_regression_sweep(_si(m, _AllFlaky()))
+
+    assert out.result["common_cause"] is False
+    assert all(g.status == "complete" for g in goals)

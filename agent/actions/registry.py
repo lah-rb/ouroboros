@@ -227,6 +227,7 @@ def build_action_registry() -> ActionRegistry:
         action_quality_sweep_next,
         action_warning_sweep_next,
         action_regression_sweep,
+        action_store_env_escalation_findings,
         action_run_test_suite_gate,
         # In-graph task router (classify flow)
         action_persist_routing,
@@ -509,6 +510,9 @@ def build_action_registry() -> ActionRegistry:
     registry.register("warning_sweep_next", action_warning_sweep_next)
     registry.register("run_test_suite_gate", action_run_test_suite_gate)
     registry.register("regression_sweep", action_regression_sweep)
+    registry.register(
+        "store_env_escalation_findings", action_store_env_escalation_findings
+    )
     # Fix target resolution — menu assembly moved to fix_target_menu projection
     registry.register("persist_routing", action_persist_routing)
     from agent.actions.router_actions import (

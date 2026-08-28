@@ -462,6 +462,18 @@ class GoalRecord(BaseModel):
     # retest verdict is now honored every time it arrives with guidance.
     test_guidance: str = ""
     retest_count: int = 0
+    # CONSECUTIVE honored retest verdicts with no intervening fix attempt
+    # (operator rule, 2026-08-28). retest_count is monotonic telemetry; this
+    # is the streak the escalation gate reads. Incremented beside both
+    # retest_count sites; reset when a fix attempt lands for the goal
+    # (file_ops/project_ops sweep handlers) or its check passes in a sweep
+    # (recomplete / verify-only recert) — NOT on completion: the tmp_cleaner
+    # incident loop completed and reopened each round, and the streak must
+    # survive that to ever reach the gate. At _RETEST_STREAK_ESCALATE the
+    # search gate escalates with an environment-suspicion brief: honest
+    # retests + a failing required check + no code change fingerprints a
+    # broken harness, not broken code (15 goals, ~225-cycle self-heal).
+    retest_streak: int = 0
     # Stuck-goal escalation (operator, 2026-08-07: "replace the current
     # [deep_search] path with the full escalation path — that was the
     # original intent when it was built"). The gate fires when a goal has
@@ -1187,6 +1199,12 @@ class MissionState(BaseModel):
     # and spend a replan each time. Plain list, appended in place (the
     # polish_entries pattern), never a CRDT set.
     polish_designed: list[str] = Field(default_factory=list)
+    # Common-cause failure signatures the regression sweep has ALREADY
+    # escalated (2026-08-28). One escalate session per signature: listed on
+    # dispatch, un-listed when a wave contains no failure matching it
+    # (recovery observed re-arms detection for a future fault). Plain list,
+    # the polish_designed pattern — never a CRDT set.
+    common_cause_seen: list[str] = Field(default_factory=list)
     # ── League run protocol (epoch v2.0, 2026-08-02) — both additive ──
     # The budget park now lands at the work→entry boundary, BEFORE the entry
     # flow books the finished flow's report; these tail-call inputs are

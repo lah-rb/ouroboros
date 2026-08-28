@@ -3081,6 +3081,9 @@ async def _sweep_after_file_ops(
 
     prior_diag_summary, prior_interact_headline = _prior_diagnosis_context(goal)
 
+    # A fix attempt is landing: whatever retest streak was building, the
+    # loop is no longer "honest retests with no code change".
+    goal.retest_streak = 0
     goal.failed_attempts.append(
         FailedAttempt(
             target_file=fops_target,
@@ -3337,6 +3340,7 @@ async def _sweep_after_project_ops(
     from agent.persistence.models import FailedAttempt
 
     prior_diag_summary, prior_interact_headline = _prior_diagnosis_context(goal)
+    goal.retest_streak = 0  # a fix attempt landed — the streak is over
     goal.failed_attempts.append(
         FailedAttempt(
             target_file=_ENV_ATTEMPT_TARGET,
@@ -3437,6 +3441,10 @@ async def _sweep_after_diagnose(
         retests_used = int(getattr(goal, "retest_count", 0) or 0)
         if guidance:
             goal.retest_count = retests_used + 1
+            # Streak, not telemetry: consecutive honored retests with no
+            # intervening fix. The search gate escalates on it — see
+            # GoalRecord.retest_streak.
+            goal.retest_streak = int(getattr(goal, "retest_streak", 0) or 0) + 1
             dispatch_config = {
                 "goal_id": goal.id,
                 "goal_description": goal.description,
@@ -3711,6 +3719,7 @@ async def _sweep_interact_failure(
     # (conflict counted this round, disarm at K).
     if getattr(last_report, "acceptance_vetoed", False):
         goal.retest_count = int(getattr(goal, "retest_count", 0) or 0) + 1
+        goal.retest_streak = int(getattr(goal, "retest_streak", 0) or 0) + 1
         dispatch_config = {
             "goal_id": goal.id,
             "goal_description": goal.description,
@@ -3836,6 +3845,7 @@ async def _verify_only_recert(goal: Any, effects: Any) -> bool:
     goal.regression_reopened = False
     goal.regression_check_failed = False
     goal.regression_autocompleted = True  # arm the flip-flop guard
+    goal.retest_streak = 0  # the check passed — the harness works for it
     logger.info(
         "Functional sweep: '%s' re-certified deterministically "
         "(verify-only rung — checks pass, no LLM dispatch)",
@@ -4836,6 +4846,12 @@ async def action_harvest_quality_findings(step_input: StepInput) -> StepOutput:
 
 
 _REGRESSION_CONCURRENCY = 8
+# Common-cause detector floor: identical failures across this many DISTINCT
+# goals in one wave is a shared fault (harness/env, or one edit breaking
+# everything the same way), never N independent regressions. Two goals can
+# legitimately share a defect; three sharing a byte-identical failure line
+# have a common cause.
+_COMMON_CAUSE_MIN_GOALS = 3
 _REGRESSION_CHECK_TIMEOUT = 30
 # A check may carry its own timeout (authored tests store one measured from
 # their probe runs). Capped so one pathological check can't stall a sweep that
@@ -4851,6 +4867,20 @@ def _check_timeout(check: dict) -> int:
     if wanted <= 0:
         return _REGRESSION_CHECK_TIMEOUT
     return min(max(wanted, _REGRESSION_CHECK_TIMEOUT), _REGRESSION_CHECK_TIMEOUT_CAP)
+
+
+def _failure_signature(row: dict) -> str:
+    """Normalize a failed check row to a comparable cause signature.
+
+    The last non-empty output line is the exception/verdict line for every
+    harness we run (`No module named pytest`, `ModuleNotFoundError: ...`,
+    `1 failed in 0.02s`); rc disambiguates 127-class shell failures from
+    test failures. Deliberately NOT hashed — the signature doubles as the
+    human-readable subject in the escalation brief."""
+    err = str(row.get("stderr") or "").strip() or str(row.get("stdout") or "").strip()
+    lines = [ln.strip() for ln in err.splitlines() if ln.strip()]
+    tail = lines[-1] if lines else "(no output)"
+    return f"rc={row.get('return_code')} | {tail[:160]}"
 
 
 async def action_regression_sweep(step_input: StepInput) -> StepOutput:
@@ -4951,6 +4981,9 @@ async def action_regression_sweep(step_input: StepInput) -> StepOutput:
     autocompleted: set[str] = set()
     ran = 0
     torn = 0  # reopen-direction failures that did not survive a quiet re-run
+    common_cause = False
+    env_evidence = env_expected = ""
+    env_goal_ids: list[str] = []
     if complete_pairs or recomplete_pairs:
         sem = asyncio.Semaphore(_REGRESSION_CONCURRENCY)
 
@@ -5074,6 +5107,76 @@ async def action_regression_sweep(step_input: StepInput) -> StepOutput:
                     cmd[:120],
                 )
 
+        # ── COMMON-CAUSE DETECTOR (2026-08-28, operator rule) ────────
+        # The tmp_cleaner incident: a gutted .venv made every pytest-based
+        # check fail with the same line, the sweep read 15 unrunnable checks
+        # as 15 regressions, and the only self-heal path was quarantining
+        # legitimate authored tests one by one (~225 cycles). Identical
+        # failures across >= _COMMON_CAUSE_MIN_GOALS distinct goals in one
+        # wave is ONE fault — env, or a single edit breaking everything the
+        # same way — and either way per-goal diagnosis is the wrong tool.
+        # Publish an escalation brief; mission_control dispatches the
+        # escalate flow directly (operator ruling over the WarningRecord
+        # alternative). Runs AFTER the confirm block so torn rows (rewritten
+        # green) never count. BOTH directions participate: once the fleet is
+        # reopened, the same broken checks fail in the recomplete direction
+        # on every subsequent wave, and the detector must keep seeing them.
+        failed_rows = [
+            (goal, check, row)
+            for direction, goal, check, row in outcomes
+            if not row["passed"]
+        ]
+        sig_map: dict = {}
+        for _g, _c, _r in failed_rows:
+            sig_map.setdefault(_failure_signature(_r), []).append((_g, _c, _r))
+        # Recovery re-arms detection: a signature no longer failing anywhere
+        # this wave is un-listed, so a future recurrence escalates again.
+        seen_sigs = [
+            s_
+            for s_ in (getattr(mission, "common_cause_seen", None) or [])
+            if s_ in sig_map
+        ]
+        mission.common_cause_seen = seen_sigs
+        for sig, members in sig_map.items():
+            distinct = {g.id: g for g, _, _ in members}
+            if len(distinct) < _COMMON_CAUSE_MIN_GOALS or sig in seen_sigs:
+                continue
+            mission.common_cause_seen.append(sig)
+            common_cause = True
+            env_goal_ids = list(distinct)
+            goal_lines = "\n".join(
+                f"- {g.description[:80]}\n    check: {str(c.get('command'))[:140]}"
+                for g, c, _ in members[:8]
+            )
+            env_evidence = (
+                f"{len(distinct)} previously-verified goals' acceptance "
+                f"checks failed IDENTICALLY in one regression wave — a "
+                f"single shared cause, not {len(distinct)} independent "
+                f"regressions. Diagnose the SHARED cause, not the goals.\n\n"
+                f"Shared failure: {sig}\n\n"
+                f"Affected goals and checks:\n{goal_lines}\n\n"
+                f"These checks were green when their goals completed, and no "
+                f"goal-specific code defect produces byte-identical failures "
+                f"across unrelated checks. Suspect the harness/environment "
+                f"first: run one failing check by hand and read its error. "
+                f"If the interpreter or venv is broken (missing module, "
+                f"missing pyvenv.cfg), the repair is an environment fix "
+                f"(project_ops / uv pip install) — never an edit to any "
+                f"goal's code."
+            )
+            env_expected = (
+                "At least one previously-failing acceptance check runs and "
+                "passes again, or the specific harness/environment fault "
+                "preventing the checks from running is identified and named."
+            )
+            logger.warning(
+                "Regression sweep: COMMON-CAUSE failure across %d goals "
+                "(%s) — dispatching environment escalation",
+                len(distinct),
+                sig[:100],
+            )
+            break  # one escalation per wave; others wait their turn
+
         # Aggregate PER GOAL: reopen if ANY required check failed; auto-complete
         # only if ALL required checks pass (a per-check loop would auto-complete
         # a multi-check goal on its first passing check while another failed).
@@ -5132,6 +5235,7 @@ async def action_regression_sweep(step_input: StepInput) -> StepOutput:
                 goal.regression_reopened = False
                 goal.regression_check_failed = False  # episode closed
                 goal.regression_autocompleted = True  # arm the flip-flop guard
+                goal.retest_streak = 0  # check passed — harness works for it
                 autocompleted.add(gid)
                 mission.notes.append(
                     NoteRecord(
@@ -5169,9 +5273,90 @@ async def action_regression_sweep(step_input: StepInput) -> StepOutput:
         if (complete_pairs or recomplete_pairs)
         else "no grounded checks to sweep"
     )
+    result = {
+        "reopened": len(reopened),
+        "autocompleted": len(autocompleted),
+        "common_cause": common_cause,
+    }
+    updates: dict = {"mission": mission}
+    if common_cause:
+        obs += f" — COMMON CAUSE across {len(env_goal_ids)} goals, escalating"
+        updates.update(
+            {
+                "env_failure_evidence": env_evidence,
+                "env_expected_outcome": env_expected,
+                "env_affected_goal_ids": env_goal_ids,
+            }
+        )
     return StepOutput(
-        result={"reopened": len(reopened), "autocompleted": len(autocompleted)},
+        result=result,
         observations=f"Regression sweep: {obs}",
+        context_updates=updates,
+    )
+
+
+async def action_store_env_escalation_findings(step_input: StepInput) -> StepOutput:
+    """Land a common-cause escalation's summary where diagnosis will SEE it.
+
+    Notes are stripped from diagnose seeds (WarningRecord's docstring exists
+    because of that blind spot) — the one per-goal field the seed renders is
+    ``search_findings``. So the escalate flow's summary is written onto EVERY
+    affected goal: whichever of them the sweep dispatches next, its diagnose
+    opens knowing "the harness was broken / what escalate found" instead of
+    re-deriving the fault from one goal's keyhole. A NoteRecord is appended
+    too, for the archive and the projections' recent-issues block.
+
+    Context: mission, escalation_summary, env_affected_goal_ids.
+    Publishes: mission.
+    """
+    from agent.persistence.models import NoteRecord
+
+    effects = step_input.effects
+    mission = step_input.context.get("mission")
+    if mission is None and effects:
+        try:
+            mission = await effects.load_mission()
+        except Exception:  # noqa: BLE001 - storing findings must not crash
+            mission = None
+    if mission is None:
+        return StepOutput(result={"stored": 0}, observations="env-store: no mission")
+
+    summary = str(step_input.context.get("escalation_summary") or "").strip()
+    ids = {str(i) for i in (step_input.context.get("env_affected_goal_ids") or [])}
+    stored = 0
+    if summary:
+        text = f"[common-cause escalation] {summary}"[:4000]
+        for g in getattr(mission, "goals", []) or []:
+            if g.id in ids:
+                # Same replace-don't-append contract as the stuck-goal path:
+                # each escalation's summary supersedes the previous one.
+                g.search_findings = text
+                stored += 1
+        mission.notes.append(
+            NoteRecord(
+                content=(
+                    f"common-cause escalation concluded across {len(ids)} "
+                    f"goal(s): {summary[:600]}"
+                ),
+                category="failure_analysis",
+                tags=["regression", "common_cause"],
+                source_flow="regression_sweep_env",
+            )
+        )
+    else:
+        logger.warning(
+            "env-store: escalation returned no summary — findings not "
+            "written; the affected goals keep their prior context"
+        )
+    if effects:
+        await effects.save_mission(mission)
+    return StepOutput(
+        result={"stored": stored},
+        observations=(
+            f"env-store: escalation findings written to {stored} goal(s)"
+            if stored
+            else "env-store: nothing to store"
+        ),
         context_updates={"mission": mission},
     )
 
