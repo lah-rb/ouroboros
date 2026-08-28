@@ -378,3 +378,84 @@ async def test_harvested_shape_goal_is_data_linked():
     assert len(created) == 1
     assert created[0].associated_files == ["world/rooms.yaml"]
     assert created[0].type == "functional"
+
+
+# ── capability_absent lifecycle (2026-08-28) ─────────────────────────────
+#
+# The flag was never cleared, and the "only the first dispatch differs"
+# guard reads goal.reports — which the archive sweep EMPTIES on completion.
+# A reopened built goal therefore time-travelled to "never built": explore
+# charter with a false premise ("does not exist yet" about a verified
+# feature), and the capability-build interceptor consuming even SUCCESSFUL
+# verifications into diagnose. Measured live (goal daac8ab):
+# interact:success → diagnose ×8, escaped only by an incidental edit.
+
+
+@pytest.mark.asyncio
+async def test_verified_completion_discharges_capability_absent():
+    g = _cgoal(
+        reports=[
+            DirectiveReport(flow="interact", status="success", summary="spec"),
+            DirectiveReport(flow="file_ops", status="success", summary="built it"),
+            DirectiveReport(flow="interact", status="success", summary="works"),
+        ]
+    )
+    await action_functional_sweep_next(_si(_mission([g])))
+    assert g.status == "complete"
+    assert g.capability_absent is False, "verified build discharges the claim"
+
+
+@pytest.mark.asyncio
+async def test_reopened_built_goal_verifies_instead_of_re_exploring():
+    """THE incident replay: complete the build, archive empties the reports,
+    a sweep reopens the goal. The next dispatch must be the VERIFY charter
+    (no false 'does not exist yet' premise) and its success must COMPLETE
+    the goal rather than being consumed into diagnose."""
+    g = _cgoal(
+        reports=[
+            DirectiveReport(flow="interact", status="success", summary="spec"),
+            DirectiveReport(flow="file_ops", status="success", summary="built"),
+            DirectiveReport(flow="interact", status="success", summary="works"),
+        ]
+    )
+    m = _mission([g])
+    await action_functional_sweep_next(_si(m))
+    assert g.status == "complete"
+
+    # archive-on-completion + sweep reopen
+    g.reports = []
+    g.status = "incomplete"
+
+    out = await action_functional_sweep_next(_si(m))
+    dc = out.context_updates["dispatch_config"]
+    assert dc.get("charter_mode", "") != "explore"
+    assert "does not exist yet" not in dc.get("flow_directive", "")
+
+    # and a successful re-verification terminates, not diagnoses
+    g.reports = [DirectiveReport(flow="interact", status="success", summary="ok")]
+    await action_functional_sweep_next(_si(m))
+    assert g.status == "complete"
+
+
+@pytest.mark.asyncio
+async def test_deterministic_recert_also_discharges_the_flag():
+    """A passing acceptance check proves the capability exists just as hard
+    as a passing interact — both re-cert paths clear the flag."""
+    from agent.actions.mission_actions import _verify_only_recert
+
+    g = _cgoal()
+    g.status = "incomplete"
+    g.regression_reopened = True
+    g.regression_check_failed = True
+    g.acceptance_checks = [{"command": "true", "name": "c", "required": True}]
+
+    class _Pass(MockEffects):
+        async def run_command(self, command, working_dir=None, timeout=30):
+            from agent.effects.protocol import CommandResult
+
+            return CommandResult(0, "", "", " ".join(command))
+
+    ok = await _verify_only_recert(g, _Pass())
+    assert ok is True
+    assert g.status == "complete"
+    assert g.capability_absent is False

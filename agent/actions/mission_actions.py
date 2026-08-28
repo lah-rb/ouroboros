@@ -3846,6 +3846,7 @@ async def _verify_only_recert(goal: Any, effects: Any) -> bool:
     goal.regression_check_failed = False
     goal.regression_autocompleted = True  # arm the flip-flop guard
     goal.retest_streak = 0  # the check passed — the harness works for it
+    goal.capability_absent = False  # a passing check proves it exists
     logger.info(
         "Functional sweep: '%s' re-certified deterministically "
         "(verify-only rung — checks pass, no LLM dispatch)",
@@ -3990,6 +3991,25 @@ async def action_functional_sweep_next(step_input: StepInput) -> StepOutput:
             goal.regression_reopened = False
             goal.regression_autocompleted = False
             goal.regression_check_failed = False
+            # The flag's claim — "this capability does not exist yet" — is
+            # discharged the moment the built feature passes verification.
+            # It was never cleared (2026-08-28), and the "only the first
+            # dispatch differs" guard reads goal.reports, which the archive
+            # sweep EMPTIES on completion — so a reopened built goal
+            # time-travelled back to "never built": explore charter with a
+            # false premise ("does not exist yet" about a verified feature),
+            # and _sweep_capability_build consuming even SUCCESSFUL
+            # verifications into diagnose (daac8ab: interact:success →
+            # diagnose ×8; escape only via an incidental edit re-arming the
+            # walk). Cleared here, every reopen path rides the verify
+            # charter and success completes normally.
+            if getattr(goal, "capability_absent", False):
+                goal.capability_absent = False
+                logger.info(
+                    "Functional sweep: '%s' capability BUILT and verified — "
+                    "clearing capability_absent (reopens verify, not explore)",
+                    goal.description[:50],
+                )
             # failed_attempts survive completion — the archive sweep
             # relocates them (retry patterns are mining material).
             logger.info("Functional sweep: '%s' completed", goal.description[:50])
@@ -5244,6 +5264,7 @@ async def action_regression_sweep(step_input: StepInput) -> StepOutput:
                 goal.regression_check_failed = False  # episode closed
                 goal.regression_autocompleted = True  # arm the flip-flop guard
                 goal.retest_streak = 0  # check passed — harness works for it
+                goal.capability_absent = False  # passing check proves it exists
                 autocompleted.add(gid)
                 mission.notes.append(
                     NoteRecord(
