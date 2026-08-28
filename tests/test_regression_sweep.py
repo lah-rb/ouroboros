@@ -797,3 +797,24 @@ async def test_collision_held_rows_do_not_count_toward_common_cause():
 
     assert out.result["common_cause"] is False
     assert all(g.status == "complete" for g in goals)
+
+
+@pytest.mark.asyncio
+async def test_common_cause_brief_presents_both_hypotheses():
+    """The plan's contract: NEUTRAL on env-vs-code. The brief must offer the
+    shared-edit hypothesis and the tests-outdated verdict alongside the
+    environment one — the discriminator is running a check and reading the
+    error, not the framing."""
+    goals = [_goal(f"g{i}", [_check(f"run_check_{i}")]) for i in range(3)]
+    m = _mission(goals)
+    fx = MockEffects(
+        commands={_wrap(f"run_check_{i}"): _failing(f"run_check_{i}") for i in range(3)}
+    )
+
+    out = await action_regression_sweep(_si(m, fx))
+
+    ev = out.context_updates["env_failure_evidence"]
+    assert "environment fix" in ev  # hypothesis 1: broken harness
+    assert "single recent edit" in ev  # hypothesis 2: one shared edit
+    assert "CHECKS are outdated" in ev  # ...with the tests-outdated verdict
+    assert "never dispatch" in ev.lower() or "per-goal fixes" in ev
