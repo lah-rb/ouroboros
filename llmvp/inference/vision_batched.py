@@ -205,10 +205,20 @@ class MtmdEncoder:
                     raise VisionInstallError(f"unsupported chunk type {ctype}")
             M.mtmd_input_chunks_free(chunks)
         finally:
-            # bitmaps are consumed by tokenize; the wrappers own them and
-            # python GC of `wrappers` releases nothing C-side — mtmd frees
-            # bitmap payloads with the chunks. Keep scope simple.
-            del wrappers
+            # BITMAPS ARE CALLER-OWNED. tokenize copies what it needs into
+            # the chunks; the raw decoded RGB (1-8 MB per figure) stays
+            # ours to free — the fork's own handler frees right after
+            # tokenize. The first version of this comment claimed mtmd
+            # freed them "with the chunks": WRONG, and the resulting leak
+            # grew the server's C heap to 46 GB over ~12,900 requests
+            # (2026-08-28, characterized via smaps: [heap] 46.4 GB /
+            # 776 segments, ~2 GB per 90 min at ~550 figs/h).
+            for w in wrappers:
+                try:
+                    if w.bitmap:
+                        M.mtmd_bitmap_free(w.bitmap)
+                except Exception:  # noqa: BLE001 — never break intake
+                    log.exception("bitmap free failed")
 
         if not segments:
             raise VisionInstallError("tokenize produced no chunks")
