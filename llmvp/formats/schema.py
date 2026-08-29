@@ -47,6 +47,14 @@ class TokenSpec(BaseModel):
     # 2026-07-29 incident burned 70k tokens on via <|user|>. Audited by
     # dev/stop_token_audit.py against GGUF eot/eom headers.
     extra_gen_stops: list = []
+    # Wrappers around each media marker in a vision prompt. Families whose
+    # template brackets images with structural tokens (PaddleOCR-VL:
+    # <|IMAGE_START|>{img}<|IMAGE_END|>) declare them here so the batched
+    # vision path reproduces the pool handler's bytes; the model was
+    # trained with the brackets and localizes image boundaries by them.
+    # Empty (muse and everyone else) leaves the bare marker.
+    media_open: str = ""
+    media_close: str = ""
     # Closer for the REASONING block when it differs from msg_close.
     # Harmony closes both its analysis and final blocks with <|end|>, so it
     # leaves this empty. Muse-Glimmer does not: its template ends the

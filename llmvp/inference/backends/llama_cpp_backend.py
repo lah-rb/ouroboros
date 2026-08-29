@@ -3411,8 +3411,42 @@ class LlamaCppBackend(BaseBackend):
         self._session_can_shift = self._ask_can_shift()
         if self._resident_requested:
             can_shift = bool(self._session_can_shift)
-            self._resident_active = can_shift
-            if can_shift:
+            # M-RoPE EXCEPTION (2026-08-29). can_shift served as a proxy for
+            # "normal attention KV where seq ops work", and for every model
+            # before paddle the two were the same fact. M-RoPE models return
+            # can_shift=False for a DIFFERENT reason: shifting rotated
+            # multi-section positions is ill-defined (llama-kv-cache.cpp
+            # get_can_shift: n_pos_per_embd() > 1), while the cache itself is
+            # ordinary — memory_seq_rm and multi-seq decode verified clean on
+            # paddle hardware (probe_vision_kv_integrity.py, 2026-08-29:
+            # neighbour KV byte-identical, joint step legal). So an M-RoPE
+            # model may host the resident cache and the batched engine; the
+            # shift-DEPENDENT features stay off via _session_can_shift=False
+            # (session window slide refuses, media seats refuse in
+            # window_seat_sync). Recurrent models still land in the else.
+            mrope = False
+            if not can_shift:
+                try:
+                    import llama_cpp as _lc
+
+                    rt = int(
+                        _lc.llama_model_rope_type(self._primary_instance._model.model)
+                    )
+                    mrope = rt in (
+                        int(_lc.llama_rope_type.LLAMA_ROPE_TYPE_MROPE),
+                        int(_lc.llama_rope_type.LLAMA_ROPE_TYPE_IMROPE),
+                    )
+                except Exception:  # noqa: BLE001 — unknowable => keep old gate
+                    mrope = False
+            self._resident_active = can_shift or mrope
+            if mrope and not can_shift:
+                log.info(
+                    "🧩 Resident-seq cache ACTIVE via the M-RoPE exception "
+                    "(memory_can_shift=False because positions are "
+                    "multi-section, not because seq ops fail; KV shift "
+                    "features stay disabled)"
+                )
+            elif can_shift:
                 log.info("🧩 Resident-seq cache ACTIVE (memory_can_shift=True)")
             else:
                 log.warning(

@@ -389,6 +389,7 @@ async def install_multimodal_prefix(
             slot.n_tokens = 0
             slot.input_ids = []
             slot.has_media = False
+            slot.cell_debt = 0
 
     await asyncio.wrap_future(engine.control(_preflight))
     for seg in split.pre:
@@ -406,15 +407,26 @@ async def install_multimodal_prefix(
                         slot.seq,
                         n_batch,
                     )
+                    # POSITION AUTHORITY IS new_past (the original plan's
+                    # R3). Under M-RoPE the chunk's n_tokens CELLS advance
+                    # n_past by only max(t,h,w) POSITIONS — paddle: a full
+                    # page is 1,240 cells moving n_past by 40. input_ids
+                    # stays position-dense (every rollback/purge removes by
+                    # position), so it gains exactly `delta` sentinels; the
+                    # remaining cells are booked as cell_debt, which
+                    # _occupancy adds so admission sees the physical cache.
+                    # Muse advances 1:1 (delta == n_tokens): debt 0,
+                    # sentinels n_tokens — byte-identical to the previous
+                    # behaviour, one code path.
                     delta = new_past - before
-                    if delta != seg.n_tokens:
+                    if delta <= 0 or delta > seg.n_tokens:
                         raise VisionInstallError(
-                            f"M-RoPE position law: +{seg.n_tokens} tokens "
-                            f"moved n_past by {delta}; cell-debt accounting "
-                            "not implemented — model cannot ride the "
-                            "batched path"
+                            f"M-RoPE position law violated: +{seg.n_tokens} "
+                            f"cells moved n_past by {delta} (expected "
+                            "1..n_tokens) — refusing the install"
                         )
-                    slot.input_ids.extend([engine.MEDIA_SENTINEL] * seg.n_tokens)
+                    slot.input_ids.extend([engine.MEDIA_SENTINEL] * delta)
+                    slot.cell_debt += seg.n_tokens - delta
                     slot.n_tokens = new_past
                     slot.has_media = True
 

@@ -362,6 +362,20 @@ class TestCellsHeldOutsideTheSeatsAreCounted:
         eng.extra_occupancy_fn = lambda: 30_000
         assert eng._free_cells(POOL) == before - 30_000
 
+    def test_media_cell_debt_counts_against_free_cells(self):
+        """M-RoPE media cells beyond the position count are PHYSICAL cache
+        the position-based ledger cannot see — a paddle page is 1,240
+        cells that move n_past by 40, and before cell_debt the other
+        1,200 were invisible to admission (the same shape as the
+        2026-08-25 free-cell inflation, from the other direction)."""
+        eng = _engine_with(FakeCtx(decode_script=[0]), samplers={})
+        eng._llama._n_ctx = POOL
+        seat = _seat(1, n_tokens=40)  # a paddle page: 40 positions...
+        eng._seats.append(seat)
+        before = eng._free_cells(POOL)
+        seat.cell_debt = 1_200  # ...and 1,200 more physical cells
+        assert eng._free_cells(POOL) == before - 1_200
+
     def test_a_flow_prefix_counts_against_free_cells(self):
         from inference.batched_engine import FlowPin
 

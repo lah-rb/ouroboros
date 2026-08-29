@@ -1328,6 +1328,18 @@ async def _run_vision_batched(
         stats["fallbacks"] += 1
         return None
     marker = encoder.marker
+    # Family media wrappers (paddleocr: <|IMAGE_START|>…<|IMAGE_END|>) —
+    # the marker itself must stay bare for mtmd_tokenize to find; the
+    # wrappers are ordinary template text around it.
+    media_open = media_close = ""
+    try:
+        from formats.registry import load_schema
+
+        _tok = load_schema(mcfg.family).tokens
+        media_open = getattr(_tok, "media_open", "") or ""
+        media_close = getattr(_tok, "media_close", "") or ""
+    except Exception:  # noqa: BLE001 — no schema, no wrappers
+        pass
 
     user_seen = False
     for msg in messages:
@@ -1348,7 +1360,7 @@ async def _run_vision_batched(
             ptype = (part or {}).get("type")
             if ptype in ("image_url", "image_path"):
                 images.append(resolve_image_part(part, roots, limit))
-                user_text_parts.append(marker)
+                user_text_parts.append(media_open + marker + media_close)
             elif ptype == "text":
                 user_text_parts.append(str(part.get("text") or ""))
             else:

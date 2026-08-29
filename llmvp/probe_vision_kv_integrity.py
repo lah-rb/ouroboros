@@ -59,13 +59,25 @@ N_BATCH = 512
 
 SEQ_A, SEQ_B = 0, 1
 
-PROMPT_A = "The mineral quartz is composed of"
+PROMPT_A = os.environ.get("PROBE_PROMPT_A", "The mineral quartz is composed of")
 # Hand-built muse-marker prompt for the probe; P1 does the faithful render.
-PROMPT_B = (
+# PROBE_PROMPT_B re-targets the probe at another family's template (the
+# 2026-08-29 paddle run passes the PaddleOCR pool template verbatim).
+PROMPT_B = os.environ.get(
+    "PROBE_PROMPT_B",
     "<|start|>user<|message|>Look carefully at this figure. <__media__> "
     "Describe every panel, axis and label.<|eot|>"
-    "<|start|>assistant to=user<|message|>"
+    "<|start|>assistant to=user<|message|>",
 )
+# PROBE_JOINT_STEP=1 adds arm 4: ONE llama_decode carrying a token row for
+# BOTH seqs after the install — the batched engine's _step shape. This is
+# the exact call probe_paddle_batched_vs_pool.py reported rejected
+# ("Invalid input batch") when its own bookkeeping advanced positions by
+# token count; with position authority from new_n_past the M-RoPE batch
+# validation (llama-batch.cpp: batch pos strictly above the seq's KV
+# pos_max) should pass. Off by default so the recorded muse verdicts stay
+# what they were.
+JOINT_STEP = os.environ.get("PROBE_JOINT_STEP", "") == "1"
 
 
 def _log(msg):
@@ -292,9 +304,46 @@ def main() -> int:
         b_logits = None
     desc = ""
     if b_logits is not None:
-        b_toks, _ = greedy(SEQ_B, pos_b3, b_logits, 200)
+        b_toks, pos_b3 = greedy(SEQ_B, pos_b3, b_logits, 200)
         desc = llama.detokenize(b_toks).decode("utf-8", errors="replace")
     _log("\n=== seq B description (greedy 200) ===\n" + desc[:800])
+
+    # ── arm 4 (opt-in): the batched engine's step shape ──────────────
+    # One decode call, one token row per LIVE seq, after the install.
+    joint_ok = None
+    if JOINT_STEP and b_logits is not None:
+        a4_pos = a_state["pos"]
+        a4_logits = a_state["logits"]
+        b4_pos = pos_b3
+        b4_logits = np.ctypeslib.as_array(
+            ctx.get_logits_ith(0), shape=(n_vocab,)
+        ).copy()
+        joint_ok = True
+        for _ in range(4):
+            batch.reset()
+            batch.add_token(int(np.argmax(a4_logits)), a4_pos, [SEQ_A], True)
+            batch.add_token(int(np.argmax(b4_logits)), b4_pos, [SEQ_B], True)
+            rc = ctx.decode(batch)
+            if rc != 0:
+                joint_ok = False
+                _log(
+                    f"arm4: JOINT multi-seq decode rejected rc={rc} "
+                    f"(A pos {a4_pos}, B pos {b4_pos})"
+                )
+                break
+            a4_pos += 1
+            b4_pos += 1
+            a4_logits = np.ctypeslib.as_array(
+                ctx.get_logits_ith(0), shape=(n_vocab,)
+            ).copy()
+            b4_logits = np.ctypeslib.as_array(
+                ctx.get_logits_ith(1), shape=(n_vocab,)
+            ).copy()
+        if joint_ok:
+            _log(
+                "arm4: 4 joint multi-seq steps decoded clean (rc=0) — the "
+                "batched _step shape is LEGAL after this install"
+            )
 
     row = {
         "golden_tail": golden[-8:],
@@ -307,13 +356,19 @@ def main() -> int:
         "pos_delta_eq_tokens": (
             stats2["new_n_past"] == stats2["old_n_past"] + stats2["img_tokens"]
         ),
+        "joint_step_ok": joint_ok,
+        "model": os.path.basename(MODEL),
     }
     os.makedirs("probe_out", exist_ok=True)
     with open("probe_out/vision_kv_integrity.jsonl", "a") as fh:
         fh.write(json.dumps(row) + "\n")
 
     ok = same2 and same3 and bool(desc.strip())
+    if joint_ok is False:
+        ok = False
     _log("\n=== VERDICT ===")
+    if joint_ok is not None:
+        _log(f"  P5 joint multi-seq step legal  : {joint_ok}")
     _log(f"  P1 neighbour KV byte-identical : {same2 and same3}")
     _log(
         f"  P2 pos_delta == img_tokens     : {row['pos_delta_eq_tokens']} "

@@ -1,0 +1,4 @@
+{"arm": "blank32", "area": 1024, "img_tokens": 144, "bitmap_ms": 0.02, "tokenize_ms": 1.33, "encode_ms": 57.0, "embd_decode_ms": 1.5}
+{"arm": "crop", "area": 28160, "img_tokens": 189, "bitmap_ms": 0.31, "tokenize_ms": 1.43, "encode_ms": 73.26, "embd_decode_ms": 1.71}
+{"arm": "page", "area": 2393600, "img_tokens": 1240, "bitmap_ms": 10.31, "tokenize_ms": 11.33, "encode_ms": 1037.28, "embd_decode_ms": 38.02}
+{"arm": "text_ref", "wall_ms": 80.5}

@@ -216,6 +216,15 @@ class SeqSlot:
     # session snapshot capture must refuse such a seat (the sentinels
     # would restore as real token ids and decode as garbage).
     has_media: bool = False
+    # KV cells this seat's media rows occupy BEYOND its position count.
+    # M-RoPE (paddle): an image chunk consumes chunk-n_tokens CELLS but
+    # advances n_past by only max(t,h,w) POSITIONS — e.g. a full page is
+    # 1,240 cells that move n_past by 40. n_tokens/input_ids stay the
+    # POSITION authority (every rollback/shift path removes by position);
+    # this debt is what occupancy must add so admission stops undercounting
+    # the physical cache. Muse-family installs advance positions 1:1, so
+    # for them this is always 0 and nothing changes.
+    cell_debt: int = 0
     pinned: bool = False  # held by a session between turns
     dead: bool = False  # context rebuilt underneath this seat
     # Lease stamp (monotonic) set at acquire, cleared at release — read by
@@ -813,7 +822,9 @@ class BatchedEngine:
                 if seat.pinned
                 else int(seat.static_len)
             )
-            held += max(pinned, live_by_seq.get(seq, 0))
+            # Media cell debt is PHYSICAL cache the position count cannot
+            # see; it exists regardless of the pinned-vs-live view.
+            held += max(pinned, live_by_seq.get(seq, 0)) + int(seat.cell_debt)
         # A live stream on a seq with no seat still holds real cells.
         held += sum(v for seq, v in live_by_seq.items() if seq not in seen)
         return held
@@ -1445,6 +1456,7 @@ class BatchedEngine:
         slot.n_tokens = head.n_tokens
         slot.input_ids = list(head.tokens)
         slot.has_media = False
+        slot.cell_debt = 0
         slot._needs_context_refresh = False
         slot._last_completion_tokens = None
 
@@ -1489,6 +1501,7 @@ class BatchedEngine:
         slot.static_len = 0
         slot.input_ids = []
         slot.has_media = False
+        slot.cell_debt = 0
         slot.pinned = False
 
     def window_seat_sync(self, slot: SeqSlot, n_keep: int) -> int:
@@ -1500,6 +1513,19 @@ class BatchedEngine:
         def _do() -> int:
             ctx = self._llama._ctx
             n_tokens = int(slot.n_tokens)
+            if slot.has_media:
+                # A media seat cannot slide: M-RoPE forbids KV shift
+                # outright (llama_kv_cache::get_can_shift is false when
+                # n_pos_per_embd > 1), and even for 1-pos media the
+                # sentinel region is not position-dense (cell_debt), so
+                # the seq_add arithmetic below would corrupt it. Refuse;
+                # the caller's pressure ladder falls through to refresh.
+                logger.warning(
+                    "🪟 window refused for media seat seq %d — media KV "
+                    "cannot shift; seat needs a refresh instead",
+                    slot.seq,
+                )
+                return n_tokens
             n_discard = (n_tokens - n_keep) // 2
             if n_discard <= 0:
                 return n_tokens

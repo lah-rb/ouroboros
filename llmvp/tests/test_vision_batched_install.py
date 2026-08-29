@@ -188,18 +188,59 @@ def test_install_orchestrates_text_then_embd_then_position():
     assert slot.has_media is True
 
 
-def test_atomic_install_enforces_the_position_law():
-    """An M-RoPE-class model whose new_n_past diverges from the token
-    count must FAIL the install (fall back to the pool path) — silently
-    accepting it would under-count occupancy exactly like the 2026-08-25
-    free-cell inflation."""
+def test_atomic_install_books_mrope_divergence_as_cell_debt():
+    """An M-RoPE install whose n_past advance diverges from the cell count
+    (paddle: a page is 1,240 cells moving n_past by 40) must keep
+    input_ids POSITION-dense — exactly `delta` sentinels — and book the
+    remaining cells as cell_debt so occupancy sees the physical cache.
+    The original refusal here was the 2026-08-29 recheck's finding: the
+    guard was the ONLY thing keeping paddle off the batched path."""
+    eng = _InlineEngine()
+    slot = _bare_slot(seq=1)
+    split = SplitPrompt(pre=[_chunk(10, atomic=True)], text2=[1])
+    asyncio.run(
+        install_multimodal_prefix(eng, _FakeEncoder(atomic_delta=7), slot, split, 16, 8)
+    )
+    assert slot.n_tokens == 7, "position authority is new_n_past"
+    assert slot.input_ids == [BatchedEngine.MEDIA_SENTINEL] * 7
+    assert slot.cell_debt == 3, "10 cells - 7 positions"
+    assert slot.has_media is True
+
+
+def test_atomic_install_muse_shape_is_byte_identical_to_before():
+    """delta == n_tokens (every 1-pos-per-token family, muse included)
+    must produce EXACTLY the pre-cell-debt state: n_tokens sentinels,
+    zero debt. One code path; the figtext campaign's behaviour is the
+    regression fence."""
+    eng = _InlineEngine()
+    slot = _bare_slot(seq=1)
+    split = SplitPrompt(pre=[_chunk(10, atomic=True)], text2=[1])
+    asyncio.run(install_multimodal_prefix(eng, _FakeEncoder(), slot, split, 16, 8))
+    assert slot.n_tokens == 10
+    assert slot.input_ids == [BatchedEngine.MEDIA_SENTINEL] * 10
+    assert slot.cell_debt == 0
+    assert slot.has_media is True
+
+
+def test_atomic_install_still_refuses_impossible_position_advances():
+    """delta <= 0 or delta > n_tokens is not a divergence, it is
+    corruption — the install must fail (pool fallback), never book it."""
     eng = _InlineEngine()
     slot = _bare_slot(seq=1)
     split = SplitPrompt(pre=[_chunk(10, atomic=True)], text2=[1])
     with pytest.raises(VisionInstallError, match="position law"):
         asyncio.run(
             install_multimodal_prefix(
-                eng, _FakeEncoder(atomic_delta=7), slot, split, 16, 8
+                eng, _FakeEncoder(atomic_delta=0), slot, split, 16, 8
+            )
+        )
+    eng2 = _InlineEngine()
+    slot2 = _bare_slot(seq=1)
+    split2 = SplitPrompt(pre=[_chunk(10, atomic=True)], text2=[1])
+    with pytest.raises(VisionInstallError, match="position law"):
+        asyncio.run(
+            install_multimodal_prefix(
+                eng2, _FakeEncoder(atomic_delta=11), slot2, split2, 16, 8
             )
         )
 
