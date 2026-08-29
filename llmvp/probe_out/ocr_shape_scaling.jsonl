@@ -1,0 +1,10 @@
+{"arm": "batched", "n": 1, "errors": [], "wall_s": 1.02, "requests": 12, "req_per_s": 11.74, "req_ms_p50": 83.7, "req_ms_p90": 85.9}
+{"arm": "batched", "n": 2, "errors": [], "wall_s": 1.23, "requests": 24, "req_per_s": 19.49, "req_ms_p50": 101.6, "req_ms_p90": 102.2}
+{"arm": "batched", "n": 4, "errors": [], "wall_s": 1.59, "requests": 48, "req_per_s": 30.2, "req_ms_p50": 131.4, "req_ms_p90": 131.7}
+{"arm": "batched", "n": 8, "errors": [], "wall_s": 2.55, "requests": 96, "req_per_s": 37.61, "req_ms_p50": 211.8, "req_ms_p90": 212.3}
+{"arm": "batched", "n": 16, "errors": [], "wall_s": 4.2, "requests": 192, "req_per_s": 45.71, "req_ms_p50": 350.2, "req_ms_p90": 352.4}
+{"arm": "pool", "n": 1, "errors": [], "wall_s": 1.02, "requests": 12, "req_per_s": 11.8, "req_ms_p50": 82.6, "req_ms_p90": 82.8}
+{"arm": "pool", "n": 2, "errors": [], "wall_s": 1.67, "requests": 24, "req_per_s": 14.38, "req_ms_p50": 135.6, "req_ms_p90": 136.4}
+{"arm": "pool", "n": 4, "errors": [], "wall_s": 3.02, "requests": 48, "req_per_s": 15.91, "req_ms_p50": 245.9, "req_ms_p90": 247.8}
+{"arm": "pool", "n": 8, "errors": [], "wall_s": 5.8, "requests": 96, "req_per_s": 16.54, "req_ms_p50": 473.1, "req_ms_p90": 484.2}
+{"arm": "pool", "n": 16, "errors": [], "wall_s": 11.52, "requests": 192, "req_per_s": 16.67, "req_ms_p50": 939.8, "req_ms_p90": 967.1}
