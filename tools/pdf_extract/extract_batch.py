@@ -129,9 +129,26 @@ _FURNITURE = re.compile(
 )
 
 # Above this, a document is a book and gets a human decision instead of an OCR
-# pass — see extract_paper. Above every paper that has succeeded on this corpus
-# (max 177 pages), below the 560-page volume that cannot fit a dispatch budget.
-_MAX_EXTRACT_PAGES = int(os.environ.get("OUROBOROS_MAX_EXTRACT_PAGES", "200"))
+# pass — see extract_paper. The bound is CURATION, not OCR: extraction is
+# page-by-page and segment-resumable, so a long document costs time but never
+# fails, while the curator seat is 65,536 tokens (~56,689 after turn overhead)
+# and a doc that will not fit even at the compression ladder's deepest rung
+# parks as curate_oversize.
+#
+# 200 -> 300 (2026-08-29, measured). Floor tokens were measured for 199 real
+# extractions through the actual ladder (compress_rung "full" +
+# build_curator_doc + the script-aware char estimate). PAGE COUNT IS A WEAK
+# PROXY and runs the OPPOSITE way for big documents: dense articles floor at
+# 750+ tok/page while large reports and theses run 50-300 (a 390-page USGS
+# report floors at 21k tokens and FITS; a 148-page dense paper floors at 61k
+# and PARKS). Across documents >= 60 pages, 89% already fit the seat, and the
+# fit limit is ~220 pages at the sparse density typical of that class. 300
+# covers it with headroom while still refusing the true books (the queue's
+# tail runs 400-2,790 pages). Cost on the live queue: +34 papers, +8.1k pages,
+# ~+14 h of OCR. A paper that parks at curate is not lost — the markdown is in
+# the corpus and the park is a review queue, so a later, larger curate seat
+# re-admits it.
+_MAX_EXTRACT_PAGES = int(os.environ.get("OUROBOROS_MAX_EXTRACT_PAGES", "300"))
 
 # Degenerate-decode detection — see _max_repeat_words.
 _REPEAT_MAX_PERIOD = 24  # longest phrase treated as a loop unit
