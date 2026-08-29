@@ -4035,8 +4035,20 @@ class LlamaCppBackend(BaseBackend):
         vision_bytes = 0
         mmproj = getattr(self.config.model, "mmproj_path", None)
         if mmproj:
+            # TIMES THE ENCODER POOL. Each batched-vision encoder is its own
+            # mtmd context with its own projector upload
+            # (vision_batched_encoders; 1 for every config that predates the
+            # 2026-08-29 pool). Same lesson as the vision-context width
+            # under-count below: a preflight that prices one copy approves a
+            # pool it cannot afford.
+            enc_copies = 1
+            if bool(getattr(self.config.model, "vision_batched", False)):
+                enc_copies = max(
+                    1,
+                    int(getattr(self.config.model, "vision_batched_encoders", 1) or 1),
+                )
             try:
-                vision_bytes += os.path.getsize(str(mmproj))
+                vision_bytes += os.path.getsize(str(mmproj)) * enc_copies
             except OSError as exc:
                 log.warning("mmproj not readable for preflight (%s): %s", mmproj, exc)
             v_ctx = int(getattr(self.config.model, "vision_n_ctx", 8192) or 8192)

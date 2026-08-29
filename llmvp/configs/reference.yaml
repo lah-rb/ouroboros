@@ -500,6 +500,18 @@ model:
   #     streams (a semaphore in run_vision_completion). Seats are the
   #     hard bound; this keeps vision from starving text lanes.
   vision_batched_max_streams: 3
+  # [O] Type: int — parallel mtmd ENCODER contexts for the batched path
+  #     (an encode is a ViT+projector forward; one context runs one at a
+  #     time). 1 = the single process-wide encoder. Each extra context
+  #     uploads a full projector copy on the projector device (~1 GB for
+  #     paddle's mmproj) and the preflight prices it. Raise when encode
+  #     is the measured serial stage — paddle crops pay a constant
+  #     57-73 ms minimum-grid encode (~38% of a request), which kept the
+  #     first batched-serving cell throughput-flat (2026-08-29,
+  #     dev/OCR_LANE_2026-08-29.md). Health exposes
+  #     encoder_wait_ms_last: sustained tens of ms at load means this is
+  #     set too low.
+  vision_batched_encoders: 1
   # [O] Type: bool — offload the mtmd projector to the GPU.
   # TRUE DOES NOT MEAN "the model's GPU". The handler's signature is
   # (mmproj_path, verbose, use_gpu, image_min_tokens, image_max_tokens, ...)

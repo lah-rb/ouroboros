@@ -403,6 +403,15 @@ class ModelConfig(BaseModel):
     # in run_vision_completion). Seats are the hard bound; this keeps
     # vision from starving text lanes of seats.
     vision_batched_max_streams: int = 3
+    # Parallel mtmd ENCODER contexts for the batched path (an encode is a
+    # ViT+projector forward; one context runs one at a time). 1 keeps the
+    # single process-wide encoder. Each additional context uploads a full
+    # projector copy (~1 GB for paddle's mmproj) on the projector device —
+    # VRAM buys encoder concurrency and nothing else; the preflight counts
+    # it. Raise this when encode is the measured serial stage (paddle
+    # crops: constant 57-73 ms each, ~38% of a request — the reason the
+    # first batched-serving cell was throughput-flat, 2026-08-29).
+    vision_batched_encoders: int = 1
     # Offload the mtmd projector to the GPU. TRUE IS NOT "the model's GPU":
     # the handler's signature is (mmproj_path, verbose, use_gpu, ...) with no
     # device index anywhere, so mtmd allocates on the DEFAULT device — device

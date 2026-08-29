@@ -36,6 +36,11 @@ model:
   resident_seq_cache: true
   vision_batched: true
   vision_batched_max_streams: 8
+  # Per-stream encode (2026-08-29): 2 mtmd contexts so concurrent crops
+  # encode in parallel — encode is the constant 57-73 ms / ~38% of a crop
+  # request that kept the first batched cell throughput-flat. Each extra
+  # context is ~0.9 GB projector on CUDA1; the preflight prices it.
+  vision_batched_encoders: 2
   # Fallback pool geometry — unchanged from production.
   vision_n_ctx: 32768
   vision_pool_size: 2

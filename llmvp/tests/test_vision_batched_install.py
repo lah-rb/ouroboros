@@ -361,3 +361,81 @@ def test_install_preflight_scrubs_disagreeing_kv():
     asyncio.run(install_multimodal_prefix(eng, _FakeEncoder(), slot, split, 16, 8))
     assert scrubbed["n"] == 1  # stale KV removed before any install row
     assert slot.n_tokens == 5  # 2 text + 3 media, from a clean base
+
+
+# ── encoder pool (per-stream encode, 2026-08-29) ─────────────────────
+
+
+@pytest.mark.asyncio
+async def test_encoder_pool_leases_are_parallel_and_disjoint(monkeypatch):
+    """At size 2, two concurrent leases hold DIFFERENT members — the whole
+    point of the pool: encode was the serial 38% of a crop request."""
+    from inference.vision_batched import MtmdEncoder, MtmdEncoderPool
+
+    monkeypatch.setattr(MtmdEncoder, "ensure", lambda self, m: None)
+    pool = MtmdEncoderPool(mmproj_path="/fake.gguf", size=2)
+    await pool.ensure(object())
+    async with pool.lease() as a:
+        async with pool.lease() as b:
+            assert a is not b
+
+
+@pytest.mark.asyncio
+async def test_encoder_pool_size_one_serializes(monkeypatch):
+    """size=1 must behave like the old single encoder: a second lease
+    waits until the first releases."""
+    import asyncio
+
+    from inference.vision_batched import MtmdEncoder, MtmdEncoderPool
+
+    monkeypatch.setattr(MtmdEncoder, "ensure", lambda self, m: None)
+    pool = MtmdEncoderPool(mmproj_path="/fake.gguf", size=1)
+    await pool.ensure(object())
+    order: list[str] = []
+
+    async def first():
+        async with pool.lease():
+            order.append("first-in")
+            await asyncio.sleep(0.02)
+            order.append("first-out")
+
+    async def second():
+        await asyncio.sleep(0.005)  # start after `first` holds the lease
+        async with pool.lease():
+            order.append("second-in")
+
+    await asyncio.gather(first(), second())
+    assert order == ["first-in", "first-out", "second-in"]
+
+
+@pytest.mark.asyncio
+async def test_encoder_pool_releases_on_exception(monkeypatch):
+    """A leaked lease silently shrinks the pool until vision deadlocks —
+    the acquire_vision_instance failure shape. Release must survive a
+    raise inside the lease."""
+    from inference.vision_batched import MtmdEncoder, MtmdEncoderPool
+
+    monkeypatch.setattr(MtmdEncoder, "ensure", lambda self, m: None)
+    pool = MtmdEncoderPool(mmproj_path="/fake.gguf", size=1)
+    await pool.ensure(object())
+    with pytest.raises(RuntimeError):
+        async with pool.lease():
+            raise RuntimeError("boom")
+    async with pool.lease() as enc:  # would hang forever on a leak
+        assert enc is not None
+
+
+@pytest.mark.asyncio
+async def test_encoder_pool_ensure_is_idempotent(monkeypatch):
+    from inference.vision_batched import MtmdEncoder, MtmdEncoderPool
+
+    calls = {"n": 0}
+
+    def _ensure(self, m):
+        calls["n"] += 1
+
+    monkeypatch.setattr(MtmdEncoder, "ensure", _ensure)
+    pool = MtmdEncoderPool(mmproj_path="/fake.gguf", size=3)
+    await pool.ensure(object())
+    await pool.ensure(object())
+    assert calls["n"] == 3, "each member once, second ensure a no-op"

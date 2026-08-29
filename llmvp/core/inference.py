@@ -1290,7 +1290,7 @@ async def _run_vision_batched(
     from fastapi.concurrency import run_in_threadpool
 
     from inference.vision_batched import (
-        MtmdEncoder,
+        MtmdEncoderPool,
         VisionInstallError,
         install_multimodal_prefix,
         render_vision_prompt,
@@ -1303,7 +1303,16 @@ async def _run_vision_batched(
         return None
     stats = getattr(backend, "_vision_batched_stats", None)
     if stats is None:
-        stats = {"served": 0, "fallbacks": 0, "install_ms_last": 0.0, "active": 0}
+        stats = {
+            "served": 0,
+            "fallbacks": 0,
+            "install_ms_last": 0.0,
+            "active": 0,
+            # Lease-acquire wait: the direct read on whether
+            # vision_batched_encoders is set high enough — sustained
+            # tens-of-ms here at load means encode is queueing again.
+            "encoder_wait_ms_last": 0.0,
+        }
         backend._vision_batched_stats = stats
 
     # ── shape check + intake (raw BYTES — the encoder wants buffers, not
@@ -1313,21 +1322,22 @@ async def _run_vision_batched(
     system_text = ""
     user_text_parts: list = []
     images: list = []
-    encoder = getattr(backend, "_vision_batched_encoder", None)
-    if encoder is None:
-        encoder = MtmdEncoder(
+    enc_pool = getattr(backend, "_vision_batched_encoder_pool", None)
+    if enc_pool is None:
+        enc_pool = MtmdEncoderPool(
             mmproj_path=str(mcfg.mmproj_path),
+            size=int(getattr(mcfg, "vision_batched_encoders", 1) or 1),
             projector_device=getattr(mcfg, "vision_projector_device", None),
             use_gpu=bool(getattr(mcfg, "vision_projector_gpu", True)),
         )
-        backend._vision_batched_encoder = encoder
+        backend._vision_batched_encoder_pool = enc_pool
     try:
-        await run_in_threadpool(encoder.ensure, backend._primary_instance._model)
+        await enc_pool.ensure(backend._primary_instance._model)
     except Exception:  # noqa: BLE001 — encoder init failure => pool path
         log.exception("batched vision: encoder init failed — pool fallback")
         stats["fallbacks"] += 1
         return None
-    marker = encoder.marker
+    marker = enc_pool.marker
     # Family media wrappers (paddleocr: <|IMAGE_START|>…<|IMAGE_END|>) —
     # the marker itself must stay bare for mtmd_tokenize to find; the
     # wrappers are ordinary template text around it.
@@ -1387,35 +1397,45 @@ async def _run_vision_batched(
             # without this the reaper reclaims the seat mid-install (19
             # double-checkouts on 2026-08-27; see _seat_reaper_sweep).
             backend._vision_installing.add(id(instance))
-            split = await run_in_threadpool(
-                encoder.split_prompt,
-                prompt_text,
-                images,
-                instance.n_tokens == 0,
+            # THE LEASE COVERS tokenize+encode+install, then releases
+            # BEFORE generation: the encoder is only needed while media
+            # moves, and holding it through a 30-60 s muse figure
+            # description would serialize the whole pool behind decode.
+            t_lease = _time.time()
+            async with enc_pool.lease() as encoder:
+                stats["encoder_wait_ms_last"] = round(
+                    (_time.time() - t_lease) * 1000.0, 1
+                )
+                split = await run_in_threadpool(
+                    encoder.split_prompt,
+                    prompt_text,
+                    images,
+                    instance.n_tokens == 0,
+                )
+                try:
+                    n_embd_inp = backend._primary_instance._model.n_embd_inp()
+                    await install_multimodal_prefix(
+                        engine,
+                        encoder,
+                        instance,
+                        split,
+                        n_embd_inp,
+                        int(getattr(backend._primary_instance, "n_batch", 512)),
+                    )
+                    install_ms = (_time.time() - t0) * 1000.0
+                    stats["install_ms_last"] = round(install_ms, 1)
+                    prompt_tokens_total = instance.n_tokens + len(split.text2)
+                    text2 = list(split.text2)
+                finally:
+                    split.free()
+            answer = await backend.generate_async(
+                instance=instance,
+                prompt_tokens=text2,
+                max_tokens=resolved_max,
+                temperature=resolved_temp,
+                stop_texts=list(stops) if stops else None,
+                static_in_prompt=False,
             )
-            try:
-                n_embd_inp = backend._primary_instance._model.n_embd_inp()
-                await install_multimodal_prefix(
-                    engine,
-                    encoder,
-                    instance,
-                    split,
-                    n_embd_inp,
-                    int(getattr(backend._primary_instance, "n_batch", 512)),
-                )
-                install_ms = (_time.time() - t0) * 1000.0
-                stats["install_ms_last"] = round(install_ms, 1)
-                prompt_tokens_total = instance.n_tokens + len(split.text2)
-                answer = await backend.generate_async(
-                    instance=instance,
-                    prompt_tokens=list(split.text2),
-                    max_tokens=resolved_max,
-                    temperature=resolved_temp,
-                    stop_texts=list(stops) if stops else None,
-                    static_in_prompt=False,
-                )
-            finally:
-                split.free()
             text = vision_clean(answer or "", mcfg.family)
             generated = len(getattr(instance, "_last_completion_tokens", None) or [])
             stats["served"] += 1

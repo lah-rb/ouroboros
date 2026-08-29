@@ -295,6 +295,103 @@ class MtmdEncoder:
         return int(newp.value)
 
 
+class MtmdEncoderPool:
+    """K independent mtmd contexts, LEASED one per request.
+
+    WHY A POOL. An encode is a ViT+projector forward writing the mtmd
+    context's own output scratch — one context runs one forward at a time,
+    and with a single process-wide encoder that made encode the SERIAL
+    stage of batched vision. Measured 2026-08-29 (dev/OCR_LANE doc): a
+    paddle crop pays a constant 57-73 ms minimum-grid encode (~38% of the
+    request), and the batched serving cell held quality but stayed
+    throughput-FLAT against the pool because every stream queued on this
+    one lock while decode multiplexed underneath. Each pool member costs a
+    full projector upload (~1 GB for paddle's mmproj) — VRAM buys encoder
+    concurrency, the same trade the old per-instance vision pool made, but
+    here it buys ONLY the encode stage; KV stays in the one batched
+    context. The preflight governor counts size × mmproj.
+
+    THE LEASE COVERS tokenize + encode + install, one request at a time
+    per member. A media chunk carries its preprocessing from tokenize, so
+    creating and encoding it on the SAME context removes every
+    cross-context question; the atomic install then reads the leased
+    context's flags from the decode thread, which is the same overlap
+    (install on ctx concurrent with another encode) production has always
+    run. At size 1 this degrades to today's single-encoder behaviour with
+    one improvement: split_prompt is now inside the lease, closing the
+    previously-unserialized concurrent-tokenize window on a shared ctx.
+
+    asyncio-native on purpose: leases are awaited in request coroutines
+    (never the decode thread), so a queue.Queue would block the loop.
+    """
+
+    def __init__(
+        self,
+        mmproj_path: str,
+        size: int = 1,
+        n_threads: int = 4,
+        projector_device: Optional[str] = None,
+        use_gpu: bool = True,
+    ) -> None:
+        self.size = max(1, int(size or 1))
+        self._encoders: List[MtmdEncoder] = [
+            MtmdEncoder(
+                mmproj_path=mmproj_path,
+                n_threads=n_threads,
+                projector_device=projector_device,
+                use_gpu=use_gpu,
+            )
+            for _ in range(self.size)
+        ]
+        self._q: Any = None  # asyncio.Queue, built in ensure() (needs a loop)
+        self._ensure_lock: Any = None
+
+    @property
+    def marker(self) -> str:
+        return self._encoders[0].marker
+
+    async def ensure(self, llama_model: Any) -> None:
+        """Idempotent lazy init of every member (blocking C loads run in
+        the default executor). ~0.5-1 s per member, paid once."""
+        import asyncio
+
+        if self._ensure_lock is None:
+            self._ensure_lock = asyncio.Lock()
+        async with self._ensure_lock:
+            if self._q is not None:
+                return
+            loop = asyncio.get_running_loop()
+            for enc in self._encoders:
+                await loop.run_in_executor(None, enc.ensure, llama_model)
+            q: Any = asyncio.Queue()
+            for enc in self._encoders:
+                q.put_nowait(enc)
+            self._q = q
+            log.info(
+                "👁  batched-vision encoder pool ready: %d context(s)",
+                self.size,
+            )
+
+    def lease(self):
+        """Async context manager yielding one member for the request's
+        tokenize+encode+install window. Released on every exit path — a
+        leaked lease silently shrinks the pool until vision deadlocks,
+        the same failure shape acquire_vision_instance guards against."""
+        import contextlib
+
+        assert self._q is not None, "ensure() first"
+
+        @contextlib.asynccontextmanager
+        async def _cm():
+            enc = await self._q.get()
+            try:
+                yield enc
+            finally:
+                self._q.put_nowait(enc)
+
+        return _cm()
+
+
 def render_vision_prompt(
     family: str,
     system_text: str,
