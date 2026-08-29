@@ -1,0 +1,41 @@
+# PaddleOCR-VL — OCR STAGE-SPLIT / POOL-WIDTH PROBE. Not a serving config.
+#
+# WHY IT EXISTS. Phase 0 of the OCR lane migration asks two questions the
+# production config cannot answer as it stands:
+#
+#   P0a  What fraction of a real OCR request is DECODE? Batching multiplexes
+#        decode and SERIALIZES encode (MtmdEncoder holds a process-wide lock,
+#        while the pool path encodes independently per instance). So an
+#        encode-dominated OCR mix makes the batched engine the WRONG
+#        architecture here, even though it won 3.3x on figtext.
+#   P0b  Does pool width pay at OCR shape, and does the KV reduction that
+#        buys the width hold quality? vision_n_ctx is per CONTEXT and the
+#        preflight multiplies by vision_pool_size, so (4 x 16384) costs
+#        exactly what today's (2 x 32768) costs.
+#
+# WHY IT IS A SEPARATE FILE. Production paddle is served as a hot SECONDARY on
+# muse's server, which is where /v1 comes from — paddle's own config sets no
+# openai_shim because it never needs one. Standing paddle up alone for a clean
+# measurement therefore needs the shim turned on, and the production config
+# must not carry a flag it does not use in production.
+#
+# The pool geometry below is swept by the probe driver, which rewrites
+# vision_pool_size / vision_n_ctx between cells. Values here are the
+# production baseline so an unswept run reproduces today's serving shape.
+#
+# NOT A SWAP OR ROUTING TARGET. Delete once Phase 0 reports.
+
+extends: paddle-ocr-vl
+
+app:
+  # 8008 on purpose: extract_batch.py's default OUROBOROS_LLMVP_URL, so the
+  # end-to-end P0b arm needs no environment surgery to find it. Nothing else
+  # may be running when this is up.
+  port: 8008
+  # The whole point of this file.
+  openai_shim: true
+
+model:
+  # Baseline = production. The driver overrides both per cell.
+  vision_n_ctx: 32768
+  vision_pool_size: 2

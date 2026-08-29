@@ -88,13 +88,27 @@ model:
   n_ctx: 4096
   # Vision: the window OCR crops actually land in.
   vision_n_ctx: 32768
-  # 2, not the subprocess path's 4. That 4 was its measured saturation point
-  # on the M1 and was carried here untested; 4 x 32768 KV is 2.25 GB and it
-  # was never admitted — the pool that OOMed the server was this one. Two
-  # concurrent crops is the width the batched bench actually supports:
-  # vision+vision serialized at S=0.093 (dev/batched_modality_mix.py), i.e.
-  # the second crop is ~free. Raise it once the governor can prove the KV
-  # fits on CUDA1 and a bench shows 4 still pays.
+  # 2, AND MEASURED TO BE THE RIGHT NUMBER — not a hedge any more.
+  #
+  # The old reason for 2 was an OOM: the preflight counted ONE vision context
+  # instead of vision_pool_size, approved "1.49GB OK" for 4 x 32768, and then
+  # died building the pool it had just approved. That governor bug is fixed
+  # (llama_cpp_backend.py, "TIMES THE POOL WIDTH"), so the hazard is gone.
+  #
+  # Width was then swept on the real tool over real PDFs, iso-memory
+  # (vision_n_ctx is per CONTEXT, so 2x32768, 4x16384 and 8x8192 all preflight
+  # at 2.09 GB — verified byte-identical). Throughput on one workload:
+  #
+  #     2 x 32768 -> 11.26 pages/min      <- this config
+  #     4 x 16384 -> 10.37 pages/min
+  #     8 x  8192 -> 10.82 pages/min
+  #
+  # WIDTH BUYS NOTHING. An OCR request is ~80% FIXED per-request serving cost
+  # (~92 ms that scales with neither image area, output length, prompt length
+  # nor n_ctx); only ~14% is encode+decode+transport, and the fixed part does
+  # not parallelize across contexts. Do not raise this expecting throughput —
+  # raise DEFAULT_LANE_MAX_INFLIGHT["paddle"] with it and you get a deeper
+  # queue and noisier telemetry. See dev/OCR_LANE_2026-08-29.md.
   vision_pool_size: 2
   # The projector cannot follow main_gpu — mtmd takes use_gpu, not a device —
   # so left alone it lands on CUDA0 where muse already sits (that OOM killed

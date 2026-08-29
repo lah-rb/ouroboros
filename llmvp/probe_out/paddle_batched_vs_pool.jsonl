@@ -1,0 +1,11 @@
+{"arm": "batched", "n": 1, "wall_s": 1.47, "prefill_s": 0.06, "gen_tokens": 700, "errors": [], "peak_mb": 746, "base_mb": 746, "agg_tps": 476.2}
+{"arm": "batched", "n": 2, "wall_s": 1.76, "prefill_s": 0.12, "gen_tokens": 1400, "errors": [], "peak_mb": 765, "base_mb": 745, "agg_tps": 795.5}
+{"arm": "batched", "n": 4, "wall_s": 2.28, "prefill_s": 0.25, "gen_tokens": 2800, "errors": [], "peak_mb": 745, "base_mb": 746, "agg_tps": 1228.1}
+{"arm": "batched", "n": 8, "wall_s": 3.67, "prefill_s": 0.63, "gen_tokens": 5600, "errors": [], "peak_mb": 746, "base_mb": 746, "agg_tps": 1525.9}
+{"arm": "batched", "n": 16, "wall_s": 6.58, "prefill_s": 1.81, "gen_tokens": 11200, "errors": [], "peak_mb": 746, "base_mb": 747, "agg_tps": 1702.1}
+{"arm": "batched", "n": 24, "wall_s": 11.03, "prefill_s": 3.55, "gen_tokens": 16800, "errors": [], "peak_mb": 745, "base_mb": 745, "agg_tps": 1523.1}
+{"arm": "pool", "n": 1, "wall_s": 1.46, "gen_tokens": 700, "errors": [], "peak_mb": 745, "base_mb": 745, "agg_tps": 479.5}
+{"arm": "pool", "n": 2, "wall_s": 2.42, "gen_tokens": 1400, "errors": [], "peak_mb": 745, "base_mb": 745, "agg_tps": 578.5}
+{"arm": "pool", "n": 4, "wall_s": 4.38, "gen_tokens": 2800, "errors": [], "peak_mb": 745, "base_mb": 745, "agg_tps": 639.3}
+{"arm": "pool", "n": 8, "wall_s": 8.44, "gen_tokens": 5600, "errors": [], "peak_mb": 765, "base_mb": 745, "agg_tps": 663.5}
+{"arm": "pool", "n": 16, "wall_s": 16.79, "gen_tokens": 11200, "errors": [], "peak_mb": 745, "base_mb": 745, "agg_tps": 667.1}

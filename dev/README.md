@@ -40,6 +40,14 @@ banked (memories / dev/archive/docs/) — do not let this directory re-rot.
   multi-seq engine: P0 probe verdicts (KV-integrity GO), predictions,
   build log. Probes live in `llmvp/probe_vision_*.py`.
 
+- `OCR_LANE_2026-08-29.md` — **can the figtext treatment be repeated on OCR?
+  No.** Phase 0 refuted both levers before any product code: decode is 12.8 %
+  of a crop request (so the batched path is the wrong architecture — it
+  serializes encode) and pool width 2/4/8 is flat (so do not widen
+  `vision_pool_size` or add `ocr*` lanes). OCR is bound by a ~92 ms FIXED
+  per-request serving cost that scales with nothing. Probes:
+  `llmvp/probe_ocr_{proxy,sweep,floor,analyze,stage_split}.py`.
+
 - `batched_parity.py` — batched-decode determinism/isolation parity. `duo_soak.py` — multi-seat soak + latch-heal.
 - `snapshot_stress.py` — snapshot-tier acceptance. `cache_strategy_stress.py` / `cache_compat_matrix.{py,sh}` — KV strategy & per-model compat. **The compat matrix is the sweep harness — extend it, don't rebuild it** (`CACHE_SWEEP_PLAN.md` §sweep: raise depth 3→12, record the new `session_strategy` health fields, needle past the window).
 - `caching/FEATURE_MATRIX.md` — **the operational view (2026-07-30)**: there are only THREE deployable strategies (pool+replay / pool+resident / batched+resident — batched hard-requires resident, so full_replay is unreachable there), and this maps all 15 cache/state features onto them with measured benefit, measured cost, and a per-model "what you can layer today" verdict. Read it before enabling any cache feature on a model. Headline: five features are on by config and OFF in reality, four of them under the production batched shape, and three announce it only at log.debug.

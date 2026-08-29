@@ -1,0 +1,3 @@
+{"identical": true, "tax_vs_matmul": 0.79, "encodes_done": 17, "control": {"wall_s": 7.73, "tps": 49.7}, "encode": {"wall_s": 37.47, "tps": 10.2}, "matmul": {"wall_s": 7.89, "tps": 48.6}}
+{"identical": true, "tax_vs_matmul": 0.899, "encodes_done": 16, "control": {"wall_s": 7.83, "tps": 49.0}, "encode": {"wall_s": 78.75, "tps": 4.9}, "matmul": {"wall_s": 7.91, "tps": 48.6}}
+{"identical": true, "tax_vs_matmul": 0.898, "encodes_done": 16, "control": {"wall_s": 7.85, "tps": 48.9}, "encode": {"wall_s": 78.03, "tps": 4.9}, "matmul": {"wall_s": 8.0, "tps": 48.0}}
