@@ -543,7 +543,16 @@ def _prompts_dir():
 # REWRITTEN. A promoted paper keeps `extract_unverified`, so an audit can
 # always separate "machine-verified against a publisher text layer" from
 # "admitted on curator judgement alone".
-_EXTRACTION_USABLE = ("extracted", "extract_unverified")
+#
+# extract_lingual joined 2026-08-29 (post-acceptance translation, executing
+# the 2026-08-22 lane-closure design): the curator reviews non-English
+# originals accurately — all 22 untranslated non-en denials were substantive
+# content verdicts — so lingual papers pay the acceptance tax FIRST and only
+# the accepted ones spend translate seats (_translation_pending gates on
+# review_status == "accepted"). The status stays extract_lingual through
+# review; the translation drain books it to "extracted" + writes the .en.md
+# beside the source, which _build_doc_for already prefers by convention.
+_EXTRACTION_USABLE = ("extracted", "extract_unverified", "extract_lingual")
 
 
 def _fig_pending(record: dict) -> bool:
@@ -1060,6 +1069,13 @@ _PRIORITY_ASPECTS = frozenset(
         "emission_spectroscopy",
         "raman ftir cultural heritage",
         "vibrational_spectroscopy",
+        # Foundations goals (2026-08-29): technique physics + mineral
+        # formation/chemistry — added to help the trained model generalize
+        # (the OLMo probe found polymorphs unsolved for want of INPUT, not
+        # capacity), so their papers should be worked early, not queued
+        # behind the survey bins.
+        "spectroscopy technique physics",
+        "mineral formation and chemistry",
     }
 )
 

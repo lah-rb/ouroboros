@@ -570,10 +570,21 @@ def acquisition_is_truncated(record: dict, pdf_pages: int) -> bool:
 
 
 def _translation_pending(record: dict) -> bool:
-    """A record the TRANSLATION drain owes work to: lingual verdict with a
-    markdown on disk to translate."""
-    return record.get("extraction_status") == "extract_lingual" and bool(
-        record.get("md_path")
+    """A record the TRANSLATION drain owes work to: an ACCEPTED lingual
+    paper with a markdown on disk to translate.
+
+    POST-ACCEPTANCE BY DESIGN (2026-08-22 lane-closure decision, executed
+    2026-08-29): the curator reviews originals accurately — all 22
+    untranslated non-en denials were substantive content verdicts — and 5
+    of 27 verdicted translations had been spent on papers the curator then
+    denied. So lingual papers flow to curation AS-IS (_EXTRACTION_USABLE
+    includes extract_lingual), and only the accepted ones spend translate
+    seats: the papers that have already paid the acceptance tax.
+    """
+    return (
+        record.get("extraction_status") == "extract_lingual"
+        and bool(record.get("md_path"))
+        and record.get("review_status") == "accepted"
     )
 
 

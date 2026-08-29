@@ -272,7 +272,15 @@ async def triage_one(effects, paper_key: str, pdf_rel: str) -> dict:
     tech = v.get("technique") or ""
     geo = v.get("geological", "unclear")
     is_review = v["type"] == "review"
-    off_topic = geo == "no"
+    # OFF TOPIC = not geological AND not about one of the corpus's own
+    # techniques. Widened 2026-08-29 with the foundations goals: a paper on
+    # the PHYSICS of Raman/LIBS/XRD (scattering theory, plasma diagnostics,
+    # diffraction physics, calibration theory) measures no mineral and used
+    # to park off_topic terminally here — exactly the papers the
+    # physics-of-technique aspect now hunts. A named corpus technique keeps
+    # a non-geological paper in the queue at normal priority; the curator
+    # remains the judge of whether its content earns acceptance.
+    off_topic = geo == "no" and tech in ("", "none", "other")
 
     bin_ = tech
     if off_topic and tech in ("", "none", "other"):

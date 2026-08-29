@@ -126,12 +126,37 @@ async def test_verdict_routes_lingual_vs_english(monkeypatch, tmp_path):
 
 
 def test_translation_pending_predicate():
+    """POST-ACCEPTANCE (2026-08-29): only papers the curator ACCEPTED spend
+    translate seats — the 2026-08-22 closure finding executed as selection
+    (5 of 27 verdicted translations had gone to papers then denied)."""
     assert _translation_pending(
+        {
+            "extraction_status": "extract_lingual",
+            "md_path": "x.md",
+            "review_status": "accepted",
+        }
+    )
+    # unreviewed lingual: waits for the curate lane, not a defect
+    assert not _translation_pending(
         {"extraction_status": "extract_lingual", "md_path": "x.md"}
     )
-    assert not _translation_pending({"extraction_status": "extract_lingual"})
+    # denied: never translated — the exact waste the closure measured
     assert not _translation_pending(
-        {"extraction_status": "extracted", "md_path": "x.md"}
+        {
+            "extraction_status": "extract_lingual",
+            "md_path": "x.md",
+            "review_status": "denied",
+        }
+    )
+    assert not _translation_pending(
+        {"extraction_status": "extract_lingual", "review_status": "accepted"}
+    )
+    assert not _translation_pending(
+        {
+            "extraction_status": "extracted",
+            "md_path": "x.md",
+            "review_status": "accepted",
+        }
     )
 
 
@@ -197,7 +222,11 @@ def test_gate_catches_degeneration_and_bloat():
 
 def test_translation_selection_claims_and_attempt_cap():
     bank = {
-        "a": {"extraction_status": "extract_lingual", "md_path": "a.md"},
+        "a": {
+            "extraction_status": "extract_lingual",
+            "md_path": "a.md",
+            "review_status": "accepted",
+        },
         "b": {
             "extraction_status": "extract_lingual",
             "md_path": "b.md",
@@ -435,6 +464,7 @@ async def test_translate_drain_partial_progress_two_rounds(monkeypatch):
         "paper_key": "p1",
         "extraction_status": "extract_lingual",
         "md_path": "databank/markdown/p1.md",
+        "review_status": "accepted",
         "script_profile": {"cjk": 0.6},
     }
     fx = MockEffects(
@@ -496,6 +526,7 @@ async def test_translate_drain_chunk_failure_banks_successes(monkeypatch):
         "paper_key": "p1",
         "extraction_status": "extract_lingual",
         "md_path": "databank/markdown/p1.md",
+        "review_status": "accepted",
     }
     fx = MockEffects(
         files={
@@ -549,6 +580,7 @@ async def test_translate_chunk_img_mismatch_gets_one_retry(monkeypatch):
         "paper_key": "p1",
         "extraction_status": "extract_lingual",
         "md_path": "databank/markdown/p1.md",
+        "review_status": "accepted",
     }
     fx = MockEffects(
         files={
@@ -638,6 +670,7 @@ async def test_translate_chunk_numeric_miss_gets_one_retry(monkeypatch):
         "paper_key": "p1",
         "extraction_status": "extract_lingual",
         "md_path": "databank/markdown/p1.md",
+        "review_status": "accepted",
     }
     fx = MockEffects(
         files={
@@ -666,14 +699,20 @@ def test_translation_selection_prefers_strong_tags():
         "a_stray": {
             "extraction_status": "extract_lingual",
             "md_path": "a.md",
+            "review_status": "accepted",
             "tags": [{"relevance": "adjacent"}],
         },
         "z_close": {
             "extraction_status": "extract_lingual",
             "md_path": "z.md",
+            "review_status": "accepted",
             "tags": [{"relevance": "close"}],
         },
-        "m_untagged": {"extraction_status": "extract_lingual", "md_path": "m.md"},
+        "m_untagged": {
+            "extraction_status": "extract_lingual",
+            "md_path": "m.md",
+            "review_status": "accepted",
+        },
     }
     _TRANSLATE_CLAIMS.clear()
     try:
@@ -714,6 +753,7 @@ async def test_a_chunk_is_banked_as_it_lands_not_at_the_end_of_the_round(monkeyp
         "paper_key": "p1",
         "extraction_status": "extract_lingual",
         "md_path": "databank/markdown/p1.md",
+        "review_status": "accepted",
     }
 
     banked_when = []
@@ -780,6 +820,7 @@ def _budget_fixture(monkeypatch, n_chunks=2):
         "paper_key": "p1",
         "extraction_status": "extract_lingual",
         "md_path": "databank/markdown/p1.md",
+        "review_status": "accepted",
         "script_profile": {"cjk": 0.6},
     }
     fx = MockEffects(
@@ -897,6 +938,7 @@ def test_a_chunk_failure_defers_the_paper_instead_of_wedging_the_lane():
         return {
             "extraction_status": "extract_lingual",
             "md_path": "databank/markdown/x.md",
+            "review_status": "accepted",
             "tags": [],
         }
 

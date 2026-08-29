@@ -47,6 +47,21 @@ _CHUNK_CHARS = 12_000
 # refine_queries turn and the engine's slack keep the rest.
 _TRANSLATE_SEATS = 2
 
+# Language-code → name for the prompt's source hint. Codes the corpus has
+# actually produced (the extraction-side stopword vote + catalog metadata);
+# an unknown code passes through verbatim — a code beats "cyrillic"-by-bug.
+_LANGUAGE_NAMES = {
+    "es": "Spanish",
+    "fr": "French",
+    "pt": "Portuguese",
+    "de": "German",
+    "it": "Italian",
+    "ru": "Russian",
+    "ja": "Japanese",
+    "zh": "Chinese",
+    "ko": "Korean",
+}
+
 TRANSLATE_MIN_NUMERIC = 0.98
 # Per-chunk retry threshold — looser than the assembly bar on purpose: a
 # chunk is a small sample (a few dozen tokens), so one boundary artifact
@@ -297,8 +312,10 @@ def _tag_priority(record: dict) -> int:
 
 
 def select_translation_paper(databank: dict) -> str | None:
-    """One unclaimed extract_lingual paper with retry budget left.
+    """One unclaimed ACCEPTED extract_lingual paper with retry budget left.
 
+    Post-acceptance by design (see _translation_pending): curation reads
+    originals, so only papers the curator accepted spend translate seats.
     Ordered by (tag strength, key): relevance first, then deterministic —
     which doubles as finish-first: a partially translated paper keeps
     being selected until it completes."""
@@ -363,12 +380,28 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
     try:
         import asyncio
 
+        # SOURCE HINT. The record's `language` (the extraction-side vote,
+        # present on ~88% of the lingual cohort) beats any script guess —
+        # the old profile-max fired unconditionally and its default was
+        # dead code (max over a non-empty literal tuple), so every
+        # Latin-script Spanish/French/German paper was prompted "source
+        # script: cyrillic". Language first; a real non-Latin script
+        # second (only when actually present); the honest unknown last.
+        lang = str(rec.get("language") or "").strip().lower()
         profile = rec.get("script_profile") or {}
-        hint = max(
-            (s for s in ("cyrillic", "cjk", "hangul", "greek")),
-            key=lambda s: float(profile.get(s) or 0.0),
-            default="non-Latin",
-        )
+        if lang and lang != "en":
+            hint = _LANGUAGE_NAMES.get(lang, lang)
+        else:
+            present = [
+                s
+                for s in ("cyrillic", "cjk", "hangul", "greek")
+                if float(profile.get(s) or 0.0) >= 0.05
+            ]
+            hint = (
+                max(present, key=lambda s: float(profile.get(s) or 0.0))
+                if present
+                else "non-Latin"
+            )
         attempts = int(rec.get("translate_attempts") or 0)
         # Retry rounds run warmer: the first failure is often a too-literal
         # decode loop or an omitted passage; temperature is the lever.
