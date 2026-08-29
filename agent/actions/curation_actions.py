@@ -43,6 +43,13 @@ Numeric tokenization mirrors tools/pdf_extract/extract_batch.py
 from __future__ import annotations
 from agent.paths import repo_root as _repo_root
 from agent.scheduler.capacity_claim import current_claim
+from agent.actions.drain_lane import (
+    ClaimSet,
+    decline,
+    drain_budget,
+    select_cost_bounded,
+    server_alive,
+)
 
 import difflib
 import json
@@ -724,15 +731,11 @@ def _fig_batch(databank: dict) -> list[str]:
 # _fig_batch a paper OVER the budget is SKIPPED here, not dispatched alone:
 # an 86-minute figure-heavy paper belongs to a dedicated curator dispatch,
 # never to a branch riding a discovery round.
-_FIGTEXT_CLAIMS: set[str] = set()
+_FIGTEXT_CLAIMS = ClaimSet("figtext")
 
 
 def _figtext_drain_budget() -> int:
-    raw = os.environ.get("OUROBOROS_FIGTEXT_FIGS", "").strip()
-    try:
-        return max(0, int(raw)) if raw else 6
-    except ValueError:
-        return 6
+    return drain_budget("OUROBOROS_FIGTEXT_FIGS", 6)
 
 
 def _figs_remaining(record: dict) -> int:
@@ -755,38 +758,28 @@ def select_figtext_batch(databank: dict, max_figures: int) -> list[str]:
     taken ALONE and the tool's --max-figures pool caps the round — big
     papers make progress across rounds instead of being skipped forever
     (693 papers at 13+ figures were structurally unreachable under the
-    old skip rule)."""
-    pending = sorted(
-        (
-            k
-            for k, r in databank.items()
-            if _fig_pending(r) and k not in _FIGTEXT_CLAIMS
-        ),
-        key=lambda k: (
-            0 if "/" in str(databank[k].get("figtext_progress") or "") else 1,
-            _figs_remaining(databank[k]),
+    old skip rule).
+
+    The packing rule itself now lives in drain_lane.select_cost_bounded,
+    shared with the OCR drain; what stays here is what is actually about
+    figures — the pending predicate, the cost, and the finish-first order.
+    """
+    return select_cost_bounded(
+        databank,
+        budget=max_figures,
+        pending=_fig_pending,
+        cost=lambda k, r: _figs_remaining(r),
+        sort_key=lambda k, r: (
+            0 if "/" in str(r.get("figtext_progress") or "") else 1,
+            _figs_remaining(r),
             k,
         ),
+        claims=_FIGTEXT_CLAIMS,
     )
-    batch: list[str] = []
-    figures = 0
-    for key in pending:
-        n = _figs_remaining(databank[key])
-        if figures + n > max_figures:
-            if batch:
-                break
-            # Nothing fits whole: take the head paper alone; the tool's
-            # figure pool bounds the round.
-            batch.append(key)
-            break
-        batch.append(key)
-        figures += n
-    _FIGTEXT_CLAIMS.update(batch)
-    return batch
 
 
 def release_figtext_keys(keys: list[str]) -> None:
-    _FIGTEXT_CLAIMS.difference_update(keys)
+    _FIGTEXT_CLAIMS.release(keys)
 
 
 async def action_figtext_drain_batch(step_input):
@@ -810,11 +803,10 @@ async def action_figtext_drain_batch(step_input):
     budget = _figtext_drain_budget()
 
     def _decline(reason: str) -> StepOutput:
-        summary = {"attempted_papers": 0, "figures": 0, "reason": reason}
-        return StepOutput(
-            result=summary,
-            observations=f"figtext drain idle ({reason})",
-            context_updates={"figtext_summary": summary},
+        return decline(
+            reason,
+            summary_key="figtext_summary",
+            counters={"attempted_papers": 0, "figures": 0},
         )
 
     if budget <= 0:
@@ -1564,12 +1556,7 @@ async def action_fig_review_batch(step_input):
         # retry when the server returns. A reachable server with zero
         # reports still books below — a permanently absent tool must not
         # spin forever (the curator e2e pins that).
-        alive = False
-        try:
-            alive = bool(await effects.inference_pool_health())
-        except Exception:  # noqa: BLE001 — unreachable is the signal
-            alive = False
-        if not alive:
+        if not await server_alive(effects):
             summary = {"status": "failed", "reason": "server unreachable — declined"}
             return StepOutput(
                 result=summary,

@@ -33,6 +33,12 @@ import time
 
 from agent.models import StepInput, StepOutput
 from agent.paths import repo_root as _repo_root
+from agent.actions.drain_lane import (
+    ClaimSet,
+    decline,
+    drain_budget,
+    select_cost_bounded,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +53,24 @@ EXTRACT_TIMEOUT_S = 1800
 # pages; 600 s covers the sub-oversize population with margin, and anything
 # larger routes to the book lane instead.
 _EXTRACT_ITEM_TIMEOUT_S = int(os.environ.get("OUROBOROS_EXTRACT_ITEM_TIMEOUT_S", "600"))
+
+
+def _ocr_drain_pages() -> int:
+    """PAGES a drain round may claim, across all its papers.
+
+    The round's real budget. OUROBOROS_OCR_DRAIN_PDFS caps how many PAPERS a
+    round takes, and on its own that let round duration swing ~20x — this
+    queue holds 6-page notes beside 100-page reviews, and only the long rounds
+    hit EXTRACT_TIMEOUT_S and lose their tail to `unjudged`.
+
+    120 reproduces today's typical round (4 papers x ~33 pages) so the change
+    is a variance reduction, not a throughput change: at the 5.7 s/page
+    measured on this rig (2026-08-29 sweep, 10.4-11.3 pages/min) that is
+    ~12 min against a 30-min EXTRACT_TIMEOUT_S, which leaves room for a slow
+    paper without letting three long ones walk the round past its own budget.
+    """
+    return drain_budget("OUROBOROS_OCR_DRAIN_PAGES", 120)
+
 
 # Statuses this stage will not revisit. extract_unverified belongs here:
 # another OCR pass over a scan with no text layer yields the same
@@ -574,12 +598,80 @@ def _extraction_pending(record: dict) -> bool:
 # one asyncio loop with no awaits between check and claim. IN-PROCESS
 # ONLY: a second agent process would need a flock'd claim file (the events
 # queue is the precedent); until then, one mission = one process stands.
-_OCR_CLAIMS: set[str] = set()
+_OCR_CLAIMS = ClaimSet("ocr")
+
+# Page counts for papers the extractor has never opened. pymupdf reads only
+# the xref to answer page_count (0.6 ms measured), but a round still must not
+# stat the whole queue — select_cost_bounded sizes lazily, and this caches
+# what it does read for the life of the process. Page counts do not change.
+_PDF_PAGES: dict[str, int] = {}
 
 
-def select_ocr_batch(databank: dict, max_pdfs: int) -> list[str]:
-    """Pick up to max_pdfs unclaimed pending keys and CLAIM them. Callers
-    must release_ocr_keys() in a finally.
+def _pdf_page_count(path: str) -> int:
+    """Pages in a PDF, cached. 0 when it cannot be read."""
+    if path in _PDF_PAGES:
+        return _PDF_PAGES[path]
+    n = 0
+    try:
+        import pymupdf
+
+        doc = pymupdf.open(path)
+        n = int(doc.page_count)
+        doc.close()
+    except Exception:  # noqa: BLE001 — an unreadable PDF is sized, not raised
+        logger.debug("page count failed for %s", path, exc_info=True)
+    _PDF_PAGES[path] = n
+    return n
+
+
+def _pages_remaining(record: dict, working_dir: str) -> int:
+    """Pages this paper still owes the OCR lane — the round's real cost.
+
+    A resumable extraction banks its cursor in extract_progress, so a
+    part-extracted paper costs only what is left. A fresh paper has no banked
+    total and the PDF is opened to count.
+
+    Returns 1 rather than 0 for an unreadable path: an item whose cost cannot
+    be measured must still be selectable (the extraction ladder is where a
+    missing PDF gets its verdict), and a zero cost would let unlimited
+    unreadable papers into one round.
+    """
+    prog = record.get("extract_progress") or {}
+    total = int(prog.get("total_pages") or 0)
+    if total:
+        done = 0
+        parts = prog.get("parts") or []
+        try:
+            done = sum(int(p.get("pages") or 0) for p in parts)
+        except (AttributeError, TypeError, ValueError):
+            done = 0
+        return max(1, total - done)
+    rel = str(record.get("pdf_path") or "")
+    if not rel:
+        return 1
+    path = rel if os.path.isabs(rel) else os.path.join(working_dir, rel)
+    return _pdf_page_count(path) or 1
+
+
+def select_ocr_batch(
+    databank: dict,
+    max_pdfs: int,
+    *,
+    working_dir: str = "",
+    max_pages: int = 0,
+) -> list[str]:
+    """Pick unclaimed pending keys and CLAIM them. Callers must
+    release_ocr_keys() in a finally.
+
+    BOUNDED BY PAGES AS WELL AS PAPERS when `working_dir` is given. Paper
+    count alone is a poor budget: this queue holds 6-page notes and 100-page
+    reviews, so a four-paper round varied ~20x in duration against one fixed
+    EXTRACT_TIMEOUT_S, and the long rounds are the ones that hit it and lose
+    their tail to `unjudged`. Pages are what a round actually spends.
+
+    `max_pdfs` remains a hard ceiling, so this can only make rounds smaller or
+    more even than the count-bounded form it replaces. Without `working_dir`
+    (page costs are unresolvable) the behaviour is exactly the old one.
 
     Order: papers already PART-EXTRACTED first, then needs_reextract, then
     by CONTENT PRIORITY, then the rest. Finish-first matters more than it
@@ -595,11 +687,6 @@ def select_ocr_batch(databank: dict, max_pdfs: int) -> list[str]:
     Untriaged papers default to 1, so a queue with no triage keeps exactly
     its previous order.
     """
-    pending = [
-        (k, r)
-        for k, r in databank.items()
-        if _extraction_pending(r) and r.get("pdf_path") and k not in _OCR_CLAIMS
-    ]
 
     def _content_priority(rec: dict) -> int:
         try:
@@ -608,20 +695,42 @@ def select_ocr_batch(databank: dict, max_pdfs: int) -> list[str]:
         except (TypeError, ValueError):
             return 1
 
-    pending.sort(
-        key=lambda kr: (
-            not (kr[1].get("extract_progress") or {}).get("parts"),
-            kr[1].get("extraction_status") != "needs_reextract",
-            _content_priority(kr[1]),
+    def _order(key: str, rec: dict) -> tuple:
+        return (
+            not (rec.get("extract_progress") or {}).get("parts"),
+            rec.get("extraction_status") != "needs_reextract",
+            _content_priority(rec),
         )
+
+    def _pending(rec: dict) -> bool:
+        return bool(_extraction_pending(rec) and rec.get("pdf_path"))
+
+    if not working_dir:
+        # No workspace root: page costs are unresolvable, so keep the
+        # count-bounded behaviour exactly. Cost 1 per paper makes the shared
+        # packer reproduce `pending[:max_pdfs]`.
+        return select_cost_bounded(
+            databank,
+            budget=max_pdfs,
+            pending=_pending,
+            cost=lambda k, r: 1,
+            sort_key=_order,
+            claims=_OCR_CLAIMS,
+            max_items=max_pdfs,
+        )
+    return select_cost_bounded(
+        databank,
+        budget=max_pages if max_pages > 0 else _ocr_drain_pages(),
+        pending=_pending,
+        cost=lambda k, r: _pages_remaining(r, working_dir),
+        sort_key=_order,
+        claims=_OCR_CLAIMS,
+        max_items=max_pdfs,
     )
-    keys = [k for k, _ in pending[:max_pdfs]]
-    _OCR_CLAIMS.update(keys)
-    return keys
 
 
 def release_ocr_keys(keys: list[str]) -> None:
-    _OCR_CLAIMS.difference_update(keys)
+    _OCR_CLAIMS.release(keys)
 
 
 # ── book segments (the oversize interleave) ───────────────────────────
@@ -1078,43 +1187,45 @@ async def action_ocr_drain_batch(step_input: StepInput) -> StepOutput:
     (action_extract_pdf_batch) appends extraction.jsonl — no mission writes,
     so it satisfies the branch ownership contract without exceptions.
 
-    Inputs: working_directory; env OUROBOROS_OCR_DRAIN_PDFS bounds the
-    slice (default 4 ≈ one discovery dispatch of paddle work at ~65 s/paper;
-    0 disables). Result: attempted, extracted, reason.
+    Inputs: working_directory. The slice is bounded BOTH ways:
+    OUROBOROS_OCR_DRAIN_PDFS caps papers (default 4; 0 disables) and
+    OUROBOROS_OCR_DRAIN_PAGES caps the pages behind them (default 120), so a
+    round of long papers no longer runs ~20x a round of short ones.
+    Result: attempted, extracted, reason.
     """
     from agent.actions.scholarly_actions import read_databank
 
     effects = step_input.effects
-    raw = os.environ.get("OUROBOROS_OCR_DRAIN_PDFS", "").strip()
-    try:
-        max_pdfs = int(raw) if raw else 4
-    except ValueError:
-        max_pdfs = 4
+    max_pdfs = drain_budget("OUROBOROS_OCR_DRAIN_PDFS", 4)
+
+    def _decline(reason: str) -> StepOutput:
+        return decline(reason, summary_key="ocr_summary", counters={"attempted": 0})
+
     if max_pdfs <= 0:
-        return StepOutput(
-            result={"attempted": 0, "reason": "disabled"},
-            observations="OCR drain disabled",
-        )
+        return _decline("disabled")
     if effects is None:
-        return StepOutput(
-            result={"attempted": 0, "reason": "no effects"},
-            observations="OCR drain: no effects",
+        return _decline("no effects")
+
+    # Resolved BEFORE selection: page-cost bounding needs the workspace root
+    # to resolve the (workspace-relative) pdf_path of a paper the extractor
+    # has never opened. Falls back to the mission, which always knows its own
+    # working directory — the acquire step is dispatched with params {}, and
+    # reading the input alone once silently disabled a whole lane.
+    working_dir = str(
+        step_input.inputs.get("working_directory")
+        or getattr(
+            getattr(step_input.context.get("mission"), "config", None),
+            "working_directory",
+            "",
         )
+        or ""
+    )
 
     databank = await read_databank(effects)
-    keys = select_ocr_batch(databank, max_pdfs)
+    keys = select_ocr_batch(databank, max_pdfs, working_dir=working_dir)
     if not keys:
         # Regular queue empty — spend the round on one BOOK SEGMENT instead
         # (the oversize interleave; see _book_segment_round).
-        working_dir = str(
-            step_input.inputs.get("working_directory")
-            or getattr(
-                getattr(step_input.context.get("mission"), "config", None),
-                "working_directory",
-                "",
-            )
-            or ""
-        )
         if working_dir:
             book = await _book_segment_round(step_input, working_dir)
             logger.info("📚 book lane: %s", book)
@@ -1131,12 +1242,7 @@ async def action_ocr_drain_batch(step_input: StepInput) -> StepOutput:
                 observations=f"OCR drain: {note}",
                 context_updates={"ocr_summary": summary},
             )
-        summary = {"attempted": 0, "reason": "nothing unclaimed pending"}
-        return StepOutput(
-            result=summary,
-            observations="OCR drain: nothing unclaimed pending",
-            context_updates={"ocr_summary": summary},
-        )
+        return _decline("nothing unclaimed pending")
     claimed = list(keys)
     try:
         # PRE-OCR TRIAGE. Read each claimed paper's FIRST PAGE before spending

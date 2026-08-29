@@ -163,7 +163,9 @@ async def _ocr_lane(step_input: StepInput, max_pdfs: int) -> dict:
     # Claimed selection (shared with the ocr_drain parallel branch):
     # needs_reextract first, unclaimed only — two concurrent drains must
     # never OCR the same PDF twice.
-    keys = select_ocr_batch(databank, max_pdfs)
+    # working_dir engages PAGE-cost bounding as well as the paper cap, so an
+    # overlap round of long papers cannot monopolise the dispatch it rides.
+    keys = select_ocr_batch(databank, max_pdfs, working_dir=working_dir)
     if not keys:
         return {"attempted": 0, "reason": "nothing unclaimed pending"}
 
