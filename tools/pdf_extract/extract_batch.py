@@ -64,6 +64,7 @@ OUROBOROS_PADDLE_MMPROJ / OUROBOROS_PADDLE_MLX.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import re
@@ -624,6 +625,132 @@ def _script_profile(text: str) -> dict:
     return out
 
 
+# ── Page-shape text mode (EXPERIMENT — challenged canonical and LOST) ─
+#
+# WHY IT EXISTS. The region pipeline sends ~25-30 tiny crops per page, and
+# every crop pays a stack of per-request constants (minimum-patch-grid
+# encode 57-73 ms, serving and engine per-request costs — three successive
+# throughput levers each died on one, dev/OCR_LANE_2026-08-29.md). ONE
+# page-level request amortizes them all, and a first 24-page dev-set A/B
+# scored numeric 0.8625 vs the region pipeline's 0.6744.
+#
+# WHY IT IS NOT THE DEFAULT. The pre-registered 15-paper/90-page fresh-
+# sample validation REVERSED that result: region 0.8929 / page-shape
+# 0.7410 numeric, 12 of 13 page-routed papers below their region
+# counterpart, one at 0.34 with the classic failure shape — the one-shot
+# output was HALF the region output's bytes and ended in a degenerate
+# "at 476°C" x403 orbit. On dense two-column pages the model skips content
+# and orbits on numeric tables; the dev-set win was a small-n artifact of
+# a weak-baseline sample. Wall improved only 1.33x. The region pipeline is
+# canonical; this mode stays for experiments (--text-mode auto|page).
+#
+# THE ROUTER (auto mode): CJK-heavy pages (measured 0.000 one-shot where
+# region booked 1.000) and no-text-layer pages go to the region pipeline;
+# any page-shape failure falls back to the region path for THAT page.
+# Figures on page-shape pages are harvested from pymupdf geometry
+# (_figure_regions) into the same tmp layout, so _collect_figures dedups
+# and filters them identically (measured: 96 kept vs region's 87 on the
+# validation sample — the harvest itself is sound).
+
+_PAGE_MODE_MAX_TOKENS = int(os.environ.get("OUROBOROS_PAGE_MODE_MAX_TOKENS", "3584"))
+# Fraction of classified letters in the pymupdf truth above which a page
+# routes to the region pipeline. The measured failure was CJK; the other
+# scripts listed are unproven one-shot and cheap to keep on the safe path.
+_PAGE_MODE_NONPAGE_SCRIPTS = ("cjk", "hangul", "arabic", "thai", "hebrew")
+_PAGE_MODE_SCRIPT_MAX = float(os.environ.get("OUROBOROS_PAGE_MODE_SCRIPT_MAX", "0.10"))
+
+_PAGE_PROMPT = (
+    "Transcribe ALL text on this page as plain markdown, in reading order. "
+    "Include headers, body text, captions, footnotes and table contents. "
+    "Do not describe the page; output only the transcription."
+)
+
+
+def _route_page(truth: str) -> str:
+    """'page' or 'region' for one page, from its pymupdf prose truth.
+
+    Pure function of the truth text so the routing policy is testable
+    without a PDF in hand."""
+    stripped = truth.strip()
+    if len(stripped) < 200:
+        return "region"  # scan / no text layer: unverifiable, paddlex terrain
+    prof = _script_profile(stripped)
+    if (
+        sum(prof.get(s, 0.0) for s in _PAGE_MODE_NONPAGE_SCRIPTS)
+        > _PAGE_MODE_SCRIPT_MAX
+    ):
+        return "region"
+    return "page"
+
+
+def _page_transcribe(
+    png_bytes: bytes,
+    temperature: float,
+    top_p: float,
+    timeout: float = 300.0,
+) -> str:
+    """One full-page transcription through the fleet vision endpoint.
+
+    Sends `model` the same way _ensure_llmvp_model names it, so the call
+    routes identically on the production fleet server (paddle as a hot
+    secondary) and on a standalone campaign server (paddle as primary,
+    served under its config stem)."""
+    payload = {
+        "model": _LLMVP_MODEL,
+        "max_tokens": _PAGE_MODE_MAX_TOKENS,
+        "temperature": temperature,
+        "top_p": top_p,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "data:image/png;base64,"
+                            + base64.b64encode(png_bytes).decode("ascii")
+                        },
+                    },
+                    {"type": "text", "text": _PAGE_PROMPT},
+                ],
+            }
+        ],
+    }
+    req = urllib.request.Request(
+        f"{_LLMVP_URL.rstrip('/')}/v1/vision",
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        out = json.loads(resp.read())
+    return (out.get("choices") or [{}])[0].get("message", {}).get("content") or ""
+
+
+def _harvest_page_figures(page, out_dir: str, dpi: int) -> int:
+    """Render this page's figure regions (pymupdf geometry) as crops into
+    ``out_dir`` for _collect_figures to filter/dedup — the page-shape
+    replacement for the region pipeline's markdown_images harvest. Returns
+    the number of crops written; never raises (figures must not sink the
+    page's text)."""
+    n = 0
+    try:
+        rects = _figure_regions(page)
+        os.makedirs(out_dir, exist_ok=True)
+        for j, r in enumerate(rects):
+            try:
+                r = r & page.rect  # clamp
+                if r.width < 40 or r.height < 40:  # points; rules/underlines
+                    continue
+                pix = page.get_pixmap(dpi=dpi, clip=r)
+                pix.save(os.path.join(out_dir, f"pfig_{j:02d}.png"))
+                n += 1
+            except Exception:  # noqa: BLE001 — one bad rect is not fatal
+                continue
+    except Exception:  # noqa: BLE001
+        return n
+    return n
+
+
 # Collapse threshold mirrors extraction_actions.MAX_REPEAT_WORDS (the
 # verdict's degen limit): runs the verdict would condemn get collapsed to
 # one unit + an explicit marker instead, because the degen census
@@ -874,13 +1001,22 @@ def extract_paper(
     temperature: float = 0.8,
     top_p: float = 0.95,
     page_range: tuple | None = None,
+    text_mode: str = "region",
 ) -> dict:
     """``page_range=(a, b)`` extracts pages [a, b) only — the BOOK SEGMENT
     mode. An explicit range is operator intent, so the oversize referral is
     bypassed; the markdown lands in a part file (markdown/<key>.part_AAAA.md)
     for the drain to assemble once every segment is done, and figure
     numbering continues from what is already on disk so segments never
-    clobber earlier crops."""
+    clobber earlier crops.
+
+    ``text_mode``: "region" (the paddlex layout+crop pipeline, this
+    function's historical behaviour and the parameter default so library
+    callers and tests are untouched), "page" (one full-page VL request per
+    page), or "auto" — the CANONICAL mode: _route_page decides per page,
+    and a failed page-shape call falls back to the region path for that
+    page. The CLI defaults to auto (env OUROBOROS_OCR_TEXT_MODE overrides
+    without a code change)."""
     t0 = time.time()
     report = {
         "paper_key": key,
@@ -899,6 +1035,9 @@ def extract_paper(
         "largest_table_rows": 0,
         "figures_kept": 0,
         "figures_dropped": 0,
+        "pages_page_mode": 0,
+        "pages_region_mode": 0,
+        "page_mode_fallbacks": 0,
         "seconds": 0.0,
         "error": "",
     }
@@ -938,30 +1077,67 @@ def extract_paper(
             for i in page_indices:
                 page = doc[i]
                 png = os.path.join(tmp, f"p{i}.png")
-                page.get_pixmap(dpi=dpi).save(png)
+                pix = page.get_pixmap(dpi=dpi)
+                pix.save(png)
                 truth = _prose_text(page)
-
-                parts = []
                 out_dir = os.path.join(tmp, f"out{i}")
-                # Explicit, every call: the client otherwise pins temperature
-                # to 0 (greedy) for llama-cpp-server backends, and greedy
-                # loops deterministically on some pages. See --vl-temperature.
-                for res in pipe.predict(png, temperature=temperature, top_p=top_p):
-                    md = getattr(res, "markdown", None)
-                    if isinstance(md, dict):
-                        parts.append(md.get("markdown_texts") or "")
-                        # Some pipeline versions stash crops via save;
-                        # harvest both shapes.
-                        imgs = md.get("markdown_images") or {}
-                        os.makedirs(out_dir, exist_ok=True)
-                        for rel, im in imgs.items():
-                            try:
-                                im.save(os.path.join(out_dir, os.path.basename(rel)))
-                            except Exception:
-                                pass
-                    elif md:
-                        parts.append(str(md))
-                page_md = "\n".join(p for p in parts if p)
+
+                # Per-page route. "auto" is the canonical policy; explicit
+                # modes pin every page for A/Bs and rollback.
+                if text_mode == "auto":
+                    route = _route_page(truth)
+                elif text_mode == "page":
+                    route = "page"
+                else:
+                    route = "region"
+
+                page_md = ""
+                if route == "page":
+                    try:
+                        page_md = _page_transcribe(
+                            pix.tobytes("png"), temperature, top_p
+                        ).strip()
+                    except Exception as exc:  # noqa: BLE001 — fall back per page
+                        print(
+                            f"page-mode fallback p{i}: "
+                            f"{type(exc).__name__}: {str(exc)[:120]}",
+                            file=sys.stderr,
+                        )
+                        page_md = ""
+                    if page_md:
+                        report["pages_page_mode"] += 1
+                        _harvest_page_figures(page, out_dir, dpi)
+                    else:
+                        # Empty answer or transport failure: the region
+                        # pipeline is the fallback CONTRACT for this page.
+                        report["page_mode_fallbacks"] += 1
+                        route = "region"
+
+                if route == "region":
+                    report["pages_region_mode"] += 1
+                    parts = []
+                    # Explicit, every call: the client otherwise pins
+                    # temperature to 0 (greedy) for llama-cpp-server
+                    # backends, and greedy loops deterministically on some
+                    # pages. See --vl-temperature.
+                    for res in pipe.predict(png, temperature=temperature, top_p=top_p):
+                        md = getattr(res, "markdown", None)
+                        if isinstance(md, dict):
+                            parts.append(md.get("markdown_texts") or "")
+                            # Some pipeline versions stash crops via save;
+                            # harvest both shapes.
+                            imgs = md.get("markdown_images") or {}
+                            os.makedirs(out_dir, exist_ok=True)
+                            for rel, im in imgs.items():
+                                try:
+                                    im.save(
+                                        os.path.join(out_dir, os.path.basename(rel))
+                                    )
+                                except Exception:
+                                    pass
+                        elif md:
+                            parts.append(str(md))
+                    page_md = "\n".join(p for p in parts if p)
                 page_mds.append(page_md)
 
                 if len(truth.strip()) >= 200 and page_md.strip():
@@ -1097,6 +1273,20 @@ def main() -> int:
         default=0.95,
         help="VL nucleus sampling threshold passed per predict()",
     )
+    ap.add_argument(
+        "--text-mode",
+        choices=("auto", "page", "region"),
+        default=os.environ.get("OUROBOROS_OCR_TEXT_MODE", "region"),
+        help="Text extraction shape. 'region' (CANONICAL — the paddlex "
+        "layout+crop pipeline) held numeric 0.893 vs 'auto' page-shape's "
+        "0.741 on the 15-paper/90-page pre-registered validation "
+        "(2026-08-29, dev/OCR_LANE doc): one-shot page transcription "
+        "skips content and orbits on dense pages, and its earlier +0.19 "
+        "dev-set win did not generalize. 'auto' (page-shape with script/"
+        "text-layer routing and per-page region fallback) and 'page' stay "
+        "as experiment modes; OUROBOROS_OCR_TEXT_MODE overrides the "
+        "default without a code change.",
+    )
     args = ap.parse_args()
 
     # Resolve weights together, so a half-specified pair cannot silently mix
@@ -1178,6 +1368,7 @@ def main() -> int:
                 temperature=args.vl_temperature,
                 top_p=args.vl_top_p,
                 page_range=pr,
+                text_mode=args.text_mode,
             )
             print(json.dumps(report, ensure_ascii=False), flush=True)
     finally:
