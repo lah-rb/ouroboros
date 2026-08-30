@@ -603,19 +603,30 @@ def lanes_for_scraper() -> List[Lane]:
             resource="text_seat",
             est_kv=12_000,
         ),
-        # ONE translate lane, not two (2026-08-29 evening, operator).
-        # The second lane was carried over from the pre-closure occupancy
-        # finding, which measured seats free 94% of ticks — that is no
-        # longer the world. Post-acceptance selection makes translation
-        # DOWNSTREAM of curate: the lanes drain every accepted lingual
-        # paper and then idle (measured 6 rounds done / 14 idle over 2 h),
-        # while each ACTIVE lane holds up to _TRANSLATE_SEATS=2 concurrent
-        # chunk streams — so two lanes could take 4 of the 6 engine seats
-        # for work that is not there. Curate's refusals over the same
-        # window were majority SEAT-bound (13 "no free seat" vs 8 "needs
-        # cells"), and curate is what PRODUCES translation's input. One
-        # lane consumes the accepted queue with room to spare; the seat it
-        # gives back goes to curate5 below.
+        # SECOND TRANSLATE LANE, restored 2026-08-30 after an overnight
+        # measurement. Cutting to one lane the previous evening did lift
+        # curate (accepted 7.5 -> 10.0/h) but it CUT TRANSLATION 84%
+        # (5.7 -> 0.9/h) and the accepted-lingual backlog grew 6 -> 25.
+        #
+        # The mechanism is admission, not seats. A dynamic_kv lane claims
+        # `max(est_kv, free_cells)` — the WHOLE free pool — so five dynamic
+        # curate lanes leave a fixed 12k translate lane no window, and
+        # _one_unit returns False on refusal, which _run_lane books as
+        # IDLE. That is why the single lane read 17 done / 81 idle while
+        # 25 selectable papers waited: it was refused, not empty.
+        #
+        # Two lanes give translation two admission attempts per cycle
+        # instead of one. Seven text lanes against six engine seats is
+        # DELIBERATE over-subscription (text_seat inflight is 7): whichever
+        # side has work wins the seat, so the split rebalances itself
+        # instead of being frozen by a static lane count — the failure both
+        # of the previous two configurations shared.
+        Lane(
+            name="translate2",
+            flow="translate_drain",
+            resource="text_seat",
+            est_kv=12_000,
+        ),
         Lane(
             name="curate",
             flow="curate_drain",
