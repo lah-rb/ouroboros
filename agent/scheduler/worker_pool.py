@@ -603,18 +603,19 @@ def lanes_for_scraper() -> List[Lane]:
             resource="text_seat",
             est_kv=12_000,
         ),
-        # Second lane on the SAME drain — safe by construction:
-        # _TRANSLATE_CLAIMS is shared in-process, so the lanes claim
-        # different papers; the deferral set rotates both past wedged
-        # papers. Kept from the pre-closure occupancy finding (seats
-        # free 94% of ticks — lane SERIALISM, not seat count, was the
-        # binding limit).
-        Lane(
-            name="translate2",
-            flow="translate_drain",
-            resource="text_seat",
-            est_kv=12_000,
-        ),
+        # ONE translate lane, not two (2026-08-29 evening, operator).
+        # The second lane was carried over from the pre-closure occupancy
+        # finding, which measured seats free 94% of ticks — that is no
+        # longer the world. Post-acceptance selection makes translation
+        # DOWNSTREAM of curate: the lanes drain every accepted lingual
+        # paper and then idle (measured 6 rounds done / 14 idle over 2 h),
+        # while each ACTIVE lane holds up to _TRANSLATE_SEATS=2 concurrent
+        # chunk streams — so two lanes could take 4 of the 6 engine seats
+        # for work that is not there. Curate's refusals over the same
+        # window were majority SEAT-bound (13 "no free seat" vs 8 "needs
+        # cells"), and curate is what PRODUCES translation's input. One
+        # lane consumes the accepted queue with room to spare; the seat it
+        # gives back goes to curate5 below.
         Lane(
             name="curate",
             flow="curate_drain",
@@ -668,6 +669,20 @@ def lanes_for_scraper() -> List[Lane]:
             # doc worth curating (4k tok) plus one turn's overhead
             # (14k). Keep in step with _CURATE_MIN_DOC_TOKENS +
             # _CURATE_TURN_OVERHEAD_TOKENS in curation_actions.py.
+            est_kv=18_000,
+            dynamic_kv=True,
+            idle_backoff_s=30.0,
+        ),
+        # Fifth curate lane, taking the seat translate2 gave back
+        # (2026-08-29 evening). Curate is the pipeline's true bottleneck
+        # now — it gates acceptance, which gates translation, and its own
+        # refusals were majority seat-bound. Safe by the same construction
+        # as curate2-4: _CURATE_CLAIMS is shared in-process, so the lanes
+        # claim different papers. Six text lanes against six engine seats.
+        Lane(
+            name="curate5",
+            flow="curate_drain",
+            resource="text_seat",
             est_kv=18_000,
             dynamic_kv=True,
             idle_backoff_s=30.0,

@@ -77,11 +77,14 @@ async def test_a_v2_mission_starts_lanes_and_stops_them_cleanly():
             "figtext3",  # third lane, P5 ramp (server at 3 streams)
             "figtext4",  # fourth lane, P5 ramp step 2
             "translate",  # post-accept translation, reopened 2026-08-29
-            "translate2",
             "curate",
             "curate2",
             "curate3",
             "curate4",
+            # curate5 took translate2's seat 2026-08-29 evening: translation
+            # is downstream of curate, so it idled while curate was refused
+            # for seats. Six text lanes against six engine seats.
+            "curate5",
             "recover",
             "biblio",
         }
