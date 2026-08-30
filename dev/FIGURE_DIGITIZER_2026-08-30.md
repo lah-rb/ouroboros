@@ -157,10 +157,92 @@ the reference catalogue is a grounding point, not an authority. A digitised
 position is never shifted toward a catalogue value; disagreement is flagged,
 never corrected.
 
+---
+
+## Phase 1b — the instrument, and the ground truth it runs on
+
+Built BEFORE the extractor on purpose. An extractor written first gets tuned
+against figures somebody eyeballed, and every number it then produces is
+unfalsifiable.
+
+### The operator's data (`~/Downloads`, 1.7 GB)
+
+Far richer than the plan assumed — it is not just spectra, it is a **paired
+LIBS↔XRF calibration series**.
+
+| set | contents |
+|---|---|
+| `HandheldLIBS/` | 5 SME iron-oxide pellets × 6–7 spots × ~40 shots + `average.csv`. **1,730 spectra.** |
+| `GroundTruthXRF/` | the same pellets by XRF: `result.yaml` with quantitative composition per element |
+| `Au_Summer2024LIBS/` | 268 spectra over 14 gold-bearing localities, plus rendered PNGs and `ploting.py` |
+
+All spectra share one format: `wavelength,intensity`, **23,431 points,
+180–961 nm at 0.0333 nm/px**. Iron-oxide spectra carry ~245 peaks at 5%
+prominence; the Au spectra ~165. Recognisable lines land where they should
+(Ca II 393.3/396.8, Na D 589.0, the Fe cluster near 373–382).
+
+**The pairing is the valuable part.** Directory names encode Fe content, and
+every one has matching LIBS:
+
+```
+SME #4  Fe=46.870%   7 spots   371 spectra
+SME #1  Fe=57.843%   6 spots   246 spectra
+SME #3  Fe=62.881%   7 spots   343 spectra
+SME #2  Fe=76.429%   7 spots   343 spectra   (site 2)
+SME #2  Fe=77.003%   7 spots   343 spectra   (site 1)
+SME #6  Fe=86.009%   7 spots   427 spectra
+```
+
+Five Fe concentrations spanning 46.9–86.0% with hundreds of spectra each is a
+real calibration series — which is exactly the "intensities vary because they
+carry information" signal the corpus currently cannot teach. It is a Phase 2
+asset (it needs multi-series and legend semantics), recorded here so it is not
+rediscovered later.
+
+**The Au PNGs are not usable as digitiser targets**, and it is worth saying
+why so nobody tries: `ploting.py` draws with `ax.plot(x, y, 'o')`, so they are
+scatter markers, not traces — published figures are lines. They are useful for
+a different reason: `mplcursors` annotations bake **exact peak positions and
+intensities** into the image, so they self-label, and they exhibit every
+hazard the harness models (boxed frame, `1e10` exponent, 11 annotation boxes
+with arrows crossing the plot).
+
+### The renderer
+
+`synth.py` renders a spectrum to a vector PDF via pymupdf and returns exactly
+what it drew: the polyline, the axis mapping, tick values and positions, the
+exponent, the stroke width, and where the drawn axis stops. Rendering the full
+23,431-point survey takes 0.26 s. Nothing is downsampled — collapsing ~39 data
+points into one column IS the rasterisation loss under measurement, and
+downsampling here would hide it.
+
+Independently toggleable arms: frame (2/4 spines), ticks (in/out/both,
+major±minor), tick density, gridlines, log y, exponent multiplier, axis
+extends past last tick, stroke width, annotation boxes with arrows into the
+tallest peaks, legend, x-range (survey vs zoom), render dpi, JPEG quality.
+
+At default geometry a full survey samples 0.93 nm/px at 160 dpi and 0.25 at
+600; a 390–410 nm window samples 0.024 nm/px. That single fact is the whole
+resolution argument, and it is now an assertion rather than a claim.
+
+Four more bugs, all caught by the tests rather than by looking:
+
+1. **The first render came out blank** — no axes, no trace. pymupdf's
+   `finish()` only closes a path group; `commit()` is what writes it. Every
+   arm would have scored a perfect zero against an empty page.
+2. **Tick density was not actually an arm.** Choosing "the first step above the
+   raw spacing" returned the same 4 ticks for every request from 5 to 9 on a
+   180–961 nm range, so a sweep of 3/5/7/9 would have measured one setting
+   four times. Now the step is chosen by closest resulting count.
+3. **`axis_extends` was unmodelled in ground truth.** The drawn axis ran past
+   the interior but nothing recorded where it stopped — which is precisely the
+   quantity a digitiser would misread as the data range. Now `x_axis_end_pt`.
+4. A dataclass field with a default placed before non-defaulted ones.
+
 ## Files
 
-- `tools/figure_digitizer/{__init__,source,graphmeta,schema,digitize}.py`
-- `tests/test_figure_digitizer_{source,graphmeta,schema}.py` (23 tests)
+- `tools/figure_digitizer/{__init__,source,graphmeta,schema,digitize,synth}.py`
+- `tests/test_figure_digitizer_{source,graphmeta,schema,synth}.py` (33 tests)
 - Artifacts: `databank/figdata/<key>.json`, run reports in `figdata/_runs/`
 
 ## Repro
