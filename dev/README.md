@@ -48,6 +48,22 @@ banked (memories / dev/archive/docs/) — do not let this directory re-rot.
   per-request serving cost that scales with nothing. Probes:
   `llmvp/probe_ocr_{proxy,sweep,floor,analyze,stage_split}.py`.
 
+- `FIGURE_DIGITIZER_2026-08-30.md` — **reading published spectrum plots as
+  matrices instead of vision consumables** (Phase 1a: relocation + tiering).
+  Corrects a claim I made to the operator: plot curves are recoverable as
+  VECTOR paths in only 8% of LIBS papers (6.2% of figures), not two thirds —
+  the high segment counts are text glyph outlines, so the raster CV path is
+  tier 1. Crops carry no link back to their PDF, but NCC relocation
+  re-derives page + rect at **100%** (median ncc 0.9972), so no extractor
+  change is needed. Tier-N (native embedded image) available for **80%** of
+  figures — but at a median **1.79×** gain, not the 2.8× an earlier small
+  probe suggested: publishers standardise on 300 dpi, so the gain is pinned
+  near 300/160. Wide survey plots therefore stay unresolvable at the line
+  level; assignment has to refuse there. Four measurement-caught bugs, all
+  mine, incl. a 40-page sweep cap that faked a 12% relocation failure rate and
+  a figtext veto that was silently dropping 1,929 real spectrum figures.
+  Tool: `tools/figure_digitizer/`; artifacts: `databank/figdata/`.
+
 - `batched_parity.py` — batched-decode determinism/isolation parity. `duo_soak.py` — multi-seat soak + latch-heal.
 - `snapshot_stress.py` — snapshot-tier acceptance. `cache_strategy_stress.py` / `cache_compat_matrix.{py,sh}` — KV strategy & per-model compat. **The compat matrix is the sweep harness — extend it, don't rebuild it** (`CACHE_SWEEP_PLAN.md` §sweep: raise depth 3→12, record the new `session_strategy` health fields, needle past the window).
 - `caching/FEATURE_MATRIX.md` — **the operational view (2026-07-30)**: there are only THREE deployable strategies (pool+replay / pool+resident / batched+resident — batched hard-requires resident, so full_replay is unreachable there), and this maps all 15 cache/state features onto them with measured benefit, measured cost, and a per-model "what you can layer today" verdict. Read it before enabling any cache feature on a model. Headline: five features are on by config and OFF in reality, four of them under the production batched shape, and three announce it only at log.debug.
