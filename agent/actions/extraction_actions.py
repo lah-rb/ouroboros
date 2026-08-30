@@ -711,6 +711,19 @@ def select_ocr_batch(
             not (rec.get("extract_progress") or {}).get("parts"),
             rec.get("extraction_status") != "needs_reextract",
             _content_priority(rec),
+            # SMALLEST-REMAINING WITHIN A TIER — the throughput policy the
+            # curate and figtext selectors already run ("the drain eats each
+            # tier from the short end"). Without it the first three keys TIE
+            # for almost the whole queue (untriaged papers are all
+            # (True, True, 1)), the head is therefore arbitrary, and a big
+            # head triggers the never-starve escape EVERY round: measured
+            # live 2026-08-29, four consecutive rounds selected ONE paper of
+            # 217 / 264 / 80 / 540 pages instead of four small ones, holding
+            # OCR near 2.4 pages/min against a measured 9.7-11.3 while the
+            # 3060 idled. Page cost is cached per path (_PDF_PAGES), so
+            # sizing the whole candidate list costs one 0.6 ms PDF open per
+            # NEW paper and nothing thereafter.
+            _pages_remaining(rec, working_dir),
         )
 
     def _pending(rec: dict) -> bool:
