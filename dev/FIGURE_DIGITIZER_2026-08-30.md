@@ -538,6 +538,79 @@ strokes that fall under the ink threshold.
 **Rule for later phases: when a synthetic fixture and real data disagree,
 check the fixture first.**
 
+---
+
+## Side experiment — can annotation furniture be masked out? (2026-08-31)
+
+Operator suggestion: have paddle block off legend and annotation space and
+paint it to background, so an annotated figure becomes extractable instead of
+refused.
+
+**The mechanism works, and well.** Masking text spans PLUS filled boxes PLUS
+the strokes touching them, against exact truth:
+
+| figure | F1 before | F1 after | \|dI\| before | \|dI\| after |
+|---|---|---|---|---|
+| annot ×4 | 0.133 | **0.627** | 0.855 | **0.055** |
+| annot + legend | 0.000 | **0.784** | — | **0.056** |
+| legend only | 0.823, flagged | 0.823, flag cleared | | |
+| clean (control) | 0.823 | 0.823, nothing masked | | |
+
+Against a clean baseline of 0.823 that is near-full recovery, and the
+intensity error falls by 15×.
+
+**A trap found on the way.** Masking the TEXT LAYER ALONE changes nothing —
+F1 stays at 0.133 — because the harm is done by the box outlines and the
+callout arrows, which are vector drawings rather than text. Worse, it clears
+the `annotation_overlap` flag while leaving the extraction broken, so the
+figure stops refusing and starts emitting garbage. Text-only masking is
+strictly more dangerous than no masking at all.
+
+### But paddle cannot supply the boxes
+
+Two independent routes, both closed:
+
+- **PP-DocLayoutV3 / PaddleOCRVL**: a chart is ATOMIC. The pipeline returns
+  `figure_title` plus one `chart` box covering the whole figure and never
+  decomposes its interior; `overall_ocr_res` comes back empty for charts.
+- **PP-OCRv5 / PP-OCRv4 text detection**: both download, neither runs —
+  `NotImplementedError: ConvertPirAttribute2RuntimeAttribute not support`, a
+  paddle runtime mismatch in `tools/pdf_extract/.venv`. Not fixed, because
+  the OCR lane depends on that venv and the mission is live.
+
+Nor can a VLM. Asked for annotation boxes with ground truth to score against,
+`muse` reasoned in prose, emitted no coordinates, and invented two label
+values that are not in the figure. `paddle-ocr-vl` ignored the question
+entirely and transcribed the chart as a data table — **about 35 fabricated
+wavelength/intensity pairs**. That is a clean live demonstration of the
+unbounded reading this whole tool exists to replace.
+
+### The PDF can, for 18% of figures
+
+The only exact box source is the document itself, and its reach is measured:
+
+```
+tier                  n    interior TEXT     filled BOX
+native_raster       128      6 (  5%)      3 (  2%)
+render_vector        17     12 ( 71%)     10 ( 59%)
+vector               10     10 (100%)      4 ( 40%)
+render_resampled      5      0 (  0%)      0 (  0%)
+28/160 (18%) carry PDF text inside the plot area
+```
+
+A prior assumption of mine is refuted here: publishers do NOT generally
+typeset labels over a raster figure. In the native-raster tier — which is 80%
+of the corpus — the annotation is baked into the pixels, and only 5% carry any
+PDF text inside the plot at all.
+
+**Verdict.** Worth implementing for the vector-backed tiers, where it is free,
+exact, and recovers most of the loss. Not a general solution: for the
+native-raster majority no box source exists — not paddle, not a VLM, not the
+PDF — so refusal stands there. Masking must also always include drawings, never
+text alone.
+
+Repro: `dev/figdig_furniture_masking.py`.
+
 ## Files
 
 - `tools/figure_digitizer/{__init__,source,graphmeta,schema,digitize,synth,axes,curve,peaks}.py`
