@@ -188,3 +188,61 @@ def test_matching_is_greedy_on_distance_not_ordinal():
     pairs, uf, ut = PK.match(found, [5.0, 9.0], tolerance=0.3)
     assert len(pairs) == 1 and pairs[0][1] == 5.0
     assert ut == [9.0]
+
+
+# ── Detection criterion ───────────────────────────────────────────────
+
+
+def test_detection_is_independent_of_the_brightest_line():
+    """THE reason the criterion changed. A range-relative prominence floor is
+    hostage to the largest feature on the page: adding one enormous line far
+    away raises the bar everywhere and silently deletes small clean peaks
+    that have excellent local signal-to-noise. The IUPAC/NIST convention is
+    defined against LOCAL background for exactly this reason."""
+    x = np.linspace(200.0, 800.0, 6000)
+    small = np.zeros_like(x)
+    for c in (300.0, 340.0, 380.0):
+        small += 0.06 * np.exp(-((x - c) ** 2) / (2 * 0.6**2))
+
+    before = PK.pick(x, small, criterion="snr", stroke_px=2.0)
+    # Now add one line twenty times taller, far from the others.
+    with_giant = small + 1.2 * np.exp(-((x - 700.0) ** 2) / (2 * 0.6**2))
+    after = PK.pick(x, with_giant, criterion="snr", stroke_px=2.0)
+
+    kept = sum(
+        1
+        for c in (300.0, 340.0, 380.0)
+        if any(abs(p.position - c) < 2.0 for p in after)
+    )
+    assert kept == 3, "a distant bright line must not delete small local peaks"
+    assert len(before) >= 3
+
+    # The range-relative rule is what fails here, and that is why it is not
+    # the default: the same three peaks fall under 5% of the new range.
+    old = PK.pick(x, with_giant, criterion="prominence")
+    old_kept = sum(
+        1 for c in (300.0, 340.0, 380.0) if any(abs(p.position - c) < 2.0 for p in old)
+    )
+    assert old_kept < 3, "range-relative rule unexpectedly survived; test is stale"
+
+
+def test_snr_is_the_default_criterion():
+    x = np.linspace(0.0, 100.0, 2000)
+    y = 0.02 * np.exp(-((x - 50.0) ** 2) / (2 * 0.5**2))
+    assert PK.pick(x, y) == PK.pick(x, y, criterion="snr")
+
+
+def test_an_unknown_criterion_is_refused():
+    import pytest as _pytest
+
+    # The input has to actually VARY, or pick() returns on zero span before
+    # it ever reaches the criterion dispatch and the check is unreachable.
+    x = np.linspace(0.0, 10.0, 200)
+    y = np.exp(-((x - 5.0) ** 2) / 0.5)
+    with _pytest.raises(ValueError):
+        PK.pick(x, y, criterion="vibes")
+
+
+def test_a_flat_trace_yields_no_peaks_under_snr():
+    x = np.linspace(0.0, 10.0, 400)
+    assert PK.pick(x, np.ones_like(x), criterion="snr") == []

@@ -540,6 +540,72 @@ check the fixture first.**
 
 ---
 
+## The detection criterion was the wrong KIND of threshold (2026-08-31)
+
+Operator challenge: peaks are being lost across the whole spectrum including
+quiet zones with visually isolated peaks, so the criterion for calling a peak
+may be muddled. **Correct**, and a framing of mine needed retracting with it:
+of the 23 peaks separated by more than the 1.87 nm resolution limit, the
+shipped rule recovered 12. Calling that "close to the ceiling" was wrong — it
+was discarding **half of what the figure could physically resolve**.
+
+**What was shipped:** `prominence >= 5% of the full intensity range`. That is
+not a standard criterion, and it is hostage to the brightest feature on the
+page — with the tallest line near 25,000 counts it imposes a flat ~1,250-count
+floor everywhere, so a clean isolated line in a quiet region is discarded
+because of a large line hundreds of nm away.
+
+**What standard practice is:** detection is defined against LOCAL noise.
+IUPAC/NIST put the limit of detection at 3 sigma over local background and the
+limit of quantitation at 10; LIBS line identification conventionally uses
+SNR >= 3 over the local continuum. Nothing standard is relative to the global
+range.
+
+Shipped: `criterion="snr"` at 5 sigma, on the conservative side of the IUPAC
+LOD. Background is a rolling minimum smoothed by a median; noise is a rolling
+MAD scaled by 1.4826. Both windows are expressed in SAMPLES tied to the stroke
+rather than in nm, because a fixed nm window that suits a 780 nm survey is
+wider than a zoomed panel's whole range. The old rule stays available as
+`criterion="prominence"` for comparison only.
+
+Re-scored over 5 samples × 14 arms:
+
+| criterion | peaks found | resolvable recovered | \|dx\| median | \|dI\| median |
+|---|---|---|---|---|
+| prominence (old) | 2,246 | 893/1271 (**70%**) | 0.545 px | 0.0090 |
+| local SNR 5σ (new) | 4,764 | 1041/1271 (**82%**) | 0.538 px | 0.0104 |
+
+Position accuracy is unchanged and intensity accuracy stays 5× inside the P3
+threshold.
+
+### Two validations that turned out VACUOUS
+
+The extra peaks cannot be shown to be real, and both attempts to show it
+failed against a random control — the second one only after it had produced a
+result I was ready to act on.
+
+- *"every found peak matches a local maximum in the source"* scored 1.000.
+  Random positions score **0.980**. Lift 1.02×. The source has 1,725 local
+  maxima over 600 nm, so nearly any position matches.
+- *"every found peak matches a NIST line of an element the XRF confirms in
+  this pellet"* scored 0.91. Random scores **0.78**. Lift 1.18×.
+
+The second is a finding in its own right. For the 20 elements this pellet
+contains there are **15,076 NIST lines between 200–800 nm, one every 0.04 nm**,
+against a position uncertainty of ~0.5 px (≈0.47 nm). **Peak identification at
+survey resolution is close to unfalsifiable** — four-fifths of arbitrary
+wavelengths match a real atomic line. That is independent support for the
+adapter refusing assignment rather than choosing a candidate, and it is the
+anti-circularity concern in the plan arriving from a direction nobody expected.
+
+The change is therefore justified on the verifiable half only: the standard
+criterion, dynamic-range independence, and 70% → 82% on peaks whose positions
+can be checked. It makes IDENTIFICATION harder, not easier, which points the
+same way as everything else here — survey figures should yield positions with
+assignment refused; zoomed panels are where identification is legitimate.
+
+---
+
 ## Side experiment — can annotation furniture be masked out? (2026-08-31)
 
 Operator suggestion: have paddle block off legend and annotation space and
