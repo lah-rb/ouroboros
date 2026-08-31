@@ -768,6 +768,48 @@ turning `0.387 wt%` into 387 nm and `2024` into 202 nm.
 
 ---
 
+## What "resolvable recovered" actually counts — a reporting correction
+
+Operator question: how dramatic is the loss between 5 sigma on the image and 5
+sigma on the raw data, and is that the "resolvable" column being quoted?
+
+**It is not.** The detector was switched to 5 sigma but the TRUTH SET was left
+on the old prominence criterion, and that was never flagged. Measured over
+five SME survey figures at 160 dpi:
+
+```
+peaks by 5 sigma on the RAW spectrum (0.033 nm sampling) :  6,707
+peaks by prominence 0.05 on the RAW spectrum             :  1,102   <- truth-set basis
+peaks by 5 sigma on the IMAGE trace  (0.93 nm sampling)  :    337
+```
+
+| truth set | raw peaks | separable in the figure | recovered |
+|---|---|---|---|
+| prominence >= 0.05 (**the column quoted throughout**) | 1,102 | 97 (8.8%) | 78/97 = **80%** |
+| local 5 sigma (matches the detector) | 6,707 | 19 (0.3%) | 1/19 = **5%** |
+
+End-to-end against every raw 5-sigma peak: **1 of 6,707**.
+
+So "80% of resolvable peaks" means *of the strong, well-separated peaks, we get
+80%* — a far narrower claim than it reads as. The figure preserves roughly 5%
+of the features the raw data resolves, and of the 0.3% that survive the
+separability filter almost none is recovered, because a peak detected at 5
+sigma in a 40-shot average can be very small and does not clear the image's own
+5 sigma after rasterisation.
+
+**The counter-caveat.** 6,707 is not obviously the right denominator either: 5
+sigma on a 40-shot average is a permissive bar, one peak every 0.12 nm. It is
+not physically absurd — NIST lists one line every 0.04 nm for the 20 elements
+this pellet contains — but the number is sensitive to how the source was
+averaged.
+
+**Rule going forward: state the truth set with every recovery figure.** The
+choice moves the headline by more than an order of magnitude, and quoting the
+most favourable one without saying so is the kind of silent bias this project
+exists to avoid.
+
+---
+
 ## Stroke width: accurate to measure, wrong to sample at
 
 Operator question: how accurately is stroke width detected, and have we tried
