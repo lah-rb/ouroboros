@@ -406,6 +406,69 @@ signal (`cm⁻¹` → Raman, `2θ` → XRD, `nm` → LIBS or absorbance), with t
 figtext guess kept only as a cross-check. The prefilter stays permissive; the
 routing moves downstream of the ask.
 
+---
+
+## Do we actually need an accurate tick count?
+
+Operator challenge, 2026-08-30: *"I am not sure if we really need an accurate
+tick count if we have accurate ranges. Did this come up as required in
+testing?"*
+
+**It had not.** The 12/12-vs-0/8 cohort result is downstream of a pipeline
+built to require tick matching, so it showed that the DESIGN needs tick
+counts, not that the TASK does. The alternative was never implemented or
+scored. Measured properly, over 5 samples × 15 arms against exact truth:
+
+| method | correct | refused | **accepted-wrong** |
+|---|---|---|---|
+| N-point (tick-matched) | 63 | 12 | **0** |
+| 2-point (extreme ticks) | 63 | 0 | **12** |
+| 2-point + interior consistency check | 63 | 0 | **12** |
+| frame edges + range, no ticks at all | 55 | 0 | **20** |
+
+**The operator is right about accuracy and it is worth stating plainly: the
+tick count buys none.** All three tick-using methods score exactly 63 correct.
+On the real cohort the two agree to a median 0.028% of span (p90 0.07%).
+
+What the count buys is **detectability of failure**. Two points fit a line
+exactly by construction, so the residual is identically zero and nothing
+signals that the extremes were spurious. The 12 cases N-point refuses are
+precisely the 12 that 2-point gets wrong and cannot notice.
+
+Three findings that were not obvious going in:
+
+1. **The validator is the alignment MARGIN, not the residual.** What catches a
+   bad fit is that no single pairing beats its alternatives — a runner-up
+   comparison, the same mechanism that guards NCC relocation. Residual alone
+   is worthless here, and that is why every accuracy failure in this module
+   has arrived wearing a clean residual.
+2. **A consistency check against interior ticks is VACUOUS.** Detected marks
+   are uniform and printed labels are uniform, so any affine map aligning the
+   extremes lands the interior marks on the label grid. Uniform maps onto
+   uniform. The property that makes ticks findable makes them useless as a
+   cross-check on an endpoint fit — this is why method 3 caught nothing.
+3. **Range-only is the WORST option tested**, not a simplification: 20 wrong.
+   The longest horizontal run is not reliably the data domain (it is the frame
+   including margin, or it extends past the range), and with no ticks there is
+   nothing to catch it.
+
+**Ruling: keep tick positions, stop treating the count as the thing.** Use the
+extremes for the answer and the full set purely as the over-determination that
+licenses accepting it. An accurate count is not required; an over-determined
+SET is.
+
+Also corrected by this measurement: my own guess that coupling axis-line
+detection to tick detection caused the cohort's 22% "no axis found". Detecting
+lines WITHOUT requiring ticks recovers 32/40 against 31/40 — one figure. The
+missing 20% is genuinely "no long contiguous run exists", a multi-panel and
+broken-axis problem, not a tick problem.
+
+**Open lever, not yet built:** a genuinely third source. The tick fit and the
+vision labels are not independent, so neither can validate the other beyond
+what the margin already tests. The figtext prose ("the x-axis runs 200–900 nm")
+is independent of both, and could license accepting some of the 16% currently
+refused.
+
 ## Files
 
 - `tools/figure_digitizer/{__init__,source,graphmeta,schema,digitize,synth,axes}.py`
