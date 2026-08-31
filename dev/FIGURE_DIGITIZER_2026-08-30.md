@@ -924,6 +924,49 @@ far more than any property of the extractor.
 
 ---
 
+## Recovery against figure span, and why sigma does not matter
+
+Windows centred on 420 nm (the dense Ca/Fe region), five SME spectra, the same
+sigma applied to the raw data and the extracted trace.
+
+| span | resolvable | sep% | rec% s=3 | rec% s=5 | rec% s=10 |
+|---|---|---|---|---|---|
+| 10 nm | 0.036 nm | 100 | 99.1 | 99.1 | 99.0 |
+| 20 nm | 0.072 | 100 | 99.6 | 99.6 | 99.5 |
+| 30 nm | 0.107 | 100 | 95.6 | 96.6 | 97.9 |
+| 40 nm | 0.143 | 100 | 84.5 | 86.6 | 89.5 |
+| 50 nm | 0.179 | 99.6 | 69.7 | 70.0 | 70.4 |
+| 75 nm | 0.269 | 78 | 36.0 | 34.5 | 32.3 |
+| 100 nm | 0.406 | 26 | 10.9 | 10.0 | 8.9 |
+| 150 nm | 0.573 | 4 | 0.9 | 1.0 | 1.0 |
+| 200 nm | 0.907 | 0.2 | 0.1 | 0.1 | 0.1 |
+| >=250 nm | >=1.3 | 0 | 0.0 | 0.0 | 0.0 |
+
+**Sigma changes nothing.** Every cell is within two or three points across
+3, 5 and 10 sigma. The threshold was never the binding constraint; span is.
+
+**Two regimes, and the boundary is at 50 nm.** Up to 50 nm separability holds
+at ~100% while recovery falls 99% -> 70%: the lines ARE distinguishable and
+the extractor is what misses them, so extractor work pays there. Past 50 nm
+separability itself collapses — 78% at 75 nm, 26% at 100, 4% at 150, zero
+from 200 — and nothing about detection helps, because the information is gone
+from the drawing.
+
+**Banded against the corpus** (share from vision-read tick labels, n=31):
+
+| band | share of corpus | recovery |
+|---|---|---|
+| zoom < 50 nm | 29% | 70-99% |
+| narrow 50-200 nm | 3% | 1-70%, mostly poor |
+| wide 200-500 nm | 29% | ~0% |
+| survey > 500 nm | 39% | ~0% |
+
+Median span is the wrong summary for a corpus this bimodal — roughly a third
+sits in the usable regime and two thirds are past the cliff, and an average
+between them describes no actual figure.
+
+---
+
 ## Stroke width: accurate to measure, wrong to sample at
 
 Operator question: how accurately is stroke width detected, and have we tried
