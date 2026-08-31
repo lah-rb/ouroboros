@@ -1271,6 +1271,122 @@ ephemeral and lost — which is why this one is committed).
 
 ---
 
+## How dpi interleaves, once the pen is deconvoluted (2026-08-31)
+
+With the detector honest, dpi becomes measurable. The geometry predicts it
+should not matter at all: `resolvable = grid x stroke_px`, grid = span/columns
+and stroke_px = stroke_pt x dpi/72, so **dpi cancels in the product**. Four
+predictions were registered before the run (D1 flat above 160 at 20 nm; D2
+wide spans climb but saturate far below narrow; D3 thin pens gain more than
+thick; D4 floored recovery gains MORE than retention).
+
+Swept 5 spans x {0.5, 2.0} pt x {80, 160, 300, 600} dpi x 5 samples.
+
+```
+ span   pt  dpi meas_px eff_pt  resolv |   ret% floored%
+   20  0.5  160    2.00   0.90   0.048 |  95.9     87.3
+   20  0.5  300    3.00   0.72   0.038 |  98.2     91.4
+   20  0.5  600    5.00   0.60   0.032 |  99.5     96.4
+   50  0.5  160    2.00   0.90   0.120 |  92.4     52.9
+   50  0.5  300    3.00   0.72   0.096 |  96.9     90.1
+   50  0.5  600    5.00   0.60   0.080 |  99.4     96.0
+  100  0.5   80    1.00   0.90   0.240 |  32.0      4.4   (n=1, see floor)
+  100  0.5  160    2.00   0.90   0.239 |  58.4     20.8
+  100  0.5  300    3.00   0.72   0.191 |  77.8     35.9
+  100  0.5  600    5.00   0.60   0.159 |  92.2     76.4
+  200  0.5  160    2.00   0.90   0.477 |  35.2      8.5
+  200  0.5  600    5.20   0.62   0.331 |  58.8     44.8
+  600  0.5  160    2.00   0.90   1.432 |  14.3      4.3
+  600  0.5  600    5.20   0.62   0.992 |  28.9     22.1
+  100  2.0  160    6.00   2.70   0.716 |  38.5     29.4
+  100  2.0  600   19.80   2.38   0.630 |  51.3     41.8
+  600  2.0  160    5.40   2.43   3.868 |   8.3      5.3
+  600  2.0  600   18.80   2.26   3.588 |  13.3     10.9
+```
+
+**The cancellation is exact at 80->160 and breaks above it.** At 100 nm the
+resolvable is 0.240 then 0.239 — the pen is physically IDENTICAL, 0.90 pt in
+both. Above 160 dpi it decays: 0.90 / 0.90 / 0.73 / 0.61 pt for a nominal
+0.5 pt pen. The cause is a fixed ~1 px ink overhead — antialiasing plus the
+mask counting whole pixels means measured_px ~ ceil(nominal_px), and a
+constant *pixel* overhead is worth progressively less *physical* width as dpi
+rises. So dpi does not cancel in practice; it thins the effective pen.
+
+**The 80->160 step is a clean natural experiment** and it settles the two-term
+decomposition. The pen is unchanged in physical units, resolvable is unchanged
+to three decimals, and retention still nearly doubles:
+
+```
+  100 nm   resolvable 0.240 -> 0.239 (pen 0.90 -> 0.90 pt)   retention 32.0 -> 58.4
+  200 nm   resolvable 0.480 -> 0.477 (pen 0.90 -> 0.90 pt)   retention 15.8 -> 35.2
+  600 nm   resolvable 1.436 -> 1.432 (pen 0.90 -> 0.90 pt)   retention  7.6 -> 14.3
+```
+
+That is the **grid term moving with the pen held fixed** — the max-pooling of
+raw samples into columns, isolated. It also makes resolvable insufficient on a
+third independent axis: 0.240 and 0.239 give 32.0% and 58.4%.
+
+**Scoring.** D1 **REFUTED** — retention is not flat above 160 dpi even at
+20 nm (95.9 -> 99.5); dpi buys something everywhere. D2 **MIXED** — "climbs"
+confirmed, "saturates far below" refuted: 100 nm at 600 dpi reaches 92.2%,
+which is what 20 nm gave at 160 dpi. No saturation appears anywhere in range.
+D3 **CONFIRMED** (from the fully-sampled 160 dpi baseline; the 80 dpi thin-pen
+row is n=1-2, see the floor below): at 600 nm the thin pen gains 2.01x against
+the thick pen's 1.60x. D4 **CONFIRMED, and it is the largest effect in the
+table**: at 100 nm retention gains 1.58x while floored 10-sigma recovery gains
+3.67x, because the quantisation floor itself shrinks as the trace grows in
+pixels. The fraction of retained peaks that are *attestable* at 10 sigma goes
+0.36 -> 0.83.
+
+**The boundary moves.** The previously-recorded "50 nm boundary, and nothing
+helps above it" was measured at a fixed 160 dpi. Retention at 0.5 pt:
+
+```
+   dpi     20nm     50nm    100nm    200nm    600nm
+   160     95.9     92.4     58.4     35.2     14.3
+   300     98.2     96.9     77.8     45.6     21.1
+   600     99.5     99.4     92.2     58.8     28.9
+```
+
+At 600 dpi the usable boundary sits near **100 nm**, not 50. Wide-but-not-
+survey figures move from unusable to mostly recoverable.
+
+**A refusal floor falls out.** At 0.5 pt / 80 dpi (0.56 px nominal) the trace
+extractor lost the curve on **16 of 20 renders**; at 160 dpi (1.11 px) it
+extracted 20/20. A pen under ~1 px does not extract at all — a hard floor,
+independent of any detection threshold, and the first empirical version of the
+refusal number the plan wanted from Gate B.
+
+**But the lever is only available on 17% of the corpus.** Over the 160 plot
+figures with source blocks on disk:
+
+```
+tier                  n      %   dpi we are stuck with (p25/med/p75/max)
+native_raster       128  80.0%   200 / 300 / 300 / 1158
+render_vector        17  10.6%   -- ours to choose
+vector               10   6.2%   -- ours to choose
+render_resampled      5   3.1%   160 / 160 / 160
+```
+
+For the native-raster majority dpi is the publisher's decision, median 300 and
+only 9% at >=600 — so those figures sit on the middle row of the table above,
+permanently. Re-rendering them finer is `render_resampled`: a finer grid over
+the same information, which buys nothing and must not be reported as
+precision.
+
+**Actionable gap, not yet applied.** `source.load_pixels` defaults to
+`src.effective_dpi`, which for a vector-backed render is the 160 dpi crop
+resolution. The module docstring (lines 20-21) already states that
+re-rendering vector art at 600 dpi is a genuine information gain — but the
+default does not act on it. On the 27 vector-backed figures that is a
+measured 1.6-2.0x in retention and up to 3.7x in 10-sigma recovery, from a
+default change. Left for the operator's call since this turn's question was
+diagnostic.
+
+Repro: `dev/figdig_dpi_interleave.py`.
+
+---
+
 ## Files
 
 - `tools/figure_digitizer/{__init__,source,graphmeta,schema,digitize,synth,axes,curve,peaks}.py`
