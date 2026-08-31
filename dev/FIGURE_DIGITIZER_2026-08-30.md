@@ -1387,6 +1387,105 @@ Repro: `dev/figdig_dpi_interleave.py`.
 
 ---
 
+## Can we predict minimum resolvable feature from figure metadata? (2026-08-31)
+
+The operator's question: given a figure's native resolution (taking the max
+available), stroke width and span, can we predict its minimum resolvable
+feature? Measured over **116,808 peak-observations across 300 cells** (5 spans
+x 4 strokes x 3 dpi x 5 real spectra), recording for every truth peak its raw
+FWHM, its nearest-neighbour separation, and whether it won its own detection.
+
+**A scorer bug had to be fixed first, and it is the vacuous-gate shape again
+(fifth instance).** The first version asked "is there A detection within
+tolerance of this truth peak" -- which lets ONE merged blob satisfy BOTH peaks
+under it, so merging, the exact failure being measured, could not fail the
+test. Detection read 90-97% across every separation quartile while true
+retention was 49%. Assignment must be one-to-one and greedy on distance, each
+detection consumable once. After the fix the per-peak rates reproduce the dpi
+sweep exactly (58.4 / 92.2 / 14.3 / 95.9), which is the cross-check that the
+broken version failed silently.
+
+**Reframe: it is a separation limit, not a width limit.** Width is the weaker
+variable and its correlation with detection changes sign across span (+0.488
+at 20 nm, +0.080 at 100, -0.070 at 600). Separation is the physically right
+criterion (Rayleigh), so the quantity fitted is s50 -- the neighbour
+separation at which a peak has a 50% chance of winning its own detection.
+
+**The headline fit looks excellent and is half illusion.**
+
+```
+  s50_nm = 3.48*grid + 0.225*pen     R2 = 0.863   (thresholdless retention)
+  s50_nm = 7.64*grid + 0.298*pen     R2 = 0.889   (floored 10-sigma recovery)
+```
+
+But `pen = grid x stroke_px`, so this is algebraically `s50 = grid x (a + b*
+stroke_px)` -- and `grid` ranges 120x across these cells. **Expressed in
+pixels, where that scale is removed, R2 falls from 0.86 to 0.19.** Nearly all
+of the nm-space R2 is the model tracking the grid scale, which is the part
+that was never in doubt. Reporting the 0.86 without this decomposition would
+have been the same error class as the vacuous gate: a number that cannot fail.
+
+**What is actually there, in pixels** (s50 binned by pen width, no fit):
+
+```
+  stroke_px   n   median s50_px      IQR
+      0-3     3        5.5         4.5 - 10.7
+      3-5     6        6.5         3.6 -  9.9
+      5-8    11        6.1         5.8 -  9.0
+     8-12    12        9.1         7.3 - 11.3
+    12-20     7       14.8        12.7 - 17.1
+    20-40     7       17.6        14.7 - 20.1
+```
+
+Monotone and significant (rho +0.641, p 1.2e-06). A robust (Theil-Sen) fit
+gives `s50_px ~ 4.7 + 0.45*stroke_px` at a median error of 27%, but R2 is
+NEGATIVE (-1.5): the fit tracks the bulk and is destroyed by a heavy tail.
+Held-out extrapolation is 15-44% median with worst cases of 500-800%.
+
+**Why the tail is not fixable from metadata.** Two hypotheses were tested.
+Identifiability -- that s50 is only estimable when a cell's detection rate is
+mid-range -- is **REFUTED** (rho -0.135, p 0.37; restricting to the mid band
+made the fit worse). The second is confirmed: holding span, pen and dpi FIXED
+and splitting by which of the five real spectra was plotted,
+
+```
+  config                  sme1  sme2  sme3  sme4  sme6   spread
+  span 100 1.0pt 160dpi   12.9   9.5  22.3  15.5  26.7     36%
+  span 200 1.0pt 300dpi    7.2   8.8  22.8  14.4  10.1     44%
+  span 200 2.0pt 600dpi   17.3  15.5  20.3  32.4  41.0     39%
+```
+
+Between-sample spread is a median **31%** of the mean against a total
+across-cell spread of 73% -- so roughly **42% of all scatter comes from the
+spectrum's own crowding**, at identical figure geometry. That is not figure
+metadata and no amount of span/stroke/dpi can recover it.
+
+**Verdict: yes for triage, no for a per-peak number.**
+
+- The SCALE is predictable and that is the useful part: `s50 ~ grid x 10 px`
+  at 10 sigma, `grid = span / (interior_width_pt x dpi/72)`. Good to roughly a
+  factor of 1.5-2, which is enough to rank figures and to refuse the hopeless
+  ones before spending a vision call.
+- A point estimate of a given figure's resolvable separation is NOT available
+  from these three variables; the residual is 27-37% with a heavy tail, and
+  the largest single missing term is a property of the spectrum, knowable only
+  after extraction.
+
+**Actionable, and it is a correction to what we currently emit.** The
+precision block reports `resolvable_unit = grid x stroke_px` -- the pen term
+ALONE. The measurement says the binding constraint is a grid floor of ~5 px
+(retention) to ~10 px (10 sigma) that applies regardless of pen. For a typical
+3 px stroke the model gives 6.1 px against the emitted 3.0 px, so
+**`resolvable_unit` currently understates the real resolvable separation by
+about 2x**, and by more for fine pens. It should either be renamed to
+`pen_merge_unit` or redefined as `grid x (4.7 + 0.45 * stroke_px)` with the
+scatter recorded alongside. Not applied -- this turn's question was
+diagnostic.
+
+Repro: `dev/figdig_resolvable_model.py`.
+
+---
+
 ## Files
 
 - `tools/figure_digitizer/{__init__,source,graphmeta,schema,digitize,synth,axes,curve,peaks}.py`
