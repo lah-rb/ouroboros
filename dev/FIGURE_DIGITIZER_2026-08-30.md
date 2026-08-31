@@ -314,10 +314,97 @@ best of six alignments won on noise, and the calibration came out **6,343 nm
 off at a 0.28 px residual**. With it, that case refuses — and so does one case
 it would have got right. That asymmetry is deliberate.
 
-**Not yet done in 1c:** the structured vision ask for tick LABELS, and with it
-P9 and P10. The CV half supplies tick POSITIONS; label values are still taken
-from ground truth. Deferred rather than skipped, because the vision server is
-serving the live mission's figtext lanes.
+---
+
+## Phase 1c part 2 — the structured vision ask, on 40 real corpus figures
+
+Run against the live server (`muse-glimmer-30b-cuda`) at one request at a
+time, ~80 s each. Images are sent as base64 data URIs, not paths: the server
+refuses any path outside `model.vision_image_roots`, and this tool renders its
+own crops.
+
+```
+scored figures            : 40
+vision replied+parsed     : 38 (95%)
+structured ask USABLE     : 21 (52%)      <- P10 target >=80%
+tick-count disagreement   : 19/26 (73%)   <- P9 target >=20%
+end-to-end calibration ok : 12/40 (30%), median residual 0.30 px
+```
+
+### P9 — CONFIRMED, and stronger than the prediction asked for
+
+73% disagreement, far above the 20% floor and nowhere near the 5% that would
+have collapsed the design to one source. But the count that matters is not the
+disagreement rate, it is what agreement PREDICTS:
+
+| CV x-tick count | vision agrees on count | calibrated |
+|---|---|---|
+| plausible (2–12), n=20 | 12 | **12 / 12 (100%)** |
+| plausible, counts disagree, n=8 | — | 0 / 8 |
+
+**Every successful calibration came from a case where the two independent
+readings agreed on the tick count, and every such case succeeded.** The
+two-source design is not redundancy — the agreement IS the acceptance test,
+and it is free.
+
+### P10 — REFUTED, with a caveat about its baseline
+
+The structured ask reached **52% usable** against an 80% target, where usable
+means a unit plus at least two numeric labels on each axis. Refuted.
+
+The baseline half of P10 should NOT be read as refuted, because the two
+numbers measure different things. This cohort's "figtext yields two ranges"
+scored 85%, against the 28.9% quoted corpus-wide — but the cohort probe counts
+any `N–N` pattern anywhere in caption plus description, including "5–10 mg"
+and "Figure 3–4", and it never checks that a range belongs to an axis or
+WHICH axis. It is a loose proxy that overstates; the 28.9% stands.
+
+**Why 52% is low is itself the finding: only 26 of 40 figures carry two or
+more numeric Y labels at all**, and `y_unit` came back null on 19 of 38.
+For LIBS that is correct behaviour by the figures, not a failure to read them
+— intensity is routinely printed as "a.u." with no numeric scale. Requiring a
+calibrated y-axis demands something real spectra frequently do not provide and
+do not need for peak POSITION. Scored x-axis-only, usable metadata is 65%.
+This vindicates the existing decision to emit `relative_intensity` normalised
+0–1 and make `intensity_data_units` optional.
+
+### The real bottleneck is CV axis detection on real figures
+
+| outcome | n | share |
+|---|---|---|
+| CV found no x-axis | 9 | 22% |
+| CV over-detected (14–60 ticks) | 7 | 18% |
+| CV plausible (2–12 ticks) | 24 | 60% |
+
+The detector that scored 84% with zero errors on synthetics finds nothing or
+over-counts on 40% of real figures. **The synthetic harness is too clean** —
+it models one plot per page with one trace, while real figures are multi-panel
+composites with subplot labels, colour legends, marker scatter and inset axes.
+That is the honest limit of a self-built instrument, and the reason Gate B and
+Gate C exist. Fixing it is Phase 1d work, not a tuning pass.
+
+### A contamination finding that changes the technique routing
+
+The 12 calibrated x-ranges expose the cohort selector, not the calibrator:
+
+```
+cm⁻¹  249 - 1750     <- Raman, not LIBS
+s       0 - 10       <- a time series
+None    0 - 0.7  /  0.2 - 1.0  /  1.05 - 2.62   <- not spectra at all
+nm   1000 - 1600     <- NIR, not LIBS emission
+nm    200 - 600 / 400 - 700 / 200 - 1000        <- genuinely LIBS
+```
+
+Only about half are LIBS emission spectra. The figtext prefilter assigns
+technique by keyword — "nm" or "wavelength" appearing anywhere — which sweeps
+in Raman (whose excitation is quoted in nm), absorbance spectra, and time
+series from papers that merely mention LIBS.
+
+**Correction to the design: technique must be assigned from the axis unit the
+vision ask reads, not from a figtext keyword.** `x_unit` is the authoritative
+signal (`cm⁻¹` → Raman, `2θ` → XRD, `nm` → LIBS or absorbance), with the
+figtext guess kept only as a cross-check. The prefilter stays permissive; the
+routing moves downstream of the ask.
 
 ## Files
 

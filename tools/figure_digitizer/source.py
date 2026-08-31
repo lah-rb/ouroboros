@@ -26,6 +26,7 @@ precision number that is not real.
 from __future__ import annotations
 
 import dataclasses
+import io
 import math
 import os
 
@@ -554,3 +555,35 @@ def find_pdf(working_dir: str, key: str) -> str | None:
 
     hits = _glob.glob(os.path.join(working_dir, "**", f"{key}.pdf"), recursive=True)
     return hits[0] if hits else None
+
+
+def load_pixels(doc, src: Source, dpi: float | None = None):
+    """The best available pixels for a sourced figure, as a PIL image.
+
+    For a native raster this decodes the embedded image and crops to the
+    figure's sub-box, which is the whole point of the tier: no render step
+    sits between the original pixels and the reader. Every other tier renders
+    the located rect, by default at the source's own effective dpi so the
+    caller gets what the precision block promised.
+    """
+    from PIL import Image
+
+    if src.tier == "native_raster" and src.xref is not None:
+        try:
+            info = doc.extract_image(src.xref)
+            img = Image.open(io.BytesIO(info["image"])).convert("RGB")
+            if src.sub_box_px:
+                x0, y0, x1, y1 = (int(round(v)) for v in src.sub_box_px)
+                x0, y0 = max(0, x0), max(0, y0)
+                x1, y1 = min(img.width, max(x1, x0 + 1)), min(
+                    img.height, max(y1, y0 + 1)
+                )
+                img = img.crop((x0, y0, x1, y1))
+            return img
+        except Exception:  # noqa: BLE001 — fall through to a render
+            pass
+
+    use_dpi = dpi or (src.effective_dpi if math.isfinite(src.effective_dpi) else 600.0)
+    use_dpi = max(72.0, min(float(use_dpi), 900.0))
+    pm = doc[src.page].get_pixmap(dpi=int(use_dpi), clip=fitz.Rect(*src.rect_pt))
+    return Image.frombytes("RGB", (pm.width, pm.height), pm.samples)

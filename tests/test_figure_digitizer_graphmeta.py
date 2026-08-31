@@ -136,3 +136,52 @@ def test_a_plot_without_a_spectral_unit_is_refused(tmp_path):
 
 def test_a_paper_with_no_figtext_yields_nothing(tmp_path):
     assert G.hints(str(tmp_path), "absent") == []
+
+
+# ── The structured ask ────────────────────────────────────────────────
+
+
+def test_a_json_reply_is_parsed_even_when_wrapped():
+    """Models fence their JSON or chat around it. The object is what matters."""
+    reply = (
+        "Sure, here is the result:\n```json\n"
+        '{"is_plot": true, "x_unit": "nm", "x_tick_labels": [200, 400, 600],'
+        ' "y_tick_labels": [0, 1, 2], "y_direction": "up"}\n```\nHope that helps!'
+    )
+    got = G.parse_structured(reply)
+    assert got["is_plot"] is True
+    assert got["x_unit"] == "nm"
+    assert got["x_tick_labels"] == [200.0, 400.0, 600.0]
+
+
+def test_labels_that_are_strings_or_carry_a_unicode_minus_still_parse():
+    reply = '{"x_tick_labels": ["200", "−100", "1,000", "n/a"], "y_tick_labels": []}'
+    got = G.parse_structured(reply)
+    assert got["x_tick_labels"] == [200.0, -100.0, 1000.0]
+
+
+def test_an_unparseable_reply_is_a_result_not_a_crash():
+    assert G.parse_structured("I cannot read this figure.") is None
+    assert G.parse_structured("") is None
+    assert G.parse_structured("{not json}") is None
+
+
+def test_the_prompt_states_no_bare_count():
+    """A number the task can contradict outranks the prose beside it: the
+    model optimises the number instead of the job. The ask must never tell it
+    how many ticks to find."""
+    import re as _re
+
+    # No digit-bearing quantity phrases like "5 to 9" or "at least 3".
+    assert not _re.search(r"\b\d+\s*(?:-|–|to)\s*\d+\b", G.STRUCTURED_PROMPT)
+    assert not _re.search(
+        r"\b(?:at least|at most|exactly|about)\s+\d+", G.STRUCTURED_PROMPT
+    )
+
+
+def test_the_ask_requests_the_exponent_and_the_axis_direction():
+    """Both are silent corruptions if missed: a dropped 1e4 multiplier is a
+    10,000x error, and a mis-read direction inverts the whole axis."""
+    assert "y_exponent" in G.STRUCTURED_PROMPT
+    assert "y_direction" in G.STRUCTURED_PROMPT
+    assert "axes_terminate_at_range" in G.STRUCTURED_PROMPT

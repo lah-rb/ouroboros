@@ -16,10 +16,12 @@ tick labels, and only for figures that survive here.
 
 from __future__ import annotations
 
+import base64
 import dataclasses
 import json
 import os
 import re
+import urllib.request
 
 # Spectral x-axis units. A figure that names none of these is not a spectrum
 # plot, whatever else it may be.
@@ -135,3 +137,121 @@ def hints(working_dir: str, key: str) -> list[FigtextHint]:
             )
         )
     return out
+
+
+# ── The structured ask ────────────────────────────────────────────────
+
+VISION_URL = "http://127.0.0.1:8008/v1/vision"
+
+# No bare count appears anywhere in this prompt. A number the task can
+# contradict ("list 5-9 ticks") outranks the prose beside it, and the model
+# optimises the number instead of the job.
+STRUCTURED_PROMPT = (
+    "This image is a plot from a scientific paper. Read ONLY its axes — not "
+    "the data, not the caption.\n\n"
+    "Reply with a single JSON object and nothing else:\n"
+    "{\n"
+    '  "is_plot": true or false,\n'
+    '  "x_unit": the x-axis unit exactly as printed, or null,\n'
+    '  "y_unit": the y-axis unit exactly as printed, or null,\n'
+    '  "x_tick_labels": every numeric label printed along the x-axis, in '
+    "left-to-right order, as numbers,\n"
+    '  "y_tick_labels": every numeric label printed along the y-axis, in '
+    "bottom-to-top order, as numbers,\n"
+    '  "y_exponent": the power of ten printed at the top of the y-axis (as in '
+    '"1e4" or "x10^4"), or null if none is shown,\n'
+    '  "y_direction": "up" if larger values are higher on the page, else '
+    '"down",\n'
+    '  "axes_terminate_at_range": true if each axis line stops at its last '
+    "tick, false if the line continues past it,\n"
+    '  "n_traces": how many distinct data series are drawn\n'
+    "}\n\n"
+    "Transcribe labels you can actually read. Omit any you cannot; do not "
+    "infer a label from the spacing of its neighbours, and do not round."
+)
+
+_JSON_BLOCK = re.compile(r"\{.*\}", re.S)
+
+
+def _coerce_numbers(seq) -> list[float]:
+    out = []
+    for v in seq if isinstance(seq, list) else []:
+        try:
+            out.append(float(str(v).replace(",", "").replace("−", "-")))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def parse_structured(reply: str) -> dict | None:
+    """Pull the JSON object out of a model reply, however it was wrapped."""
+    if not reply:
+        return None
+    m = _JSON_BLOCK.search(reply)
+    if not m:
+        return None
+    try:
+        obj = json.loads(m.group(0))
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(obj, dict):
+        return None
+    obj["x_tick_labels"] = _coerce_numbers(obj.get("x_tick_labels"))
+    obj["y_tick_labels"] = _coerce_numbers(obj.get("y_tick_labels"))
+    return obj
+
+
+def ask_structured(
+    image_path: str,
+    *,
+    url: str = VISION_URL,
+    timeout: float = 180.0,
+    max_tokens: int = 700,
+) -> dict | None:
+    """Ask the vision model to read a plot's axes, and nothing else.
+
+    This is the ONLY place the digitiser talks to a model, and it is
+    deliberately confined to reading printed tick labels — a small, checkable
+    job. Nothing about the data is asked for, because that is the unbounded
+    reading this whole tool exists to replace.
+    """
+    # Sent as a base64 data URI rather than a path: the server refuses any
+    # path outside `model.vision_image_roots`, and this tool renders its own
+    # crops to wherever the caller asked. A data URI needs no server config.
+    with open(image_path, "rb") as fh:
+        b64 = base64.b64encode(fh.read()).decode()
+    ext = os.path.splitext(image_path)[1].lstrip(".").lower() or "png"
+    mime = "jpeg" if ext in ("jpg", "jpeg") else ext
+    payload = json.dumps(
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": STRUCTURED_PROMPT},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/{mime};base64,{b64}"},
+                        },
+                    ],
+                }
+            ],
+            "max_tokens": max_tokens,
+            "temperature": 0.1,
+        }
+    ).encode()
+    req = urllib.request.Request(
+        url, data=payload, headers={"Content-Type": "application/json"}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = json.loads(resp.read().decode())
+    except Exception:  # noqa: BLE001 — an unreachable server is a datum
+        return None
+    text = ""
+    if isinstance(body, dict):
+        choices = body.get("choices") or []
+        if choices:
+            text = (choices[0].get("message") or {}).get("content", "") or ""
+        text = text or body.get("content", "") or body.get("text", "") or ""
+    return parse_structured(text)
