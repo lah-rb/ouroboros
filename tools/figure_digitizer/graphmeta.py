@@ -164,10 +164,15 @@ STRUCTURED_PROMPT = (
     '"down",\n'
     '  "axes_terminate_at_range": true if each axis line stops at its last '
     "tick, false if the line continues past it,\n"
-    '  "n_traces": how many distinct data series are drawn\n'
+    '  "n_traces": how many distinct data series are drawn,\n'
+    '  "line_labels": every annotation printed ON the plot that names a '
+    'spectral line, verbatim, such as "Ca II 393.37" or "Fe I 404.6 nm" '
+    "-- an empty list if none are printed\n"
     "}\n\n"
     "Transcribe labels you can actually read. Omit any you cannot; do not "
-    "infer a label from the spacing of its neighbours, and do not round."
+    "infer a label from the spacing of its neighbours, and do not round.\n"
+    "For line_labels, copy only what is printed on the figure. Do not supply "
+    "a wavelength from your own knowledge of which element a peak belongs to."
 )
 
 _JSON_BLOCK = re.compile(r"\{.*\}", re.S)
@@ -198,6 +203,11 @@ def parse_structured(reply: str) -> dict | None:
         return None
     obj["x_tick_labels"] = _coerce_numbers(obj.get("x_tick_labels"))
     obj["y_tick_labels"] = _coerce_numbers(obj.get("y_tick_labels"))
+    raw = obj.get("line_labels")
+    obj["line_labels"] = [
+        (v if isinstance(v, str) else str((v or {}).get("text", "")))
+        for v in (raw if isinstance(raw, list) else [])
+    ]
     return obj
 
 

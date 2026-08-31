@@ -240,3 +240,183 @@ def match(
     unmatched_f = [p for i, p in enumerate(found) if i not in used_found]
     unmatched_t = [t for i, t in enumerate(free_truth) if i not in used_truth]
     return pairs, unmatched_f, unmatched_t
+
+
+# ── Reference alignment ───────────────────────────────────────────────
+
+# A shift larger than this many resolvable widths means the reference was
+# matched to the wrong peak. Refuse rather than move everything somewhere new.
+MAX_REFERENCE_SHIFT_WIDTHS = 2.0
+# ...and a candidate must be found within this many resolvable widths of the
+# reference's stated position to be considered at all.
+REFERENCE_SEARCH_WIDTHS = 3.0
+# A shift SMALLER than this is not worth making. The offset estimated from one
+# reference carries its own error (measured sd 0.64 px), so correcting a bias
+# below that floor injects more noise than it removes: on a correctly
+# calibrated axis, aligning took median position error from 0.183 nm to 0.343.
+# Break-even sits near 0.25 resolvable widths, which is where this is set.
+MIN_REFERENCE_SHIFT_WIDTHS = 0.25
+# Two independent references must imply shifts agreeing within this, or one of
+# them matched the wrong line.
+REFERENCE_AGREEMENT_WIDTHS = 0.75
+
+
+@dataclasses.dataclass
+class Alignment:
+    """A single global offset, and the evidence for applying it."""
+
+    shift: float = 0.0
+    applied: bool = False
+    reference_value: float | None = None
+    reference_source: str = "none"
+    matched_position: float | None = None
+    reason: str = "no reference available"
+
+    def as_dict(self, unit_suffix: str = "") -> dict:
+        key = f"shift_{unit_suffix}" if unit_suffix else "shift"
+        return {
+            key: round(self.shift, 5),
+            "applied": self.applied,
+            "reference_value": self.reference_value,
+            "reference_source": self.reference_source,
+            "matched_position": (
+                round(self.matched_position, 5)
+                if self.matched_position is not None
+                else None
+            ),
+            "reason": self.reason,
+        }
+
+
+def align_to_reference(
+    found: list[Peak],
+    references: list[float],
+    *,
+    resolvable: float,
+    source: str = "unknown",
+) -> Alignment:
+    """One global offset from reference lines of known position.
+
+    This is wavelength calibration, not identification, and the distinction is
+    what keeps it inside the project's epistemic rule. A SINGLE offset is
+    estimated and applied to EVERY peak, so the spectrum's relative structure
+    is untouched and the correction stays falsifiable — if the reference was
+    matched to the wrong feature, every other line moves with it and the
+    disagreement shows. Snapping each peak individually to its nearest
+    catalogue value would instead manufacture agreement, which is the failure
+    `interconnect` exists to prevent.
+
+    A single reference can only fix an OFFSET. It cannot fix a scale error:
+    the slope comes from the tick fit and is never touched here, so a spectrum
+    whose nm-per-pixel is wrong will be pinned correctly at the reference and
+    drift away from it.
+
+    Three refusals, each measured rather than assumed:
+
+    * no candidate near any reference;
+    * a shift below the noise floor — the estimate carries sd ~0.64 px of its
+      own, so correcting a well-calibrated axis made things WORSE (median
+      error 0.183 nm to 0.343) until this dead-band was added;
+    * references that disagree with each other, which is what a mis-locked
+      match looks like from the inside.
+    """
+    if not found or not references:
+        return Alignment(reason="no reference available")
+    if not math.isfinite(resolvable) or resolvable <= 0:
+        return Alignment(reason="figure has no resolvable width")
+
+    search = REFERENCE_SEARCH_WIDTHS * resolvable
+
+    # References closer together than the search window cannot be told apart
+    # by this figure: both lock onto the SAME peak and then appear to disagree
+    # by exactly their own separation. Ca II H and K are 3.481 nm apart, which
+    # is inside the window at survey resolution, and that is precisely how
+    # they failed -- every cell refused with "references disagree by 3.4810".
+    usable: list[float] = []
+    for ref in sorted(references):
+        if all(abs(ref - u) > search for u in usable):
+            usable.append(ref)
+
+    hits: list[tuple[float, float, float]] = []  # (shift, ref, matched position)
+    claimed: list[float] = []
+    for ref in usable:
+        near = [
+            p
+            for p in found
+            if abs(p.position - ref) <= search and all(p.position != c for c in claimed)
+        ]
+        if not near:
+            continue
+        p = min(near, key=lambda q: abs(q.position - ref))
+        claimed.append(p.position)
+        hits.append((ref - p.position, ref, p.position))
+    if not hits:
+        return Alignment(reason="no peak near any reference")
+
+    shifts = np.array([h[0] for h in hits], dtype=float)
+    # Independent references must tell the same story. When they do not, the
+    # nearest peak to at least one of them is not the line it claims to be --
+    # which is exactly how a large axis error fails, by locking onto a
+    # NEIGHBOURING line and implying a plausible but wrong shift.
+    if (
+        len(shifts) > 1
+        and float(np.ptp(shifts)) > REFERENCE_AGREEMENT_WIDTHS * resolvable
+    ):
+        return Alignment(
+            shift=float(np.median(shifts)),
+            reference_value=hits[0][1],
+            reference_source=source,
+            matched_position=hits[0][2],
+            reason=(
+                f"references disagree by {float(np.ptp(shifts)):.4f}; at least "
+                "one matched the wrong line"
+            ),
+        )
+
+    k = int(np.argmin(np.abs(shifts - np.median(shifts))))
+    shift, ref, pos = hits[k]
+    floor = MIN_REFERENCE_SHIFT_WIDTHS * resolvable
+    cap = MAX_REFERENCE_SHIFT_WIDTHS * resolvable
+    if abs(shift) < floor:
+        return Alignment(
+            shift=shift,
+            reference_value=ref,
+            reference_source=source,
+            matched_position=pos,
+            reason=(
+                f"implied shift {shift:.4f} is below {floor:.4f}; the axis "
+                "agrees with the reference and correcting would add noise"
+            ),
+        )
+    if abs(shift) > cap:
+        return Alignment(
+            shift=shift,
+            reference_value=ref,
+            reference_source=source,
+            matched_position=pos,
+            reason=f"implied shift {shift:.4f} exceeds {cap:.4f}; reference likely mismatched",
+        )
+    # Whether a second, independent reference agreed is part of the claim: a
+    # single-reference alignment has nothing to catch a mis-locked match, and
+    # the artifact must not present the two as equally supported.
+    return Alignment(
+        shift=shift,
+        applied=True,
+        reference_value=ref,
+        reference_source=source,
+        matched_position=pos,
+        reason=(
+            "aligned"
+            if len(shifts) > 1
+            else "aligned (single reference, no cross-check)"
+        ),
+    )
+
+
+def apply_alignment(found: list[Peak], alignment: Alignment) -> list[Peak]:
+    """Translate every peak by the alignment's offset, or none of them."""
+    if not alignment.applied or alignment.shift == 0.0:
+        return found
+    return [
+        dataclasses.replace(p, position=p.position + alignment.shift) for p in found
+    ]

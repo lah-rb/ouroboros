@@ -671,6 +671,69 @@ its shift is irrecoverable does not hold.
 
 ---
 
+## Reference alignment — correcting a wrong axis, not a right one
+
+Operator direction: take the reference from the same LLM pass that supplies
+the other figure metadata, and fall back on Ca II 393 when a figure labels
+nothing.
+
+**Mechanism.** The tick fit gives `nm = slope x px + intercept`. Alignment
+finds the detected peak nearest a reference wavelength and adds ONE offset to
+every peak — algebraically an intercept correction, with the slope untouched.
+That bounds what it can do: a single reference fixes an axis OFFSET exactly
+and cannot fix an axis SCALE error, which would need two references fitted
+jointly. Nonlinearity is neither's job; the calibration residual gate refuses
+it.
+
+It is calibration, not identification, and the distinction is what keeps it
+inside `interconnect.py:31-40`. One offset applied to every peak leaves the
+relative structure untouched and stays falsifiable — a mismatched reference
+moves everything and the disagreement shows. Snapping each peak to its nearest
+catalogue value would manufacture agreement instead.
+
+**The first result was that it made things worse**: median position error
+0.183 -> 0.343 nm on a correctly calibrated axis. After the tick-centre fix
+the residual bias is -0.029 px while the single-reference estimate carries
+sd 0.638 px, so correcting a near-zero bias injects the reference's own noise.
+A synthetic axis is perfect by construction, so that test could only ever show
+the cost. Injecting a known axis error shows the benefit:
+
+| axis error | raw | printed labels | Ca II fallback |
+|---|---|---|---|
+| 0.0 nm | 0.183 nm | **0.183** (0/10 applied) | 0.204 (4/10) |
+| 0.5 nm | 0.454 | 0.416 | 0.450 |
+| 1.0 nm | 0.945 | **0.205** | 0.603 |
+| 2.0 nm | 1.880 | **0.276** | 0.482 |
+| 5.0 nm | 1.915 | 1.150 (4/10) | 0.976 |
+
+Printed labels do nothing on a correct axis and recover ~7x on a wrong one.
+The Ca II fallback is strictly weaker, as it should be — a catalogue line
+assumed to be the tallest thing nearby is a weaker claim than the authors'
+own annotation, and the artifact records which was used.
+
+**Three refusals, each added because a measurement demanded it:**
+
+* **dead-band** (0.25 resolvable widths) — without it, correcting a
+  well-calibrated axis was worse than leaving it alone;
+* **cap** (2 widths) — an implied shift larger than the figure can plausibly
+  be wrong by means the reference matched the wrong line;
+* **agreement** (0.75 widths) — independent references must tell the same
+  story, which is how a large axis error is caught: it fails by locking onto a
+  NEIGHBOURING line and implying a plausible but wrong shift.
+
+**A design bug the agreement check found in itself.** Ca II H and K are
+3.481 nm apart — inside the 3-width search window at survey resolution — so
+both locked onto the SAME peak and then "disagreed" by exactly their own
+separation. Every cell refused with `references disagree by 3.4810`.
+References closer together than the search window are now pruned to one, and
+the alignment records `single reference, no cross-check` so a weaker claim is
+never presented as a stronger one.
+
+Also fixed: the label regex matched a three-digit run inside a longer number,
+turning `0.387 wt%` into 387 nm and `2024` into 202 nm.
+
+---
+
 ## Savitzky-Golay smoothing: does the LIBS preprocessing standard transfer?
 
 Operator question: LIBS work commonly denoises with Savitzky-Golay — how does
