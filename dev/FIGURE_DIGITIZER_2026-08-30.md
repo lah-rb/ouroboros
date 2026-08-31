@@ -967,6 +967,53 @@ between them describes no actual figure.
 
 ---
 
+## Does stroke width substitute for span?
+
+If `resolvable = nm-per-px x stroke`, then a thin pen on a wide figure should
+behave like a thick pen on a narrow one, and recovery should collapse onto a
+single function of resolvable. Swept 5 spans x 4 stroke widths x 5 samples at
+10 sigma:
+
+| resolvable | span | stroke | sep% | rec% |
+|---|---|---|---|---|
+| 0.119 nm | 20 nm | 2.0 pt | 100% | **98.6%** |
+| 0.119 nm | 50 nm | 0.5 pt | 100% | **38.1%** |
+| 0.179 nm | 50 nm | 1.0 pt | 99.6% | 70.4% |
+| 0.186 nm | 20 nm | 3.0 pt | 100% | 90.0% |
+| 0.239 nm | 100 nm | 0.5 pt | 95.4% | 24.2% |
+| 0.328 nm | 50 nm | 2.0 pt | 61.9% | 39.4% |
+
+**It does not collapse.** At an identical 0.119 nm — and identical 100%
+separability — recovery is 98.6% or 38.1% depending on how that resolvable was
+produced. A coarser 0.328 nm beats a finer 0.239 nm.
+
+**But resolvable is still the best single predictor**, and an earlier draft of
+this section overstated the case by saying it does not predict recovery at all.
+Rank correlations over the 20 cells:
+
+```
+resolvable = nm/px x stroke      rho -0.972   p 8.1e-13
+span                             rho -0.939   p 8.4e-10
+nm per pixel                     rho -0.922   p 7.9e-09
+stroke in pixels alone           rho -0.413   p 7.0e-02   (not significant)
+```
+
+The accurate statement is that resolvable is a strong monotone predictor and
+an insufficient one: it ranks figures well but leaves a factor of 2.6 in
+recovery unexplained at a fixed value. **So the artifact should record span and
+stroke alongside `resolvable_unit`, not resolvable alone** — a consumer
+choosing figures on resolvable would rank them correctly and still be surprised
+by which ones actually yield.
+
+**One unexplained result, flagged rather than claimed.** At 50 nm the stroke
+sweep is non-monotone — 38.1 / 70.4 / 39.4 / 7.3 for 0.5 / 1.0 / 2.0 / 3.0 pt,
+peaking in the middle — while every other span falls monotonically. This may
+be self-inflicted: the local-noise window is `15 x stroke_px`, so changing the
+stroke changes the detection window, and a 2 px stroke sits at the estimator's
+floor. Treat it as a suspected artifact of our own windowing until isolated.
+
+---
+
 ## Stroke width: accurate to measure, wrong to sample at
 
 Operator question: how accurately is stroke width detected, and have we tried
