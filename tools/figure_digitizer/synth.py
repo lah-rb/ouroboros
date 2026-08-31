@@ -64,6 +64,10 @@ class PlotSpec:
     stroke_pt: float = 1.0
     annotations: int = 0  # labelled boxes with arrows into the trace
     legend: bool = False
+    # Extra coloured traces, drawn as vertically offset copies. Phase 1
+    # REFUSES multi-series figures, so this arm tests that the refusal fires
+    # rather than that extraction succeeds.
+    n_series: int = 1
 
     title: str = ""
     x_label: str = "Wavelength (nm)"
@@ -292,6 +296,21 @@ def render(
     shape.draw_polyline([fitz.Point(float(a), float(b)) for a, b in zip(px, py)])
     shape.finish(color=(0, 0, 0), width=spec.stroke_pt, closePath=False)
     shape.commit()
+
+    # Additional series, if this arm is testing the multi-series refusal.
+    _SERIES_COLOURS = [(0.85, 0.1, 0.1), (0.1, 0.4, 0.9), (0.1, 0.6, 0.2)]
+    for k in range(1, max(1, spec.n_series)):
+        shift = (bottom - top) * 0.06 * k
+        shape = page.new_shape()
+        shape.draw_polyline(
+            [fitz.Point(float(a), float(b) - shift) for a, b in zip(px, py)]
+        )
+        shape.finish(
+            color=_SERIES_COLOURS[(k - 1) % len(_SERIES_COLOURS)],
+            width=spec.stroke_pt,
+            closePath=False,
+        )
+        shape.commit()
 
     _labels(page, gt, exponent)
     if spec.annotations:

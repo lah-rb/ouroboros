@@ -469,9 +469,78 @@ what the margin already tests. The figtext prose ("the x-axis runs 200–900 nm"
 is independent of both, and could license accepting some of the 16% currently
 refused.
 
+---
+
+## Phase 1d — curve extraction and peaks
+
+Scored over 5 samples × 18 arms = 90 cells, against **continuous** source
+positions rather than a binned reference, restricted to peaks the figure's own
+sampling can separate.
+
+```
+extracted 63 / 90     refused 27  (annotation 10, multi-series 10, no calibration 7)
+P1  |dx| median 0.508 px   p95 0.987 px      target med<=0.3, p95<=1.0   n=862 peaks
+P2  precision 0.965   recall 0.704   F1 0.814    target F1>=0.95
+P3  |dI| median 0.0094   p95 0.0310            target <=0.05
+```
+
+| # | verdict |
+|---|---|
+| P1 | **partially met** — p95 inside 1.0 px, median 0.508 above the 0.3 target |
+| P2 | **REFUTED** at 0.814. Precision 0.965 is the half that matters; the shortfall is recall |
+| P2b | **REFUTED** hard — see below |
+| P3 | **CONFIRMED**, 5× inside the threshold |
+| P11 | **CONFIRMED** — 12/12, series counted exactly for 1/2/3/4 |
+
+### What limits recall is the PEN, not the sampling
+
+Recall tracks stroke width and nothing else: 0.763 at 0.5 pt, 0.576 at 1.0 pt,
+0.406 at 2.5 pt. And rendering at higher dpi does **not** recover it — recall
+falls from 0.753 at 80 dpi to 0.277 at 600, because a finer grid resolves more
+truth while the pen merges the same physical neighbours. This is the sibling of
+the P6b finding: neither native resolution nor render dpi buys back peaks the
+pen has already merged. `resolvable = grid × stroke` is the right model, and it
+is what the precision block already emits.
+
+### P2b: annotation is as dangerous as predicted
+
+The plan called in-interior annotation the highest-probability killer. It is:
+following the box tops gave **F1 0.13, four peaks recovered out of sixty, and
+intensities out by 0.72** on a 0–1 scale. The pre-registered fallback applies —
+refuse on `annotation_overlap` — and the yield cost is 10 of 90 cells.
+
+The planned detector did not work. It looked for annotation as a LEFTOVER
+component, but an arrow physically connects the box to the curve, so the two
+become one component and nothing is left over. What does work is detecting the
+effect rather than the cause: a box top puts the topmost-ink series on a long
+flat shelf far above the trace, and a shelf ends with an abrupt jump where a
+broad peak's apex does not.
+
+### A process failure worth recording
+
+Six of the Phase 1d bugs were found and fixed cleanly. The seventh — a
+synthetic test fixture that returned no trace — I chased through **four**
+changes to the extractor, each of which regressed it on real figures, until a
+direct check showed coverage had gone from 1.00 to `None` on almost every real
+arm. The mistake was tuning production code to satisfy a fixture instead of
+first asking whether the fixture was representative. It was not: a
+mathematically exact flat baseline is genuinely ambiguous with a frame rule,
+and a lone ultra-steep Gaussian fragments under antialiasing. Neither occurs in
+the corpus.
+
+The fix was to test against a REAL spectrum — `tests/data/libs_sme1_spot1.txt`,
+SME #1 at native sampling — after which the same code passed unchanged. Sample
+DENSITY turned out to matter as much as shape: reduced to 4,000 samples that
+spectrum extracts at 0.70 coverage, at native sampling 1.00, because near one
+sample per rendered column the vertical connectors become thin antialiased
+strokes that fall under the ink threshold.
+
+**Rule for later phases: when a synthetic fixture and real data disagree,
+check the fixture first.**
+
 ## Files
 
-- `tools/figure_digitizer/{__init__,source,graphmeta,schema,digitize,synth,axes}.py`
+- `tools/figure_digitizer/{__init__,source,graphmeta,schema,digitize,synth,axes,curve,peaks}.py`
 - `tests/test_figure_digitizer_{source,graphmeta,schema,synth,axes}.py` (52 tests)
 - Artifacts: `databank/figdata/<key>.json`, run reports in `figdata/_runs/`
 
