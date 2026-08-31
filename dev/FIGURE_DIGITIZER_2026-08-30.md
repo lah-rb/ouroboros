@@ -239,10 +239,90 @@ Four more bugs, all caught by the tests rather than by looking:
    quantity a digitiser would misread as the data range. Now `x_axis_end_pt`.
 4. A dataclass field with a default placed before non-defaulted ones.
 
+---
+
+## Phase 1c — axis calibration (the unbounded error term)
+
+Scored over **5 SME samples × 15 adversarial arms = 75 cells**, against exact
+truth, reported per sample so a headline cannot hide one sample's failure.
+
+| outcome | count | |
+|---|---|---|
+| accepted, correct | **63 / 75 (84%)** | every one sub-pixel: 0.39–0.68 px |
+| refused | 12 / 75 (16%) | honest outcome, not an error |
+| **accepted and WRONG** | **0 / 75** | the number that matters |
+
+Per sample: 13/13/12/14/11 accepted, no sample an outlier.
+
+Y-axis, measured separately because the log arm lives there:
+
+```
+linear y-axis accurate (<1% of range): 10/10
+log detection recall:                   5/5
+FALSE log calls on linear axes:         0/10
+```
+
+### P4 verdict — partially met
+
+Pre-registered: *"max residual ≤ 1.0 px on ≥90% of cases; log detection recall
+≥95% with zero false positives on linear."*
+
+- Residual criterion: **met** — every accepted case is far inside 1.0 px.
+- Log criteria: **met** — 5/5 recall, 0 false positives.
+- The ≥90% rate: **not met at 84%**, and the shortfall is entirely
+  REFUSALS. Since the refusals are the guard working, this is recorded as
+  partially met rather than refuted; the honest headline is *zero wrong
+  answers at an 84% yield*, and whether 16% refusal is acceptable is a yield
+  question for later phases, not a correctness one.
+
+### Six bugs, and a pattern worth naming
+
+Five of the six produced a WRONG ANSWER THAT LOOKED RIGHT — a low residual on
+a calibration that was badly off. That is the signature failure of this module
+and the reason residual alone can never be the acceptance test.
+
+1. **Tick length is dpi-relative, not a pixel count.** A 4 pt tick is 9 px at
+   160 dpi and 33 px at 600. Fixed bounds found no ticks above ~300 dpi, then
+   rejected every axis for having none.
+2. **The trace touching the axis fakes inward ticks.** Short perpendicular
+   runs at many columns, indistinguishable from ticks one at a time — and
+   obviously not ticks once required to be regular.
+3. **A proportional grid tolerance lets a wrong step survive.** Seeded on a
+   frame corner, a chain drifted 21 px per interval and still fit inside 18%
+   of a 128 px step, swallowing the true 107 px grid. The tolerance is now
+   absolute, because ticks are placed to sub-pixel accuracy.
+4. **Minor ticks are regular too.** Kept by the regularity filter and paired
+   ordinally against major labels, they put the calibration out by **700 nm**
+   at a 0.37 px residual. Fixed by length clustering — which must run AFTER
+   the regularity filter, never before: applied to raw marks it reads its
+   statistics off a population contaminated by trace touch points and evicts
+   the real ticks, taking a working case from 8 correct ticks to 4 wrong ones.
+5. **Ordinal truncation shifts every pair when a tick is missing in the
+   MIDDLE.** A sliding contiguous window cannot express a gap; both runs are
+   now indexed onto their own grids so alignment is a single integer offset
+   and holes are free.
+6. **A y-axis calibrated upside down.** Page y grows downward while the
+   plotted quantity grows upward, so sorting both sequences ascending mirrors
+   the axis — and evenly spaced ticks fit a straight line just as well
+   reversed. All ten rendered y-axes were wrong at a 0.31 px residual, and the
+   count guard cannot see it because the counts match.
+
+The defence that caught the worst case is the same margin logic that guards
+relocation: when tick and label counts disagree, the winning alignment must
+beat the runner-up. Without it, a thick trace hid five of eight ticks, the
+best of six alignments won on noise, and the calibration came out **6,343 nm
+off at a 0.28 px residual**. With it, that case refuses — and so does one case
+it would have got right. That asymmetry is deliberate.
+
+**Not yet done in 1c:** the structured vision ask for tick LABELS, and with it
+P9 and P10. The CV half supplies tick POSITIONS; label values are still taken
+from ground truth. Deferred rather than skipped, because the vision server is
+serving the live mission's figtext lanes.
+
 ## Files
 
-- `tools/figure_digitizer/{__init__,source,graphmeta,schema,digitize,synth}.py`
-- `tests/test_figure_digitizer_{source,graphmeta,schema,synth}.py` (33 tests)
+- `tools/figure_digitizer/{__init__,source,graphmeta,schema,digitize,synth,axes}.py`
+- `tests/test_figure_digitizer_{source,graphmeta,schema,synth,axes}.py` (52 tests)
 - Artifacts: `databank/figdata/<key>.json`, run reports in `figdata/_runs/`
 
 ## Repro
