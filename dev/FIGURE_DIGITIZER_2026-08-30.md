@@ -606,6 +606,55 @@ assignment refused; zoomed panels are where identification is legitimate.
 
 ---
 
+## Savitzky-Golay smoothing: does the LIBS preprocessing standard transfer?
+
+Operator question: LIBS work commonly denoises with Savitzky-Golay — how does
+it compare to the 5-sigma rule? It is not an alternative to it: SG is a
+smoothing filter and the sigma rule is a detection criterion, so the real
+question is whether SG-then-detect beats detect-on-raw.
+
+Published practice, for reference: Franco, Milori & Villas Boas compared every
+combination of noise filter and baseline method on LIBS soil spectra and found
+Savitzky-Golay paired with 4S Peak Filling best (r = 0.93, RMSE = 0.21) —
+smoothing first, baseline second, then quantification. Typical guidance is
+polynomial order 2-3 with the window kept well inside the peak width.
+
+Tested as a pre-step to the 5-sigma detector, 5 samples per cell:
+
+| dpi | extracted peak FWHM | raw resolvable | SG w=7 p=3 | raw \|dx\| | SG \|dx\| |
+|---|---|---|---|---|---|
+| 160 | 2.7 samples | 16/23 (70%) | 16/23 (70%) | 0.430 px | 0.496 px |
+| 300 | 4.5 samples | 82/91 (**90%**) | 90/91 (**99%**) | 0.297 px | 0.582 px |
+| 600 | 7.5 samples | 14/17 (82%) | 14/17 (82%) | 0.241 px | 1.759 px |
+
+**It costs position accuracy everywhere** — 1.2x worse at 160 dpi, 2x at 300,
+7x at 600 — and its recall benefit exists in exactly one regime. At w=5 and
+600 dpi it fails outright, recovering 1 of 17 while emitting 440 peaks:
+a low-order polynomial fitted across a staircase rings, and the spurious
+maxima win the match.
+
+**Why it does not transfer cleanly.** The extracted trace is quantised to
+integer pixel rows — measured, exactly one distinct fractional part, steps of
+1.000 px. Its "noise" is bounded quantisation correlated with local slope,
+not the independent photon/detector noise SG is derived for, and smoothing a
+staircase displaces the apex rather than averaging noise away. The window
+also has no room: at 160 dpi a peak is 2.7 samples across, so even a 5-point
+window spans the whole feature. In the source spectrum a peak is 5.7 samples
+across at 0.033 nm sampling — the regime the literature works in.
+
+**Verdict: not adopted by default.** Position is the product this tool can
+actually validate, and SG degrades it in every cell; the recall it buys is in
+peaks that are individually unverifiable against a catalogue with a line every
+0.04 nm. Worth revisiting as a CONDITIONAL step: the corpus median effective
+dpi is 286, squarely in the one regime where it wins 90% -> 99%, so a rule
+gated on measured peak FWHM in samples (roughly 3.5-6) would be defensible if
+the recall matters more than half a pixel of position.
+
+Sources: arXiv 1805.03695 (Franco et al., baseline correction for LIBS);
+SciPy Cookbook and SpectroChemPy for parameter guidance.
+
+---
+
 ## Side experiment — can annotation furniture be masked out? (2026-08-31)
 
 Operator suggestion: have paddle block off legend and annotation space and
