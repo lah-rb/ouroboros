@@ -222,3 +222,27 @@ def test_a_rendered_y_axis_reads_the_right_way_up(tmp_path):
 
 def test_a_blank_image_yields_no_axes():
     assert A.find_axes(np.zeros((50, 50), dtype=bool)) == (None, None)
+
+
+def test_a_tick_centre_includes_the_half_pixel():
+    """CAUGHT LIVE. A tick occupying columns a..b covers [a, b+1), so its
+    centre is (a+b)/2 + 0.5. The trace's samples are already reported at
+    column centres, so omitting the half here left the calibration's pixel
+    origin half a pixel away from the trace's own — putting every extracted
+    position ~0.5 px to the right. At 160 dpi correcting it took median
+    position error from 0.611 px to 0.203."""
+    mask = np.zeros((40, 60), dtype=bool)
+    mask[20, 5:55] = True  # the axis line
+    for c in (10, 20, 30, 40):  # single-column ticks below it
+        mask[21:25, c] = True
+    marks = A._marks_on_side(mask, 20, (5, 54), "x", +1, 2, 12, 2)
+    assert [m[0] for m in marks] == [10.5, 20.5, 30.5, 40.5]
+
+
+def test_a_multi_column_tick_centres_on_its_span():
+    mask = np.zeros((40, 60), dtype=bool)
+    mask[20, 5:55] = True
+    mask[21:25, 10:13] = True  # a tick three columns wide: 10,11,12
+    marks = A._marks_on_side(mask, 20, (5, 54), "x", +1, 2, 12, 2)
+    # columns 10..12 cover [10, 13), centre 11.5
+    assert marks[0][0] == pytest.approx(11.5)

@@ -606,6 +606,71 @@ assignment refused; zoomed panels are where identification is legitimate.
 
 ---
 
+## A half-pixel in the tick geometry — P1 now fully confirmed
+
+Chasing whether the Savitzky-Golay position shift was correctable turned up a
+systematic bias in the RAW positions: mean signed error +0.399 px, i.e. every
+extracted position sat about half a pixel to the right of truth.
+
+**Cause.** A tick occupying columns `a..b` covers the continuous span
+`[a, b+1)`, so its centre is `(a+b)/2 + 0.5`. `_marks_on_side` returned
+`np.mean(group)` without the half — while the TRACE's samples were already
+being reported at column centres. The calibration's pixel origin and the
+trace's therefore disagreed by exactly half a pixel, and everything read half
+a pixel right.
+
+Fixed. Re-scored over 5 samples x 18 arms:
+
+| | before | after |
+|---|---|---|
+| P1 \|dx\| median | 0.508 px | **0.199 px** |
+| P1 \|dx\| p95 | 0.987 px | **0.752 px** |
+
+**P1 goes from partially met to CONFIRMED** — both the median (target ≤ 0.3)
+and the p95 (target ≤ 1.0) now clear. It is the first pre-registered verdict
+in this project to improve on a bug fix rather than a threshold change.
+
+### The second bias term is the RENDERER's, and is not corrected
+
+A residual remains and it varies with dpi: +0.07 px at 160, −0.14 at 300,
+−0.57 at 600. Two candidate fixes were tested and both rejected:
+
+- **Undoing the pen morphologically.** The topmost-ink series is close to a
+  grey erosion of the drawn path by the pen, so dilating back should undo it.
+  Measured: bias at 600 dpi improves (−0.359 → −0.214) but median error gets
+  worse at every dpi and a quarter of the peaks are lost.
+- **Baking an empirical stroke-dependent offset.** Rejected on evidence, after
+  the operator asked whether the residual might be machine-specific. Changing
+  ONLY the rasteriser's antialiasing level — same geometry, same data — moves
+  the bias by 0.2 px:
+
+  ```
+  aa_level=0:  bias -0.228   med|err| 0.479
+  aa_level=4:  bias -0.027   med|err| 0.369
+  aa_level=8:  bias -0.055   med|err| 0.411
+  ```
+
+  So the residual tracks the rasteriser, not the figure. Fitting a constant to
+  it would be fitting to MuPDF at one antialiasing setting, and 80% of the
+  corpus is `native_raster` rasterised by publishers with unknown settings. It
+  would not transfer.
+
+Recorded as `RESIDUAL_POSITION_BIAS_PX = 0.25` and reported as uncertainty
+rather than subtracted. **A bias that depends on who drew the figure is
+uncertainty, not a correction.**
+
+### Savitzky-Golay, revisited in this light
+
+The SG shift is largely correctable, which was the operator's question. SG
+does not randomise position — it trades scatter for bias: raw error is mean
++0.399 sd 0.754, SG error is mean +0.545 sd **0.328**. One reference peak of
+known wavelength takes SG from 0.584 to 0.338 px, and a perfect offset reaches
+0.258. LIBS figures routinely label a line, so the reference is usually
+printed on the figure. Still not adopted by default, but the objection that
+its shift is irrecoverable does not hold.
+
+---
+
 ## Savitzky-Golay smoothing: does the LIBS preprocessing standard transfer?
 
 Operator question: LIBS work commonly denoises with Savitzky-Golay — how does

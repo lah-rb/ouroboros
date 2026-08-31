@@ -37,6 +37,15 @@ _BG_WINDOW_MIN = 9
 _NOISE_DETREND = 5
 
 
+# What is left of the position bias after the tick-centre geometry is
+# corrected. It is NOT a constant to subtract: it tracks the rasteriser, not
+# the figure. Changing only the antialiasing level of the renderer -- same
+# geometry, same data -- moved it by 0.2 px, and 80% of the corpus is
+# rasterised by publishers with unknown settings. It is reported as
+# uncertainty rather than removed.
+RESIDUAL_POSITION_BIAS_PX = 0.25
+
+
 @dataclasses.dataclass
 class Peak:
     """One peak, in data coordinates, with its own uncertainty."""
