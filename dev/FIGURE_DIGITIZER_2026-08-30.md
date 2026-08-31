@@ -877,6 +877,53 @@ same underlying spectrum.
 
 ---
 
+## How much of the corpus is zoomed? — and why figtext cannot say
+
+Since a survey figure yields no line list and a zoomed panel yields a faithful
+one, the corpus's value hinges on the split. figtext looked like the cheap way
+to measure it. **It is not, and the failure is systematic.**
+
+Parsing stated wavelength ranges out of figtext gives a median span of 100 nm
+and suggests ~64% of figures are under 200 nm. Validated against tick labels
+read by the structured vision ask on the same figures, that agrees **1 time in
+15 (7%)** and understates span by roughly 8x:
+
+```
+doi_10.1016_j.microc.2019.104388  fig_17   figtext 200nm   actual 800nm
+doi_10.1585_pfr.17.2406018        fig_11   figtext  30nm   actual 600nm
+doi_10.1186_s40494-016-0075-4     fig_04   figtext  20nm   actual 600nm
+median figtext 60 nm   vs   median vision 490 nm
+```
+
+The cause is plain once seen: a description says "peaks between 390 and 410
+nm" — a FEATURE of interest, not the axis extent — and the parse takes the
+sub-range for the axis. This is the same weakness recorded earlier under P10
+("ranging from 378 to 390" never says which axis), arriving in a more
+expensive form: here it does not merely fail to answer, it answers wrongly and
+in a consistently optimistic direction.
+
+**The reliable measure**, from vision-read tick labels (n=31, median span
+400 nm):
+
+| band | count | share |
+|---|---|---|
+| zoom < 50 nm | 9 | **29.0%** |
+| narrow 50-200 nm | 1 | 3.2% |
+| wide 200-500 nm | 9 | 29.0% |
+| survey > 500 nm | 12 | **38.7%** |
+
+About 29% are true zoomed panels; 68% are 200 nm or wider. Small sample, and
+it is the cohort already run through the vision ask rather than a fresh draw,
+so it should be re-measured over a larger cohort before the number is leaned
+on. But the direction is clear and it is NOT the optimistic figtext picture.
+
+**Consequence for yield.** If ~29% holds, roughly 1,500 of the 5,254 LIBS
+candidate figures are panels that can yield a line list, and the rest are
+partial observations. That is the number that predicts this project's value —
+far more than any property of the extractor.
+
+---
+
 ## Stroke width: accurate to measure, wrong to sample at
 
 Operator question: how accurately is stroke width detected, and have we tried
