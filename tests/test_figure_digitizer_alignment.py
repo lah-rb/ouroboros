@@ -88,12 +88,16 @@ def test_references_that_disagree_are_refused():
     """Two independent references must tell the same story. When they do not,
     at least one matched a neighbouring line rather than the line it names —
     which is exactly how a large axis error fails."""
-    # Both references find a candidate inside their window, but they imply
-    # different shifts: 393.366-391.0 = +2.37, 589.0-592.0 = -3.00.
+    # Both references find a candidate inside their window, but no single
+    # linear map explains both: the implied stretch is far from unity.
     found = _peaks([391.0, 592.0])
     al = PK.align_to_reference(found, [393.366, 589.0], resolvable=1.87)
     assert not al.applied
-    assert "disagree" in al.reason
+    # Caught by the SCALE bound rather than by comparing raw shifts. Comparing
+    # shifts before fitting was tried and removed: a genuine scale error IS
+    # different shifts at different references, so that test rejected exactly
+    # the case the joint fit exists to handle.
+    assert "scale" in al.reason
 
 
 def test_references_closer_than_the_search_window_are_not_independent():
@@ -138,3 +142,64 @@ def test_implausible_label_numbers_are_ignored():
 def test_labels_parse_with_or_without_species_and_unit():
     got = LB.references_from_labels(["393.37", "Ca II 393.37 nm", "Fe I 404.6"])
     assert 393.37 in got and 404.6 in got
+
+
+# ── Multi-reference: slope as well as offset ──────────────────────────
+
+
+def test_two_references_correct_a_scale_error():
+    """The error a single reference is blind to. An axis whose nm-per-pixel is
+    wrong gets pinned correctly at the reference and drifts away from it; no
+    amount of translating fixes that."""
+    # truth 300 and 700; measured with a small stretch, inside the move cap
+    found = _peaks([301.0, 702.0, 500.0])
+    al = PK.align_to_reference(found, [300.0, 700.0], resolvable=1.87)
+    assert al.applied
+    assert al.scale != 1.0
+    moved = {round(p.position, 3) for p in PK.apply_alignment(found, al)}
+    assert 300.0 in moved and 700.0 in moved
+
+
+def test_a_single_reference_reports_offset_only():
+    found = _peaks([391.0, 600.0])
+    al = PK.align_to_reference(found, [393.366], resolvable=1.87)
+    assert al.applied
+    assert al.scale == 1.0
+    assert "offset only" in al.reason
+
+
+def test_a_correct_axis_is_left_alone_with_many_references():
+    """The dead-band is judged on how far the correction actually MOVES the
+    spectrum, not on the offset term — a scale fit with a near-zero intercept
+    still moves the ends a long way."""
+    found = _peaks([300.02, 500.0, 699.98])
+    al = PK.align_to_reference(found, [300.0, 700.0], resolvable=1.87)
+    assert not al.applied
+    assert "below" in al.reason
+
+
+def test_an_absurd_fitted_scale_is_refused():
+    """With exactly two references the fit is EXACT and its residual is
+    identically zero, so the scale bound is the only guard between a
+    mismatched pair and a confident wrong answer."""
+    found = _peaks([300.0, 320.0])
+    al = PK.align_to_reference(found, [300.0, 322.0], resolvable=1.87)
+    assert not al.applied
+    assert "scale" in al.reason
+
+
+def test_three_references_that_do_not_fit_one_line_are_refused():
+    """With three references the fit is over-determined, so a single bad match
+    shows as a residual rather than passing silently."""
+    found = _peaks([301.0, 495.0, 701.0])  # the middle one is 5 nm out
+    al = PK.align_to_reference(found, [300.0, 500.0, 700.0], resolvable=1.87)
+    assert not al.applied
+    assert "residual" in al.reason
+
+
+def test_the_alignment_records_how_many_references_supported_it():
+    found = _peaks([301.0, 701.0])
+    al = PK.align_to_reference(found, [300.0, 700.0], resolvable=1.87)
+    d = al.as_dict("nm")
+    assert d["n_references"] == 2
+    assert "scale" in d and "max_residual" in d

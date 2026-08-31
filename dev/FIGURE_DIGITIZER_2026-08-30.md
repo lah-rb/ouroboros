@@ -721,6 +721,40 @@ own annotation, and the artifact records which was used.
   story, which is how a large axis error is caught: it fails by locking onto a
   NEIGHBOURING line and implying a plausible but wrong shift.
 
+### Multi-reference: fitting the slope as well as the offset
+
+Two or more independent references pin the SCALE, which is the error a single
+reference is blind to. Against an axis given both a 1 nm offset and a stretch
+about 200 nm:
+
+| offset | stretch | end error | raw | 1 ref | 3 refs |
+|---|---|---|---|---|---|
+| 0.0 nm | 1.0000 | 0.00 nm | 0.183 | — | **0.186** (1/10 applied) |
+| 1.0 nm | 1.0000 | 1.00 nm | 0.945 | 0.603 | **0.218** (9/10) |
+| 1.0 nm | 1.0020 | 2.56 nm | 1.585 | 0.792 | **0.213** (10/10) |
+| 1.0 nm | 1.0050 | 4.90 nm | 1.798 | 1.101 | **0.345** (9/10) |
+| 1.0 nm | 1.0100 | 8.80 nm | 1.928 | 1.571 | 1.732 (5/10) |
+
+A correct axis is still left alone; a wrong one is corrected to within a
+quarter of a resolvable width up to roughly the reference search window, and
+beyond that the guards refuse rather than corrupt. Three references and four
+perform the same, so three is enough. The ceiling is structural: the search
+window is 3 resolvable widths (7.46 nm here), and an axis wrong by more than
+that AT a reference cannot find its own line.
+
+**Two ordering bugs, both found by tests rather than review.**
+
+The raw shifts were being required to agree BEFORE the fit. But a genuine
+scale error *is* different shifts at different references — that check
+rejected exactly the case the joint fit exists to handle. Agreement is now
+tested afterwards, as the residual of the fit. Removing it took the 1.005
+stretch case from 1.593 nm at 2/10 applied to 0.345 nm at 9/10.
+
+And with EXACTLY two references the fit is exact and its residual is
+identically zero, so the scale bound is the only thing between a mismatched
+pair and a confident wrong answer. At the original 5% a pair implying a 2.7%
+stretch sailed through — a 21 nm error over a 780 nm survey. Tightened to 2%.
+
 **A design bug the agreement check found in itself.** Ca II H and K are
 3.481 nm apart — inside the 3-width search window at survey resolution — so
 both locked onto the SAME peak and then "disagreed" by exactly their own

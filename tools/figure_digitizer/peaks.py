@@ -259,23 +259,53 @@ MIN_REFERENCE_SHIFT_WIDTHS = 0.25
 # Two independent references must imply shifts agreeing within this, or one of
 # them matched the wrong line.
 REFERENCE_AGREEMENT_WIDTHS = 0.75
+# With two or more independent references the SLOPE can be fitted as well as
+# the offset. A correction further from unity than this means the references
+# were matched to the wrong lines.
+#
+# With EXACTLY two references the fit is exact and its residual is identically
+# zero, so this bound is the only thing standing between a mismatched pair and
+# a confident wrong answer -- which is why it is tight. At 5% a pair implying
+# a 2.7% stretch sailed through; over a 780 nm survey that is a 21 nm error.
+# A real figure's scale is wrong by fractions of a percent.
+MAX_SCALE_DEVIATION = 0.02
 
 
 @dataclasses.dataclass
 class Alignment:
-    """A single global offset, and the evidence for applying it."""
+    """A global correction of the wavelength scale, and its evidence.
+
+    ``scale`` is 1.0 for an offset-only correction, which is all a single
+    reference can support. Two or more independent references also pin the
+    SLOPE — the error a single reference cannot see, where an axis with the
+    wrong nm-per-pixel is pinned correctly at the reference and drifts away
+    from it.
+    """
 
     shift: float = 0.0
+    scale: float = 1.0
     applied: bool = False
     reference_value: float | None = None
     reference_source: str = "none"
     matched_position: float | None = None
+    reference_values: list = dataclasses.field(default_factory=list)
+    max_residual: float = 0.0
     reason: str = "no reference available"
+
+    @property
+    def n_references(self) -> int:
+        return len(self.reference_values)
+
+    def to_value(self, position):
+        return position * self.scale + self.shift
 
     def as_dict(self, unit_suffix: str = "") -> dict:
         key = f"shift_{unit_suffix}" if unit_suffix else "shift"
         return {
             key: round(self.shift, 5),
+            "scale": round(self.scale, 8),
+            "n_references": self.n_references,
+            "max_residual": round(self.max_residual, 5),
             "applied": self.applied,
             "reference_value": self.reference_value,
             "reference_source": self.reference_source,
@@ -354,23 +384,90 @@ def align_to_reference(
         return Alignment(reason="no peak near any reference")
 
     shifts = np.array([h[0] for h in hits], dtype=float)
-    # Independent references must tell the same story. When they do not, the
-    # nearest peak to at least one of them is not the line it claims to be --
-    # which is exactly how a large axis error fails, by locking onto a
-    # NEIGHBOURING line and implying a plausible but wrong shift.
-    if (
-        len(shifts) > 1
-        and float(np.ptp(shifts)) > REFERENCE_AGREEMENT_WIDTHS * resolvable
-    ):
+    # NOTE: the raw shifts are deliberately NOT required to agree here. A
+    # genuine scale error produces different shifts at different references --
+    # that is what a scale error IS -- so demanding agreement before fitting
+    # rejects exactly the case the joint fit exists to handle. Agreement is
+    # tested afterwards, as the residual of the fit.
+
+    # Two or more independent references pin the SLOPE as well as the offset.
+    # That is the error a single reference is blind to: an axis with the wrong
+    # nm-per-pixel is pinned correctly at the reference and drifts away from
+    # it, and no amount of translating fixes that.
+    if len(hits) > 1:
+        meas = np.array([h[2] for h in hits], dtype=float)
+        want = np.array([h[1] for h in hits], dtype=float)
+        scale, offset = np.polyfit(meas, want, 1)
+        resid = float(np.max(np.abs(want - (scale * meas + offset))))
+        if abs(scale - 1.0) > MAX_SCALE_DEVIATION:
+            return Alignment(
+                shift=float(offset),
+                scale=float(scale),
+                reference_values=[h[1] for h in hits],
+                reference_source=source,
+                max_residual=resid,
+                reason=(
+                    f"fitted scale {scale:.5f} departs from unity by more than "
+                    f"{MAX_SCALE_DEVIATION}; references likely mismatched"
+                ),
+            )
+        if resid > REFERENCE_AGREEMENT_WIDTHS * resolvable:
+            return Alignment(
+                shift=float(offset),
+                scale=float(scale),
+                reference_values=[h[1] for h in hits],
+                reference_source=source,
+                max_residual=resid,
+                reason=(
+                    f"references do not fit one line, residual {resid:.4f}; "
+                    "at least one matched the wrong line"
+                ),
+            )
+        # The dead-band is judged on how far this actually MOVES the spectrum,
+        # not on the offset term alone -- a scale correction with a near-zero
+        # intercept still moves the ends a long way.
+        span_lo = min(p.position for p in found)
+        span_hi = max(p.position for p in found)
+        moved = max(
+            abs(span_lo * scale + offset - span_lo),
+            abs(span_hi * scale + offset - span_hi),
+        )
+        if moved < MIN_REFERENCE_SHIFT_WIDTHS * resolvable:
+            return Alignment(
+                shift=float(offset),
+                scale=float(scale),
+                reference_values=[h[1] for h in hits],
+                reference_source=source,
+                max_residual=resid,
+                reason=(
+                    f"largest implied move {moved:.4f} is below "
+                    f"{MIN_REFERENCE_SHIFT_WIDTHS * resolvable:.4f}; the axis "
+                    "agrees with the references"
+                ),
+            )
+        if moved > MAX_REFERENCE_SHIFT_WIDTHS * resolvable:
+            return Alignment(
+                shift=float(offset),
+                scale=float(scale),
+                reference_values=[h[1] for h in hits],
+                reference_source=source,
+                max_residual=resid,
+                reason=(
+                    f"largest implied move {moved:.4f} exceeds "
+                    f"{MAX_REFERENCE_SHIFT_WIDTHS * resolvable:.4f}; "
+                    "references likely mismatched"
+                ),
+            )
         return Alignment(
-            shift=float(np.median(shifts)),
+            shift=float(offset),
+            scale=float(scale),
+            applied=True,
             reference_value=hits[0][1],
             reference_source=source,
             matched_position=hits[0][2],
-            reason=(
-                f"references disagree by {float(np.ptp(shifts)):.4f}; at least "
-                "one matched the wrong line"
-            ),
+            reference_values=[h[1] for h in hits],
+            max_residual=resid,
+            reason=f"aligned on {len(hits)} references (scale and offset)",
         )
 
     k = int(np.argmin(np.abs(shifts - np.median(shifts))))
@@ -405,18 +502,17 @@ def align_to_reference(
         reference_value=ref,
         reference_source=source,
         matched_position=pos,
-        reason=(
-            "aligned"
-            if len(shifts) > 1
-            else "aligned (single reference, no cross-check)"
-        ),
+        reference_values=[ref],
+        reason="aligned (single reference, offset only, no cross-check)",
     )
 
 
 def apply_alignment(found: list[Peak], alignment: Alignment) -> list[Peak]:
-    """Translate every peak by the alignment's offset, or none of them."""
-    if not alignment.applied or alignment.shift == 0.0:
+    """Apply the alignment to every peak, or to none of them."""
+    if not alignment.applied:
+        return found
+    if alignment.scale == 1.0 and alignment.shift == 0.0:
         return found
     return [
-        dataclasses.replace(p, position=p.position + alignment.shift) for p in found
+        dataclasses.replace(p, position=alignment.to_value(p.position)) for p in found
     ]
