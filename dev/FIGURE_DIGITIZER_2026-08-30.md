@@ -768,6 +768,54 @@ turning `0.387 wt%` into 387 nm and `2024` into 202 nm.
 
 ---
 
+## Stroke width: accurate to measure, wrong to sample at
+
+Operator question: how accurately is stroke width detected, and have we tried
+scanning AT the stroke width as the peak resolution?
+
+**The estimator is essentially exact modulo pixel quantisation.** Against
+known drawn widths from 0.5 to 3.0 pt across 80-600 dpi (20 conditions, 5
+samples each):
+
+```
+bias +0.67 px    sd 0.24 px    median |err| 0.67 px
+```
+
+Measured is reliably `ceil(true)` — a stroke of true width 2.22 px covers
+three pixel rows once its antialiased edges clear the ink threshold, and the
+mask counts all three. The +0.67 is that edge, not scatter; sd 0.24 across a
+45x range of widths is the number that matters. Like the position residual it
+is an antialiasing artifact, so it is not subtracted.
+
+**Sampling at that width is harmful, and monotonically so.** Resampling the
+trace to one sample per stroke before detection:
+
+| bin size | samples per resolvable element | peaks | resolvable | \|dx\| med |
+|---|---|---|---|---|
+| none (native columns) | 1.0 | 1,988 | 248/283 (**88%**) | 0.302 px |
+| stroke/4 | 4.0 | 1,573 | 243/283 (86%) | 0.303 |
+| stroke/2 | 2.0 | 900 | 199/283 (70%) | 0.429 |
+| stroke | 1.0 | 388 | 107/283 (**38%**) | 0.625 |
+| 2 x stroke | 0.5 | 179 | 48/283 (17%) | 0.470 |
+
+A Nyquist argument predicts a plateau at stroke/2 — two samples per element —
+and there is none: recall falls 88% -> 70% there and keeps falling. Nyquist
+governs bandlimited resampling, and max-binning an upper envelope is a
+nonlinear morphological operation that merges and displaces rather than
+filters. The native pixel grid is already the finest sampling available and
+any coarsening only destroys.
+
+Setting `min_distance` to the stroke instead of binning is harmless but
+pointless: 580/725 against the baseline's 583/725, identical median position
+error. Requiring `fwhm >= stroke` is slightly worse (77% vs 80%).
+
+**The distinction worth keeping.** Stroke width is the right thing to REPORT
+as the resolution limit — `resolvable = grid x stroke` is exactly what the
+precision block emits — and the wrong thing to SAMPLE at. Those are different
+uses of the same number, and only the first is sound.
+
+---
+
 ## Savitzky-Golay smoothing: does the LIBS preprocessing standard transfer?
 
 Operator question: LIBS work commonly denoises with Savitzky-Golay — how does
