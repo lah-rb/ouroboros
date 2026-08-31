@@ -832,6 +832,42 @@ has a different one — a real property of the figures, not an artefact, but it
 means the two denominators are not identical. And the zoom finds 210 peaks
 against 200 raw, so roughly a dozen are spurious; precision there is ~94%.
 
+### Tightening to 10 sigma changes nothing
+
+The IUPAC limit of QUANTITATION rather than detection, applied to raw and
+image alike, in the same window:
+
+| figure | sigma | raw | separable | recovered | end-to-end |
+|---|---|---|---|---|---|
+| survey | 3 | 219 | 0 (0%) | — | 0.0% |
+| survey | 5 | 217 | 0 (0%) | — | 0.0% |
+| survey | 10 | 214 | 0 (0%) | — | **0.0%** |
+| zoom | 3 | 207 | 207 (100%) | 204/207 | 98.6% |
+| zoom | 5 | 200 | 200 (100%) | 198/200 | 99.0% |
+| zoom | 10 | 190 | 190 (100%) | 189/190 | **99.5%** |
+
+A stricter bar was expected to thin the line list and so reduce crowding. It
+does not: 219 -> 214 is a 2% cut, because on a 40-shot average the peaks sit
+far above even 10 sigma. The threshold was never the binding constraint — the
+lines are real, strong and unambiguous in the raw data, and the survey
+destroys them purely by drawing.
+
+Pushed to absurdity to find the ceiling, one sample, same window:
+
+```
+sigma   raw peaks   density    separable
+    3          43   0.465nm    0/43  (0%)
+   10          43   0.465nm    0/43  (0%)
+   50          39   0.513nm    0/39  (0%)
+  250          28   0.714nm    0/28  (0%)
+  500          27   0.741nm    0/27  (0%)
+```
+
+At 2.61 nm resolution a 20 nm window can hold **at most 7** separable lines.
+The spectrum still carries 27 at 500 sigma. **No detection threshold rescues a
+survey figure of a dense spectrum** — the limit is geometric, not statistical,
+and the only lever is a figure drawn at a finer scale.
+
 **The acceptance rule follows directly.** A zoomed panel yields a faithful line
 list and should be accepted as a peak set. A survey figure of a dense spectrum
 yields a sparse, crowding-determined sample of its strong lines and should be
