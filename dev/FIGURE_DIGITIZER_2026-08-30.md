@@ -810,6 +810,37 @@ exists to avoid.
 
 ---
 
+## Survey vs zoom, on the same window — the acceptance case
+
+Everything below is restricted to 390-410 nm, on the same spectra, with the
+same 5-sigma criterion applied to the raw data and to the extracted trace.
+The ONLY thing that differs is the figure the data was drawn into.
+
+| figure | nm/px | resolvable | raw 5σ peaks | separable | image peaks | recovered |
+|---|---|---|---|---|---|---|
+| survey 180-961 nm | 0.933 | 2.612 nm | 217 | **0 (0%)** | 19 | 0/217 = **0.0%** |
+| zoom 390-410 nm | 0.024 | 0.072 nm | 200 | **200 (100%)** | 210 | 198/200 = **99.0%** |
+
+This is not a difference of degree. A survey figure of this spectrum resolves
+NOTHING in the window — every one of the 217 lines the instrument recorded sits
+closer to a neighbour than the 2.6 nm the pen can separate. The same data drawn
+as a 20 nm panel resolves all 200 and the digitiser recovers 198.
+
+Two honest caveats. The raw counts differ (217 vs 200) because each figure's
+5-sigma threshold is computed against its own dynamic range, and a zoomed panel
+has a different one — a real property of the figures, not an artefact, but it
+means the two denominators are not identical. And the zoom finds 210 peaks
+against 200 raw, so roughly a dozen are spurious; precision there is ~94%.
+
+**The acceptance rule follows directly.** A zoomed panel yields a faithful line
+list and should be accepted as a peak set. A survey figure of a dense spectrum
+yields a sparse, crowding-determined sample of its strong lines and should be
+recorded as a partial observation with its `resolvable_unit` attached — never
+as a peak set for the mineral. The difference between them is 0% and 99% of the
+same underlying spectrum.
+
+---
+
 ## Stroke width: accurate to measure, wrong to sample at
 
 Operator question: how accurately is stroke width detected, and have we tried
