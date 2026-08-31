@@ -36,6 +36,29 @@ _BG_WINDOW_STROKES = 15
 _BG_WINDOW_MIN = 9
 _NOISE_DETREND = 5
 
+# An extracted trace cannot measure noise below its own pixel grid. A thick
+# pen's topmost-ink envelope is SMOOTH at the detrend scale, so the rolling
+# MAD collapses to ~0 and "N sigma above noise" degenerates into "any local
+# maximum" -- the criterion passes everything, which is exactly the vacuous
+# gate this project keeps re-finding. Measured: every stroke >= 2pt arm of a
+# 5-span sweep hit sigma == 0.00000 and its 10-sigma recovery equalled its
+# thresholdless retention. The honest floor is the quantisation sigma of a
+# uniform +-0.5 px rounding error, 1/sqrt(12) px, expressed in whatever
+# units the caller normalised y into.
+_QUANT_SIGMA_PX = 1.0 / math.sqrt(12.0)
+
+
+def trace_noise_floor(y_extent_px: float) -> float:
+    """The sigma floor for a trace whose y spans ``y_extent_px`` pixels.
+
+    Callers that hand ``pick`` a 0-1 normalised extracted trace must also
+    hand it this floor; raw instrument data (not quantised by a pen) keeps
+    the default of 0.
+    """
+    if not (y_extent_px > 0):
+        return 0.0
+    return _QUANT_SIGMA_PX / float(y_extent_px)
+
 
 # What is left of the position bias after the tick-centre geometry is
 # corrected. It is NOT a constant to subtract: it tracks the rasteriser, not
@@ -75,7 +98,7 @@ class Peak:
 
 
 def _local_background_and_noise(
-    y: np.ndarray, stroke_px: float
+    y: np.ndarray, stroke_px: float, noise_floor: float = 0.0
 ) -> tuple[np.ndarray, np.ndarray]:
     """Rolling continuum and rolling noise sigma for an extracted trace.
 
@@ -94,7 +117,7 @@ def _local_background_and_noise(
     sigma = 1.4826 * median_filter(resid, size=win, mode="nearest")
     positive = sigma[sigma > 0]
     floor = float(np.percentile(positive, 25)) if positive.size else 1e-9
-    return bg, np.maximum(sigma, floor)
+    return bg, np.maximum(sigma, max(floor, noise_floor))
 
 
 def _parabolic_offset(y: np.ndarray, i: int) -> float:
@@ -131,6 +154,7 @@ def pick(
     prominence_frac: float = DEFAULT_PROMINENCE_FRAC,
     min_distance_px: float = 1.0,
     position_uncertainty: float = 0.0,
+    noise_floor: float = 0.0,
 ) -> list[Peak]:
     """Peaks of a trace already mapped into data coordinates.
 
@@ -162,7 +186,7 @@ def pick(
         return []
     distance = max(1, int(math.ceil(min_distance_px)))
     if criterion == "snr":
-        bg, sigma = _local_background_and_noise(yf, stroke_px)
+        bg, sigma = _local_background_and_noise(yf, stroke_px, noise_floor)
         idx, props = find_peaks(
             yf,
             height=bg + snr_sigma * sigma,

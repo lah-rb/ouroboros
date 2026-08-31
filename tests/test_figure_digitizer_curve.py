@@ -246,3 +246,44 @@ def test_an_unknown_criterion_is_refused():
 def test_a_flat_trace_yields_no_peaks_under_snr():
     x = np.linspace(0.0, 10.0, 400)
     assert PK.pick(x, np.ones_like(x), criterion="snr") == []
+
+
+def test_a_vacuous_sigma_estimate_must_not_pass_everything():
+    """CAUGHT LIVE in the stroke sweep. A thick pen's topmost-ink envelope is
+    smooth at the detrend scale, the rolling MAD collapses to ~0, and
+    "10 sigma above noise" degenerates into "any local maximum": every
+    stroke >= 2pt arm measured sigma == 0.00000 and its 10-sigma recovery
+    EQUALLED its thresholdless retention. The quantisation floor is what
+    keeps the criterion falsifiable on extracted traces."""
+    extent_px = 300.0
+    x = np.linspace(0.0, 100.0, 1200)
+    # A smooth hump on a flat baseline, quantised to the pixel grid like
+    # a real trace...
+    y = np.exp(-((x - 80.0) ** 2) / (2 * 8.0**2))
+    # ...plus, on the FLAT part, a bump that survives rounding (1.5 px) yet
+    # sits well under the ~2.9 px that 10x the quantisation floor demands.
+    y += 1.5 * np.exp(-((x - 30.0) ** 2) / (2 * 0.4**2)) / extent_px
+    y = np.round(y * extent_px) / extent_px
+
+    floor = PK.trace_noise_floor(extent_px)
+    assert floor > 0
+    honest = PK.pick(
+        x, y, criterion="snr", snr_sigma=10.0, stroke_px=4.0, noise_floor=floor
+    )
+    assert all(
+        abs(p.position - 30.0) > 2.0 for p in honest
+    ), "a sub-quantisation bump passed 10 sigma; the floor is not applied"
+    assert any(
+        abs(p.position - 80.0) < 2.0 for p in honest
+    ), "the floor must not swallow a genuinely tall peak"
+    # The trap this guards against: with no floor the same wiggle sails
+    # through, because sigma on a smooth envelope estimates to ~zero.
+    vacuous = PK.pick(x, y, criterion="snr", snr_sigma=10.0, stroke_px=4.0)
+    assert any(
+        abs(p.position - 30.0) < 2.0 for p in vacuous
+    ), "sigma no longer collapses on smooth envelopes; this test is stale"
+
+
+def test_the_noise_floor_is_zero_for_unquantised_data():
+    assert PK.trace_noise_floor(0.0) == 0.0
+    assert PK.trace_noise_floor(-3.0) == 0.0

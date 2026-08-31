@@ -1182,6 +1182,95 @@ text alone.
 
 Repro: `dev/figdig_furniture_masking.py`.
 
+## The pen was innocent: the stroke anomaly was a vacuous sigma (2026-08-31)
+
+The operator challenged the stroke table above on physical grounds: the pen is
+what abstracts peak detection, so at a fixed nm-per-px a finer pen cannot lose
+more information than a thicker one — "a confound between higher resolution
+sample and finer pen seems impossible." The challenge was correct.
+
+**De-confounded methodology.** The old sweep coupled two strokes: the pen that
+draws the figure and the `stroke_px` handed to `pick()`, which scales the
+noise window. The re-run separates detection from ink with arms that differ
+ONLY in the detector (same renders, same traces, same truth, same tolerance):
+
+- **retention** — a distinct local apex exists within tolerance, no threshold
+  at all. Pure "did the pen keep it."
+- **coupled 10-sigma** — last turn's detector, window at `15 x measured px`.
+- **floored 10-sigma** — same, with the quantisation noise floor below.
+
+```
+ span   pt    px  resolv |   ret% coupled% floored% | med_sigma
+   20  0.5  2.00  0.048  |  95.9    95.9     87.3   |  0.00000
+   20  1.0  3.20  0.077  |  94.1    94.1     86.8   |  0.00000
+   20  2.0  6.40  0.153  |  90.9    90.9     81.4   |  0.00000
+   20  3.0 10.00  0.239  |  84.5    84.5     77.7   |  0.00000
+   50  0.5  2.00  0.120  |  92.4    52.9     52.9   |  0.00274
+   50  1.0  3.20  0.191  |  84.5    76.5     61.8   |  0.00057
+   50  2.0  6.00  0.358  |  62.0    62.0     52.7   |  0.00000
+   50  3.0 10.80  0.645  |  52.9    52.9     47.3   |  0.00000
+  100  0.5  2.00  0.239  |  58.4    20.8     20.8   |  0.00274
+  100  1.0  3.20  0.382  |  48.7    24.0     24.0   |  0.00275
+  100  2.0  6.00  0.716  |  38.5    38.5     29.4   |  0.00000
+  100  3.0  8.20  0.979  |  32.3    32.3     24.7   |  0.00000
+  200  0.5  2.00  0.477  |  35.2     8.5      8.5   |  0.00272
+  200  1.0  3.00  0.717  |  28.7    12.3     12.3   |  0.00272
+  200  2.0  5.60  1.337  |  21.1    21.1     15.5   |  0.00000
+  200  3.0  8.00  1.910  |  16.7    16.7     12.6   |  0.00000
+  600  0.5  2.00  1.432  |  14.3     4.3      4.3   |  0.00378
+  600  1.0  3.20  2.293  |  11.4     4.9      4.9   |  0.00271
+  600  2.0  5.40  3.868  |   8.3     6.3      5.3   |  0.00109
+  600  3.0  8.20  5.870  |   7.6     7.6      6.1   |  0.00000
+```
+
+**The mechanism is the sigma column, and it is the vacuous-gate trap again**
+(fourth confirmed instance in this repo). A thick pen's topmost-ink envelope
+is smooth at the 5-sample detrend scale, so the rolling MAD estimates ~0 and
+"10 sigma above local noise" degenerates into "any local maximum": every
+thick-pen arm shows sigma 0.00000 and its coupled recovery EQUALS its
+thresholdless retention, digit for digit. The thin pen faithfully renders the
+spectrum's real fine structure, estimates an honest sigma, and gets a
+genuinely enforced bar. The old table compared a vacuously-passed criterion
+against an enforced one and read the difference as "thick pen wins."
+
+The mechanism I suspected in the previous entry — the `15 x stroke_px`
+WINDOW — was wrong: pinning the window while sweeping the pen moved almost
+nothing. It was the estimate, not the window.
+
+**Fix shipped.** `peaks.trace_noise_floor()`: an extracted trace cannot
+measure noise below its own pixel grid, so sigma is floored at the
+quantisation sigma of a uniform half-pixel rounding error, `1/sqrt(12)` px in
+the caller's normalised units. Regression test renders the trap both ways.
+
+**What this retracts, and what stands:**
+
+- RETRACTED: the 50 nm non-monotonicity (38.1/70.4/39.4/7.3) — retention is
+  monotone there, 92.4/84.5/62.0/52.9. Retracted with it: "a coarser 0.328 nm
+  beats a finer 0.239 nm" and the 98.6-vs-38.1 reading of the matched-
+  resolvable pair as an ink property. All three were the detector.
+- CONFIRMED (the operator's physics): a finer pen is monotonically better at
+  every span, once you measure the ink instead of the detector.
+- STANDS: **stroke does not substitute for span.** Even under retention,
+  matched resolvable splits by span (0.239 nm: 84.5 vs 58.4; 0.716/0.717 nm:
+  38.5 vs 28.7) — and the reason is now stateable: the loss has two terms,
+  grid alone (at a 200 nm span each column max-pools ~7 raw samples, so
+  sub-pixel peaks collapse regardless of pen) and grid x stroke (pen
+  merging). A single product cannot collapse a two-argument function.
+- REAL RESIDUAL, no longer anomalous: with the floor in place a 2 pt pen
+  still edges the 0.5 pt pen in 10-sigma RECOVERY at 100-200 nm (29.4 vs
+  20.8) while losing in RETENTION (38.5 vs 58.4). The max-envelope of a
+  thick pen is a crude smoother: it suppresses column-to-column jitter —
+  mostly unresolved real lines that read as noise at survey grid — more than
+  it suppresses broad peaks, the same trade Savitzky-Golay makes on purpose.
+  Detectability and separability are different currencies; the thin pen
+  retains more but can honestly ATTEST less at N sigma, because it also
+  renders the noise.
+
+Repro: `dev/figdig_stroke_deconfound.py` (the previous sweep's script was
+ephemeral and lost — which is why this one is committed).
+
+---
+
 ## Files
 
 - `tools/figure_digitizer/{__init__,source,graphmeta,schema,digitize,synth,axes,curve,peaks}.py`
