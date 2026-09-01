@@ -1280,13 +1280,42 @@ async def select_curate_paper(
         sized.append((_aspect_priority(rec), aged, chars, key))
     if not sized:
         return "", ""
-    _, _, _, key = min(sized)
-    doc = await _build_doc_for(effects, key, budget_chars)
+
+    # CLAIM BEFORE THE AWAIT. ClaimSet's safety argument is "no awaits between
+    # check and claim", and this function had many: the loop above awaits doc
+    # sizing for every uncached key, and _build_doc_for awaits again, with
+    # the claim taken only at the very end. Every selector that entered that
+    # window computed the same smallest-fitting key and claimed it after the
+    # fact. Measured 2026-09-01: four lanes (three remote, one local) started
+    # within 24 s of each other on a cold size cache and all curated
+    # doi_10.34321_22063 -- 2.5 lane-hours on a paper one lane finished in
+    # seven minutes, booked five times, dataset record taken by whichever
+    # finished last. The race was latent for the local lanes all along; the
+    # remote lanes, launching together with identical budgets, made it
+    # near-certain.
+    #
+    # So: re-check the claim set NOW, take the claim synchronously, and only
+    # then build. A key claimed by a sibling during our awaits is skipped for
+    # the next candidate rather than returned empty -- an empty return costs
+    # the lane a 30 s idle backoff for a queue that has work in it.
+    key = ""
+    for _, _, _, cand in sorted(sized):
+        if cand not in _CURATE_CLAIMS:
+            _CURATE_CLAIMS.add(cand)
+            key = cand
+            break
+    if not key:
+        return "", ""
+    try:
+        doc = await _build_doc_for(effects, key, budget_chars)
+    except BaseException:
+        _CURATE_CLAIMS.release([key])  # a failed build must not pin the paper
+        raise
     if _effective_chars(doc) > budget_chars:  # doc changed since caching
+        _CURATE_CLAIMS.release([key])
         _CURATE_DOC_CACHE[key] = await _curate_doc_sizes(effects, key)
         return "", ""
     _CURATE_STARVED.pop(key, None)
-    _CURATE_CLAIMS.add(key)
     return key, doc
 
 

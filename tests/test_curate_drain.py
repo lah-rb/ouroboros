@@ -458,3 +458,97 @@ async def test_an_undeclared_remote_seat_is_assumed_to_be_shaped_like_ours(
         (_CURATE_SEAT_TOKENS - _CURATE_TURN_OVERHEAD_TOKENS) * _CURATE_CHARS_PER_TOKEN
     )
     assert got == want
+
+
+# ── the claim must be atomic with the check ───────────────────────────
+
+
+def _yielding_build(monkeypatch):
+    """Open the race window on purpose: make _build_doc_for yield to the
+    event loop once before doing its work. MockEffects awaits never actually
+    suspend, so without this four gathered selectors run back to back and the
+    race cannot show -- on the OLD code as well as the new."""
+    import asyncio
+
+    import agent.actions.curation_actions as CA
+
+    real = CA._build_doc_for
+
+    async def _slow(effects, key, budget):
+        await asyncio.sleep(0)
+        return await real(effects, key, budget)
+
+    monkeypatch.setattr(CA, "_build_doc_for", _slow)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_selectors_cannot_claim_the_same_paper(monkeypatch):
+    """CAUGHT LIVE (2026-09-01): three remote lanes and one local lane, launched
+    within 24 s on a cold size cache, all selected doi_10.34321_22063 and all
+    curated it -- 2.5 lane-hours for a paper one lane finished in 7 min. The
+    claim was taken AFTER the awaits, so every selector in the window saw it
+    unclaimed."""
+    import asyncio
+
+    _clear_state()
+    _yielding_build(monkeypatch)
+    fx = MockEffects(files=_bank_files([_rec("solo")], {"solo": "x" * 100}))
+    bank = await read_databank(fx)
+    try:
+        results = await asyncio.gather(
+            *[select_curate_paper(fx, bank, 1000) for _ in range(4)]
+        )
+        claimed = [k for k, _ in results if k]
+        assert claimed == ["solo"], f"double-claim: {claimed}"
+    finally:
+        _clear_state()
+
+
+@pytest.mark.asyncio
+async def test_a_lost_race_falls_through_to_the_next_paper(monkeypatch):
+    """A sibling winning the claim must not idle this lane: with two papers
+    pending and four selectors, exactly two DISTINCT keys come back."""
+    import asyncio
+
+    _clear_state()
+    _yielding_build(monkeypatch)
+    fx = MockEffects(
+        files=_bank_files([_rec("a"), _rec("b")], {"a": "x" * 100, "b": "y" * 200})
+    )
+    bank = await read_databank(fx)
+    try:
+        results = await asyncio.gather(
+            *[select_curate_paper(fx, bank, 1000) for _ in range(4)]
+        )
+        claimed = sorted(k for k, _ in results if k)
+        assert claimed == ["a", "b"], f"got {claimed}"
+    finally:
+        _clear_state()
+
+
+@pytest.mark.asyncio
+async def test_an_oversize_or_failing_build_releases_its_claim(monkeypatch):
+    """The claim is now taken BEFORE the build, so every exit after it must
+    hand the key back or the paper is pinned for the life of the process."""
+    import agent.actions.curation_actions as CA
+
+    _clear_state()
+    fx = MockEffects(files=_bank_files([_rec("p")], {"p": "x" * 100}))
+    bank = await read_databank(fx)
+    try:
+        # oversize after build: doc "changed since caching"
+        monkeypatch.setattr(CA, "_effective_chars", lambda d: 10**9)
+        key, _ = await select_curate_paper(fx, bank, 1000)
+        assert key == "" and "p" not in _CURATE_CLAIMS
+        monkeypatch.undo()
+
+        # a build that raises
+        async def _boom(*_a, **_k):
+            raise RuntimeError("build failed")
+
+        monkeypatch.setattr(CA, "_build_doc_for", _boom)
+        with pytest.raises(RuntimeError):
+            await select_curate_paper(fx, bank, 1000)
+        assert "p" not in _CURATE_CLAIMS
+    finally:
+        _clear_state()
