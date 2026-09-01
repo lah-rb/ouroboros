@@ -1486,6 +1486,89 @@ Repro: `dev/figdig_resolvable_model.py`.
 
 ---
 
+## How much is vector, really -- and is it additive? (2026-08-31)
+
+The operator's recollection was sub-10%, and asked whether that share is
+ADDITIVE to the ~30% of raster figures whose span/pen/dpi combination already
+retains 90%+ of peaks. Measured three ways, because the first two answers
+disagree with each other and both are misleading alone.
+
+**Figure-level, from the 60-paper figdata sample: 6.2%** (10 of 160 plot
+figures at `tier: vector`). This is the number that matches the recollection
+-- and it is contaminated. The `technique: libs` field on those artifacts is
+the RUN PARAMETER (`--technique libs`), not detected content. Reading their
+recovered captions, **not one of the ten is a LIBS emission spectrum**: they
+are UV-Vis diffuse reflectance, Raman, fluorescence, molecular absorption, and
+one absorbance-versus-TIME trace. Any conclusion drawn from that sample about
+LIBS would have been drawn from the wrong population.
+
+**Paper-level, scanning 600 PDFs directly: 14.8%** (89 papers) carry a
+curve-shaped vector path. Higher than the figure-level rate because a paper
+counts once whether one figure or six are vector.
+
+**The filter that matters: a vector curve is only worth having if it beats the
+raster it would otherwise get.** The curve's unique-x vertex count is the
+figure's true information ceiling; compare it to the columns a render would
+provide over the same width.
+
+```
+  of the 89 vector papers:  58.4% beat a 160-dpi raster
+                            43.8% beat 300 dpi
+                            25.8% beat 600 dpi
+  unique-x per curve: median 594, range 21 - 21,527
+```
+
+So **a third to a half of "vector" figures are decimated by the plotting
+library below the raster grid they would land on** -- vector in format, but
+the data is already gone, and gone in a way no rasterisation analysis would
+ever reveal. This is the trap in treating the tier as a quality tier.
+
+**For LIBS specifically** (42 LIBS-mentioning papers in the 600):
+
+```
+  carry a vector curve          5 / 42  = 11.9%
+  ...and it beats a 300dpi raster  3 / 42  =  7.1%
+   doi_10.1007_s00339-016-0085-9    uniq_x 3440   812 dpi-equiv
+   doi_10.1007_s11483-009-9114-y    uniq_x 1615   749 dpi-equiv
+   doi_10.1002_aesr.202400338       uniq_x  659   336 dpi-equiv
+   doi_10.1016_j.aca.2022.340261    uniq_x  148    56 dpi-equiv  DECIMATED
+   doi_10.1007_s11214-021-00807-w   uniq_x   95    27 dpi-equiv  DECIMATED
+```
+
+The LIBS vector rate (11.9%) is statistically indistinguishable from the
+non-LIBS rate (14.4%, n=362) -- vector availability is a TYPESETTING property,
+not a technique one.
+
+**Is it additive?** Structurally yes, and for a reason worth stating: vector
+availability is decided by how the publisher typeset the page, while zoom-vs-
+survey is decided by what the author chose to show. Those are independent
+decisions, so the ~7% should overlap the already-usable ~30% only by chance.
+More importantly it is additive in KIND: a full-resolution polyline has no pen
+and no column max-pooling, so **span stops mattering** -- the 600 nm survey
+that raster cannot do at any available dpi is fully readable here. That is
+precisely the population raster loses.
+
+**But the ceiling is lower than "free" suggests.** The best LIBS vector curve
+carries 3,440 samples; the operator's own instrument records ~18,000 over
+180-1000 nm (~0.045 nm/sample). A 3,440-vertex survey is ~0.17 nm/sample --
+about 4x decimated against the instrument, though still 4-8x better than a
+300-600 dpi raster of the same rect. Vector is the best available source, not
+a lossless one.
+
+**Verdict.** ~7% of LIBS papers gain materially from the vector path, on top
+of the ~30% raster-usable, and the gain is concentrated exactly where raster
+fails (wide surveys). Worth building, but as an opportunistic path over a
+handful of papers -- and the tier MUST carry the vertex-count check, because
+half of what calls itself vector is worse than rendering it.
+
+**Caveats.** 46 of the 89 vector papers have no figtext on disk and could not
+be classified; LIBS identification is a regex over figtext, not a read. The
+LIBS vector cohort is n=5. These are order-of-magnitude figures.
+
+Repro: `dev/figdig_vector_survey.py`.
+
+---
+
 ## Files
 
 - `tools/figure_digitizer/{__init__,source,graphmeta,schema,digitize,synth,axes,curve,peaks}.py`
