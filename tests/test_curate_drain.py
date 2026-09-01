@@ -389,3 +389,72 @@ async def test_a_degraded_feed_falls_back_to_the_static_cell():
         _Snap(free_cells=60_000, knows_kv=False), pool_health={"kvPoolTokens": 65536}
     )
     assert await _curate_doc_budget_chars(unknown) == legacy
+
+
+# ── remote lanes size against THEIR engine, not ours ──────────────────
+
+
+class _QueuedLocalSnapshot:
+    """What the local feed looked like when the leak bit: queued and nearly
+    full. Rung 3 returns 0 on this -- correctly, for a LOCAL lane."""
+
+    knows_kv = True
+    serving = True
+    engine_fatal = None
+    waiting = 2
+    free_cells = 487
+    n_ctx_seq = 65_536
+
+
+class _LaneFx:
+    def __init__(self, domain="", routes=None):
+        self._inference_domain = domain
+        self._llmvp_domains = routes or {}
+
+    async def capacity_snapshot(self):
+        return _QueuedLocalSnapshot()
+
+    async def inference_pool_health(self):
+        return {"kvPoolTokens": 65_536}
+
+
+@pytest.mark.asyncio
+async def test_a_remote_lane_budget_comes_from_its_own_seat_not_the_local_pool(
+    monkeypatch,
+):
+    """CAUGHT LIVE (2026-09-01): 40 of 46 remote rounds declined 'nothing
+    unclaimed fits the seat budget' while the remote engine sat idle. The
+    lane held no local claim, fell to rung 3, and sized its document against
+    the LOCAL server's leftover cells."""
+    from agent.actions.curation_actions import (
+        _CURATE_CHARS_PER_TOKEN,
+        _CURATE_TURN_OVERHEAD_TOKENS,
+    )
+
+    monkeypatch.delenv("OUROBOROS_CURATE_DOC_CHARS", raising=False)
+    remote = _LaneFx("curate_remote", {"curate_remote": {"seat_tokens": 131_072}})
+    got = await _curate_doc_budget_chars(remote)
+    want = int((131_072 - _CURATE_TURN_OVERHEAD_TOKENS) * _CURATE_CHARS_PER_TOKEN)
+    assert got == want, "remote budget did not come from the declared seat"
+
+    # The very same local conditions must still stop a LOCAL lane cold.
+    assert await _curate_doc_budget_chars(_LaneFx()) == 0
+
+
+@pytest.mark.asyncio
+async def test_an_undeclared_remote_seat_is_assumed_to_be_shaped_like_ours(
+    monkeypatch,
+):
+    from agent.actions.curation_actions import (
+        _CURATE_CHARS_PER_TOKEN,
+        _CURATE_SEAT_TOKENS,
+        _CURATE_TURN_OVERHEAD_TOKENS,
+    )
+
+    monkeypatch.delenv("OUROBOROS_CURATE_DOC_CHARS", raising=False)
+    remote = _LaneFx("curate_remote", {"curate_remote": {"endpoint": "http://x"}})
+    got = await _curate_doc_budget_chars(remote)
+    want = int(
+        (_CURATE_SEAT_TOKENS - _CURATE_TURN_OVERHEAD_TOKENS) * _CURATE_CHARS_PER_TOKEN
+    )
+    assert got == want

@@ -46,6 +46,42 @@ docs/hour *degrades*: gpt-oss 127.7 -> 88.5, muse 36.8 -> 28.9. Four docs
 sequentially on gpt-oss take 113 s; four in parallel take 163 s — parallelism
 is 44% slower in aggregate.
 
+> **CORRECTION (2026-09-01, second-reviewer pass).** The "degrades" and
+> "44% slower" readings above are a methodology artefact, not a property of
+> the engines. The bench rotated through a doc set, so each concurrency arm
+> ran DIFFERENT documents — and the higher arms drew larger ones:
+>
+> | conc | tok/doc (gpt-oss) | prefill tok/s | docs/h | tok/doc (muse) | prefill tok/s | docs/h |
+> |---|---|---|---|---|---|---|
+> | 1 | 17,513 | 621 | 127.7 | 17,219 | 176 | 36.8 |
+> | 2 | 18,912 | 621 | 118.2 | 18,648 | 177 | 34.2 |
+> | 4 | 23,630 | 581 | 88.5 | 22,950 | **184** | 28.9 |
+>
+> The conc=4 arm carried 35% more tokens per document; docs/hour fell 31%;
+> aggregate prefill fell 6.5% for gpt-oss and ROSE 4.5% for muse. The
+> "113 s sequential vs 163 s parallel" comparison set 4× the small conc=1
+> doc against the four larger conc=4 docs — 70k tokens against 94.5k. At
+> equal tokens it is 152 s vs 163 s, within single-run noise.
+>
+> **Corrected finding: aggregate throughput is FLAT in concurrency.** The
+> device is prefill-saturated, so concurrency neither buys nor costs
+> aggregate throughput. The physics paragraph below stands; the empirical
+> "parallel is slower" does not, and the operator's scepticism of it was
+> warranted — this would have been the first time parallel-in-aggregate lost
+> to serial on this hardware, and it did not. One clean confirmation the
+> data does give: the single-seat gpt-oss config QUEUED its four calls
+> (per-call 39/76/121/163 s, a staircase) while the swarm config ran them
+> truly concurrently (171/169/170/169 s), and both arms finished in the same
+> total time. Same tokens, same wall clock, parallel or serial — that is
+> what saturation looks like.
+>
+> Consequences: `remote_text_seat` was raised from 3 to 4 (concurrency is
+> free in aggregate and covers booking/gate gaps; a lane that can never run
+> is dead weight), and the earlier suggestion to LOWER it to 1–2 is
+> withdrawn — it rested on this reading. The bench now runs the same
+> document set at every concurrency so total tokens are identical across
+> arms.
+
 The reason is that prefill is compute-bound and already saturates the device.
 Batched decode multiplexes DECODE across streams; it cannot manufacture
 prefill FLOPs. muse-swarm makes this unambiguous: 128 seats available, all
@@ -172,3 +208,50 @@ while muse alone sustains 36.8 docs/h uncontended, with `fig_review` holding
 question and available now.
 
 Repro: `dev/bench_curate_quality.py --model <name> --accepted 10 --denied 10`
+
+
+---
+
+# Remote lane: the second leak (2026-09-01, second-reviewer pass)
+
+The dedicated remote lanes (`curate_r1-4`, est_kv=0 / seats=0, own resource)
+were verified routing to the mac and running in parallel with the local
+lanes. Their throughput was nonetheless well below what the engine allows,
+and the trace says why. Over the first 40 minutes of the v6 run
+(`step_end` events, flow `curate_drain`, by branch):
+
+```
+              rounds   declined <5s   did work   median work-round
+  LOCAL          87        78 (90%)       9           344 s
+  REMOTE         46        40 (87%)       6         1,076 s
+```
+
+The 1,076 s per productive remote round is the mac's prefill rate
+(~176 tok/s shared three ways) across two long turns — slow, but expected,
+not odd. The loss is the **40 of 46 remote rounds that declined instantly**,
+every one with the literal reason `nothing unclaimed fits the seat budget`.
+
+Two places still coupled the remote lanes to the LOCAL server after the
+est_kv/seats fix:
+
+1. `_curate_doc_budget_chars` — a remote lane holds no local claim, so
+   `claim_tokens` was 0 and the function fell to rung 3: a LIVE SNAPSHOT
+   OF THE LOCAL ENGINE. Its document budget was therefore whatever cells
+   the five local lanes had left, and it returned 0 outright whenever the
+   local queue was non-empty. Fixed with rung 2b: a lane with a domain
+   sizes its document against that domain's declared `seat_tokens`
+   (131,072 for the mac; undeclared assumes the local seat).
+2. `WorkerPool._one_unit` — `CapacityModel.admit()` checks `waiting`,
+   `serving` and `engine_fatal` on the local feed BEFORE the seats/kv skip,
+   so a remote lane was refused whenever the local server had a queue.
+   Fixed: a lane with a domain never consults the local model; it is bounded
+   by `max_inflight` for its own resource only.
+
+The "heavier material" hypothesis was checked and does not hold: both lane
+groups draw smallest-first from one shared claim set, and under the leak the
+remote lanes received SMALLER budgets (local leftovers), not larger papers.
+
+Telemetry gap noted in passing: the run trace recorded `inferences: 0` for
+a run that completed 15 curate rounds — inference events are not being
+emitted from the drain lanes, so per-turn prefill/decode timings had to be
+inferred from step durations. Worth its own look.

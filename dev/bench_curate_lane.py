@@ -106,18 +106,29 @@ async def run(url, model, prompts, max_tokens, concurrencies, reps):
             flush=True,
         )
 
-        cursor = 1  # prompts[0] spent on warm-up
+        # THE SAME documents at every concurrency. The first version rotated
+        # through the doc set -- conc=1 took the 2nd doc, conc=4 the 5th-8th --
+        # and the conc=4 arm carried 35% more tokens per document
+        # (17,513 -> 23,630). docs/hour then fell with concurrency for a
+        # reason that had nothing to do with concurrency, and it was read as
+        # "parallel is slower in aggregate". Normalised to tokens the arms
+        # were flat. Holding the doc set fixed makes total tokens identical
+        # across arms, so docs/hour and tok/s are both directly comparable:
+        # conc=1 runs the N docs one at a time, conc=N runs them all at once.
+        n_docs = max(concurrencies)
+        docs = prompts[1 : 1 + n_docs]  # prompts[0] spent on warm-up
         for n in concurrencies:
             runs = []
             for rep in range(reps):
-                batch = []
-                for _ in range(n):
-                    batch.append(prompts[cursor % len(prompts)])
-                    cursor += 1
+                batches = [docs[i : i + n] for i in range(0, len(docs), n)]
                 t0 = time.time()
-                res = await asyncio.gather(
-                    *[one(client, url, p, max_tokens) for p in batch]
-                )
+                res = []
+                for batch in batches:
+                    res.extend(
+                        await asyncio.gather(
+                            *[one(client, url, p, max_tokens) for p in batch]
+                        )
+                    )
                 wall = time.time() - t0
                 fresh = sum(r["fresh_prefill"] for r in res)
                 gen = sum(r["generated"] for r in res)
@@ -149,12 +160,12 @@ async def run(url, model, prompts, max_tokens, concurrencies, reps):
                     "prefill_tok_s": fp / med,
                     "decode_tok_s": gn / med,
                     "cache_hits": sum(r["cache_hits"] for r in runs),
-                    "docs_per_hour": 3600.0 * n / med,
+                    "docs_per_hour": 3600.0 * len(docs) / med,
                     "runs": runs,
                 }
             )
             print(
-                f"  conc={n}: median wall {med:.1f}s -> {3600.0*n/med:.1f} docs/hour",
+                f"  conc={n}: median wall {med:.1f}s -> {3600.0*len(docs)/med:.1f} docs/hour",
                 flush=True,
             )
     return out

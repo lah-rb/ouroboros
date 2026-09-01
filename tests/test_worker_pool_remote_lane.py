@@ -103,3 +103,73 @@ def test_a_local_lane_adds_no_domain_key():
     fx = ChildEffects(_Parent(), branch="lane:curate", inference_domain="")
     asyncio.run(fx.run_inference("p", {"max_tokens": 5}))
     assert "domain" not in seen["overrides"]
+
+
+def test_a_remote_lane_is_never_gated_by_the_local_capacity_model(monkeypatch):
+    """THE second leak. est_kv=0/seats=0 skipped the cells and seats checks,
+    but admit() tests `waiting`/`serving`/`engine_fatal` on the LOCAL feed
+    first, so remote lanes were refused whenever the local server had a
+    queue. A lane whose tokens run elsewhere must not ask the local model
+    at all -- and must never hold a local reservation."""
+    import asyncio
+
+    from agent.scheduler.worker_pool import Lane, WorkerPool
+
+    class _Refuses:
+        _feed = None
+
+        def admit(self, *_a, **_k):
+            class V:
+                admitted = False
+                reason = "server queue depth 9"
+                free_cells = 0
+                free_seats = 0
+
+            return V()
+
+        def reserve(self, *_a, **_k):
+            raise AssertionError("a remote lane reserved LOCAL cells")
+
+        def release(self, *_a, **_k):
+            pass
+
+    remote = Lane(
+        name="curate_r1",
+        flow="curate_drain",
+        resource="remote_text_seat",
+        est_kv=0,
+        seats=0,
+        domain="curate_remote",
+    )
+    local = Lane(
+        name="curate", flow="curate_drain", resource="text_seat", est_kv=18_000
+    )
+    pool = WorkerPool(
+        effects=None,
+        lanes=[remote, local],
+        capacity_model=_Refuses(),
+        flow_registry={},
+        max_inflight={"remote_text_seat": 4, "text_seat": 7},
+    )
+    ran = []
+
+    async def _run(lane):
+        ran.append(lane.name)
+        return True
+
+    monkeypatch.setattr(pool, "_run_flow", _run)
+    assert asyncio.run(pool._one_unit(remote, pool.state["curate_r1"])) is True
+    assert (
+        asyncio.run(pool._one_unit(local, pool.state["curate"])) is False
+    ), "a LOCAL lane must still honour the local model's refusal"
+    assert ran == ["curate_r1"]
+
+
+def test_every_remote_lane_may_dispatch():
+    """A lane that can never run is dead weight: the cap must admit as many
+    remote lanes as exist. (Aggregate throughput is flat in concurrency on a
+    prefill-saturated engine -- corrected bench, 2026-09-01 -- so extra
+    concurrency costs nothing and covers booking/gate gaps.)"""
+    lanes = _lanes()
+    remote = [ln for ln in lanes.values() if ln.name.startswith("curate_r")]
+    assert DEFAULT_LANE_MAX_INFLIGHT[remote[0].resource] >= len(remote)

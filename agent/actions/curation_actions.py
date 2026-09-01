@@ -1070,6 +1070,7 @@ async def _curate_doc_budget_chars(effects, claim_tokens: int = 0) -> int:
 
     Rung 1  operator override (env)
     Rung 2  the dispatcher's reservation-adjusted claim   <- the normal path
+    Rung 2b the lane's REMOTE seat (llmvp_domains[domain].seat_tokens)
     Rung 3  a live capacity snapshot  (single-lane callers, no worker pool)
     Rung 4  the legacy static cell    (feed degraded => width 1 => sole consumer)
 
@@ -1094,6 +1095,24 @@ async def _curate_doc_budget_chars(effects, claim_tokens: int = 0) -> int:
             pass
 
     cells = int(claim_tokens or 0)  # rung 2
+
+    # Rung 2b: a lane whose inference runs on ANOTHER engine. It holds no
+    # local claim (the worker pool does not admit it against the local
+    # model), so without this rung it fell to rung 3 and sized its document
+    # against the LOCAL server's free cells -- cells the five local lanes had
+    # already spent. Measured 2026-09-01: 40 of 46 remote rounds declined
+    # "nothing unclaimed fits the seat budget" while the remote engine sat
+    # idle. The remote seat is whatever the domain declares (`seat_tokens`,
+    # the engine's per-stream window -- for kv_unified pools the health
+    # field nCtxSeq reports the POOL and cannot be used); undeclared, it is
+    # assumed to be shaped like ours.
+    domain = str(getattr(effects, "_inference_domain", "") or "")
+    if cells <= 0 and domain:
+        routes = getattr(effects, "_llmvp_domains", None) or {}
+        route = routes.get(domain) if isinstance(routes, dict) else None
+        seat = int((route or {}).get("seat_tokens") or 0) or _CURATE_SEAT_TOKENS
+        cells = seat
+
     if cells <= 0:  # rung 3
         snap = None
         fn = getattr(effects, "capacity_snapshot", None)

@@ -100,13 +100,16 @@ DEFAULT_LANE_MAX_INFLIGHT: Dict[str, int] = {
     "vision_ctx": 4,  # tracks vision_batched_max_streams
     "paddle": 1,
     "network": 1,
-    # Remote curate seats. The mac holds 128, so this is NOT a seat limit —
-    # it is a PREFILL limit. Curate is prefill-dominated (~23k in, a few
-    # hundred out) and the bench showed total docs/hour FALLING as
-    # concurrency rose (muse 36.8 -> 34.2 -> 28.9 at 1/2/4) because prefill
-    # already saturates the device. Concurrency here only covers the gaps
-    # where a lane is booking or running gates rather than generating.
-    "remote_text_seat": 3,
+    # Remote curate seats. The mac holds 128, so this is not a seat limit.
+    # An earlier value of 3 rested on a bench reading that total docs/hour
+    # FELL with concurrency; re-analysis (2026-09-01) showed that arm had
+    # been handed 35% larger documents, and normalised to tokens the
+    # aggregate is FLAT (gpt-oss 621/621/581 tok/s, muse 176/177/184 at
+    # 1/2/4). Prefill saturates the device, so concurrency buys no aggregate
+    # throughput -- and costs none. It does cover the gaps where a lane is
+    # booking or running gates, so every remote lane may run; a lane that
+    # can never dispatch is dead weight.
+    "remote_text_seat": 4,
 }
 
 
@@ -420,7 +423,14 @@ class WorkerPool:
             return False
 
         token = None
-        if self.model is not None:
+        # A lane with a DOMAIN runs its tokens on another engine, so the local
+        # capacity model has no jurisdiction over it -- not for cells, not for
+        # seats, and not for the `waiting`/`serving` checks that admit() runs
+        # BEFORE it looks at cells. Measured 2026-09-01: with est_kv=0/seats=0
+        # alone, remote lanes were still refused whenever the LOCAL queue was
+        # non-empty, because those early checks read the local feed. Such a
+        # lane is bounded by max_inflight for its own resource, nothing else.
+        if self.model is not None and not lane.domain:
             verdict = self.model.admit(lane.name, lane.est_kv, lane.seats)
             if not verdict.admitted:
                 # Kept for the periodic report: "nothing is moving" and
