@@ -130,3 +130,32 @@ def test_the_controller_routes_the_gate_phase_through_admission():
 def test_every_stage_is_counted(stage_key, monkeypatch):
     out = _run({}, monkeypatch)
     assert stage_key in out.result["by_stage"]
+
+
+# ── the loop guard must tell a paced stand-down from a hot loop ───────
+
+
+def test_the_loop_guard_separates_paced_yields_from_hot_loops():
+    """CAUGHT LIVE. The self-loop guard predates the worker pool: it reads
+    ANY non-dispatching controller cycle as a livelock. With the gate now
+    standing down so the lanes can run, that killed a healthy mission after
+    50 stand-downs (2026-09-01) while curate lanes were packing throughout —
+    'ran 51 times without dispatching work'.
+
+    A hot loop must still trip at 50; a paced yield must not.
+    """
+    import inspect
+
+    from agent import loop as L
+
+    src = inspect.getsource(L)
+    assert "consecutive_yield" in src, "no separate budget for paced yields"
+    assert "yielded_deliberately" in src, "delay is not carried to the guard"
+    # the hot-loop ceiling must stay small, the paced one must be far larger
+    assert "max_consecutive_yield = 2000" in src
+    assert (
+        "max_consecutive_entry = (max_cycles + 3) if max_cycles is not None else 50"
+        in src
+    )
+    # a dispatch must clear BOTH counters
+    assert src.count("consecutive_yield = 0") >= 2, "yield counter never resets"
