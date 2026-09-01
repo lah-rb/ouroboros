@@ -85,6 +85,11 @@ class MissionYAMLConfig(BaseModel):
     working_dir: str = "."
     effects_profile: Literal["local", "git_managed", "dry_run"] = "local"
     llmvp_endpoint: str = "http://localhost:8008/graphql"
+    # Per-domain inference routing; see persistence/models.py. Lets one lane
+    # (curate) run its tokens on another host while claims, booking and gates
+    # stay in this one process -- drain_lane.ClaimSet is in-process only, so
+    # splitting the PROCESS would double-claim papers.
+    llmvp_domains: dict = Field(default_factory=dict)
     flow_set: str = "code_core"
     # "batch" was named "parallel" until 2026-07-23 — renamed because true
     # parallelism now means the swarm/batched-engine paths; this mode is one

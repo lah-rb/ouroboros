@@ -51,6 +51,12 @@ class MissionConfig(BaseModel):
     escalation_budget_usd: float | None = None
     escalation_tokens_used: int = 0
     llmvp_endpoint: str = "http://localhost:8008/graphql"
+    # Per-domain inference routing, e.g.
+    #   {"curate": {"endpoint": "http://10.0.0.9:8008/graphql",
+    #               "model": "muse-glimmer-30b-swarm"}}
+    # Empty = every lane uses llmvp_endpoint, which is the pre-existing
+    # behaviour. Model is per-domain because registry names are host-local.
+    llmvp_domains: dict = Field(default_factory=dict)
     # Which flow set runs this mission (agent/flow_sets.py registry).
     # Selects the controller flow and phase derivation; additive default
     # keeps pre-flow-set mission.json files loading unchanged.

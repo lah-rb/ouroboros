@@ -101,6 +101,7 @@ class LocalEffects:
         trace_thinking: bool = False,
         trace_prompts: bool = False,
         http_transport=None,
+        llmvp_domains: dict | None = None,
     ) -> None:
         self._working_dir = os.path.realpath(working_directory)
         if not os.path.isdir(self._working_dir):
@@ -114,6 +115,19 @@ class LocalEffects:
         # Persistence manager — lazy-initialized only when persistence methods are called
         self._persistence = None
         self._llmvp_endpoint = llmvp_endpoint or "http://localhost:8008/graphql"
+        # Per-DOMAIN inference routing: {"curate": {"endpoint": ..., "model": ...}}.
+        #
+        # One mission is one PROCESS (drain_lane.ClaimSet is in-process only, so
+        # a second agent would double-claim the same papers). Routing a lane's
+        # inference to another host keeps that invariant — the claims, the
+        # booking and the gates all stay here — while moving only the tokens.
+        # Both endpoint and model are per-domain because a registry name is
+        # host-local: the same weights are "muse-glimmer-30b-cuda" here and
+        # "muse-glimmer-30b-swarm" on the mac.
+        self._llmvp_domains: dict = dict(llmvp_domains or {})
+        # One client per endpoint, not per domain: two domains pointed at the
+        # same host must share a client or they double the watchdog polling.
+        self._inference_by_endpoint: dict[str, InferenceEffect] = {}
         self._model_default_temperature = model_default_temperature
         # HTTP client — lazy; http_transport lets tests inject
         # httpx.MockTransport without monkeypatching.
@@ -1329,14 +1343,35 @@ class LocalEffects:
 
     # ── Inference (via LLMVP GraphQL API) ─────────────────────────
 
-    def _get_inference(self) -> InferenceEffect:
-        """Lazy-initialize the inference client."""
-        if self._inference is None:
-            self._inference = InferenceEffect(
-                endpoint=self._llmvp_endpoint,
+    def _get_inference(self, domain: str = "") -> InferenceEffect:
+        """Lazy-initialize the inference client for a domain.
+
+        An unknown or absent domain resolves to the mission's default
+        endpoint, so a lane that never declares one is unaffected and a
+        typo'd domain degrades to local rather than failing the round.
+        """
+        route = self._llmvp_domains.get(domain) if domain else None
+        if not route:
+            if self._inference is None:
+                self._inference = InferenceEffect(
+                    endpoint=self._llmvp_endpoint,
+                    model_default_temperature=self._model_default_temperature,
+                )
+            return self._inference
+
+        endpoint = str(route.get("endpoint") or self._llmvp_endpoint)
+        model = str(route.get("model") or "") or None
+        key = f"{endpoint}|{model or ''}"
+        client = self._inference_by_endpoint.get(key)
+        if client is None:
+            client = InferenceEffect(
+                endpoint=endpoint,
                 model_default_temperature=self._model_default_temperature,
+                model=model,
             )
-        return self._inference
+            self._inference_by_endpoint[key] = client
+            logger.info("inference domain %r -> %s (model=%s)", domain, endpoint, model)
+        return client
 
     async def token_count(self, texts: list[str], model: str = "") -> list[int]:
         """Exact token counts from the serving model's own tokenizer.
@@ -1441,7 +1476,15 @@ class LocalEffects:
         start = time.monotonic()
         prompt_preview = prompt[:80] + "..." if len(prompt) > 80 else prompt
 
-        inference = self._get_inference()
+        # `domain` selects the server; it is consumed HERE and never sent.
+        # InferenceEffect reads config_overrides key-by-key, so an unknown key
+        # is already inert — popping it keeps that true if that ever changes.
+        domain = ""
+        if config_overrides and "domain" in config_overrides:
+            config_overrides = dict(config_overrides)
+            domain = str(config_overrides.pop("domain") or "")
+
+        inference = self._get_inference(domain)
         result = await inference.run_inference(
             prompt, config_overrides, static_prefix=static_prefix, flow_key=flow_key
         )
