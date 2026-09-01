@@ -351,6 +351,7 @@ def build_action_registry() -> ActionRegistry:
         action_curate_ingest_review,
         action_curate_pack_data,
         action_curate_sweep_next,
+        action_check_drain_backlog,
         action_derive_curation_goals,
         action_fig_review_batch,
         action_fig_review_sweep_next,
@@ -468,6 +469,7 @@ def build_action_registry() -> ActionRegistry:
     registry.register("check_extraction_complete", action_check_extraction_complete)
     registry.register("reopen_extraction_goal", action_reopen_extraction_goal)
     registry.register("derive_curation_goals", action_derive_curation_goals)
+    registry.register("check_drain_backlog", action_check_drain_backlog)
     registry.register("fig_review_sweep_next", action_fig_review_sweep_next)
     registry.register("fig_review_batch", action_fig_review_batch)
     from agent.actions.curation_actions import action_figtext_drain_batch

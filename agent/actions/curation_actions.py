@@ -589,6 +589,85 @@ def _curation_pending(record: dict) -> bool:
     return True  # review not yet run
 
 
+# ── Drain backlog: the gate's admission check ─────────────────────────
+
+
+async def action_check_drain_backlog(step_input):
+    """How much unfinished pipeline work is waiting, by stage.
+
+    WHY THE GATE NEEDS THIS. The research gate asks "is the corpus
+    covered?" — a question whose answer is only stable once the pipeline
+    has drained. Asked while thousands of papers are still queued it
+    reports a shortfall, `harvest_research_findings` reopens the aspect,
+    discovery finds nothing new (its queries are exhausted), the gate is
+    re-asked, and the controller spins. Measured 2026-09-01: 1,479
+    gate_fails against 96 curate rounds, both engines idle, two packs in
+    six hours — the lanes had 1,548 papers ready and could not get the
+    event loop.
+
+    So the gate is treated as a JOB that must be ADMITTED, exactly as a
+    worker lane is admitted against free seats (scheduler/capacity_model).
+    A lane waits for capacity; the gate waits for the backlog to clear.
+    The difference from a plain retry cap is that this is not a guess
+    about how many failures are too many — it is the actual condition
+    under which the gate's answer means anything.
+
+    Counts reuse the drains' OWN pending predicates rather than
+    re-deriving them, so "pending" cannot drift between the lane that
+    does the work and the gate that waits for it.
+
+    Context: none. Result: backlog, by_stage, admitted.
+    """
+    from agent.actions.extraction_actions import (
+        _extraction_pending,
+        _translation_pending,
+    )
+    from agent.actions.scholarly_actions import read_databank
+    from agent.models import StepOutput
+
+    effects = step_input.effects
+    try:
+        databank = await read_databank(effects)
+    except Exception as e:  # noqa: BLE001 — an unreadable databank must not
+        # wedge the controller; admit the gate and let it decide.
+        logger.warning("drain backlog unreadable (%s) — admitting the gate", e)
+        return StepOutput(
+            result={"backlog": 0, "by_stage": {}, "admitted": True},
+            observations="drain backlog unreadable; gate admitted",
+        )
+
+    by_stage = {
+        "extract": 0,
+        "figtext": 0,
+        "curate": 0,
+        "translate": 0,
+    }
+    for rec in databank.values():
+        if _extraction_pending(rec):
+            by_stage["extract"] += 1
+        if _fig_pending(rec):
+            by_stage["figtext"] += 1
+        if _curation_pending(rec):
+            by_stage["curate"] += 1
+        if _translation_pending(rec):
+            by_stage["translate"] += 1
+    backlog = sum(by_stage.values())
+    admitted = backlog == 0
+    detail = ", ".join(f"{k} {v}" for k, v in by_stage.items() if v)
+    return StepOutput(
+        result={
+            "backlog": backlog,
+            "by_stage": by_stage,
+            "admitted": admitted,
+        },
+        observations=(
+            f"drain backlog {backlog} ({detail}) — gate stands down"
+            if backlog
+            else "pipeline drained — gate admitted"
+        ),
+    )
+
+
 async def _load_registry(effects) -> dict:
     fc = await effects.read_file(KEY_REGISTRY_PATH)
     if not getattr(fc, "exists", False) or not fc.content.strip():

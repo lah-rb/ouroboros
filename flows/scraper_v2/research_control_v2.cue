@@ -88,7 +88,7 @@ research_control_v2: #FlowDefinition & {
 					{condition: "result.phase == 'plan'", transition: "dispatch_planning"},
 					{condition: "result.phase == 'discovery'", transition: "discovery_sweep_next"},
 					{condition: "result.phase == 'catalog'", transition: "catalog_sweep_next"},
-					{condition: "result.phase == 'gate'", transition: "dispatch_research_gate"},
+					{condition: "result.phase == 'gate'", transition: "gate_admission"},
 					{condition: "true", transition: "dispatch_planning"},
 				]
 			}
@@ -176,6 +176,44 @@ research_control_v2: #FlowDefinition & {
 		}
 
 		// ── Gate: coverage + grounding, derived verdict ─────────────
+
+		// ADMISSION, not a retry cap. The gate asks whether the corpus is
+		// covered — a question whose answer is only stable once the pipeline
+		// has drained. Asked over a full backlog it reports a shortfall,
+		// harvest_findings reopens the aspect, discovery finds nothing new
+		// (queries exhausted), and the gate is re-asked forever. Measured
+		// 2026-09-01: 1,479 gate_fails against 96 curate rounds with both
+		// engines idle and 1,548 papers ready — the controller had taken the
+		// event loop from the lanes that could have cleared the shortfall.
+		//
+		// So the gate is admitted the way a worker lane is admitted against
+		// free seats: a lane waits for capacity, the gate waits for the
+		// backlog. It stands down to `awaiting_drains` while work remains.
+		gate_admission: #StepDefinition & {
+			action:      "check_drain_backlog"
+			description: "Admit the gate only once the drains have nothing pending"
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.admitted == true", transition: "dispatch_research_gate"},
+					{condition: "true", transition: "awaiting_drains"},
+				]
+			}
+		}
+
+		// Yields the cycle back to the worker lanes. The delay is the point:
+		// the controller must not hold the loop while the lanes hold the work.
+		awaiting_drains: #StepDefinition & {
+			action:      "noop"
+			description: "Lanes have pending work — stand down and let them run"
+			tail_call: {
+				flow: "research_control_v2"
+				input_map: {
+					mission_id: {$ref: "input.mission_id"}
+				}
+				delay: 60
+			}
+		}
 
 		dispatch_research_gate: #StepDefinition & {
 			action:      "flow"
