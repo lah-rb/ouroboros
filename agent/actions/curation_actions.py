@@ -1221,22 +1221,14 @@ async def _book_curate_oversize(effects, paper_key: str, reason: str) -> None:
     _CURATE_STARVED.pop(paper_key, None)
 
 
-# Inference domain for the review/pack turns. When mission config maps it
-# (config.llmvp_domains["curate"]) these turns run on that host instead of the
-# mission's default server; unmapped, it is inert. Only the TOKENS move —
-# selection, claims, gates and booking stay in this process, because
-# drain_lane.ClaimSet is in-process only and a second agent would double-claim.
-CURATE_DOMAIN = "curate"
-
-
 async def _curate_turn(effects, prompt: str, max_tokens: int):
+    # No `domain` here ON PURPOSE. Which engine a curate turn runs on is a
+    # property of the LANE, not of the action: worker_pool stamps it on the
+    # branch's ChildEffects, so curate..curate5 stay local while curate_r1-4
+    # run on the remote host, from this one code path. Setting it here would
+    # force every lane onto one server and re-create the no-op it replaced.
     result = await effects.run_inference(
-        prompt,
-        {
-            "max_tokens": max_tokens,
-            "temperature": "t*0.4",
-            "domain": CURATE_DOMAIN,
-        },
+        prompt, {"max_tokens": max_tokens, "temperature": "t*0.4"}
     )
     if getattr(result, "error", None):
         raise _CurateTransportFault(str(result.error))

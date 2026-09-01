@@ -87,6 +87,14 @@ async def test_a_v2_mission_starts_lanes_and_stops_them_cleanly():
             "curate3",
             "curate4",
             "curate5",
+            # Dedicated REMOTE curate lanes (2026-09-01). Additive, and
+            # gated on their own resource with est_kv=0/seats=0 so they
+            # draw nothing from the local pool — routing alone was a no-op
+            # while the lanes still spent local cells.
+            "curate_r1",
+            "curate_r2",
+            "curate_r3",
+            "curate_r4",
             "recover",
             "biblio",
         }

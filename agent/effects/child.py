@@ -33,9 +33,15 @@ _BLOCKED = ("save_mission", "push_event", "clear_events")
 class ChildEffects:
     """Delegating proxy around the parent effects for one parallel branch."""
 
-    def __init__(self, parent: Any, branch: str):
+    def __init__(self, parent: Any, branch: str, inference_domain: str = ""):
         self._parent = parent
         self._branch = branch
+        # Which inference DOMAIN this branch's work runs on. Set by the
+        # worker pool from the lane definition, so routing is a property of
+        # the LANE rather than of the action: the same curate_drain flow is
+        # local on one lane and remote on another, and neither the flow nor
+        # the action needs to know which.
+        self._inference_domain = inference_domain
 
     def __getattr__(self, name: str) -> Any:
         if name in _BLOCKED:
@@ -51,6 +57,29 @@ class ChildEffects:
 
             return _blocked
         return getattr(self._parent, name)
+
+    async def run_inference(
+        self,
+        prompt: str,
+        config_overrides: dict | None = None,
+        static_prefix: str | None = None,
+        flow_key: str | None = None,
+    ):
+        """Delegate, stamping this branch's inference domain.
+
+        An explicit `domain` from the caller WINS — a lane default must
+        never override a call that deliberately picked a server. Absent
+        both, this is byte-for-byte the parent's behaviour.
+        """
+        if self._inference_domain and not (config_overrides or {}).get("domain"):
+            config_overrides = dict(config_overrides or {})
+            config_overrides["domain"] = self._inference_domain
+        return await self._parent.run_inference(
+            prompt,
+            config_overrides,
+            static_prefix=static_prefix,
+            flow_key=flow_key,
+        )
 
     async def push_note(
         self,

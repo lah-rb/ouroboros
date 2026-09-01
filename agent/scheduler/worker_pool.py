@@ -73,6 +73,14 @@ class Lane:
     #: (agent/scheduler/capacity_claim.py). For these lanes `est_kv` is the
     #: MINIMUM VIABLE UNIT — the admission gate, not the expected draw.
     dynamic_kv: bool = False
+    #: Inference domain (mission config `llmvp_domains`) this lane's work
+    #: runs on. "" = the mission's default server. A lane pointed at another
+    #: host must ALSO declare est_kv=0/seats=0 and its own `resource`, or it
+    #: will be admitted against local cells it never spends — which is
+    #: exactly the no-op that routing alone produced: the tokens moved, the
+    #: accounting did not, and the lane stayed throttled by a local pool it
+    #: had stopped using.
+    domain: str = ""
 
 
 # Measured N* per resource comes from the throughput sweep; until it runs
@@ -92,6 +100,13 @@ DEFAULT_LANE_MAX_INFLIGHT: Dict[str, int] = {
     "vision_ctx": 4,  # tracks vision_batched_max_streams
     "paddle": 1,
     "network": 1,
+    # Remote curate seats. The mac holds 128, so this is NOT a seat limit —
+    # it is a PREFILL limit. Curate is prefill-dominated (~23k in, a few
+    # hundred out) and the bench showed total docs/hour FALLING as
+    # concurrency rose (muse 36.8 -> 34.2 -> 28.9 at 1/2/4) because prefill
+    # already saturates the device. Concurrency here only covers the gaps
+    # where a lane is booking or running gates rather than generating.
+    "remote_text_seat": 3,
 }
 
 
@@ -476,7 +491,11 @@ class WorkerPool:
         if flow_def is None:
             raise KeyError(f"lane {lane.name}: unknown flow {lane.flow!r}")
 
-        child_fx = ChildEffects(self.effects, branch=f"lane:{lane.name}")
+        child_fx = ChildEffects(
+            self.effects,
+            branch=f"lane:{lane.name}",
+            inference_domain=lane.domain,
+        )
         out = await execute_flow(
             flow_def=flow_def,
             inputs=dict(self.inputs),
@@ -698,6 +717,33 @@ def lanes_for_scraper() -> List[Lane]:
             dynamic_kv=True,
             idle_backoff_s=30.0,
         ),
+        # ── Dedicated REMOTE curate lanes (2026-09-01) ──────────────────
+        #
+        # These run the same curate_drain against another host's engine.
+        # They are ADDITIVE: curate..curate5 keep the local seats, and
+        # _CURATE_CLAIMS is shared in-process, so local and remote lanes
+        # claim different papers by the same construction that makes
+        # curate2-5 safe. One mission is still one PROCESS — a second agent
+        # would need a flock'd claim file and would double-claim.
+        #
+        # est_kv=0 / seats=0 / their own `resource` is the load-bearing
+        # part, and the lesson from the first attempt: routing the tokens
+        # alone changed nothing, because the lanes were still admitted
+        # against local cells and still held local seats they no longer
+        # spent. A lane served by another engine must be gated on THAT
+        # engine, exactly as paddle and the vision lanes already are.
+        *[
+            Lane(
+                name=f"curate_r{i}",
+                flow="curate_drain",
+                resource="remote_text_seat",
+                est_kv=0,
+                seats=0,
+                domain="curate_remote",
+                idle_backoff_s=30.0,
+            )
+            for i in (1, 2, 3, 4)
+        ],
         # OA recovery: pure network I/O (Wayback / CORE / meta-tag routes)
         # — no muse seat, no KV, paced by the shared per-host politeness
         # state. Long idle backoff: each record is walked ONCE (stamped),
