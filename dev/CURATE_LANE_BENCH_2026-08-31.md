@@ -87,3 +87,88 @@ The Mac now has `muse-glimmer-30b-swarm` resident (it was `qwen3.8-27b`).
 Swaps were clean throughout — `ok: true`, no rollback, no evicted streams.
 
 Repro: `dev/bench_curate_lane.py --model <name> --concurrency 1,2,4`
+
+---
+
+# Quality: does gpt-oss reproduce muse's verdicts?
+
+Speed said swap; this asks whether we can afford to. 10 accepted papers
+spread across the size range (709 → 152,212 tokens) plus **10 denied** as a
+control, on the **production prompt** (`prompts/curator/review_paper`
+rendered through the real `PromptRenderer` with the live mission objective,
+same turn shape, `max_tokens` 4096, `t*0.4`), parsed with the production
+`parse_llm_json`.
+
+**Why the denied arm exists.** Every pack on disk is `accepted`, so an
+accept-only test is unfalsifiable — a model that accepts unconditionally
+scores 100%. `papers.jsonl` carries 1,466 `review_status: denied` records,
+which makes the test able to fail. A false ACCEPT is also the expensive
+error: it pollutes the corpus.
+
+**Why muse was re-run.** Comparing gpt-oss against muse's historical verdicts
+without knowing muse's own reproducibility would attribute ordinary sampling
+noise to the challenger. muse re-run against its OWN past verdicts is the
+noise floor.
+
+| | accepted | denied | overall | decode failures |
+|---|---|---|---|---|
+| **muse-glimmer-30b-swarm** (noise floor) | 8/9 | **10/10** | **18/19 = 95%** | 0 |
+| **gpt-oss-120b-a5** | 7/8 | 8/9 | 15/17 = 88% | **2** |
+
+## Findings
+
+**1. The accuracy gap is NOT statistically distinguishable.** Fisher exact on
+agreement gives **p = 0.59**. At this n the 88 vs 95 difference is one or two
+papers. This sample cannot rank the two models on accuracy, and any writeup
+claiming it does is overreading.
+
+**2. muse does not reproduce itself either — the floor is 95%, not 100%.**
+It flipped `doi_10.1038_srep29254` from its own historical accept to deny.
+So ~5% verdict churn is baseline, not a challenger defect.
+
+**3. The one substantive gpt-oss error is a FALSE ACCEPT, and it is real.**
+`doi_10.26896_1028-6861-2019-85-7-7-15` — direct ICP-AES of gasoline,
+kerosene and mineral oil — was denied by muse historically AND on re-run
+(fuels are not a named material system), and accepted by gpt-oss. Two
+independent muse judgements against one gpt-oss judgement makes this an
+error rather than a coin flip, and it is in the direction that costs most.
+
+gpt-oss's other disagreement is arguably the STRICTER read: it denied
+`doi_10.5755_j02.ms.25190` because the quantitative values live only in VLM
+figure readings.
+
+**4. The concrete operational defect is reliability, not judgement.**
+gpt-oss hit **2 hard `llama_decode` failures in 20 papers**, muse zero:
+
+```
+Fatal Decode Error at Pos 0, Batch size 2048        (on the SMALLEST doc, 709 tok)
+Fatal Decode Error at Pos 19708, Batch size 1: llama_decode failed (code -3)
+```
+
+muse processed both of those documents without incident, so this is
+gpt-oss-specific, not bad data. `p = 0.49` on 2-vs-0, so this too is
+under-powered — but a decode fault is a mechanism, not a score, and it echoes
+the recorded `flow_kv_cache`/gpt-oss corruption history. It needs a root
+cause before any swap.
+
+**5. The 131,072 ceiling is shared, exactly as the operator said.** Both
+models refused the 152k-token paper with the same per-stream error. Confirms
+the retraction above: context is not a differentiator.
+
+## Verdict
+
+**Not yet.** gpt-oss is 3.5x faster and its judgement is not measurably
+worse — but "not measurably worse" at n=17 is a statement about the sample,
+not the model. Before swapping:
+
+- root-cause the 2 decode failures (they are a mechanism, and 10% of papers
+  is not a rounding error at 1,548 queued);
+- widen to ~60 papers per arm, which would make a 7-point gap detectable;
+- keep the deny arm at ≥50% of the sample.
+
+And none of this blocks the larger win: **contention**. Curate packs 3.2/h
+while muse alone sustains 36.8 docs/h uncontended, with `fig_review` holding
+4 of 6 local seats. Moving figtext off-box is independent of the model
+question and available now.
+
+Repro: `dev/bench_curate_quality.py --model <name> --accepted 10 --denied 10`
