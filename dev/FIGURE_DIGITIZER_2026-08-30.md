@@ -1682,6 +1682,76 @@ Two things caught while banking, both the vacuous-gate shape:
 
 ---
 
+## Figure precision versus the resolution the papers report (2026-09-02)
+
+Operator question: how does the instrument's result compare to the accuracy
+the machines themselves report in published figures? Two independent
+quantities per figure -- our position uncertainty (0.5 px x grid; measured
+median |dx| 0.36-0.51 px) and our d50 from the banked detection curve at the
+LIBS median line intensity -- joined to the paper's own stated spectral
+resolution (`spectral_resolution_nm` pack key first, a prose regex second;
+139 papers report one, median 0.20 nm, p10 0.05, p90 3.2).
+
+**A parse bias had to be removed first.** The first pass took each figure's
+axis span from an "a to b nm" regex over its VLM reading. Checked against the
+tick list in the SAME reading, the two agreed in only **43%** of figures
+(66/154); the failures were the regex grabbing a feature sub-range ("peaks
+between 380 and 400 nm") off a 400 nm axis -- the same failure the figtext
+span parse showed in August (7% agreement, 8x understatement). Understating
+span flatters d50, and the first pass duly reported 26% of figures separating
+what the instrument separates. The tick list IS the axis, so the survey was
+rebuilt on tick extents. All numbers below are from `dev/figdig_precision_survey.py`.
+
+```
+  181 figures     span median 100 nm (44% <=50 nm, 46% >=150 nm)
+                  grid median 0.240 nm/px     position unc median 0.120 nm
+                  d50 median 1.67 nm          p10 0.14    p90 14.7
+
+  53 joined       position unc <= reported resolution:   57%
+  (30 papers)     d50 <= reported resolution:             9%
+                  median d50 / reported:                7.3x
+
+  by span         n   d50/reported   d50<=reported   pos_unc<=reported
+      0-50 nm    18       1.8x            22%            100%
+     50-150 nm    7       6.6x            14%             86%
+    150+ nm      28      50.4x             0%             21%
+
+  by instrument   n   d50/reported   d50<=reported
+    <=0.1 nm      13     173x               0%
+    0.1-0.5 nm    32       7.4x             9%
+    >=0.5 nm       8       5.2x            25%
+
+  <=0.1 nm instrument drawn as a >=150 nm survey: n=14, median d50/reported 156x
+  figures that keep the instrument's separating power: n=5, span median 8 nm,
+  80% under 50 nm, reported resolution median 0.40 nm
+```
+
+**Reading.** Position and separation are different questions with opposite
+answers. On zoomed panels a digitised POSITION is as precise as the
+instrument's stated resolution in every case (100% at <=50 nm, 57% overall):
+a line we find, we place well. But SEPARATING neighbouring lines is where the
+figure loses to the instrument -- 1.8x worse even on zooms, 50x on surveys,
+and 156x when a high-resolution echelle spectrum is printed as a survey. That
+last row is the corpus's worst information loss: the instrument resolved
+0.05 nm and the page carries about 8 nm of separating power. Only 5 of 53
+joined figures keep the instrument's separating power, and they are sub-50 nm
+panels from moderate-resolution (0.3-0.5 nm) spectrometers.
+
+Consequence for the pipeline: the digitiser's honest product from a survey
+figure is positions of the lines it resolves, at instrument-grade precision,
+with the KNOWLEDGE that it resolves a small fraction of them -- never a
+complete line list. That is exactly what `d50_unit` and `expected_recovery`
+now state per figure.
+
+Caveats: n=53 joined; reported values are pack keys plus a prose regex, not
+read by hand; spans are VLM tick lists (validated only against the same
+readings' ranges); the 0.5 px position figure is the synthetic-instrument
+median, not a per-figure measurement.
+
+Repro: `dev/figdig_precision_survey.py` -> $FIGDIG_OUT/precision_survey.json.
+
+---
+
 ## Files
 
 - `tools/figure_digitizer/{__init__,source,graphmeta,schema,digitize,synth,axes,curve,peaks}.py`
