@@ -1748,6 +1748,28 @@ read by hand; spans are VLM tick lists (validated only against the same
 readings' ranges); the 0.5 px position figure is the synthetic-instrument
 median, not a per-figure measurement.
 
+**A second, smaller bias, found while overlaying the results on real figures
+(2026-09-02).** The survey's grid is labelled-tick span over FRAME width, and
+the labelled ticks do not always reach the frame: across the 181 figures a
+median 13% of the frame width lies outside the outermost detected tick, and
+9% of figures carry minor ticks the VLM does not list. On the icarus
+KCl/K2SO4 survey the drawn axis runs 276-865 nm against labelled ticks at
+300-800, so the grid was understated by 15% and d50 by the same (5.20 ->
+6.14 nm). That number is from a DIAGNOSTIC calibration anchored on the
+figure's three unmistakable lines (K I 766.49, K I 769.90, O I 777.42; fit
+residual 0.2 px), which is the identification-as-calibration move the tool
+itself forbids -- used here only to measure the bias, not to produce data.
+Direction: figures are somewhat WORSE than the survey reports; the 7x and
+50x conclusions are unaffected.
+
+The production path, for the record, REFUSED to calibrate that figure:
+`find_axes` returned 60 tick marks (minors at 10 nm, majors at 100) that the
+major/minor length split did not separate, so `match_labels_to_ticks` paired
+six labels against six consecutive minors at a degenerate margin and
+`calibrate` declared it ambiguous. Correct refusal; but it points at a
+defect worth fixing -- the major/minor split should fall back to spacing
+(a 10:1 count ratio is unmistakable) when tick lengths do not separate.
+
 Repro: `dev/figdig_precision_survey.py` -> $FIGDIG_OUT/precision_survey.json.
 
 ---
