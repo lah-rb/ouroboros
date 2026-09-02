@@ -968,6 +968,17 @@ _CURATE_DOC_CACHE: dict[str, tuple[int, int]] = {}
 #: rounds per lane observed), so aging fires well inside one run without
 #: adding a sidecar write per round.
 _CURATE_STARVED: dict[str, int] = {}
+# Papers booked TERMINAL by this process (denied, review_failed, packed,
+# pack_failed). The claim set guards work in flight; once a round books and
+# releases, the only guard left is the on-disk status -- and a sibling lane's
+# `databank` argument is a snapshot it read seconds earlier, before that
+# booking landed. Measured 2026-09-01: twice in one hour a lane selected a
+# paper 4-8 s BEFORE its sibling's round ended, on a snapshot taken before the
+# sibling booked, and curated it again (one pack record overwritten by the
+# second run). Selection skips anything in this set regardless of what the
+# snapshot says. Process-lifetime, not timed: a terminal booking is never
+# undone by the pipeline, only by hand.
+_CURATE_BOOKED: set[str] = set()
 #: Rounds over budget before a paper is promoted to the head of its tier.
 _CURATE_AGING_ROUNDS = 25
 
@@ -1243,7 +1254,9 @@ async def select_curate_paper(
     """
     sized: list[tuple[int, int, int, str]] = []
     for key, rec in databank.items():
-        if key in _CURATE_CLAIMS or not _curation_pending(rec):
+        if key in _CURATE_CLAIMS or key in _CURATE_BOOKED:
+            continue
+        if not _curation_pending(rec):
             continue
         sizes = _CURATE_DOC_CACHE.get(key)
         if sizes is None:
@@ -1321,6 +1334,21 @@ async def select_curate_paper(
 
 def release_curate_keys(keys: list[str]) -> None:
     _CURATE_CLAIMS.difference_update(keys)
+
+
+def _booked_terminal(out, state: dict) -> bool:
+    """Did action_curate_book_result leave this paper in a state the pipeline
+    will never revisit? Mirrors _curation_pending's terminal set exactly:
+    review denied/review_failed, or pack packed/pack_failed. A booking whose
+    own status is 'failed' wrote nothing durable and must not count."""
+    res = (getattr(out, "result", None) or {}) if out is not None else {}
+    if str(res.get("status") or "") == "failed":
+        return False
+    review = str((state.get("review") or {}).get("status") or "")
+    pack = str((state.get("pack") or {}).get("status") or "")
+    if review in ("denied", "review_failed"):
+        return True
+    return review == "accepted" and pack in ("packed", "pack_failed")
 
 
 async def _book_curate_oversize(effects, paper_key: str, reason: str) -> None:
@@ -1561,6 +1589,13 @@ async def action_curate_drain_batch(step_input):
                 StepInput(effects=effects, context={"curate_state": state})
             )
             _CURATE_DOC_CACHE.pop(key, None)
+            # Record the terminal booking BEFORE the claim is released (in
+            # `finally` below), so there is no instant at which a sibling can
+            # see the key unclaimed, unbooked-in-memory, and pending on a
+            # stale snapshot. A booking that itself failed leaves the paper
+            # pending and is deliberately NOT recorded.
+            if _booked_terminal(out, state):
+                _CURATE_BOOKED.add(key)
         finally:
             release_curate_keys([key])
         outcomes.append(

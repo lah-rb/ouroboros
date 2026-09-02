@@ -15,6 +15,7 @@ import json
 import pytest
 
 from agent.actions.curation_actions import (
+    _CURATE_BOOKED,
     _CURATE_CLAIMS,
     _CURATE_DOC_CACHE,
     _curate_doc_budget_chars,
@@ -60,6 +61,7 @@ def _rec(key: str, **extra) -> dict:
 def _clear_state():
     _CURATE_CLAIMS.clear()
     _CURATE_DOC_CACHE.clear()
+    _CURATE_BOOKED.clear()
 
 
 # ── Budget derivation ────────────────────────────────────────────────
@@ -552,3 +554,73 @@ async def test_an_oversize_or_failing_build_releases_its_claim(monkeypatch):
         assert "p" not in _CURATE_CLAIMS
     finally:
         _clear_state()
+
+
+# ── a booked paper is never re-selected off a stale snapshot ───────────
+
+
+@pytest.mark.asyncio
+async def test_a_paper_booked_this_process_is_not_reselected_from_a_stale_snapshot(
+    monkeypatch,
+):
+    """CAUGHT LIVE (2026-09-01), twice in one hour, AFTER the atomic-claim fix:
+    a lane read its databank snapshot, a sibling booked the paper and released
+    its claim 4-8 s later, and the first lane then selected the same paper --
+    unclaimed, and still pending on the snapshot it was holding. The claim set
+    guards work in flight; the on-disk status guards booked work; the gap
+    between them is the length of a 15k-row databank read."""
+    monkeypatch.setenv("OUROBOROS_CURATE_PAPERS", "1")
+    _clear_state()
+    fx = MockEffects(
+        files=_bank_files([_rec("a")], {"a": "Raman at 532 nm on quartz."}),
+        pool_health={"kvPoolTokens": 65536},
+        inference_responses=[
+            json.dumps(
+                {
+                    "verdict": "deny",
+                    "summary": "no data",
+                    "issues": [],
+                    "deny_category": "no_usable_data",
+                }
+            ),
+        ],
+    )
+    stale = await read_databank(fx)  # the sibling's view, taken BEFORE the round
+    try:
+        out = await action_curate_drain_batch(_si(fx))
+        assert {o["paper_key"] for o in out.result["outcomes"]} == {"a"}
+        assert not _CURATE_CLAIMS, "claim must be released after booking"
+        assert "a" in _CURATE_BOOKED, "terminal booking was not recorded"
+        # The sibling now selects off its STALE snapshot, where 'a' is pending.
+        key, _ = await select_curate_paper(fx, stale, 1000)
+        assert key == "", "a booked paper was handed out again off a stale snapshot"
+    finally:
+        _clear_state()
+
+
+def test_booked_terminal_mirrors_the_pending_predicate():
+    """Only outcomes the pipeline will never revisit may be recorded. A
+    booking that itself failed, or an accept with no pack verdict yet, leaves
+    the paper pending and must NOT be recorded -- or it would be pinned for
+    the life of the process."""
+    from agent.actions.curation_actions import _booked_terminal
+
+    class _Out:
+        def __init__(self, status):
+            self.result = {"status": status}
+
+    ok = _Out("denied")
+    assert _booked_terminal(ok, {"review": {"status": "denied"}})
+    assert _booked_terminal(ok, {"review": {"status": "review_failed"}})
+    assert _booked_terminal(
+        ok, {"review": {"status": "accepted"}, "pack": {"status": "packed"}}
+    )
+    assert _booked_terminal(
+        ok, {"review": {"status": "accepted"}, "pack": {"status": "pack_failed"}}
+    )
+    assert not _booked_terminal(ok, {"review": {"status": "accepted"}})
+    assert not _booked_terminal(
+        _Out("failed"), {"review": {"status": "denied"}}
+    ), "a failed booking wrote nothing durable"
+    # an absent booking result must not mask a terminal review verdict
+    assert _booked_terminal(None, {"review": {"status": "denied"}})
