@@ -562,6 +562,25 @@ def _did_work(result: dict, context: dict) -> bool:
     return False
 
 
+def _remote_curate_lanes() -> int:
+    """How many dedicated remote curate lanes to run (default 4, 0 disables).
+
+    Sized to the REMOTE engine's seats, which the pool cannot see: muse's
+    swarm config serves many streams, qwen3-next's 256k config serves ONE.
+    Four lanes against a single-seat engine would refuse three of every four
+    rounds and book them idle. OUROBOROS_REMOTE_CURATE_LANES=1 for that case.
+    """
+    import os
+
+    raw = os.environ.get("OUROBOROS_REMOTE_CURATE_LANES", "").strip()
+    if not raw:
+        return 4
+    try:
+        return max(0, min(8, int(raw)))
+    except ValueError:
+        return 4
+
+
 def lanes_for_scraper() -> List[Lane]:
     """The scraper's four drains as lanes.
 
@@ -752,7 +771,7 @@ def lanes_for_scraper() -> List[Lane]:
                 domain="curate_remote",
                 idle_backoff_s=30.0,
             )
-            for i in (1, 2, 3, 4)
+            for i in range(1, _remote_curate_lanes() + 1)
         ],
         # OA recovery: pure network I/O (Wayback / CORE / meta-tag routes)
         # — no muse seat, no KV, paced by the shared per-host politeness

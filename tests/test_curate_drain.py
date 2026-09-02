@@ -624,3 +624,59 @@ def test_booked_terminal_mirrors_the_pending_predicate():
     ), "a failed booking wrote nothing durable"
     # an absent booking result must not mask a terminal review verdict
     assert _booked_terminal(None, {"review": {"status": "denied"}})
+
+
+# ── the oversize park measures against the LARGEST seat, not this lane's ──
+
+
+@pytest.mark.asyncio
+async def test_a_doc_over_the_local_seat_but_under_a_remote_seat_is_not_parked():
+    """CAUGHT LIVE (2026-09-02): 222 papers parked against the 65k local seat
+    while a declared 256k remote seat fit 210 of them. Whichever lane sized a
+    doc first parked it for every lane. A doc some lane can take is skipped
+    by the lanes that cannot, never parked."""
+    from agent.actions.curation_actions import (
+        _CURATE_SEAT_TOKENS,
+        _largest_seat_tokens,
+    )
+
+    _clear_state()
+    big_md = "z" * 400_000  # ~121k tokens at floor: over 65k, under 256k
+    fx = MockEffects(files=_bank_files([_rec("big")], {"big": big_md}))
+    fx._llmvp_domains = {"curate_remote": {"seat_tokens": 262_144}}
+    assert _largest_seat_tokens(fx) == 262_144
+    assert _largest_seat_tokens(MockEffects()) == _CURATE_SEAT_TOKENS
+    try:
+        bank = await read_databank(fx)
+        key, _ = await select_curate_paper(fx, bank, 1_000)  # a small budget
+        assert key == "", "an over-budget doc must not be selected"
+        after = await read_databank(fx)
+        assert after["big"].get("extraction_status") == "extracted", (
+            "parked despite a declared seat that fits: "
+            f"{after['big'].get('failure_reason')}"
+        )
+        # ...and with NO larger seat anywhere, the park still happens.
+        _clear_state()
+        fx2 = MockEffects(files=_bank_files([_rec("big")], {"big": big_md}))
+        bank2 = await read_databank(fx2)
+        key2, _ = await select_curate_paper(fx2, bank2, 1_000)
+        assert key2 == ""
+        after2 = await read_databank(fx2)
+        assert after2["big"].get("extraction_status") == "curate_oversize"
+        assert f"{_CURATE_SEAT_TOKENS:,}-token seat" in after2["big"]["failure_reason"]
+    finally:
+        _clear_state()
+
+
+def test_provenance_names_the_lane_domain_model_not_the_local_config():
+    """Every pack a remote lane produced was stamped with the LOCAL server's
+    active config. The stamp must name the model that actually ran."""
+    from agent.actions.curation_actions import _active_text_model, _provenance_model
+
+    remote = _LaneFx("curate_remote", {"curate_remote": {"model": "qwen3-next-80b-a3"}})
+    assert _provenance_model(remote) == "qwen3-next-80b-a3"
+    assert _provenance_model(_LaneFx()) == _active_text_model()
+    # a domain with no model declared falls back rather than stamping ""
+    assert _provenance_model(_LaneFx("curate_remote", {"curate_remote": {}})) == (
+        _active_text_model()
+    )

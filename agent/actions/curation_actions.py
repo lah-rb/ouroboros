@@ -520,6 +520,21 @@ def _active_text_model() -> str:
         return "unknown"
 
 
+def _provenance_model(effects) -> str:
+    """Which model actually reviewed and packed this paper. A lane routed to
+    another engine (ChildEffects.inference_domain -> llmvp_domains[domain])
+    ran on THAT domain's model; only a lane on the default server ran on the
+    config named in llmvp/active_config.txt. Before this, every pack a remote
+    lane produced was stamped with the LOCAL server's config."""
+    domain = str(getattr(effects, "_inference_domain", "") or "")
+    routes = getattr(effects, "_llmvp_domains", None) or {}
+    if domain and isinstance(routes, dict):
+        model = str((routes.get(domain) or {}).get("model") or "")
+        if model:
+            return model
+    return _active_text_model()
+
+
 def _prompts_dir():
     import os
 
@@ -1241,6 +1256,22 @@ async def _curate_doc_sizes(effects, paper_key: str) -> tuple[int, int]:
     return raw, min(raw, floor)
 
 
+def _largest_seat_tokens(effects) -> int:
+    """The biggest per-stream seat any curate lane can run on: the local seat
+    or the largest `seat_tokens` a declared inference domain advertises. The
+    oversize park compares against THIS, so a paper is parked only when no
+    lane at all could take it."""
+    seats = [_CURATE_SEAT_TOKENS]
+    routes = getattr(effects, "_llmvp_domains", None) or {}
+    if isinstance(routes, dict):
+        for route in routes.values():
+            try:
+                seats.append(int((route or {}).get("seat_tokens") or 0))
+            except (TypeError, ValueError):
+                continue
+    return max(seats)
+
+
 async def select_curate_paper(
     effects, databank: dict, budget_chars: int
 ) -> tuple[str, str]:
@@ -1263,19 +1294,27 @@ async def select_curate_paper(
             sizes = await _curate_doc_sizes(effects, key)
             _CURATE_DOC_CACHE[key] = sizes
         raw_chars, floor_chars = sizes
-        # A floor over the SEAT can never run at any budget: park it in a
+        # A floor over EVERY seat can never run at any budget: park it in a
         # visible review queue instead of letting it starve (or worse,
         # select-fault-reselect — the 2026-08-26 poison-pill loop).
+        #
+        # "Every seat" is the largest seat ANY lane can offer, not this
+        # lane's. Measured 2026-09-02: 222 papers sat parked against the
+        # 65k local seat while a declared 256k remote seat fit 210 of them
+        # -- the remote lanes never saw those papers, because whichever lane
+        # sized the doc first parked it for all of them. A doc that fits
+        # some other lane's seat is skipped here (starved, aged like any
+        # other over-budget paper) and left for the lane that fits.
         floor_tokens = int(floor_chars / _CURATE_CHARS_PER_TOKEN)
+        largest_seat = _largest_seat_tokens(effects)
         if floor_chars > 0 and floor_tokens > int(
-            (_CURATE_SEAT_TOKENS - _CURATE_TURN_OVERHEAD_TOKENS)
-            * _CURATE_OVERSIZE_PARK_MARGIN
+            (largest_seat - _CURATE_TURN_OVERHEAD_TOKENS) * _CURATE_OVERSIZE_PARK_MARGIN
         ):
             await _book_curate_oversize(
                 effects,
                 key,
                 f"curation: doc floor ~{floor_tokens:,} tokens exceeds the "
-                f"{_CURATE_SEAT_TOKENS:,}-token seat even at deepest "
+                f"{largest_seat:,}-token seat even at deepest "
                 "compression; review by hand",
             )
             continue
@@ -2396,7 +2435,7 @@ async def action_curate_book_result(step_input):
                 },
                 "data": data,
                 "provenance": {
-                    "model": _active_text_model(),
+                    "model": _provenance_model(effects),
                     "figtext_model": figtext_model,
                     "packed_at": datetime.now(timezone.utc).isoformat(),
                     "md_path": rec.get("md_path", ""),
@@ -2430,7 +2469,7 @@ async def action_curate_book_result(step_input):
             rec["pack_status"] = "pack_failed"
             rec["failure_reason"] = f"pack: {pack.get('reason') or 'no pack state'}"
             outcome = "pack_failed"
-    rec["curation_method"] = f"{_active_text_model()}+{figtext_model}"
+    rec["curation_method"] = f"{_provenance_model(effects)}+{figtext_model}"
     await append_records(effects, [rec])
 
     summary = f"Curated {paper_key}: {outcome}"

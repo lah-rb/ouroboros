@@ -173,3 +173,23 @@ def test_every_remote_lane_may_dispatch():
     lanes = _lanes()
     remote = [ln for ln in lanes.values() if ln.name.startswith("curate_r")]
     assert DEFAULT_LANE_MAX_INFLIGHT[remote[0].resource] >= len(remote)
+
+
+def test_remote_lane_count_follows_the_environment(monkeypatch):
+    """The remote engine's seat count is invisible to the pool: muse's swarm
+    serves many streams, qwen3-next's 256k config serves ONE. Four lanes on a
+    single seat refuse three rounds in four and book them idle."""
+    monkeypatch.delenv("OUROBOROS_REMOTE_CURATE_LANES", raising=False)
+    assert (
+        len([ln for ln in lanes_for_scraper() if ln.name.startswith("curate_r")]) == 4
+    )
+    monkeypatch.setenv("OUROBOROS_REMOTE_CURATE_LANES", "1")
+    remote = [ln for ln in lanes_for_scraper() if ln.name.startswith("curate_r")]
+    assert [ln.name for ln in remote] == ["curate_r1"]
+    assert remote[0].domain == "curate_remote" and remote[0].est_kv == 0
+    monkeypatch.setenv("OUROBOROS_REMOTE_CURATE_LANES", "0")
+    assert not [ln for ln in lanes_for_scraper() if ln.name.startswith("curate_r")]
+    monkeypatch.setenv("OUROBOROS_REMOTE_CURATE_LANES", "junk")
+    assert (
+        len([ln for ln in lanes_for_scraper() if ln.name.startswith("curate_r")]) == 4
+    )

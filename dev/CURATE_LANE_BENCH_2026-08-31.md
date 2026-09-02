@@ -255,3 +255,90 @@ Telemetry gap noted in passing: the run trace recorded `inferences: 0` for
 a run that completed 15 curate rounds — inference events are not being
 emitted from the drain lanes, so per-turn prefill/decode timings had to be
 inferred from step durations. Worth its own look.
+
+---
+
+# 2026-09-02 — qwen3-next-80b-a3 at a 256k seat: the oversize pool
+
+The operator's question: 222 papers are parked `curate_oversize` against the
+65k local seat. Does a 256k trained-context model reach them, and is its
+judgement close enough to muse's to be trusted on them? Config: the mac's
+`qwen3-next-80b-a3` (Qwen3-Next-80B-A3B-Instruct UD-Q4_K_XL, 46 GB), ONE seat
+of 262,144 (`nCtxSeq` = pool), 78 GB footprint, ~27 GB headroom.
+
+## Reach
+
+The park records each paper's doc floor (deepest compression rung), so reach
+is exact. Usable budget = (seat − 14k turn overhead) / 1.1 park margin.
+
+| seat | usable doc budget | fits at floor | fits raw (no compression) |
+|---|---|---|---|
+| 65,536 (local muse) | 46,851 | 0 / 219 | 3 |
+| 131,072 (mac muse) | 106,429 | 159 | 80 |
+| 262,144 (qwen3-next) | 225,585 | **210** | 176 |
+
+The nine over 226k at floor are theses/monographs (226k–708k).
+
+## Verdict agreement (`dev/bench_curate_quality.py`, same design as gpt-oss)
+
+| | accepted | denied | overall | decode faults |
+|---|---|---|---|---|
+| muse re-run (noise floor) | 8/9 | 10/10 | 18/19 = 95% | 0 |
+| gpt-oss-120b-a5 | 7/8 | 8/9 | 15/17 = 88% | 2 |
+| **qwen3-next-80b-a3** | 8/9 | **7/10** | 15/19 = 79% | 1 (healed) |
+
+Fisher exact vs muse p = 0.34; vs gpt-oss p = 0.66 — not distinguishable at
+this n. The PATTERN is: all three false accepts are muse *scope-rule*
+denials that qwen overrode on data quality (dissolved ions in oilfield water
+≠ a named material; few-layer WSe₂ ≠ a mineral; XAS ≠ a corpus technique).
+It read good spectra and accepted, past the scope list in the same prompt.
+Its one denial of an accepted paper (SEM-EDS table, no spectrum) is the
+stricter read. Judgement on data: fine. Scope discipline: weak.
+
+## The parked arm — 8/8 served, and the pool is mostly to DENY
+
+Eight parked papers stratified across the floor range, built at the first
+ladder rung that fits (as `_build_doc_for` does): all eight returned a
+parseable verdict, none truncated, server prompts 71k–248k tokens. The 248k
+one exceeded the 225k budget because the char estimator undercounted it, and
+the seat absorbed it.
+
+Six of eight DENIED, every denial right on inspection: an OSIRIS-REx mission
+overview, a Russian multi-field proceedings volume, a Chinese TB-control
+guideline, USGS reference-sample best values (no spectra), a polyurethane
+coating thesis, a doped-Si-nanoparticle thesis (scope). Documents are parked
+because they are huge, and huge documents are monographs and proceedings.
+The two accepts are real: Mastcam multispectral survey of Gale crater (624
+spectra) and a 248k-token Raman tissue-diagnostics thesis. Extrapolated, the
+pool holds ~50 acceptable papers, not 210.
+
+## Reliability, speed, and the estimator
+
+- One `llama_decode -3` (graph computation failed) at 15.7k tokens, healed by
+  a context rebuild; none in the 27 requests after it up to 248k. Headroom
+  bottomed at 6.7 GB during a 144k prefill, recovering between turns.
+- Wall rate falls 500 tok/s (50k prompts) → 263 tok/s (248k) as the attention
+  layers grow; decode 27–29 tok/s single stream. Parked-paper median 411 s;
+  the fitting pool ≈ 20–24 h on one stream.
+- **The 3.3 chars/token estimator undercounted a table-heavy USGS bulletin
+  1.97×** (99k estimated, 195k served). Other docs 0.84–1.13×. Seat budgeting
+  for table-heavy docs must use the server's `tokenCount`, not characters.
+
+## Decisions (operator, 2026-09-02)
+
+qwen3-next reviews the rest of the parked pool: close enough in judgement
+("gave and gained ground in different areas") and the only engine that fits
+the set. Three production changes make that possible without hand-holding:
+
+1. **Park against the LARGEST seat any lane offers** (`_largest_seat_tokens`),
+   not the local constant — the bug that hid the pool from the remote lanes.
+2. **`OUROBOROS_REMOTE_CURATE_LANES`** sizes the remote lane count to the
+   remote engine's seats (qwen's config serves ONE stream).
+3. **Provenance names the lane's model** (`_provenance_model`): packs a remote
+   lane produced were stamped with the LOCAL server's active config.
+
+And a **front-matter triage** (`dev/triage_parked_frontmatter.py`): title
+page + abstract + TOC (~2–12k tokens, ~30 s) → proceed | deny, denying only
+the unmistakable non-candidates the bench found the pool is full of. Doubt
+means proceed; the triage never accepts. Calibrated on the eight bench papers
+first — the two known accepts must come back "proceed".
