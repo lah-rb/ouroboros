@@ -15,6 +15,8 @@ reads this sidecar separately, with its own source weight.
 
 from __future__ import annotations
 
+from . import confidence
+
 import dataclasses
 import json
 import math
@@ -76,6 +78,14 @@ def precision_block(src, grid_unit_per_px=None, stroke_px=None) -> dict:
             round(grid_unit_per_px, 6) if grid_unit_per_px is not None else None
         ),
         "resolvable_unit": resolvable,
+        # The pen-merge term alone understates the real limit ~2x (bench,
+        # 2026-09-01). d50 carries the grid term and is the separation at
+        # which a median-intensity line has even odds of surviving.
+        "d50_unit": (
+            round(confidence.d50(grid_unit_per_px, resolvable), 6)
+            if (grid_unit_per_px and resolvable)
+            else None
+        ),
         "limited_by": src.limited_by,
         "effective_dpi": _finite(src.effective_dpi),
         "stroke_width_px": round(stroke_px, 2) if stroke_px else None,

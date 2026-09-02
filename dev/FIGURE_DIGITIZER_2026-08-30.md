@@ -1649,6 +1649,37 @@ class, a NIST density prior, or the figure's own recovered peaks -- to ~0.035.
 
 Repro: /tmp/figdig_model/resolvable_model.json (from dev/figdig_resolvable_model.py); probes inline in the session transcript.
 
+### Banked (2026-09-01, later): `tools/figure_digitizer/confidence.py`
+
+The curve is frozen as four coefficients on ln(sep/grid), ln(sep/pen),
+ln(intensity), ln(stroke_px). A six-term parameterisation with the raw logs
+added scores identically held out by span (R2 0.942, median 0.035, AUC 0.830)
+because the extra terms are collinear -- but the two disagree on the
+EXTRAPOLATED closed form, and the frozen model's own is the one that ships:
+
+```
+  d50_px = 5.2 + 0.62 * stroke_px   (6.4 / 7.3 / 8.7 / 10.1 px at 2 / 3 / 5 / 8 px)
+```
+
+The 5.3 + 0.48 quoted above is the six-term summary; treat it as superseded.
+
+Two things caught while banking, both the vacuous-gate shape:
+
+* Geometry-only triage first scaled its nominal separation to 3 x d50 and
+  returned 0.78 for a 20 nm zoom, a 100 nm window and a 600 nm survey alike.
+  The prior must be ABSOLUTE and technique-owned: `adapters/libs.py` now
+  carries the median nearest-neighbour spacing of 10-sigma LIBS lines,
+  0.327 nm (p25 0.268, p75 0.433; 5,590 lines, five SME spectra), and
+  `confidence.triage` returns `no_basis` rather than guess when it has
+  neither a prior nor a line list. With the prior: zoom digitize, survey
+  refuse, 100 nm in between.
+* The fixture test first asked for cell-level R2 on a 2,000-row sample whose
+  cells hold a median of 5 rows; it failed at 0.45 on a model that scores
+  0.942 on the full cells. The shipped test asks for AUC and per-bin
+  calibration instead, which thin cells cannot fake.
+
+`schema.precision_block` now emits `d50_unit` beside `resolvable_unit`.
+
 ---
 
 ## Files

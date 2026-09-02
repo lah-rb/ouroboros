@@ -71,3 +71,34 @@ def position_references(labels=None) -> tuple[list[float], str]:
     if printed:
         return printed, "figure_label"
     return list(FALLBACK_REFERENCES_NM), "fallback_ca_ii"
+
+
+# ── Triage prior ─────────────────────────────────────────────────────
+#
+# The detection curve (tools/figure_digitizer/confidence.py) needs an ABSOLUTE
+# separation to judge a figure before anything is extracted. For LIBS that is
+# how close real lines sit: over 5,590 lines at 10 sigma in five handheld SME
+# iron-oxide spectra (200-800 nm), nearest-neighbour separation is
+#   p10 0.224   p25 0.268   median 0.327   p75 0.433 nm
+# with 83% of lines having a neighbour within 0.5 nm. Median relative
+# intensity 0.047 (the fit set's was 0.053). Measured 2026-09-01. A denser
+# matrix (steel, shale) sits lower; a sparse one (Au) higher -- so this is a
+# triage prior, and the figure's own recovered peaks replace it once known.
+NOMINAL_LINE_SEPARATION_NM = 0.327
+MEDIAN_LINE_INTENSITY = 0.047
+
+
+def triage_libs(
+    grid_nm_per_px: float, pen_nm: float, seps_nm=None, intensities=None
+) -> dict:
+    """Digitise-or-refuse for a LIBS figure, in nm, with the LIBS prior."""
+    from tools.figure_digitizer import confidence
+
+    return confidence.triage(
+        grid_nm_per_px,
+        pen_nm,
+        seps=seps_nm,
+        intensities=intensities,
+        nominal_sep=NOMINAL_LINE_SEPARATION_NM,
+        nominal_intensity=MEDIAN_LINE_INTENSITY,
+    )
