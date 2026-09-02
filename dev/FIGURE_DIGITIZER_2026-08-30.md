@@ -1569,6 +1569,88 @@ Repro: `dev/figdig_vector_survey.py`.
 
 ---
 
+## Pushing separation below the pen, and predicting it (2026-09-01, evening)
+
+Operator asked for methodological thoughts on (a) finding more separation and
+(b) a concrete predictor of the minimum resolvable feature from dpi, pen and
+span. Both were tested on the synthetic instrument and the 116,808-row
+per-peak dataset rather than argued.
+
+### (a) Three ideas for sub-pen separation. Two refuted, one closed by control.
+
+The ink of a trace is the curve dilated by the pen, and the column envelope
+is a max-filter of it -- a morphological operation, not a convolution, so
+linear deconvolution is the wrong model. Three ways the 2-D ink might still
+carry what the 1-D envelope has lost, on 916 doublets in the 0.6-2.2 pen band
+that the envelope had merged (50 & 100 nm windows, 1.0 pt, 160 dpi):
+
+1. **Plateau width** (a merged doublet's flat top should be pen + separation):
+   REFUTED. Top width is 2.0 px regardless of separation, corr -0.03. A merged
+   LIBS doublet has a rounded apex dominated by the taller line, not a shelf.
+2. **Naive row scan** (two horizontal ink runs in rows below the apex -- the
+   operator's tabled idea): reported 30% of merged doublets split. The
+   false-positive control on ISOLATED peaks also fired 32.6%, and the split
+   rate was flat across separation bins (33/29/25%) where the mechanism
+   requires a rise above one pen. It was counting ink fragments, not doublets.
+3. **Strict row scan** (two runs persisting >=2 rows, each >=0.7 pen wide, on
+   opposite sides of the apex): passes its control (2.3% FP) and recovers
+   **1-2% of merged doublets in every bin**, including 1-2 pen.
+
+The ceiling was small anyway: at 50 nm only 93 doublets across five spectra
+were merged by the envelope at all (most 1-2 pen pairs there already split,
+hence the 92% retention), and at 100 nm 84% of pairs sit under one pen, which
+no 2-D binary method can separate. **The pen is the limit for binary ink.**
+The one lever not probed is grey-level anti-aliasing: the edge profile of a
+stroke is the pen kernel, so a Gaussian-mixture fit across a row could in
+principle split two strokes below the pen. It is fragile against JPEG, which
+is what 80% of native sources are, so it is a bounded experiment, not a bet.
+
+### (b) The predictor works, and "minimum resolvable feature" is a curve.
+
+Pooled logistic over all 116,808 peak-observations, P(detect at floored 10
+sigma) on log sep, log pen, log grid, log intensity and the two ratios, held
+out BY SPAN (the model never sees the tested span):
+
+```
+  held-out span   n       AUC    pred rate  obs rate
+      20 nm     2,640    0.878     0.87      0.88
+      50 nm     6,288    0.858     0.65      0.69
+     100 nm    13,536    0.780     0.44      0.38
+     200 nm    27,264    0.746     0.22      0.21
+     600 nm    67,080    0.706     0.07      0.09
+```
+
+Calibrated: every predicted-probability decile lands within 0.03 of its
+observed rate except a slight under-prediction at the faint end.
+
+At the FIGURE level -- the use case -- predicted recovery (mean P over the
+figure's peaks) against observed, 300 cells, held out by span: **R2 0.942,
+median |error| 0.035**, p90 0.139. A geometry-only model (grid, pen) gives
+R2 0.890 / 0.058. So dpi, pen and span carry most of it, and the spectrum's
+own separations and intensities close the rest -- this is where the earlier
+"42% unexplained scatter" went.
+
+Standardised effects: intensity +0.78, log(sep/grid) +0.63, log(sep/pen)
++0.43, grid -0.20, pen alone ~0. The grid term outranks the pen term, matching
+the natural experiment where a fixed pen and finer grid doubled retention.
+
+Closed form at median line intensity:
+
+```
+  d50_px = 5.3 + 0.48 * pen_px          d50_nm = grid_nm_per_px * d50_px
+  intensity moves it +-40%: faint (q25) 8.4 px, bright (q75) 4.1 px at a 2 px pen
+```
+
+So the honest answer to "what is the minimum resolvable feature once dpi, pen
+and span are known" is: a detection curve P(d, I | grid, pen), and the expected
+yield for a figure is that curve averaged over the lines it plots. Geometry
+alone predicts recovery to a factor of ~2; with a line list -- from the sample
+class, a NIST density prior, or the figure's own recovered peaks -- to ~0.035.
+
+Repro: /tmp/figdig_model/resolvable_model.json (from dev/figdig_resolvable_model.py); probes inline in the session transcript.
+
+---
+
 ## Files
 
 - `tools/figure_digitizer/{__init__,source,graphmeta,schema,digitize,synth,axes,curve,peaks}.py`
