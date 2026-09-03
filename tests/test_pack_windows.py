@@ -95,3 +95,64 @@ def test_merge_promotes_a_scalar_that_meets_a_list_and_ignores_none():
     m = merge_packs([{"k": 1, "n": None}, {"k": [2, 3], "n": 5}])
     assert m["k"] == [1, 2, 3]
     assert m["n"] == 5
+
+
+def test_shape_repair_wraps_grounded_scalars_into_the_registry_shape():
+    """CAUGHT LIVE (2026-09-02): a window grounded 678 values at 1.0 and was
+    rejected because xrd_2theta_deg came back as bare numbers where the
+    registry holds list[object]. Re-wrapping loses nothing and invents nothing."""
+    from agent.actions.pack_windows import repair_shapes
+
+    registry = {
+        "xrd_2theta_deg": {
+            "type": "list[object]",
+            "exemplar": '[{"sample": "Calc7", "peak_2theta_deg": 25.8, "assignment": "002"}, {"sa',
+        },
+        "raman_peak_wavenumber_cm-1": {
+            "type": "list[object]",
+            "exemplar": [{"polymer": "PE", "peak_cm-1": 1295, "assignment": "CH2"}],
+        },
+        "laser_nm": {"type": "number", "exemplar": 532},
+    }
+    data = {
+        "xrd_2theta_deg": [25.8, 31.7, "45.5 (w)"],
+        "raman_peak_wavenumber_cm-1": [{"peak_cm-1": 1091}, 1366],  # mixed
+        "laser_nm": [532, 785],  # number vs list: NOT ours to fix
+        "unknown_key": [1, 2],
+    }
+    fixed, repairs = repair_shapes(data, registry)
+    assert fixed["xrd_2theta_deg"] == [
+        {"peak_2theta_deg": 25.8},
+        {"peak_2theta_deg": 31.7},
+        {"peak_2theta_deg": "45.5 (w)"},
+    ]
+    assert fixed["raman_peak_wavenumber_cm-1"] == [
+        {"peak_cm-1": 1091},
+        {"peak_cm-1": 1366},
+    ]
+    assert fixed["laser_nm"] == [
+        532,
+        785,
+    ], "a number/list mismatch is not a re-wrapping"
+    assert fixed["unknown_key"] == [1, 2]
+    assert sorted(r["key"] for r in repairs) == [
+        "raman_peak_wavenumber_cm-1",
+        "xrd_2theta_deg",
+    ]
+    assert data["xrd_2theta_deg"] == [25.8, 31.7, "45.5 (w)"], "input is not mutated"
+
+
+def test_shape_repair_wraps_a_lone_object_or_scalar_into_a_list():
+    from agent.actions.pack_windows import repair_shapes
+
+    registry = {
+        "emission_line_nm": {
+            "type": "list[object]",
+            "exemplar": '[{"wavelength_nm": 311}]',
+        }
+    }
+    fixed, rep = repair_shapes({"emission_line_nm": {"wavelength_nm": 766.5}}, registry)
+    assert fixed["emission_line_nm"] == [{"wavelength_nm": 766.5}]
+    fixed, rep = repair_shapes({"emission_line_nm": 766.5}, registry)
+    assert fixed["emission_line_nm"] == [{"wavelength_nm": 766.5}]
+    assert [r["from"] for r in rep] == ["scalar"]

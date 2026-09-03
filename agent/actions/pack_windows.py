@@ -185,3 +185,74 @@ def merge_packs(
             else:
                 report.conflicts.append({"path": p, "kept": cur, "dropped": v})
     return out
+
+
+# ── Shape repair ─────────────────────────────────────────────────────────
+#
+# Measured on the 2026-09-02 staged-pack run: of the windows the gates
+# rejected, four failed ONLY on registry shape -- a peak list returned as bare
+# numbers where the registry holds list[object] -- and together carried 1,236
+# grounded values at grounding >= 0.996. The eight fabrication failures sat at
+# 0.35-0.91. The two populations do not overlap, so re-shaping a grounded list
+# is safe: the numbers were in the paper; only the wrapper was missing.
+
+
+def _exemplar_field(entry: dict) -> str | None:
+    """The first numeric-valued field name in a registry entry's exemplar --
+    the key the registry itself uses for the position ("peak_cm-1",
+    "wavelength_nm", "peak_2theta_deg")."""
+    ex = entry.get("exemplar")
+    if isinstance(ex, str):
+        try:
+            ex = json.loads(ex)
+        except Exception:
+            # exemplars are TRUNCATED strings; recover the first object
+            m = re.search(r"\{[^{}]*\}", ex)
+            if not m:
+                return None
+            try:
+                ex = json.loads(m.group(0))
+            except Exception:
+                return None
+    if isinstance(ex, list):
+        ex = next((e for e in ex if isinstance(e, dict)), None)
+    if not isinstance(ex, dict):
+        return None
+    for k, v in ex.items():
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            return k
+    return next(iter(ex), None)
+
+
+def repair_shapes(data: dict, registry: dict) -> tuple[dict, list[dict]]:
+    """Coerce grounded values into the registry's declared shape where that is
+    a pure re-wrapping; never invent or drop a value.
+
+    Handled: registry ``list[object]`` met by a list containing non-object
+    items (wrap each scalar as ``{<exemplar field>: value}``), or by a bare
+    scalar/object (wrap into a one-element list). Anything else is left for
+    the registry check to judge. Returns (repaired data, repairs made)."""
+    out = dict(data)
+    repairs: list[dict] = []
+    for key, value in data.items():
+        entry = registry.get(key)
+        if not entry or str(entry.get("type") or "") != "list[object]":
+            continue
+        field = _exemplar_field(entry)
+        if isinstance(value, list):
+            if all(isinstance(v, dict) for v in value):
+                continue
+            if not field:
+                continue
+            fixed = [v if isinstance(v, dict) else {field: v} for v in value]
+            out[key] = fixed
+            repairs.append(
+                {"key": key, "from": "list", "to": "list[object]", "n": len(value)}
+            )
+        elif isinstance(value, dict):
+            out[key] = [value]
+            repairs.append({"key": key, "from": "object", "to": "list[object]", "n": 1})
+        elif value is not None and field:
+            out[key] = [{field: value}]
+            repairs.append({"key": key, "from": "scalar", "to": "list[object]", "n": 1})
+    return out, repairs
