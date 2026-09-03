@@ -58,14 +58,31 @@ from agent.effects.local import LocalEffects  # noqa: E402
 
 ROOT = os.path.expanduser("~/corpora/ouroboros-spectra")
 _OPENALEX = "https://api.openalex.org/works"
+_CROSSREF = "https://api.crossref.org/works"
+
+
+# Tiers worth a network lookup: they identify a COPY or nothing at all.
+_WEAK_TIERS = ("core", "none", "other")
+
+
+def _in_scope(rec: dict) -> bool:
+    return rec.get("review_status") == "accepted" or _curation_pending(rec)
 
 
 def needs_identity(rec: dict) -> bool:
-    """Papers that matter: accepted or still pending curation, with no
-    identifier of any tier already recorded."""
+    """Papers that matter, with no identifier of any tier recorded yet."""
     if rec.get("doi") or rec.get("arxiv_id") or rec.get("identifier_kind"):
         return False
-    return rec.get("review_status") == "accepted" or _curation_pending(rec)
+    return _in_scope(rec)
+
+
+def wants_upgrade(rec: dict) -> bool:
+    """Papers resolved only to a weak tier: a CORE download id names a COPY,
+    "other"/"none" name little or nothing. A real DOI would be better, and is
+    worth one polite lookup each."""
+    if rec.get("doi") or rec.get("arxiv_id"):
+        return False
+    return str(rec.get("identifier_kind") or "") in _WEAK_TIERS and _in_scope(rec)
 
 
 async def lookup_openalex(effects, rec: dict) -> tuple[str, str, str]:
@@ -108,11 +125,54 @@ async def lookup_openalex(effects, rec: dict) -> tuple[str, str, str]:
     return "", "", ""
 
 
+async def lookup_crossref(effects, rec: dict) -> tuple[str, str, str]:
+    """(identifier, kind, doi) from a Crossref bibliographic search.
+
+    WHY NOT OPENALEX (measured 2026-09-03). OpenAlex now meters by credit: the
+    free allowance is $0.10/day (1,000 credits) and a search costs 10, so ~100
+    searches a day, and the mission's own discovery had already spent it --
+    every request returned 429 "Insufficient budget", mailto or not. Crossref
+    is free, wants only a polite mailto, and returns the DOI directly, which
+    is the identifier we actually want rather than a work id standing in for
+    one.
+    """
+    title = str(rec.get("title") or "").strip()
+    if len(title) < 12:
+        return "", "", ""
+    params = {
+        "query.bibliographic": title[:250],
+        "rows": "5",
+        "select": "DOI,title,issued",
+        "mailto": _contact_email(),
+    }
+    try:
+        resp = await polite_request(effects, "GET", _CROSSREF, params=params)
+    except Exception:  # noqa: BLE001 -- a lookup never fails a resolution
+        return "", "", ""
+    if resp.status != 200 or not isinstance(resp.json_data, dict):
+        return "", "", ""
+    for item in ((resp.json_data.get("message") or {}).get("items") or [])[:5]:
+        if not isinstance(item, dict):
+            continue
+        parts = (item.get("issued") or {}).get("date-parts") or [[None]]
+        work = {
+            "title": (item.get("title") or [""])[0],
+            "publication_year": (parts[0] or [None])[0],
+        }
+        if not is_confident_match(work, rec):
+            continue
+        doi = str(item.get("DOI") or "").strip()
+        if doi:
+            return doi, "doi", doi
+    return "", "", ""
+
+
 async def main_async(a) -> int:
     fx = LocalEffects(a.root)
     bank = await read_databank(fx)
     side = await _read_jsonl_records(fx, DATABANK_PATH)
-    todo = [k for k, r in sorted(bank.items()) if needs_identity(r)]
+    pick = wants_upgrade if a.upgrade else needs_identity
+    todo = [k for k, r in sorted(bank.items()) if pick(r)]
     if a.limit:
         todo = todo[: a.limit]
     print(f"papers needing identity: {len(todo)}{' (limited)' if a.limit else ''}\n")
@@ -122,10 +182,12 @@ async def main_async(a) -> int:
     for n, key in enumerate(todo, 1):
         rec = bank[key]
         ident, kind = record_identifier(rec)  # tiers 1, 2 and 4: free
+        ident = openalex_id_short(ident) if kind == "openalex" else ident
         doi = ""
-        if (not ident or kind == "core") and not a.offline:
+        if (not ident or kind in _WEAK_TIERS) and not a.offline:
             # A CORE id identifies a copy; try for the work itself first.
-            l_ident, l_kind, l_doi = await lookup_openalex(fx, rec)
+            lookup = lookup_openalex if a.via == "openalex" else lookup_crossref
+            l_ident, l_kind, l_doi = await lookup(fx, rec)
             if l_ident:
                 ident, kind, doi = l_ident, l_kind, l_doi
                 kind = f"{kind}*"  # starred = looked up, for the report
@@ -177,9 +239,20 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--show", type=int, default=15)
     ap.add_argument(
-        "--offline", action="store_true", help="skip the OpenAlex lookup tier"
+        "--offline", action="store_true", help="skip the network lookup tier"
+    )
+    ap.add_argument(
+        "--via",
+        choices=("crossref", "openalex"),
+        default="crossref",
+        help="lookup index for the network tier (OpenAlex now meters by credit)",
     )
     ap.add_argument("--apply", action="store_true")
+    ap.add_argument(
+        "--upgrade",
+        action="store_true",
+        help="target papers already resolved only to a weak tier (core/other/none)",
+    )
     ap.add_argument(
         "--out", default=os.path.expanduser("~/tmp/resolve_identifiers.json")
     )

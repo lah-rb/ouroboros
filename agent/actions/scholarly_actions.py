@@ -352,6 +352,10 @@ _HOST_MIN_INTERVAL = {
     # Keyless CORE 429s within a handful of calls; a registered key lifts
     # that but the aggregator is doing us a favour, so stay unhurried.
     "api.core.ac.uk": 1.5,
+    # Crossref's polite pool (mailto) documents ~50 rps; 0.5 s is far under,
+    # and it is the free path now that OpenAlex meters by credit (measured
+    # 2026-09-03: $0.10/day, 10 credits a search, exhausted by discovery).
+    "api.crossref.org": 0.5,
 }
 
 
