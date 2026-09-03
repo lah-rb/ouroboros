@@ -1,0 +1,187 @@
+"""Section-bounded windows for staged data packing, and the merge of their packs.
+
+WHY. Pack success collapses with document length -- measured 2026-09-02 over
+1,941 accepted papers: 96% packed at 10-25k tokens, 87% at 25-50k, 58% at
+50-100k, 36% over 100k, and the failures over 50k are dominated by the
+grounding gate rejecting numbers the paper never states. Every model shows
+it; the parked pool merely put qwen3-next exclusively in the failing regime.
+A pack turn over a window the model can actually attend to is the lever.
+
+THE CUTTING RULE (operator, 2026-09-02): a window ends on a SECTION boundary,
+never at a length. Then a fact split across two windows requires the author
+to have split it across two sections -- a failure of the paper's organisation,
+not of our cutter. Sections are markdown headings; figure readings are inlined
+as blockquotes below the paragraph that cites them, so they ride inside the
+section that references them.
+
+SIZING. Windows are filled with whole sections up to a target, sized from the
+same measurement: the 10-25k band is where packing works. A single section
+larger than the hard cap becomes a window of its own -- oversize, flagged, and
+still never cut.
+
+MERGE. Packs are flat-ish JSON objects with list-valued keys carrying the
+corpus's most valuable content (peak tables). Lists concatenate with exact-
+duplicate removal; dicts merge recursively; scalars keep the FIRST value and
+record every disagreement, so a conflict is visible rather than silently
+resolved. Grounding of the merged pack against the whole document holds by
+construction when each window's pack was grounded against its own window --
+a strictly stricter check than the whole-document one, and the one that
+closes the fabrication mode directly.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from dataclasses import dataclass, field
+
+from agent.actions.curation_actions import _estimate_doc_tokens
+
+# Sized from the corpus measurement: 10-25k tokens is the 96% band.
+DEFAULT_TARGET_TOKENS = 18_000
+DEFAULT_MAX_TOKENS = 25_000
+
+_HEADING = re.compile(r"^#{1,6} +\S", re.M)
+
+
+@dataclass
+class Window:
+    index: int
+    text: str
+    tokens: int
+    section_count: int
+    first_heading: str
+    oversize: bool = False  # a single section over the hard cap: never cut
+
+
+@dataclass
+class MergeReport:
+    conflicts: list[dict] = field(default_factory=list)
+    list_keys: list[str] = field(default_factory=list)
+    scalar_keys: list[str] = field(default_factory=list)
+
+
+def split_sections(doc: str) -> list[str]:
+    """The document as a list of sections, each starting at a markdown heading.
+
+    Text before the first heading (title block, catalogue lines) is its own
+    leading section. Sections are returned verbatim and in order, so
+    ``"".join(split_sections(d)) == d``.
+    """
+    if not doc:
+        return []
+    starts = [m.start() for m in _HEADING.finditer(doc)]
+    if not starts:
+        return [doc]
+    bounds = ([0] if starts[0] > 0 else []) + starts + [len(doc)]
+    out = [doc[a:b] for a, b in zip(bounds, bounds[1:])]
+    return [s for s in out if s]
+
+
+def _heading_of(section: str) -> str:
+    m = _HEADING.search(section)
+    if not m:
+        return section.strip().splitlines()[0][:80] if section.strip() else ""
+    line = section[m.start() :].splitlines()[0]
+    return line.lstrip("#").strip()[:80]
+
+
+def window_sections(
+    doc: str,
+    target_tokens: int = DEFAULT_TARGET_TOKENS,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+) -> list[Window]:
+    """Group whole sections into windows of about ``target_tokens``.
+
+    A section is appended to the open window while the window stays within
+    ``target_tokens``, or -- when the window is empty -- unconditionally. A
+    section that alone exceeds ``max_tokens`` becomes an oversize window of
+    its own. No section is ever divided; every section lands in exactly one
+    window; order is preserved.
+    """
+    if target_tokens <= 0 or max_tokens < target_tokens:
+        raise ValueError("need 0 < target_tokens <= max_tokens")
+    sections = split_sections(doc)
+    windows: list[Window] = []
+    cur: list[str] = []
+    cur_tokens = 0
+
+    def flush() -> None:
+        nonlocal cur, cur_tokens
+        if not cur:
+            return
+        text = "".join(cur)
+        windows.append(
+            Window(
+                index=len(windows),
+                text=text,
+                tokens=cur_tokens,
+                section_count=len(cur),
+                first_heading=_heading_of(cur[0]),
+                oversize=cur_tokens > max_tokens,
+            )
+        )
+        cur, cur_tokens = [], 0
+
+    for sec in sections:
+        t = _estimate_doc_tokens(sec)
+        if t > max_tokens:
+            flush()
+            cur, cur_tokens = [sec], t
+            flush()
+            continue
+        if cur and cur_tokens + t > target_tokens:
+            flush()
+        cur.append(sec)
+        cur_tokens += t
+    flush()
+    return windows
+
+
+def _dedupe(items: list) -> list:
+    seen: set[str] = set()
+    out = []
+    for it in items:
+        key = json.dumps(it, sort_keys=True, ensure_ascii=False, default=str)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(it)
+    return out
+
+
+def merge_packs(
+    packs: list[dict], report: MergeReport | None = None, _path: str = ""
+) -> dict:
+    """Merge per-window packs into one. Lists concatenate (exact duplicates
+    dropped), dicts merge recursively, scalars keep the first value and log
+    every disagreement to ``report.conflicts``."""
+    report = report if report is not None else MergeReport()
+    out: dict = {}
+    for pack in packs:
+        if not isinstance(pack, dict):
+            continue
+        for k, v in pack.items():
+            p = f"{_path}.{k}" if _path else k
+            if k not in out:
+                out[k] = list(v) if isinstance(v, list) else v
+                (
+                    report.list_keys if isinstance(v, list) else report.scalar_keys
+                ).append(p)
+                continue
+            cur = out[k]
+            if isinstance(cur, list) and isinstance(v, list):
+                out[k] = _dedupe(cur + v)
+            elif isinstance(cur, list) and v is not None:
+                out[k] = _dedupe(cur + [v])
+            elif isinstance(v, list) and cur is not None:
+                out[k] = _dedupe([cur] + v)
+            elif isinstance(cur, dict) and isinstance(v, dict):
+                out[k] = merge_packs([cur, v], report, p)
+            elif cur is None:
+                out[k] = v
+            elif v is None or cur == v:
+                continue
+            else:
+                report.conflicts.append({"path": p, "kept": cur, "dropped": v})
+    return out
