@@ -121,6 +121,8 @@ def _envelope(**over):
         "paper_key": "doi_10.1000_x",
         "title": "Strong CoCrFeMnNi",
         "doi": "10.1000/x",
+        "identifier": "10.1000/x",
+        "identifier_kind": "doi",
         "license": "cc-by",
         "review": {"status": "accepted", "summary": "solid tensile data"},
         "data": {"yield_strength_mpa": 759},
@@ -132,17 +134,54 @@ def _envelope(**over):
 def test_required_fields_pass_and_failures():
     assert required_fields_check(_envelope()) == []
     problems = required_fields_check(
-        _envelope(title="", doi="", review={"status": "maybe"}, data={})
+        _envelope(
+            title="",
+            doi="",
+            identifier="",
+            identifier_kind="",
+            review={"status": "maybe"},
+            data={},
+        )
     )
     assert "missing title" in problems
-    assert "missing doi|arxiv_id" in problems
+    assert "missing identifier_kind (expected a tier or 'none')" in problems
     assert "review.status not in accepted|denied" in problems
     assert "missing review.summary" in problems
     assert "data empty or not an object" in problems
 
 
-def test_arxiv_id_satisfies_identifier_requirement():
-    assert required_fields_check(_envelope(doi="", arxiv_id="2401.01234")) == []
+def test_any_resolved_identifier_tier_satisfies_the_envelope():
+    for ident, kind in (
+        ("2401.01234", "arxiv"),
+        ("W2049875903", "openalex"),
+        ("10662/12345", "hdl"),
+        ("2013PA112254", "theses.fr"),
+        ("30695665", "core"),
+    ):
+        assert (
+            required_fields_check(
+                _envelope(doi="", identifier=ident, identifier_kind=kind)
+            )
+            == []
+        ), kind
+
+
+def test_an_explicit_none_is_accepted_but_a_silent_gap_is_not():
+    """Operator ruling 2026-09-03: resolve what we can, emit the rest as
+    identifier: none. 'none' is a RECORDED state and passes; a missing
+    identity block is an unanswered question and does not."""
+    assert (
+        required_fields_check(_envelope(doi="", identifier="", identifier_kind="none"))
+        == []
+    )
+    assert (
+        "missing identifier_kind (expected a tier or 'none')"
+        in required_fields_check(_envelope(doi="", identifier="", identifier_kind=""))
+    )
+    # a tier that claims an identifier must carry one
+    assert "identifier_kind 'hdl' with no identifier" in required_fields_check(
+        _envelope(doi="", identifier="", identifier_kind="hdl")
+    )
 
 
 # ── registry ──────────────────────────────────────────────────────────

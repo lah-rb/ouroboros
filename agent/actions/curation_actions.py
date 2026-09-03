@@ -41,6 +41,7 @@ Numeric tokenization mirrors tools/pdf_extract/extract_batch.py
 """
 
 from __future__ import annotations
+from agent.actions.identifiers import envelope_identity
 from agent.paths import repo_root as _repo_root
 from agent.scheduler.capacity_claim import current_claim
 from agent.actions.drain_lane import (
@@ -244,13 +245,28 @@ def grounding_check(data: dict, doc: str) -> dict:
 
 
 def required_fields_check(envelope: dict) -> list[str]:
-    """Missing/invalid required envelope fields (empty list = pass)."""
+    """Missing/invalid required envelope fields (empty list = pass).
+
+    IDENTITY (operator ruling 2026-09-03). The rule was `doi|arxiv_id`, which
+    refused 332 accepted-or-pending papers -- theses and institutional reports
+    from CORE, national registries and university repositories, two thirds of
+    everything waiting on curation. They packed cleanly and were thrown away
+    at the envelope. The envelope now requires an identity BLOCK rather than a
+    DOI: whatever tier was resolved (doi, arxiv, openalex, a repository
+    handle/urn, a CORE id) or the explicit "none". "none" is a legitimate,
+    RECORDED state -- a consumer can tell an unidentified paper from one
+    nobody looked at -- and `identifier_kind` says which tier it is, so a
+    weakly-identified record is never mistaken for a DOI'd one.
+    """
     problems = []
     for field in ("paper_key", "title", "license"):
         if not str(envelope.get(field) or "").strip():
             problems.append(f"missing {field}")
-    if not (envelope.get("doi") or envelope.get("arxiv_id")):
-        problems.append("missing doi|arxiv_id")
+    kind = str(envelope.get("identifier_kind") or "").strip()
+    if not kind:
+        problems.append("missing identifier_kind (expected a tier or 'none')")
+    elif kind != "none" and not str(envelope.get("identifier") or "").strip():
+        problems.append(f"identifier_kind {kind!r} with no identifier")
     review = envelope.get("review") or {}
     if review.get("status") not in ("accepted", "denied"):
         problems.append("review.status not in accepted|denied")
@@ -2591,6 +2607,7 @@ async def action_curate_book_result(step_input):
                 "title": rec.get("title", ""),
                 "doi": rec.get("doi", ""),
                 "arxiv_id": rec.get("arxiv_id", ""),
+                **envelope_identity(rec),
                 "license": rec.get("license", "") or "unknown",
                 "year": rec.get("year", 0),
                 "review": {
