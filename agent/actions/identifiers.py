@@ -106,6 +106,13 @@ def identifier_from_url(url: str) -> tuple[str, str]:
     return "", ""
 
 
+def openalex_id_short(value: str) -> str:
+    """W-number from an OpenAlex id or URL ("https://openalex.org/W123" -> W123)."""
+    v = str(value or "").strip()
+    m = re.search(r"\b(W\d+)\b", v)
+    return m.group(1) if m else v
+
+
 def record_identifier(record: dict) -> tuple[str, str]:
     """(identifier, kind) for a record, best tier first; ("", "none") if none.
 
@@ -117,6 +124,10 @@ def record_identifier(record: dict) -> tuple[str, str]:
         val = str(record.get(field) or "").strip()
         if not val:
             continue
+        if kind == "openalex":
+            # The scraper stores the full URL ("https://openalex.org/W123").
+            # The identifier is the W-number; the URL is where to look it up.
+            val = openalex_id_short(val)
         if field == "identifier":
             known = str(record.get("identifier_kind") or "").strip()
             if known:
@@ -136,12 +147,10 @@ def record_identifier(record: dict) -> tuple[str, str]:
     return "", "none"
 
 
-def openalex_id_short(value: str) -> str:
-    """W-number from an OpenAlex id or URL ("https://openalex.org/W123" -> W123)."""
-    v = str(value or "").strip()
-    m = re.search(r"\b(W\d+)\b", v)
-    return m.group(1) if m else v
-
+# How many distinctive words make a title a fingerprint. Below this an exact
+# title is not evidence on its own -- "Raman spectra of quartz under pressure"
+# describes a dozen papers.
+_FINGERPRINT_WORDS = 8
 
 _TITLE_STOPWORDS = frozenset("the a an of and for at from with by in on to".split())
 
@@ -161,26 +170,56 @@ def title_match_score(a: str, b: str) -> float:
 
 
 def is_confident_match(work: dict, record: dict, min_score: float = 0.72) -> bool:
-    """Does an OpenAlex work plausibly BE this paper?
+    """Does an indexed work plausibly BE this paper?
 
-    Title overlap must clear ``min_score``, and if both sides state a year
-    they must agree within one (repositories date the deposit, publishers the
-    issue). A wrong identity is worse than none, so this errs strict.
+    Title overlap must clear ``min_score``. On top of that a YEAR must
+    corroborate it -- both sides stating a year within one of each other
+    (repositories date the deposit, publishers the issue) -- UNLESS the titles
+    match exactly, which is evidence enough on its own.
+
+    Why the year is not optional (measured 2026-09-03): a partial-title match
+    with no year on either side put "LASER INDUCED BREAKDOWN SPECTROSCOPY OF
+    GEOLOGICAL SAMPLES" onto the DOI of "Laser-Induced Breakdown Spectroscopy
+    of LIQUID Samples" -- a different chapter of the same handbook. Generic
+    technique titles collide constantly in this corpus, so a wrong identity is
+    the likely error, not the unlikely one.
     """
-    if (
-        title_match_score(
-            work.get("title") or work.get("display_name"), record.get("title")
-        )
-        < min_score
-    ):
+    score = title_match_score(
+        work.get("title") or work.get("display_name"), record.get("title")
+    )
+    if score < min_score:
         return False
-    wy, ry = work.get("publication_year"), record.get("year")
     try:
-        if wy and ry and abs(int(wy) - int(ry)) > 1:
-            return False
+        wy, ry = int(work.get("publication_year") or 0), int(record.get("year") or 0)
     except (TypeError, ValueError):
-        pass
-    return True
+        wy = ry = 0
+    if score >= 1.0 and len(_title_words(record.get("title"))) >= _FINGERPRINT_WORDS:
+        # A LONG exact title is a fingerprint, and outranks a year. Measured
+        # 2026-09-03: two correct matches carried year gaps of 2 and 8 years
+        # because Crossref's "issued" is the DOI REGISTRATION date for
+        # back-deposited journals ("Makara Sains" v6i2 is 2002; the DOI says
+        # 2010). Rejecting those on the year loses real identities.
+        return True
+    if wy and ry:
+        # Otherwise a stated year must agree: a SHORT exact title is not a
+        # fingerprint, and generic technique titles collide constantly here.
+        return abs(wy - ry) <= 1
+    # A year is missing on one side, and the title is not distinctive enough
+    # to stand alone.
+    return False
+
+
+# Crossref mints component DOIs for supplementary files, chapters-as-parts and
+# figures: "10.1021/acsami.2c22595.s008" is the eighth SI file of a paper, not
+# the paper. A title search matches them because they inherit the parent's
+# title, so they must be refused explicitly -- a wrong identity is worse than
+# none, and this one silently points a record at a spreadsheet.
+_COMPONENT_DOI = re.compile(r"\.s\d{3,}$|/[a-z]*\.?s\d{3,}$", re.I)
+
+
+def is_component_doi(doi: str) -> bool:
+    """Is this DOI a supplementary-file/component DOI rather than a work?"""
+    return bool(_COMPONENT_DOI.search(str(doi or "").strip()))
 
 
 def envelope_identity(record: dict) -> dict[str, Any]:

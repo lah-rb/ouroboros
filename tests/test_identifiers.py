@@ -103,8 +103,12 @@ def test_a_match_needs_the_title_AND_a_compatible_year():
     assert not is_confident_match(
         {"title": "Something else entirely", "publication_year": 2013}, rec
     )
-    # a missing year on either side is not evidence against
-    assert is_confident_match({"title": rec["title"]}, {"title": rec["title"]})
+    # With no year on either side, only a title long enough to be a
+    # fingerprint stands alone -- this one (5 distinctive words) does not.
+    assert not is_confident_match({"title": rec["title"]}, {"title": rec["title"]})
+    assert not is_confident_match(
+        {"title": rec["title"] + " and other things"}, {"title": rec["title"]}
+    )
 
 
 def test_the_scrapers_own_identifier_field_is_classified_not_trusted():
@@ -146,3 +150,74 @@ def test_a_url_only_identifier_field_does_not_mask_a_real_one():
 def test_dspace_bitstream_urls_yield_their_handle():
     url = "http://dspace.uevora.pt/rdpc/bitstream/10174/24376/1/New%20Look.pdf"
     assert identifier_from_url(url) == ("10174/24376", "hdl")
+
+
+def test_supplementary_component_dois_are_refused():
+    """Crossref mints a DOI per supplementary file, inheriting the parent's
+    title, so a title search matches them. Pointing a record at the eighth SI
+    spreadsheet is a wrong identity, and a wrong identity is worse than none."""
+    from agent.actions.identifiers import is_component_doi
+
+    assert is_component_doi("10.1021/acsami.2c22595.s008")
+    assert is_component_doi("10.1021/acs.analchem.7b04124.s001")
+    assert not is_component_doi("10.1021/ie404055z")
+    assert not is_component_doi("10.1016/s0257-8972(99)00072-9")
+    assert not is_component_doi("10.1007/978-3-642-84511-6_5")
+    assert not is_component_doi("")
+
+
+def test_a_partial_title_needs_a_corroborating_year():
+    """CAUGHT LIVE (2026-09-03): a partial match with no year on either side
+    put a geological-samples chapter onto the DOI of the LIQUID-samples
+    chapter of the same handbook. Generic technique titles collide constantly
+    here, so a wrong identity is the likely error, not the unlikely one."""
+    rec = {
+        "title": "Laser induced breakdown spectroscopy of geological samples",
+        "year": 0,
+    }
+    work = {
+        "title": "Laser-Induced Breakdown Spectroscopy of Liquid Samples",
+        "publication_year": 2007,
+    }
+    assert not is_confident_match(work, rec)
+    # the same partial match WITH agreeing years is allowed
+    assert is_confident_match(
+        work, {**rec, "year": 2007, "title": work["title"] + " extra"}
+    )
+    # an exact title needs no year at all (a dissertation Crossref does not date)
+    exact = {
+        "title": "Preparation of transition metal oxide thin films used as solar absorbers"
+    }
+    assert is_confident_match({"title": exact["title"]}, {**exact, "year": 0})
+
+
+def test_a_long_exact_title_outranks_a_disagreeing_year():
+    """CAUGHT LIVE (2026-09-03): two correct matches carried year gaps of 2 and
+    8 years because Crossref's "issued" is the DOI REGISTRATION date for
+    back-deposited journals. A long exact title is a fingerprint; a short one
+    ("Raman spectra of quartz under pressure") describes a dozen papers."""
+    long_title = (
+        "Data report: high-resolution mineralogy for leg 199 based on "
+        "reflectance spectroscopy and physical properties"
+    )
+    assert is_confident_match(
+        {"title": long_title, "publication_year": 2006},
+        {"title": long_title, "year": 2004},
+    )
+    short = "Raman spectra of quartz under pressure"
+    assert not is_confident_match(
+        {"title": short, "publication_year": 2005}, {"title": short, "year": 2013}
+    )
+
+
+def test_an_openalex_url_is_recorded_as_its_work_number():
+    """The scraper stores the full URL; the identifier is the W-number. Two
+    packs went out carrying "https://openalex.org/W2242527..." as an identity."""
+    assert record_identifier({"openalex_id": "https://openalex.org/W2242527"}) == (
+        "W2242527",
+        "openalex",
+    )
+    assert (
+        envelope_identity({"openalex_id": "https://openalex.org/W1"})["identifier"]
+        == "W1"
+    )

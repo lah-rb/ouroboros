@@ -42,6 +42,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agent.actions.curation_actions import _curation_pending  # noqa: E402
 from agent.actions.identifiers import (  # noqa: E402
+    is_component_doi,
     is_confident_match,
     openalex_id_short,
     record_identifier,
@@ -162,7 +163,7 @@ async def lookup_crossref(effects, rec: dict) -> tuple[str, str, str]:
         if not is_confident_match(work, rec):
             continue
         doi = str(item.get("DOI") or "").strip()
-        if doi:
+        if doi and not is_component_doi(doi):
             return doi, "doi", doi
     return "", "", ""
 
