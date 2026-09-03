@@ -2619,6 +2619,10 @@ async def action_curate_book_result(step_input):
         else:
             rec["pack_status"] = "pack_failed"
             rec["failure_reason"] = f"pack: {pack.get('reason') or 'no pack state'}"
+            # Keep the window diagnostics on a FAILED pack too: which windows
+            # passed, which fabricated, at what grounding. Without this the
+            # acceptance check for windowed packing could see only successes.
+            rec["pack_quality"] = pack.get("quality") or {}
             outcome = "pack_failed"
     rec["curation_method"] = f"{_provenance_model(effects)}+{figtext_model}"
     await append_records(effects, [rec])

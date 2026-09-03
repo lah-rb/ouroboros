@@ -838,3 +838,30 @@ async def test_shape_repair_runs_inside_the_production_pack_path(monkeypatch):
         rec["pack_quality"]["shape_repairs"][0]["key"] == "raman_peak_wavenumber_cm-1"
     )
     _clear_state()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_pack_still_books_its_window_diagnostics(monkeypatch):
+    """A pack that fails every window must leave windows/windows_passed and the
+    per-window feedback on the record, or the size-binned acceptance check
+    for windowed packing can only ever see the successes."""
+    _clear_state()
+    monkeypatch.delenv("OUROBOROS_PACK_WINDOW_TOKENS", raising=False)
+    fx = MockEffects(
+        files=_bank_files([_rec("p1")], {"p1": _three_section_doc()}),
+        pool_health={"kvPoolTokens": 65536},
+        inference_responses=[
+            json.dumps({"verdict": "accept", "summary": "ok", "issues": []}),
+            json.dumps({"laser_nm": 785}),  # not in the paper
+            json.dumps({"laser_nm": 785}),  # still not
+        ],
+    )
+    out = await action_curate_drain_batch(_si(fx))
+    assert out.result["attempted"] == 1
+    rec = (await read_databank(fx))["p1"]
+    assert rec["pack_status"] == "pack_failed"
+    assert rec["failure_reason"].startswith("pack: gates failed twice")
+    q = rec["pack_quality"]
+    assert q["windows"] == 1 and q["windows_passed"] == 0 and q["parse_attempts"] == 2
+    assert "UNGROUNDED" in q["window_outcomes"][0]["feedback"]
+    _clear_state()
