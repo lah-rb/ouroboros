@@ -342,3 +342,117 @@ page + abstract + TOC (~2–12k tokens, ~30 s) → proceed | deny, denying only
 the unmistakable non-candidates the bench found the pool is full of. Doubt
 means proceed; the triage never accepts. Calibrated on the eight bench papers
 first — the two known accepts must come back "proceed".
+
+---
+
+# 2026-09-03 — Staged packing: section-bounded windows recover every paper
+
+## The question
+
+Pack success collapses with document length. Measured over 1,941 accepted
+papers (history is muse, not qwen):
+
+| doc tokens | papers | packed |
+|---|---|---|
+| <10k | 391 | 91% |
+| 10-25k | 1,082 | **96%** |
+| 25-50k | 356 | 87% |
+| 50-100k | 101 | 58% |
+| >100k | 11 | 36% |
+
+Two readings fit that curve: model recall decays with context (operator's
+hypothesis), or large documents are theses and reports that simply carry less
+packable data. The discriminator is the same papers, same model, same gates,
+one variable — the window.
+
+## The cut (operator ruling)
+
+**A window ends on a SECTION boundary, never at a length.** Then a fact split
+across two windows requires the author to have split it across two sections —
+a failure of the paper's organisation, not of our cutter. Whole sections fill
+to ~18k tokens (cap 25k); a single section over the cap becomes its own
+flagged window and is still never cut. `agent/actions/pack_windows.py`.
+
+## Result — 12/12
+
+Twelve papers that had FAILED whole-document packing, re-packed in windows
+through the production prompt, parser, canonicalisation and gates. Each
+window grounded against ITSELF (stricter than the production whole-document
+check); the merge then faces the production gates against the whole doc.
+
+| doc tok | win | pass | keys | leaves | grounding | conflicts |
+|---|---|---|---|---|---|---|
+| 51,786 | 4 | 4 | 75 | 418 | 0.995 | 3 |
+| 71,777 | 5 | 2 | 52 | 356 | 0.989 | 2 |
+| 80,394 | 5 | 4 | 49 | 385 | 0.990 | 1 |
+| 83,838 | 6 | 4 | 69 | 471 | 0.998 | 9 |
+| 85,808 | 6 | 4 | 114 | 611 | 0.995 | 7 |
+| 85,816 (Mastcam Mars) | 5 | 4 | 69 | 501 | **1.000** | 2 |
+| 87,863 | 6 | 1 | 23 | 207 | 0.981 | 0 |
+| 89,703 | 6 | 2 | 37 | 404 | 0.973 | 2 |
+| 98,324 | 6 | 3 | 45 | 545 | 0.996 | 12 |
+| 103,503 | 7 | 3 | 136 | 441 | 0.993 | 0 |
+| 105,146 | 5 | 2 | 27 | 798 | 0.995 | 1 |
+| **386,929** | 12 | 6 | 12 | **1,728** | **1.000** | 0 |
+
+**12/12 packed. 6,865 grounded values, 708 keys, in 5.4 h (median 23
+min/paper).** Merged grounding 0.973–1.000 against the whole document, median
+0.995, gate needs 0.95. The hypothesis is confirmed: these papers were never
+empty, the model could not attend to them whole. The 386,929-token paper is
+the clincher — it exceeds the 262k seat itself, so whole-document packing is
+not merely unreliable for it, it is impossible on this hardware.
+
+## Window-level behaviour is the real finding
+
+73 windows: **39 passed, 23 fabrication, 9 shape, 2 transport.**
+
+A window failing no longer sinks the paper — it costs one window. Paper 8
+passed 1 of 6 and still produced a valid 207-value pack.
+
+**Shape failures are repairable and were 17% of the yield.** Nine windows
+failed ONLY on registry shape (a peak list returned as bare numbers where the
+registry holds `list[object]`) while carrying 1,454 grounded values at
+grounding ≥0.996. The 23 fabrication failures sat at 0.32–0.93. The
+populations do not overlap, so `repair_shapes` (d0b77d8) re-wraps a grounded
+list into the registry's declared shape — inventing nothing, dropping
+nothing.
+
+## The prompt is teaching the model to fabricate
+
+**15 of 42 ungrounded values visible in gate feedback are EXACTLY the
+registry exemplar shown for that key in the pack prompt.** The registry block
+lists `emission_line_nm ... e.g. [{"wavelength_nm": 311, "sample":
+"Cervantes"}]`, and a window packed `emission_line_nm[0].wavelength_nm = 311`
+for a paper that never mentions 311 nm. Likewise `raman_spectral_range_cm-1`
+at 300–1200 and `ftir_spectral_range_cm-1_max` at 1600, exemplar values
+verbatim.
+
+Honest caveat: `xrd_wavelength_angstrom = 1.54` (Cu Kα) and `ftir_scans = 128`
+are plausible from world knowledge alone. But 311 nm as a first emission line
+is not a natural default.
+
+**Proposed, not yet tested:** strip values from the exemplars so the block
+teaches `{"wavelength_nm": <number>, "sample": <string>}` — shape without a
+copyable row. Re-pack the fabricating windows with shape-only exemplars; one
+variable, and the same windows as control.
+
+## Merge and its open question
+
+Lists concatenate (exact duplicates dropped) — peak tables merge cleanly and
+are the corpus's most valuable content. Scalars keep the FIRST value and
+record every disagreement: **39 conflicts over 12 papers, median 2.** Real
+ones look like two instruments described in different sections
+(`ftir_spectral_range_cm-1` 340–2000 vs 379–1400) or a per-section count
+meeting a global one (`sample_count` 1 vs 120). First-wins keeps the pack
+valid and loses the second reading. Promoting a conflicted scalar to a list
+carrying its source window would keep both; that is the next design call.
+
+## Operational consequences
+
+- **Review needs the whole paper; packing does not.** Windows at 15–20k fit
+  the LOCAL 65k seat, so staged packing runs on muse locally and takes the
+  Mac off the critical path for packing entirely.
+- One degeneration abort in 73 windows (`cycle period 6 x 12`, server-caught)
+  — qwen3-next is GDN-hybrid, where paragraph orbiting is a family trait.
+- Two windows lost to seat contention while the mission's remote lane was
+  live; the lane was disabled for the rest of the run and restored after.
