@@ -1502,10 +1502,19 @@ async def _curate_stateless(effects, paper_key: str, doc: str) -> dict:
 # preface, and its gates run once against the whole document -- so the
 # prompt and the turn count are byte-for-byte what they were.
 
+# The preface must not read as "pack every number in this part". The first
+# wording ("Pack ONLY values stated in THIS part") did: windowed packs coined a
+# median 25 new registry keys (p90 209) where whole-document packs coined 0
+# (p90 8-18), packing every stated quantity as its own bespoke scalar. The
+# per-window grounding gate already enforces "this part only", so the preface
+# now says what the model should DO -- pack this part as it would the whole
+# paper, in the registry's vocabulary -- and the prior_keys block hands later
+# windows the paper's own vocabulary so far.
 _PACK_PREFACE = (
-    "[This is part {n} of {total} of one paper — {sections} consecutive "
-    'section(s) starting at "{heading}". Pack ONLY values stated in THIS '
-    "part; other parts are packed separately and merged.]\n\n"
+    "[Part {n} of {total} of one paper — {sections} consecutive section(s) "
+    'starting at "{heading}". Pack this part as you would the whole paper, '
+    "with the same selectivity and the registry's vocabulary; values are "
+    "checked against this part only, and the parts are merged afterwards.]\n\n"
 )
 
 
@@ -1578,15 +1587,19 @@ async def _pack_windowed(effects, doc: str, registry: dict) -> dict:
         gates: dict = {"passed": False, "feedback": ""}
         data = None
         w_attempts = 0
+        # The paper's own vocabulary so far: keys the earlier windows packed.
+        # Absent on the first window (and so on every single-window paper),
+        # which keeps that prompt byte-identical to the pre-windowing one.
+        prior_keys = sorted({k for pk in passed_packs for k in pk})
         for _ in range(2):  # attempt 2 renders with attempt 1's gate findings
             w_attempts += 1
-            pack_prompt = await _render_prompt(
-                "curator/pack_data",
-                {
-                    "key_registry_block": format_key_registry(registry),
-                    "gate_feedback": feedback,
-                },
-            )
+            ctx = {
+                "key_registry_block": format_key_registry(registry),
+                "gate_feedback": feedback,
+            }
+            if prior_keys:
+                ctx["prior_keys"] = ", ".join(prior_keys[:120])
+            pack_prompt = await _render_prompt("curator/pack_data", ctx)
             text = await _curate_turn(
                 effects, preface + w.text + "\n\n---\n\n" + pack_prompt, 8192
             )

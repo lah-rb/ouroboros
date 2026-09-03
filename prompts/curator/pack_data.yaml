@@ -30,6 +30,14 @@ sections:
 
       {context.key_registry_block}
 
+  - id: prior_keys
+    when: context.prior_keys
+    content: |
+      Keys ALREADY USED by earlier parts of THIS paper — reuse them for the
+      same quantities rather than coining a variant spelling:
+
+      {context.prior_keys}
+
   - id: instruction
     content: |
       Extract the paper's useful RAW DATA into one flat-ish JSON object:
