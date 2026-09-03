@@ -1449,13 +1449,24 @@ async def action_mine_bibliographies(step_input: StepInput) -> StepOutput:
     reviews_mined = 0
     now = _now_iso()
     for rec in pend[:budget]:
-        rec = dict(rec)
+        key = str(rec.get("paper_key") or "")
         if rec.get("review_status") != "accepted":
             reviews_mined += 1
         path = rec.get("md_en_path") or rec.get("md_path")
         fc = await effects.read_file(str(path))
         text = fc.content if getattr(fc, "exists", False) else ""
         found = extract_reference_dois(text)
+        # APPEND THE RECORD AS IT IS NOW, NOT AS IT WAS WHEN THIS ROUND
+        # BEGAN. The file read above is a yield point, and the curate lanes
+        # book verdicts and pack outcomes into the same records during this
+        # loop; appending the round-start snapshot (last-row-replaces) wrote
+        # the stale copy over them. Measured 2026-09-02: 11 of 15 pack
+        # failure reasons booked that day were erased minutes later by this
+        # lane, so the operator's diagnostic read "" or the extraction
+        # sidecar's text instead of the pack gate's finding. Re-read the
+        # record and change only the two fields this lane owns.
+        fresh = (await read_databank(effects)).get(key)
+        rec = dict(fresh) if fresh else dict(rec)
         merged = list(dict.fromkeys((rec.get("reference_dois") or []) + found))
         prior = len(rec.get("reference_dois") or [])
         rec["reference_dois"] = merged[:MAX_REFERENCE_DOIS]
