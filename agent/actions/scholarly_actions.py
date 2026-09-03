@@ -1456,16 +1456,28 @@ async def action_mine_bibliographies(step_input: StepInput) -> StepOutput:
         fc = await effects.read_file(str(path))
         text = fc.content if getattr(fc, "exists", False) else ""
         found = extract_reference_dois(text)
-        # APPEND THE RECORD AS IT IS NOW, NOT AS IT WAS WHEN THIS ROUND
-        # BEGAN. The file read above is a yield point, and the curate lanes
-        # book verdicts and pack outcomes into the same records during this
-        # loop; appending the round-start snapshot (last-row-replaces) wrote
-        # the stale copy over them. Measured 2026-09-02: 11 of 15 pack
-        # failure reasons booked that day were erased minutes later by this
-        # lane, so the operator's diagnostic read "" or the extraction
-        # sidecar's text instead of the pack gate's finding. Re-read the
-        # record and change only the two fields this lane owns.
-        fresh = (await read_databank(effects)).get(key)
+        # APPEND THE RECORD AS IT IS NOW, AND FROM THE FILE BEING WRITTEN.
+        #
+        # Two separate bugs live here, and fixing only the first left the
+        # symptom in place.
+        #
+        # (1) STALENESS. The file read above is a yield point, and the curate
+        # lanes book verdicts and pack outcomes into the same records during
+        # this loop; appending the round-start snapshot wrote the stale copy
+        # over them (_read_jsonl_records does `records[key] = rec` -- last row
+        # REPLACES the whole record, so a stale row is not a partial update,
+        # it is a rollback).
+        #
+        # (2) THE WRONG FILE. `read_databank` returns papers.jsonl OVERLAID
+        # with the extraction sidecar, and failure_reason is sidecar-owned but
+        # `append_records` deliberately passes it through as a shared field.
+        # So a fresh MERGED read hands back the sidecar's failure_reason
+        # (usually "") and writes it to papers.jsonl over the pack gate's
+        # finding. Measured 2026-09-02: 11 of 15 pack failure reasons erased;
+        # measured again 2026-09-03 AFTER fixing (1) alone: still erased.
+        #
+        # A writer to papers.jsonl re-reads papers.jsonl.
+        fresh = (await _read_jsonl_records(effects, DATABANK_PATH)).get(key)
         rec = dict(fresh) if fresh else dict(rec)
         merged = list(dict.fromkeys((rec.get("reference_dois") or []) + found))
         prior = len(rec.get("reference_dois") or [])

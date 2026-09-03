@@ -395,9 +395,22 @@ async def test_mining_appends_the_records_current_state_not_the_round_snapshot()
         "pack_status": "",
         "failure_reason": "",
     }
+    # The extraction sidecar carries failure_reason (it OWNS the field) and
+    # here carries it EMPTY -- the un-parked cohort's shape. A fresh MERGED
+    # read therefore hands back "" for it, and append_records passes
+    # failure_reason through to papers.jsonl as a shared field. That is what
+    # defeated the first version of this fix.
     fx = MockEffects(
         files={
             "databank/papers.jsonl": json.dumps(rec) + "\n",
+            "databank/extraction.jsonl": json.dumps(
+                {
+                    "paper_key": "p1",
+                    "extraction_status": "extracted",
+                    "failure_reason": "",
+                }
+            )
+            + "\n",
             "databank/markdown/p1.md": "text\n\n## References\n\n1. doi:10.1000/abc\n",
         }
     )
@@ -420,10 +433,18 @@ async def test_mining_appends_the_records_current_state_not_the_round_snapshot()
     fx.read_file = _read_then_book
     out = await action_mine_bibliographies(_si(fx, {"budget": 5}))
     assert out.result["mined"] == 1
-    after = (await read_databank(fx))["p1"]
+
+    # Assert on the PAPERS-SIDE record: that is the file this lane appends to,
+    # and the only place the pack booking's failure_reason exists. The merged
+    # view shows the sidecar's copy of that field either way (pre-existing
+    # overlay semantics), so asserting there cannot see this bug at all.
+    from agent.actions.scholarly_actions import DATABANK_PATH, _read_jsonl_records
+
+    after = (await _read_jsonl_records(fx, DATABANK_PATH))["p1"]
     assert after["biblio_mined_at"], "the lane must still stamp its own field"
     assert after["reference_dois"] == ["10.1000/abc"]
     assert after["pack_status"] == "pack_failed", "the concurrent booking was clobbered"
     assert after["failure_reason"].startswith(
         "pack: gates failed twice"
-    ), "the pack gate's finding was erased by a stale-snapshot append"
+    ), "the pack gate's finding was erased by a stale/merged-read append"
+    assert after["title"] == "Paper", "an unrelated papers-side field was dropped"
