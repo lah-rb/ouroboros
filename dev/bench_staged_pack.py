@@ -50,6 +50,7 @@ from agent.actions.pack_windows import (  # noqa: E402
     DEFAULT_TARGET_TOKENS,
     MergeReport,
     merge_packs,
+    repair_shapes,
     window_sections,
 )
 from agent.actions.scholarly_actions import read_databank  # noqa: E402
@@ -118,7 +119,14 @@ def candidates(bank: dict, root: str, lo: int, hi: int) -> list[tuple[int, str, 
     return out
 
 
-async def pack_window(fx, win_text: str, registry: dict, aliases: dict, preface: str):
+async def pack_window(
+    fx,
+    win_text: str,
+    registry: dict,
+    aliases: dict,
+    preface: str,
+    a_no_repair: bool = False,
+):
     """The production pack turn, applied to one window, gated on that window."""
     feedback = ""
     attempts = 0
@@ -134,8 +142,11 @@ async def pack_window(fx, win_text: str, registry: dict, aliases: dict, preface:
         text = await _curate_turn(fx, preface + win_text + "\n\n---\n\n" + prompt, 8192)
         parsed = parse_llm_json(text)
         data = parsed if isinstance(parsed, dict) and parsed else None
+        repairs: list[dict] = []
         if data is not None:
             data = canonicalize_pack_keys(data, aliases)
+            if not a_no_repair:
+                data, repairs = repair_shapes(data, registry)
         gates = (
             _run_pack_gates(data, win_text, registry)
             if data is not None
@@ -145,6 +156,7 @@ async def pack_window(fx, win_text: str, registry: dict, aliases: dict, preface:
                 "grounding": {},
             }
         )
+        gates["repairs"] = repairs
         if gates["passed"]:
             return data, gates, attempts
         feedback = gates["feedback"]
@@ -206,7 +218,7 @@ async def main_async(a) -> int:
             )
             try:
                 data, gates, attempts = await pack_window(
-                    fx, w.text, registry, aliases, preface
+                    fx, w.text, registry, aliases, preface, a.no_repair
                 )
             except Exception as e:  # noqa: BLE001
                 per.append(dict(window=w.index, tokens=w.tokens, error=str(e)[:200]))
@@ -223,6 +235,8 @@ async def main_async(a) -> int:
                     sections=w.section_count,
                     passed=bool(gates["passed"]),
                     attempts=attempts,
+                    repairs=gates.get("repairs") or [],
+                    data=data,
                     grounding_rate=g.get("grounding_rate"),
                     numeric_leaves=g.get("numeric_leaves"),
                     keys=len(data or {}),
@@ -313,6 +327,9 @@ def main() -> int:
     ap.add_argument("--min-tokens", type=int, default=50_000)
     ap.add_argument("--max-tokens", type=int, default=10**9)
     ap.add_argument("--target", type=int, default=DEFAULT_TARGET_TOKENS)
+    ap.add_argument(
+        "--no-repair", action="store_true", help="skip repair_shapes before the gates"
+    )
     ap.add_argument("--cap", type=int, default=DEFAULT_MAX_TOKENS)
     ap.add_argument("--out", default=os.path.expanduser("~/tmp/bench_staged_pack.json"))
     return asyncio.run(main_async(ap.parse_args()))
