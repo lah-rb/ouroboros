@@ -456,3 +456,26 @@ carrying its source window would keep both; that is the next design call.
   — qwen3-next is GDN-hybrid, where paragraph orbiting is a family trait.
 - Two windows lost to seat contention while the mission's remote lane was
   live; the lane was disabled for the rest of the run and restored after.
+
+## 2026-09-03 — Wired into production as THE pack path
+
+Operator ruling: "there is no reason to maintain the un-windowed strategy
+going forward." `_curate_stateless` now calls `_pack_windowed` for every
+paper. Per window: production pack prompt + prior gate findings, two attempts,
+`canonicalize_pack_keys` → `repair_shapes` → gates against THE WINDOW. Passed
+windows merge (lists concatenate, dicts merge, scalars first-wins with every
+conflict recorded in `pack_quality.window_conflicts`); the merge then faces
+the production gates against the whole document. `pack_quality` carries
+`windows`, `windows_passed`, `shape_repairs`, `window_outcomes`.
+
+**Small papers are unchanged by construction, pinned by test:** a document
+under the window target is exactly one window, a single window carries no
+part-of-N preface, and its gates run once against the whole document — so the
+pack prompt and the turn count are byte-for-byte what they were
+(`test_a_small_paper_is_one_window_and_the_prompt_is_unchanged`). Window
+sizes: `OUROBOROS_PACK_WINDOW_TOKENS` (default 18,000) /
+`OUROBOROS_PACK_WINDOW_CAP` (25,000).
+
+Open: scalar conflicts stay first-wins (recorded, not resolved); the
+exemplar-value leak is under A/B (`dev/bench_exemplar_leak.py`) — if
+confirmed, the registry block shows shapes, not copyable rows.

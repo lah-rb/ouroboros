@@ -680,3 +680,161 @@ def test_provenance_names_the_lane_domain_model_not_the_local_config():
     assert _provenance_model(_LaneFx("curate_remote", {"curate_remote": {}})) == (
         _active_text_model()
     )
+
+
+# ── Windowed packing is THE pack path ────────────────────────────────
+
+
+def _three_section_doc() -> str:
+    return (
+        "# Paper\n\nIntro text with no numbers.\n\n"
+        "## Methods\n\nRaman spectra were collected at 532 nm on quartz with 10 accumulations.\n\n"
+        "## Results\n\nPeaks at 465 and 1091 cm-1 were observed for the quartz sample.\n\n"
+        "## Discussion\n\nThe 465 band is the A1 mode; the sample count was 3.\n\n"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_small_paper_is_one_window_and_the_prompt_is_unchanged(monkeypatch):
+    """The un-windowed strategy is gone (operator, 2026-09-03), so small papers
+    must come through the windowed path BYTE-IDENTICAL: one window, no
+    part-of-N preface, gates once against the whole doc."""
+    import agent.actions.curation_actions as CA
+
+    _clear_state()
+    monkeypatch.delenv("OUROBOROS_PACK_WINDOW_TOKENS", raising=False)
+    doc = _three_section_doc()
+    seen: list[str] = []
+    real_turn = CA._curate_turn
+
+    async def _capture(effects, prompt, max_tokens):
+        seen.append(prompt)
+        return await real_turn(effects, prompt, max_tokens)
+
+    monkeypatch.setattr(CA, "_curate_turn", _capture)
+    fx = MockEffects(
+        files=_bank_files([_rec("p1")], {"p1": doc}),
+        pool_health={"kvPoolTokens": 65536},
+        inference_responses=[
+            json.dumps({"verdict": "accept", "summary": "ok", "issues": []}),
+            json.dumps({"laser_nm": 532, "raman_peak_wavenumber_cm-1": [465, 1091]}),
+        ],
+    )
+    out = await action_curate_drain_batch(_si(fx))
+    assert out.result["attempted"] == 1
+    bank = await read_databank(fx)
+    assert bank["p1"]["pack_status"] == "packed"
+    q = bank["p1"]["pack_quality"]
+    assert q["windows"] == 1 and q["windows_passed"] == 1
+    pack_prompts = [
+        p for p in seen if "curator packing raw data" in p or "RAW DATA" in p
+    ]
+    assert len(pack_prompts) == 1, "one window -> exactly one pack turn"
+    assert not pack_prompts[0].startswith(
+        "[This is part"
+    ), "no preface on a single window"
+    assert doc.strip()[:40] in pack_prompts[0][:400], "the doc itself opens the prompt"
+    _clear_state()
+
+
+@pytest.mark.asyncio
+async def test_a_large_paper_packs_window_by_window_and_a_fabricating_window_costs_only_itself(
+    monkeypatch,
+):
+    import agent.actions.curation_actions as CA
+
+    _clear_state()
+    # Sections run ~12-30 tokens; target 20 / cap 60 -> every section is its
+    # own window (a 12-token lead plus a 27-token Methods would exceed 20).
+    monkeypatch.setenv("OUROBOROS_PACK_WINDOW_TOKENS", "20")
+    monkeypatch.setenv("OUROBOROS_PACK_WINDOW_CAP", "60")
+    doc = _three_section_doc()
+    seen: list[str] = []
+    real_turn = CA._curate_turn
+
+    async def _capture(effects, prompt, max_tokens):
+        seen.append(prompt)
+        return await real_turn(effects, prompt, max_tokens)
+
+    monkeypatch.setattr(CA, "_curate_turn", _capture)
+    fx = MockEffects(
+        files=_bank_files([_rec("p1")], {"p1": doc}),
+        pool_health={"kvPoolTokens": 65536},
+        inference_responses=[
+            json.dumps({"verdict": "accept", "summary": "ok", "issues": []}),
+            json.dumps(
+                {}
+            ),  # w0 (title/intro): nothing -> not a JSON object with content
+            json.dumps({}),  # w0 retry
+            json.dumps({"laser_nm": 532, "accumulations": 10}),  # w1 methods: grounded
+            json.dumps(
+                {"raman_peak_wavenumber_cm-1": [465, 1091], "laser_nm": 785}
+            ),  # w2: fabricated 785
+            json.dumps(
+                {"raman_peak_wavenumber_cm-1": [465, 1091], "laser_nm": 785}
+            ),  # w2 retry: still fabricating
+            json.dumps(
+                {"raman_peak_wavenumber_cm-1": [465], "sample_count": 3}
+            ),  # w3 discussion: grounded
+        ],
+    )
+    out = await action_curate_drain_batch(_si(fx))
+    assert out.result["attempted"] == 1
+    bank = await read_databank(fx)
+    rec = bank["p1"]
+    assert rec["pack_status"] == "packed", rec.get("failure_reason")
+    q = rec["pack_quality"]
+    assert q["windows"] == 4 and q["windows_passed"] == 2, q["window_outcomes"]
+    packed = json.loads(fx._files[rec["dataset_path"]])["data"]
+    assert packed["laser_nm"] == 532, "the fabricated 785 nm never reached the pack"
+    assert packed["raman_peak_wavenumber_cm-1"] == [
+        465
+    ], "only the grounded window's peaks merged"
+    assert packed["sample_count"] == 3 and packed["accumulations"] == 10
+    prefaced = [p for p in seen if p.startswith("[This is part")]
+    assert (
+        len(prefaced) == 6
+    ), "every pack turn on a multi-window doc carries its part-of-N preface"
+    assert "part 2 of 4" in prefaced[2]
+    _clear_state()
+
+
+@pytest.mark.asyncio
+async def test_shape_repair_runs_inside_the_production_pack_path(monkeypatch):
+    """A grounded peak list returned as bare numbers where the registry holds
+    list[object] is re-wrapped before the gates -- 1,454 grounded values were
+    lost to exactly this in the staged-pack run."""
+    _clear_state()
+    monkeypatch.delenv("OUROBOROS_PACK_WINDOW_TOKENS", raising=False)
+    from agent.actions.curation_actions import KEY_REGISTRY_PATH
+
+    registry = {
+        "raman_peak_wavenumber_cm-1": {
+            "type": "list[object]",
+            "count": 5,
+            "exemplar": '[{"peak_cm-1": 1295, "assignment": "CH2"}]',
+        }
+    }
+    files = _bank_files([_rec("p1")], {"p1": _three_section_doc()})
+    files[KEY_REGISTRY_PATH] = json.dumps(registry)
+    fx = MockEffects(
+        files=files,
+        pool_health={"kvPoolTokens": 65536},
+        inference_responses=[
+            json.dumps({"verdict": "accept", "summary": "ok", "issues": []}),
+            json.dumps({"raman_peak_wavenumber_cm-1": [465, 1091]}),  # bare numbers
+        ],
+    )
+    out = await action_curate_drain_batch(_si(fx))
+    assert out.result["attempted"] == 1
+    rec = (await read_databank(fx))["p1"]
+    assert rec["pack_status"] == "packed", rec.get("failure_reason")
+    packed = json.loads(fx._files[rec["dataset_path"]])["data"]
+    assert packed["raman_peak_wavenumber_cm-1"] == [
+        {"peak_cm-1": 465},
+        {"peak_cm-1": 1091},
+    ]
+    assert (
+        rec["pack_quality"]["shape_repairs"][0]["key"] == "raman_peak_wavenumber_cm-1"
+    )
+    _clear_state()

@@ -1482,59 +1482,210 @@ async def _curate_stateless(effects, paper_key: str, doc: str) -> dict:
         return state
 
     registry = await _load_registry(effects)
-    attempts = 0
-    gates: dict = {"passed": False, "feedback": ""}
-    data = None
-    feedback = ""
-    for _ in range(2):  # attempt 2 renders with attempt 1's gate findings
-        attempts += 1
-        pack_prompt = await _render_prompt(
-            "curator/pack_data",
-            {
-                "key_registry_block": format_key_registry(registry),
-                "gate_feedback": feedback,
-            },
-        )
-        text = await _curate_turn(effects, doc + "\n\n---\n\n" + pack_prompt, 8192)
-        parsed = parse_llm_json(text)
-        data = parsed if isinstance(parsed, dict) and parsed else None
-        if data is not None:
-            data = canonicalize_pack_keys(data, await load_key_aliases(effects))
-        gates = (
-            _run_pack_gates(data, doc, registry)
-            if data is not None
-            else {"passed": False, "feedback": "output was not a JSON object"}
-        )
-        if gates["passed"]:
-            break
-        feedback = gates["feedback"]
+    state["pack"] = await _pack_windowed(effects, doc, registry)
+    return state
 
-    if not gates["passed"]:
-        state["pack"] = {
+
+# ── Windowed packing ─────────────────────────────────────────────────
+#
+# THE ONLY PACKING PATH (operator ruling 2026-09-03: "no reason to maintain
+# the un-windowed strategy"). Pack success collapses with document length on
+# every model -- 96% at 10-25k tokens, 58% at 50-100k, 36% over 100k,
+# measured over 1,941 accepted papers -- and the failures are the grounding
+# gate rejecting numbers the paper never states: the model stops attending
+# and starts completing the schema. Section-bounded windows recovered 12/12
+# papers whole-document packing had failed (6,865 grounded values, one of
+# them a 387k-token document no seat could hold).
+#
+# Small papers are unchanged BY CONSTRUCTION: a document under the window
+# target is exactly one window, a single window carries no part-of-N
+# preface, and its gates run once against the whole document -- so the
+# prompt and the turn count are byte-for-byte what they were.
+
+_PACK_PREFACE = (
+    "[This is part {n} of {total} of one paper — {sections} consecutive "
+    'section(s) starting at "{heading}". Pack ONLY values stated in THIS '
+    "part; other parts are packed separately and merged.]\n\n"
+)
+
+
+def _pack_window_sizes() -> tuple[int, int]:
+    """(target, cap) tokens; env overrides for ops and tests."""
+    from agent.actions.pack_windows import DEFAULT_MAX_TOKENS, DEFAULT_TARGET_TOKENS
+
+    def _env(name: str, default: int) -> int:
+        raw = os.environ.get(name, "").strip()
+        try:
+            return max(1, int(raw)) if raw else default
+        except ValueError:
+            return default
+
+    target = _env("OUROBOROS_PACK_WINDOW_TOKENS", DEFAULT_TARGET_TOKENS)
+    cap = max(target, _env("OUROBOROS_PACK_WINDOW_CAP", DEFAULT_MAX_TOKENS))
+    return target, cap
+
+
+async def _pack_windowed(effects, doc: str, registry: dict) -> dict:
+    """Pack a curator doc window by window; returns the book_result pack state.
+
+    Per window: the production pack prompt (registry block + the previous
+    attempt's gate findings), two attempts, output canonicalised then
+    re-shaped (repair_shapes: a grounded list in the wrong wrapper is a
+    wrapper problem, not a data problem), gates run against THE WINDOW --
+    stricter than the whole-document check, and the one that stops a number
+    invented while reading the methods being excused by text in the
+    appendix. Passed windows merge (lists concatenate, dicts merge, scalars
+    first-wins with every disagreement recorded); the merge then faces the
+    production gates against the whole document. A window that fails costs
+    that window, not the paper.
+    """
+    from agent.actions.pack_windows import (
+        MergeReport,
+        merge_packs,
+        repair_shapes,
+        window_sections,
+    )
+    from agent.llm_json import parse_llm_json
+
+    target, cap = _pack_window_sizes()
+    windows = window_sections(doc, target, cap)
+    if not windows:
+        return {
             "status": "pack_failed",
-            "reason": f"gates failed twice: {gates['feedback'][:300]}",
+            "reason": "empty document",
+            "attempts": 0,
+            "quality": {"parse_attempts": 0},
+        }
+    aliases = await load_key_aliases(effects)
+    multi = len(windows) > 1
+    attempts = 0
+    passed_packs: list[dict] = []
+    outcomes: list[dict] = []
+    repairs_all: list[dict] = []
+    last_gates: dict = {"passed": False, "feedback": ""}
+    for w in windows:
+        preface = (
+            _PACK_PREFACE.format(
+                n=w.index + 1,
+                total=len(windows),
+                sections=w.section_count,
+                heading=w.first_heading,
+            )
+            if multi
+            else ""
+        )
+        feedback = ""
+        gates: dict = {"passed": False, "feedback": ""}
+        data = None
+        w_attempts = 0
+        for _ in range(2):  # attempt 2 renders with attempt 1's gate findings
+            w_attempts += 1
+            pack_prompt = await _render_prompt(
+                "curator/pack_data",
+                {
+                    "key_registry_block": format_key_registry(registry),
+                    "gate_feedback": feedback,
+                },
+            )
+            text = await _curate_turn(
+                effects, preface + w.text + "\n\n---\n\n" + pack_prompt, 8192
+            )
+            parsed = parse_llm_json(text)
+            data = parsed if isinstance(parsed, dict) and parsed else None
+            repairs: list[dict] = []
+            if data is not None:
+                data = canonicalize_pack_keys(data, aliases)
+                data, repairs = repair_shapes(data, registry)
+            gates = (
+                _run_pack_gates(data, w.text, registry)
+                if data is not None
+                else {"passed": False, "feedback": "output was not a JSON object"}
+            )
+            if gates["passed"]:
+                break
+            feedback = gates["feedback"]
+        attempts += w_attempts
+        last_gates = gates
+        g = gates.get("grounding") or {}
+        outcomes.append(
+            {
+                "window": w.index,
+                "tokens": w.tokens,
+                "sections": w.section_count,
+                "oversize": w.oversize,
+                "passed": bool(gates["passed"]),
+                "attempts": w_attempts,
+                "grounding_rate": g.get("grounding_rate"),
+                "numeric_leaves": g.get("numeric_leaves"),
+                "feedback": (
+                    "" if gates["passed"] else str(gates.get("feedback") or "")[:300]
+                ),
+            }
+        )
+        if gates["passed"] and data:
+            passed_packs.append(data)
+            repairs_all.extend(repairs)
+
+    if not passed_packs:
+        return {
+            "status": "pack_failed",
+            "reason": (
+                f"gates failed twice: {last_gates.get('feedback', '')[:300]}"
+                if not multi
+                else f"no window passed ({len(windows)} windows): "
+                f"{last_gates.get('feedback', '')[:240]}"
+            ),
             "attempts": attempts,
             "quality": {
-                "grounding_rate": gates.get("grounding", {}).get("grounding_rate"),
+                "grounding_rate": (last_gates.get("grounding") or {}).get(
+                    "grounding_rate"
+                ),
                 "parse_attempts": attempts,
+                "windows": len(windows),
+                "windows_passed": 0,
+                "window_outcomes": outcomes,
             },
         }
-        return state
-    state["pack"] = {
+
+    report = MergeReport()
+    if multi:
+        merged = merge_packs(passed_packs, report)
+        final = _run_pack_gates(merged, doc, registry)
+    else:
+        merged = passed_packs[0]
+        final = last_gates  # one window IS the document; do not re-run the gates
+    if not final["passed"]:
+        return {
+            "status": "pack_failed",
+            "reason": f"merged pack failed the whole-document gates: {final['feedback'][:300]}",
+            "attempts": attempts,
+            "quality": {
+                "grounding_rate": (final.get("grounding") or {}).get("grounding_rate"),
+                "parse_attempts": attempts,
+                "windows": len(windows),
+                "windows_passed": len(passed_packs),
+                "window_outcomes": outcomes,
+            },
+        }
+    return {
         "status": "packed",
-        "data": data,
+        "data": merged,
         "attempts": attempts,
         "quality": {
-            "grounding_rate": gates["grounding"]["grounding_rate"],
-            "numeric_leaves": gates["grounding"]["numeric_leaves"],
-            "ungrounded": gates["grounding"]["ungrounded"],
-            "new_keys": len(gates["registry"]["new_keys"]),
-            "reused_keys": len(gates["registry"]["reused_keys"]),
-            "near_duplicate_flags": gates["near_dups"],
+            "grounding_rate": final["grounding"]["grounding_rate"],
+            "numeric_leaves": final["grounding"]["numeric_leaves"],
+            "ungrounded": final["grounding"]["ungrounded"],
+            "new_keys": len(final["registry"]["new_keys"]),
+            "reused_keys": len(final["registry"]["reused_keys"]),
+            "near_duplicate_flags": final["near_dups"],
             "parse_attempts": attempts,
+            "windows": len(windows),
+            "windows_passed": len(passed_packs),
+            "window_conflicts": report.conflicts[:25],
+            "shape_repairs": repairs_all[:25],
+            "window_outcomes": outcomes,
         },
     }
-    return state
 
 
 async def action_curate_drain_batch(step_input):
