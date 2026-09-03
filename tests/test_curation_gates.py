@@ -357,3 +357,18 @@ def test_comma_convention_survives_a_point_heavy_markup_document():
     doc = f"doi 10.5281/zenodo.6790073 v1.0 rev 2.3 tabla 1.2 {body}"
     result = grounding_check({"sio2": 57.65, "al2o3": 13.69, "sat": 45.3}, doc)
     assert result["passed"], result
+
+
+def test_a_registry_entry_typed_bare_list_accepts_any_list():
+    """CAUGHT LIVE (2026-09-03): a window grounding 547 values at 0.998 was
+    thrown away because xps_peak_binding_energy_ev is registered `list` (its
+    first paper's value was a mixed list) and the pack sent `list[object]`.
+    An entry that says "a list of things" cannot refuse a list of one kind."""
+    from agent.actions.curation_actions import _types_compatible
+
+    assert _types_compatible("list", "list[object]")
+    assert _types_compatible("list", "list[number]")
+    assert _types_compatible("list[object]", "list")
+    # real drift is still refused
+    assert not _types_compatible("number", "string")
+    assert not _types_compatible("object", "number")

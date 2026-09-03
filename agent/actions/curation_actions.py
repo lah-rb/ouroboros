@@ -301,7 +301,16 @@ def _types_compatible(expected: str, actual: str) -> bool:
     scalar (live: lattice_parameter_angstrom, one phase then three).
     Real drift (number vs string) still fails.
     """
-    return actual == f"list[{expected}]" or expected == f"list[{actual}]"
+    if actual == f"list[{expected}]" or expected == f"list[{actual}]":
+        return True
+    # A registry entry typed bare "list" was pinned by a paper whose value was
+    # a MIXED list, so it says "a list of things" and cannot then refuse a list
+    # of one kind of thing. Measured 2026-09-03: a window grounding 547 values
+    # at 0.998 was thrown away because xps_peak_binding_energy_ev is registered
+    # `list` and the pack sent `list[object]`.
+    return "list" in (expected, actual) and (
+        expected.startswith("list") and actual.startswith("list")
+    )
 
 
 def registry_check(data: dict, registry: dict) -> dict:

@@ -197,10 +197,26 @@ def merge_packs(
 # is safe: the numbers were in the paper; only the wrapper was missing.
 
 
-def _exemplar_field(entry: dict) -> str | None:
-    """The first numeric-valued field name in a registry entry's exemplar --
-    the key the registry itself uses for the position ("peak_cm-1",
-    "wavelength_nm", "peak_2theta_deg")."""
+def _field_affinity(field: str, key: str) -> int:
+    """How strongly a field name belongs to a registry key. Higher is better."""
+    f = re.sub(r"[^a-z0-9]+", " ", field.lower()).split()
+    k = re.sub(r"[^a-z0-9]+", " ", key.lower()).split()
+    shared = len(set(f) & set(k))
+    # "peak"/"value"/"wavelength" name the POSITION a bare list carries;
+    # a condition field ("sintering_temperature_c") names something else
+    # entirely and must never win by being listed first.
+    return shared * 10 + (3 if f and f[0] in ("peak", "value", "wavelength") else 0)
+
+
+def _exemplar_field(entry: dict, key: str = "") -> str | None:
+    """The exemplar field a bare list's values belong in.
+
+    CHOSEN BY NAME AFFINITY WITH THE KEY, not by position. Measured
+    2026-09-03: the exemplar for `xrd_peaks_2theta_deg` is
+    `{"sintering_temperature_c": 850, "phase": ..., "peak_2theta_deg": 34.32}`,
+    and taking the first numeric field wrapped 2-theta values as SINTERING
+    TEMPERATURES -- a silent corruption, and worse than not repairing at all.
+    """
     ex = entry.get("exemplar")
     if isinstance(ex, str):
         try:
@@ -218,10 +234,19 @@ def _exemplar_field(entry: dict) -> str | None:
         ex = next((e for e in ex if isinstance(e, dict)), None)
     if not isinstance(ex, dict):
         return None
-    for k, v in ex.items():
-        if isinstance(v, (int, float)) and not isinstance(v, bool):
-            return k
-    return next(iter(ex), None)
+    numeric = [
+        k
+        for k, v in ex.items()
+        if isinstance(v, (int, float)) and not isinstance(v, bool)
+    ]
+    if not numeric:
+        return next(iter(ex), None)
+    best = max(numeric, key=lambda f: _field_affinity(f, key))
+    if key and _field_affinity(best, key) == 0 and len(numeric) > 1:
+        # Several numeric fields and none of them belongs to this key: any
+        # choice would be a guess, and a guess here mislabels real data.
+        return None
+    return best
 
 
 def repair_shapes(data: dict, registry: dict) -> tuple[dict, list[dict]]:
@@ -238,7 +263,7 @@ def repair_shapes(data: dict, registry: dict) -> tuple[dict, list[dict]]:
         entry = registry.get(key)
         if not entry or str(entry.get("type") or "") != "list[object]":
             continue
-        field = _exemplar_field(entry)
+        field = _exemplar_field(entry, key)
         if isinstance(value, list):
             if all(isinstance(v, dict) for v in value):
                 continue

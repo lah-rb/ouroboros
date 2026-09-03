@@ -156,3 +156,38 @@ def test_shape_repair_wraps_a_lone_object_or_scalar_into_a_list():
     fixed, rep = repair_shapes({"emission_line_nm": 766.5}, registry)
     assert fixed["emission_line_nm"] == [{"wavelength_nm": 766.5}]
     assert [r["from"] for r in rep] == ["scalar"]
+
+
+def test_the_exemplar_field_is_chosen_by_affinity_not_position():
+    """CAUGHT LIVE (2026-09-03): the exemplar for xrd_peaks_2theta_deg is
+    {"sintering_temperature_c": 850, "phase": ..., "peak_2theta_deg": 34.32},
+    and taking the first numeric field wrapped 2-theta values as SINTERING
+    TEMPERATURES -- a silent corruption, worse than not repairing."""
+    from agent.actions.pack_windows import repair_shapes
+
+    registry = {
+        "xrd_peaks_2theta_deg": {
+            "type": "list[object]",
+            "exemplar": '[{"sintering_temperature_c": 850, "phase": "CaH2O2", "peak_2theta_deg": 34.32}]',
+        }
+    }
+    fixed, _ = repair_shapes({"xrd_peaks_2theta_deg": [25.8, 31.7]}, registry)
+    assert fixed["xrd_peaks_2theta_deg"] == [
+        {"peak_2theta_deg": 25.8},
+        {"peak_2theta_deg": 31.7},
+    ]
+
+
+def test_an_unrelatable_exemplar_is_left_alone_rather_than_guessed():
+    """Several numeric fields and none belongs to the key: any choice
+    mislabels real data, so the repair declines and the gate decides."""
+    from agent.actions.pack_windows import repair_shapes
+
+    registry = {
+        "mystery_values": {
+            "type": "list[object]",
+            "exemplar": '[{"pressure_gpa": 2, "duration_h": 5}]',
+        }
+    }
+    fixed, repairs = repair_shapes({"mystery_values": [1, 2]}, registry)
+    assert fixed["mystery_values"] == [1, 2] and repairs == []
