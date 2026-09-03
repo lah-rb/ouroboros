@@ -497,3 +497,39 @@ confirmed, the registry block shows shapes, not copyable rows.
   conflicting scalars to a list would absorb. Fix committed (fb801b5: softened
   preface + `prior_keys` block), held for measurement against the production
   packs of the two high-coinage papers.
+
+## Exemplar leak: a real but small effect — REFUTED as a lever (2026-09-03)
+
+The pack prompt lists each registry key with a real example value
+(`emission_line_nm ... e.g. [{"wavelength_nm": 311, "sample": "Cervantes"}]`).
+15 of 42 ungrounded values in the staged-pack run were exactly such an
+exemplar, so: re-pack all 23 fabricating windows twice, control = the
+production block, treatment = the same block with VALUES replaced by type
+placeholders (`{"wavelength_nm": <number>}`). Same window, same model,
+alternating arm order. `dev/bench_exemplar_leak.py`.
+
+| | control | treatment |
+|---|---|---|
+| grounding, mean / median | 0.780 / 0.856 | 0.824 / 0.899 |
+| windows passed | 4/20 | 5/20 |
+| ungrounded values | 214 | 191 |
+| ...of those matching an exemplar | 34 (16%) | 19 (10%) |
+
+Paired difference +0.045 grounding, 11 windows better / 8 worse.
+**Wilcoxon p = 0.37, sign test p = 0.65 — not distinguishable from noise at
+n=20.** The prompt stays as it is.
+
+Two things the run settled anyway:
+- **The metric was partly wrong.** Treatment windows still produced values
+  "matching an exemplar" they were never shown (19 of them) — registry
+  exemplars ARE typical values, so a model completing a schema reaches for
+  them either way. The original 15/42 conflated copying with generic
+  defaults; the honest reading is that leak explains a *slice* of
+  fabrication, not the bulk.
+- **The heavy fabricators fabricate regardless.** The laser-ablation paper
+  ran 0.19-0.46 grounding under BOTH arms. Windows that fabricate badly do so
+  for reasons the prompt's examples do not touch.
+
+Also observed: **6 qwen3-next degeneration aborts** across the day's runs
+(`cycle period N x 12`, `long-cycle repetition`), all server-caught. GDN-hybrid
+family trait; the retry ladder absorbs them.
