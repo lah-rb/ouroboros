@@ -273,12 +273,28 @@ async def main_async(a) -> int:
     assert subject, "mission objective missing -- the corpus section would render empty"
 
     rows: list[dict] = []
+    if a.from_results:
+        # Book from a finished dry run: no inference, the same rows.
+        rows = json.load(open(a.from_results))
+        if a.keys:
+            rows = [r for r in rows if r["key"] in todo]
+        known = {r["key"] for r in rows}
+        missing = [k for k in todo if k not in known]
+        if missing:
+            print(
+                f"{len(missing)} papers have no row in {a.from_results}; they stay as they are"
+            )
+        print(f"loaded {len(rows)} triage rows from {a.from_results}")
     async with httpx.AsyncClient() as client:
-        model = await active_model(client, a.url)
+        model = (
+            "(from results)" if a.from_results else await active_model(client, a.url)
+        )
         print(
             f"resident model: {model}   parked pool: {len(parked)}   to triage: {len(todo)}\n"
         )
         for i, (key, rec) in enumerate(todo.items(), 1):
+            if a.from_results:
+                break
             md_p = os.path.join(
                 a.root, rec.get("md_path") or f"databank/markdown/{key}.md"
             )
@@ -354,6 +370,10 @@ async def main_async(a) -> int:
         return 0
 
     now = datetime.now(timezone.utc).isoformat()
+    # Only papers STILL parked are booked: a stale row must not overwrite a
+    # verdict the drain has reached since the dry run.
+    deny = [r for r in deny if r["key"] in parked]
+    proceed = [r for r in proceed if r["key"] in parked]
     deny_rows = []
     for r in deny:
         merged = dict(bank[r["key"]])  # FULL record -- append is last-row-replaces
@@ -400,6 +420,11 @@ def main() -> int:
     ap.add_argument("--apply", action="store_true", help="book denials")
     ap.add_argument(
         "--unpark", action="store_true", help="with --apply: un-park the proceeds"
+    )
+    ap.add_argument(
+        "--from-results",
+        default="",
+        help="book from a finished dry run's --out file instead of re-running inference",
     )
     return asyncio.run(main_async(ap.parse_args()))
 
