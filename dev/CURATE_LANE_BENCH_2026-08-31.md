@@ -479,3 +479,21 @@ sizes: `OUROBOROS_PACK_WINDOW_TOKENS` (default 18,000) /
 Open: scalar conflicts stay first-wins (recorded, not resolved); the
 exemplar-value leak is under A/B (`dev/bench_exemplar_leak.py`) — if
 confirmed, the registry block shows shapes, not copyable rows.
+
+### First production hours (2026-09-03, v15)
+
+- **Mastcam Mars paper packed** via the remote lane's windowed production
+  path: 5/5 windows, 1,075 grounded values, grounding 0.995, provenance
+  `qwen3-next-80b-a3`. Three whole-document attempts had failed it.
+- Large bin: 5 packed, 0 pack-gate failures. Small bin: 2 packed, 2 genuine
+  gate refusals (a unit conversion; a fabricated density), 9 envelope refusals
+  for missing DOI/arXiv id — **the identifier rule, not packing, is now the
+  dominant loss** (203 of 310 curate-pending papers carry no identifier).
+- **Key coinage rose**: windowed packs coin a median 25 new registry keys
+  (p90 209) vs 0 for whole-document packs (p90 8; 18 for planetary papers).
+  The 209-key pack was 209 bespoke grounded scalars. The Mars pack shows the
+  other shape: `spectral_resolution_nm`, `_2`, `_3`, `_4` — numbered variants
+  of one quantity across windows/instruments, exactly what promoting
+  conflicting scalars to a list would absorb. Fix committed (fb801b5: softened
+  preface + `prior_keys` block), held for measurement against the production
+  packs of the two high-coinage papers.
