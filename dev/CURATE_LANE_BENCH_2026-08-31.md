@@ -533,3 +533,34 @@ Two things the run settled anyway:
 Also observed: **6 qwen3-next degeneration aborts** across the day's runs
 (`cycle period N x 12`, `long-cycle repetition`), all server-caught. GDN-hybrid
 family trait; the retry ladder absorbs them.
+
+## The preface trade: −94% coinage for −32% recall (2026-09-03)
+
+fb801b5 softened the multi-window preface ("Pack ONLY values stated in THIS
+part" → "pack this part as you would the whole paper, with the same
+selectivity and the registry's vocabulary") and added a `prior_keys` block
+handing each later window the keys earlier windows of the same paper used.
+Measured by re-running the PRODUCTION `_pack_windowed` on the two
+high-coinage papers, their existing packs as controls:
+
+| | before | after |
+|---|---|---|
+| new registry keys | 270 | **17 (−94%)** |
+| grounded values | 409 | 277 (−32%) |
+| windows passed | 6/6 | 2/7 |
+
+`doi_10.1029_2006je002728` went from 209 bespoke scalars
+(`hematite_concretion_diameter_mm_min`, `omega_vnir_spectral_range_um_min`)
+to 24 keys, nearly all registry-standard (`emission_line_nm`,
+`ftir_peak_wavenumber_cm-1`, `reflectance_values`), keeping 206 of 220 values.
+
+Production, all multi-window packs (different cohorts — direction only):
+coinage median 28 → **0** (max 209 → 19), window pass 88% → 79%.
+
+**KEPT.** The registry had reached 4,722 keys; past some size it stops being
+a shared vocabulary, which is the property that makes packs comparable across
+papers. The −32% is measured on the two WORST offenders, values missed by
+selectivity are recoverable by re-packing, and a polluted registry is
+corpus-wide and much harder to undo. Open: whether the recall cost belongs to
+the preface wording or the `prior_keys` block — they shipped together and were
+measured together.
