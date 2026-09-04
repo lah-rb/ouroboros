@@ -262,12 +262,28 @@ async def book(a) -> int:
             print(f"  FAILED {key[:50]}: no window passed ({m['windows']} windows)")
             continue
         report = MergeReport()
-        if multi:
-            merged = merge_packs(passed, report)
-            final = ca._run_pack_gates(merged, doc, registry)
-        else:
-            merged = passed[0]
-            final = ca._run_pack_gates(merged, doc, registry)
+        merged = merge_packs(passed, report) if multi else passed[0]
+        # The registry moves while a batch runs (this run: 5,802 -> 6,647
+        # keys), so a key that was NEW at gate time may be registered with
+        # another shape by book time. Re-run the production shape repair
+        # against the registry the pack is actually folded into -- the same
+        # step production applies before its gates -- then gate.
+        merged, _repairs = repair_shapes(merged, registry)
+        # A key whose TYPE the registry fixed differently while the batch ran
+        # cannot be re-asked here as production would; dropping that one key
+        # (recorded in pack_quality) beats losing the paper's other values.
+        # Live: 3 of 95 papers, one key each (elements_identified,
+        # microhardness_mpa, contract_number).
+        dropped = []
+        for mm in ca.registry_check(merged, registry).get("type_mismatches") or []:
+            # NOT `key`: that is the paper key for the rest of this loop body.
+            # Live 2026-09-04: shadowing it booked three packs under
+            # "elements_identified" / "microhardness_mpa" / "contract_number".
+            mkey = mm.get("key") if isinstance(mm, dict) else str(mm).split(" ")[0]
+            if mkey in merged:
+                dropped.append({"key": mkey, "reason": str(mm)[:160]})
+                merged.pop(mkey, None)
+        final = ca._run_pack_gates(merged, doc, registry)
         if not final["passed"]:
             failed += 1
             print(
@@ -285,7 +301,8 @@ async def book(a) -> int:
             "windows": m["windows"],
             "windows_passed": len(passed),
             "window_conflicts": report.conflicts[:25],
-            "shape_repairs": [],
+            "shape_repairs": _repairs[:25],
+            "dropped_type_conflicts": dropped,
             "window_outcomes": outcomes,
             "pack_boost": BOOST_MODEL,
         }

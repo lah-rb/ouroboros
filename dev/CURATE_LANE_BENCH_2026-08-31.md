@@ -634,3 +634,39 @@ registry had folded every key. Three things followed:
   to the figure pipeline.
 
 Wording stays at the original (arm C). Coinage is the guard's job now.
+
+## API boost: Claude Haiku sub-agents repack the pack_failed set (2026-09-04)
+
+Operator ruling: the 95 accepted-but-pack_failed papers (91 from the
+whole-document era) get an API model as a boost while the local seats stay
+on the curation backlog. `dev/repack_via_agents.py` changes ONLY the model:
+production windows and prompts out, the agent's JSON back through the
+production gates (one retry with the gate's feedback), passed windows
+merged and booked exactly as a local pack, coinage guard included.
+
+| | |
+|---|---|
+| papers attempted / booked | 95 / **93** |
+| windows graded / passed | 294 / 286 (213 on the first attempt) |
+| grounded values booked | **18,396** (median 112 per paper, grounding median 1.000) |
+| keys coined / held by the guard | 3,020 / 2,286 across 30 papers |
+| type conflicts dropped at book time | 3 keys, recorded in pack_quality |
+| jobs / wall time | 139 jobs of ≤3 windows, ~18 concurrent, ~3 h |
+
+Haiku is a **heavy coiner** (new keys ≈ 2.5× reused): the guard held
+2,286 keys in the quarantine file for review (`dev/coinage_quarantine.py
+promote-shared` for the ones a second paper also coined). Two papers stay
+failed: one has no title anywhere (a 2026 publication after the mirror's
+cut, so the mirror cannot supply it) and one single-window Spanish paper
+failed twice on ungrounded copper emission lines.
+
+Three defects surfaced by running it, all fixed in the harness: the
+production transport-fault retry was missing (a remote orbit killed the
+bench once); the registry moves during a batch (5,802 → 6,690 keys), so
+the merged pack is now re-shaped against the live registry and a key
+whose type the registry fixed differently is dropped with provenance
+rather than losing the paper; and a variable-shadowing bug booked three
+packs under the dropped KEY NAMES — caught within minutes, mission
+stopped, the three bogus rows/files/folds removed and the papers rebooked
+under their own keys. A fourth lesson lives in the mirror memory: never
+join the snapshot on an empty DOI string.
