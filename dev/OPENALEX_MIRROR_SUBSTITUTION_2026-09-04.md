@@ -140,6 +140,30 @@ green). List: `~/tmp/openalex_mirror_oa_leads.json`.
   through CORE's full-text search.
 - **Fetching.** Publisher and repository downloads are network by nature.
 
+## The other sources, and their mirrors (verified 2026-09-04)
+
+Six of the scraper's seven external sources have bulk data; the seventh —
+fetching PDFs from publishers and repositories — does not, beyond the share
+the full-text corpora already parsed.
+
+| source | role here | share of accepted | bulk mirror | size / terms |
+|---|---|---|---|---|
+| OpenAlex | search, snowball, enrichment, OA locations | 45% | mirrored | 784 GB, CC0, public S3 |
+| Unpaywall | OA locations | acquisition only | inside the OpenAlex snapshot | its own snapshots ended 2022; now served from OpenAlex data |
+| Semantic Scholar | title/abstract search, external ids, OA pdf, references | 32% (S2-only) | Datasets API, release 2026-09-01 | papers 200M/45 GB, abstracts 100M/54 GB, citations 2.4B/255 GB, paper-ids 15 GB, S2ORC v2 16M full texts/180 GB; listing public, downloads need a free API key (401 without) |
+| CORE | repository full-text search (theses), downloads | 15% (CORE-only) | CORE dataset, registration by email | 291M records, 32.8M full texts (2023), latest dump 2024, size unpublished |
+| Crossref | title→DOI fallback, biblio | resolution only | 2026 public data file | ~180M records, 208 GB compressed; torrent or S3 requester-pays (~$18) |
+| Europe PMC | OA pdf by PMCID | 6% yield | FTP open-access subset | 1,281 XML files, 165 GB compressed, weekly; PDFs on FTP |
+| doi.org, publishers, repositories, Wayback | the fetch | all acquisition | none | S2ORC / CORE / Europe PMC texts cover the OA share they parsed |
+
+Two consequences. The **S2 abstracts dataset (54 GB, joins by DOI) is the
+cheap abstract layer** — versus a ~4.5 h pass over OpenAlex's inverted index
+— and would lift local discovery past the title-only ceiling. The **CORE
+dataset is the only mirror that reaches the repository theses** behind the
+CORE-only 15% of acceptances. Storage: a metadata-only flip adds ~1.5 TB on
+top of the OpenAlex drive (133 GB free); S2ORC adds 180 GB; CORE full texts
+are terabytes. A 4 TB drive covers everything but CORE's full text.
+
 ## Pending in this study
 
 - Citation snowball via `works_refs`: how many accepted papers are reachable
