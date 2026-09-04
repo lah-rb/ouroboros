@@ -116,3 +116,4 @@ Data: `trusted_labels_v1.json` (2,129 gold), `label_quarantine_v1.json`
 ## Archive
 - `archive/docs/` — finalized design docs with closing-status stamps.
 - `archive/` (rest) — pre-cleanup archived material.
+- `OPENALEX_MIRROR_2026-09-03.md` — OpenAlex API now meters by credit; the CC0 parquet snapshot (784 GB) mirrored to a dedicated USB drive with a local DuckDB title→DOI index; the disk, not the network, is the bottleneck.
