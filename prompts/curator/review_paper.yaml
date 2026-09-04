@@ -42,6 +42,16 @@ sections:
         dataset) is a DENY — say so plainly in the summary. If the
         corpus subject was not stated, do NOT guess one: judge on
         content quality alone and leave fit out of the verdict.
+      - DOCUMENT COMPOSITION: judge the document as a whole, not its best
+        figure. Name what the document IS in "document_form": one of
+        article, thesis, report, book_chapter, proceedings_paper, preprint,
+        review, dataset_description, newsletter, magazine, brochure,
+        press_release, annual_report, other. A newsletter, magazine,
+        brochure or event programme that happens to carry one relevant
+        figure is a DENY ("corpus_fit"): one figure does not make up for
+        the composition of the document, and the figure itself stays
+        available to the figure pipeline. Never describe the document as
+        the paper its one figure came from.
       - CONTENT QUALITY: does it report concrete, well-specified
         measurements or computations (named compositions, conditions,
         units), or only qualitative claims?
@@ -105,6 +115,7 @@ sections:
       ```json
       {
         "verdict": "accept",
+        "document_form": "article",
         "summary": "Arc-melted CoCrFeMnNi studied 77-293 K; tensile strength/elongation tables per temperature; APT composition profiles.",
         "issues": [
           "Fig 3 VLM reading reports 2.1 GPa where prose says 1.2 GPa — prefer prose value",
@@ -117,6 +128,7 @@ sections:
       ```json
       {
         "verdict": "deny",
+        "document_form": "article",
         "deny_category": "data_not_in_text",
         "summary": "Mineral presence per sample is complete but encoded as cell shading against a pattern legend; no values appear in the text.",
         "issues": ["Tables 2-9: presence marks are hatch fills, not text"]
@@ -128,5 +140,5 @@ sections:
       {"summary": "seems like a good paper", "issues": []}
       ```
 
-      "verdict" MUST be exactly "accept" or "deny". Return ONLY the
-      fenced JSON.
+      "verdict" MUST be exactly "accept" or "deny", and "document_form"
+      MUST be one of the forms listed above. Return ONLY the fenced JSON.

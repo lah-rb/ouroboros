@@ -11,6 +11,8 @@ from __future__ import annotations
 import importlib.util
 import os
 
+import pytest
+
 from agent.actions.curation_actions import (
     build_curator_doc,
     format_key_registry,
@@ -372,3 +374,136 @@ def test_a_registry_entry_typed_bare_list_accepts_any_list():
     # real drift is still refused
     assert not _types_compatible("number", "string")
     assert not _types_compatible("object", "number")
+
+
+# ── coinage guard (operator ruling 2026-09-04) ────────────────────────────
+
+
+def _mature_registry(n_shared: int = 250, n_single: int = 100) -> dict:
+    reg: dict = {}
+    for i in range(n_shared):
+        reg[f"shared_key_{i}"] = {"type": "number", "count": 3, "tier": "core"}
+    for i in range(n_single):
+        reg[f"single_key_{i}"] = {"type": "number", "count": 1, "tier": "bespoke-pool"}
+    return reg
+
+
+def test_coinage_verdict_holds_only_past_both_thresholds_on_a_mature_registry():
+    from agent.actions.curation_actions import (
+        COINAGE_MAX_NEW,
+        coinage_verdict,
+    )
+
+    reg = _mature_registry()
+    coining = {f"bespoke_{i}": i for i in range(COINAGE_MAX_NEW + 1)}
+    # 41 new, 0 reused: both thresholds -> held.
+    v = coinage_verdict(reg, coining)
+    assert (
+        v["coinage_quarantined"] == COINAGE_MAX_NEW + 1
+        and "mature" in v["coinage_rule"]
+    )
+    # 41 new but 30 reused: the ratio saves it -- a rich paper speaking the
+    # registry's language may still coin.
+    rich = {**coining, **{f"shared_key_{i}": 1 for i in range(30)}}
+    assert coinage_verdict(reg, rich)["coinage_quarantined"] == 0
+    # Exactly the cap, 0 reused: not past the count threshold.
+    at_cap = {f"bespoke_{i}": i for i in range(COINAGE_MAX_NEW)}
+    assert coinage_verdict(reg, at_cap)["coinage_quarantined"] == 0
+
+
+def test_coinage_verdict_never_holds_on_a_green_registry():
+    """The first papers into a corpus coin nearly everything; a green
+    registry (few keys seen in two or more papers) only logs."""
+    from agent.actions.curation_actions import (
+        COINAGE_MATURE_SHARED_KEYS,
+        coinage_verdict,
+    )
+
+    green = _mature_registry(n_shared=COINAGE_MATURE_SHARED_KEYS - 1, n_single=500)
+    v = coinage_verdict(green, {f"bespoke_{i}": i for i in range(300)})
+    assert v["coinage_quarantined"] == 0
+    assert "green" in v["coinage_rule"]
+    assert v["registry_shared_keys"] == COINAGE_MATURE_SHARED_KEYS - 1
+    assert coinage_verdict({}, {"a": 1, "b": 2})["coinage_quarantined"] == 0
+
+
+@pytest.mark.asyncio
+async def test_fold_holds_new_keys_in_quarantine_and_still_counts_reused():
+    import json
+
+    from agent.actions.curation_actions import (
+        KEY_QUARANTINE_PATH,
+        KEY_REGISTRY_PATH,
+        fold_pack_into_registry,
+    )
+    from agent.effects.mock import MockEffects
+
+    reg = _mature_registry()
+    fx = MockEffects(files={KEY_REGISTRY_PATH: json.dumps(reg)})
+    data = {f"bespoke_{i}": i for i in range(50)}
+    data["shared_key_0"] = 7
+    v = await fold_pack_into_registry(fx, reg, data, "p_newsletter")
+    assert v["coinage_quarantined"] == 50
+    assert "bespoke_0" not in reg, "held keys never enter the registry"
+    assert reg["shared_key_0"]["count"] == 4, "reused keys still count"
+    q = json.loads(fx._files[KEY_QUARANTINE_PATH])
+    assert set(q) == {f"bespoke_{i}" for i in range(50)}
+    assert (
+        q["bespoke_1"]["first_paper"] == "p_newsletter" and q["bespoke_1"]["count"] == 1
+    )
+    saved = json.loads(fx._files[KEY_REGISTRY_PATH])
+    assert "bespoke_0" not in saved and saved["shared_key_0"]["count"] == 4
+
+    # A second paper coining the same key is evidence of vocabulary: the
+    # quarantine count grows (the promote tool acts on that), still unfolded.
+    v2 = await fold_pack_into_registry(
+        fx, reg, {f"bespoke_{i}": i for i in range(45)}, "p_second"
+    )
+    assert v2["coinage_quarantined"] == 45
+    q = json.loads(fx._files[KEY_QUARANTINE_PATH])
+    assert q["bespoke_1"]["count"] == 2 and q["bespoke_1"]["papers"] == [
+        "p_newsletter",
+        "p_second",
+    ]
+    assert q["bespoke_47"]["count"] == 1
+
+    # A modest pack folds normally and leaves the quarantine file alone.
+    v3 = await fold_pack_into_registry(
+        fx, reg, {"new_modest_key": 1, "shared_key_1": 2}, "p3"
+    )
+    assert v3["coinage_quarantined"] == 0 and "new_modest_key" in reg
+
+
+def test_review_state_denies_a_non_paper_form_that_the_model_accepted():
+    from agent.actions.curation_actions import NON_PAPER_FORMS, review_state_from
+
+    assert "newsletter" in NON_PAPER_FORMS
+    st = review_state_from(
+        {
+            "verdict": "accept",
+            "document_form": "Newsletter",
+            "summary": "one LIBS figure",
+            "issues": ["fig 67 blurry"],
+        }
+    )
+    assert st["status"] == "denied" and st["deny_category"] == "corpus_fit"
+    assert st["document_form"] == "newsletter"
+    assert (
+        any("composition rule" in i for i in st["issues"])
+        and "fig 67 blurry" in st["issues"]
+    )
+    # A real article is untouched; a model denial keeps its own category.
+    ok = review_state_from(
+        {"verdict": "accept", "document_form": "article", "summary": "s"}
+    )
+    assert ok["status"] == "accepted" and ok["deny_category"] == ""
+    dn = review_state_from(
+        {
+            "verdict": "deny",
+            "deny_category": "data_not_in_text",
+            "document_form": "article",
+        }
+    )
+    assert dn["status"] == "denied" and dn["deny_category"] == "data_not_in_text"
+    # No form given: nothing changes -- the rule only acts on a named non-paper form.
+    assert review_state_from({"verdict": "accept"})["status"] == "accepted"

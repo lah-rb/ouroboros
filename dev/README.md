@@ -118,3 +118,4 @@ Data: `trusted_labels_v1.json` (2,129 gold), `label_quarantine_v1.json`
 - `archive/` (rest) — pre-cleanup archived material.
 - `OPENALEX_MIRROR_2026-09-03.md` — OpenAlex API now meters by credit; the CC0 parquet snapshot (784 GB) mirrored to a dedicated USB drive with a local DuckDB title→DOI index; the disk, not the network, is the bottleneck.
 - `OPENALEX_MIRROR_SUBSTITUTION_2026-09-04.md` — can the mirror replace the API? 99% DOI coverage; topics recall 64–96% of accepted at 10M–67M pools but do not separate accepted from denied; title terms carry half of what abstract search did; enrichment is a JOIN (`openalex_local_enrich.py`); 228 fresh OA leads.
+- `coinage_quarantine.py` — review the pack coinage guard's quarantine (keys a pack coined past 40 new and 2× reused on a mature registry, held out of `key_registry.json`): list / promote-shared / promote / drop / drop-paper, backups beside both files.

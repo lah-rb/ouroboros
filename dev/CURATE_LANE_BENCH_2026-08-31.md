@@ -598,3 +598,39 @@ one outlier, and a re-run of B alone would say whether it is noise.
 
 **Not applied.** Production stays at arm D pending the operator's ruling;
 the candidate change is the one-line preface revert, keeping the block.
+
+## After the restore: a 227-key pack, the coinage guard, the composition rule (2026-09-04)
+
+The first multi-window pack under the restored wording coined **227 keys** —
+`admission_exam_date_start`, `austria_wood_structural_permits_percentage`,
+92 figure captions — on a faculty newsletter (Polytech.News, Faculté
+Polytechnique de Mons) the remote curator had accepted on one LIBS spectrum
+figure, describing a LIBS paper the document does not contain. The
+registry had folded every key. Three things followed:
+
+- **Registry cleanup.** All 227 keys were first coined by that paper and
+  used by nothing else; removed with a backup beside the registry (5,921 →
+  5,694). The paper is denied (operator: one figure does not make up for
+  the document's composition) and its pack retired to
+  `dataset_denied_20260904/` — it held none of the figure's data (3
+  marginal keys), and the drain enforces denied-never-packed.
+- **Coinage guard** (`fold_pack_into_registry`). Over 1,766 packs the
+  coinage tail is new_keys p90 9, p99 42, max 313; 19 packs coined >40 and
+  18 of those coined more than twice what they reused — and the soft
+  wording's own data-rich packs sat there too (58–61 keys each), so the
+  wording was never the lever. A pack past BOTH thresholds (>40 new, >2×
+  reused) keeps its data, its reused keys still count, but its new keys are
+  HELD in `key_registry_quarantine.json` (count grows when another paper
+  coins the same key) for `dev/coinage_quarantine.py` to promote or drop.
+  A green registry — fewer than 200 keys seen in two or more papers — only
+  logs: the first papers into a corpus legitimately coin everything. The
+  prompt shows the 60 most-used keys, so coined singletons never reached a
+  model; the guard protects the registry as a shared vocabulary.
+- **Composition rule.** The review verdict now names `document_form`; an
+  accept on a newsletter, magazine, brochure, press release or annual
+  report is downgraded to denied/corpus_fit with the reason in issues
+  (`review_state_from`, shared by both verdict paths), and the prompt says
+  why: one figure does not carry a document, and the figure stays available
+  to the figure pipeline.
+
+Wording stays at the original (arm C). Coinage is the guard's job now.

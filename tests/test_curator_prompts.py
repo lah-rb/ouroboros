@@ -181,3 +181,17 @@ def test_partial_text_data_is_an_accept_not_a_denial():
     )
     assert 'THE BAR IS "NOTHING", NOT "NOT THE BEST PART"' in out
     assert "SOME is enough" in out
+
+
+def test_review_prompt_judges_document_composition_not_its_best_figure():
+    """Operator ruling 2026-09-04: a faculty newsletter was accepted on one
+    LIBS figure. The prompt now asks for the document's form and says a
+    single relevant figure does not carry a non-scientific document."""
+    out = _renderer().render(
+        "curator/review_paper", {"input": {}, "context": {}, "meta": {}}
+    )
+    assert "DOCUMENT COMPOSITION" in out
+    # The yaml wraps mid-phrase; assert pieces that sit on one line.
+    assert "does not make up for" in out and "composition of the document" in out
+    assert '"document_form": "article"' in out  # the exemplar carries the field
+    assert "newsletter" in out and "magazine" in out

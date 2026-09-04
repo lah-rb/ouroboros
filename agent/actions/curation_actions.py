@@ -67,6 +67,24 @@ KEY_REGISTRY_PATH = "databank/dataset/key_registry.json"
 MIN_GROUNDING_RATE = 0.95
 NEAR_DUP_RATIO = 0.85
 REGISTRY_PROMPT_TOP_N = 60
+KEY_QUARANTINE_PATH = "databank/dataset/key_registry_quarantine.json"
+# COINAGE GUARD (operator ruling 2026-09-04). Measured over 1,766 packs the
+# day it was added: new_keys median 0, p90 9, p99 42, max 313; 19 packs
+# coined more than 40 keys and 18 of those coined more than twice what they
+# reused. The right tail is where a pack stops speaking the registry's
+# language -- a faculty newsletter accepted on one LIBS figure coined 227
+# keys of admission dates and figure captions, every one folded silently
+# into the registry. A pack past BOTH thresholds keeps its data but its new
+# keys are HELD in a quarantine file, never folded, until reviewed
+# (dev/coinage_quarantine.py). A GREEN registry exempts itself: while fewer
+# than COINAGE_MATURE_SHARED_KEYS keys have been seen in two or more papers,
+# every pack legitimately coins most of its vocabulary, so the guard only
+# logs. The prompt shows the 60 most-used keys, so coined singletons never
+# reach a model either way; the guard protects the registry as a shared
+# vocabulary, which is the property that makes packs comparable.
+COINAGE_MAX_NEW = 40
+COINAGE_RATIO = 2.0
+COINAGE_MATURE_SHARED_KEYS = 200
 
 # Mirrors tools/pdf_extract/extract_batch.py _NUM_RE (separate venvs).
 _NUM_RE = re.compile(r"-?\d+\.\d+(?:[eE][+-]?\d+)?|-?\d{2,}")
@@ -448,6 +466,101 @@ def update_key_registry(registry: dict, data: dict, paper_key: str) -> dict:
         else:
             entry["count"] = int(entry.get("count") or 0) + 1
     return registry
+
+
+def coinage_verdict(registry: dict, data: dict) -> dict:
+    """Should this pack's NEW keys be folded into the registry, or held?
+
+    Pure: the thresholds above against the pack's key set and the
+    registry's maturity. Returned fields ride on pack_quality.
+    """
+    new = [k for k in data if k not in registry]
+    reused = [k for k in data if k in registry]
+    shared = sum(
+        1
+        for e in registry.values()
+        if isinstance(e, dict) and int(e.get("count") or 0) >= 2
+    )
+    mature = shared >= COINAGE_MATURE_SHARED_KEYS
+    excessive = len(new) > COINAGE_MAX_NEW and len(new) > COINAGE_RATIO * len(reused)
+    held = mature and excessive
+    if held:
+        rule = (
+            f"{len(new)} new keys > {COINAGE_MAX_NEW} and > {COINAGE_RATIO:g}x "
+            f"{len(reused)} reused; registry mature ({shared} shared keys)"
+        )
+    elif excessive:
+        rule = f"excessive coinage tolerated: registry green ({shared} shared keys)"
+    else:
+        rule = ""
+    return {
+        "coinage_quarantined": len(new) if held else 0,
+        "coinage_rule": rule,
+        "registry_shared_keys": shared,
+        "_new": new,
+        "_reused": reused,
+    }
+
+
+async def _load_quarantine(effects) -> dict:
+    fc = await effects.read_file(KEY_QUARANTINE_PATH)
+    if not getattr(fc, "exists", False) or not fc.content.strip():
+        return {}
+    try:
+        data = json.loads(fc.content)
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+async def fold_pack_into_registry(
+    effects, registry: dict, data: dict, paper_key: str
+) -> dict:
+    """Fold an accepted pack into the registry under the coinage guard.
+
+    Held keys go to KEY_QUARANTINE_PATH with exemplar, first paper and a
+    count that grows when another paper coins the same key -- a second
+    independent coinage is evidence of real vocabulary, which is what the
+    review tool promotes on. Reused keys always count. Saves the registry.
+    """
+    from datetime import datetime, timezone
+
+    v = coinage_verdict(registry, data)
+    new, reused = v.pop("_new"), v.pop("_reused")
+    if v["coinage_quarantined"]:
+        update_key_registry(registry, {k: data[k] for k in reused}, paper_key)
+        q = await _load_quarantine(effects)
+        stamp = datetime.now(timezone.utc).isoformat()
+        for k in new:
+            e = q.get(k)
+            if not isinstance(e, dict):
+                q[k] = {
+                    "type": _type_name(data[k]),
+                    "exemplar": json.dumps(data[k], ensure_ascii=False)[:120],
+                    "count": 1,
+                    "first_paper": paper_key,
+                    "papers": [paper_key],
+                    "quarantined_at": stamp,
+                }
+            else:
+                if paper_key not in (e.get("papers") or []):
+                    e["count"] = int(e.get("count") or 0) + 1
+                    e.setdefault("papers", []).append(paper_key)
+        await effects.write_file(
+            KEY_QUARANTINE_PATH, json.dumps(q, indent=1, ensure_ascii=False)
+        )
+        logger.warning(
+            "coinage guard: %s held %d new keys out of the registry (%s)",
+            paper_key,
+            len(new),
+            v["coinage_rule"],
+        )
+    else:
+        update_key_registry(registry, data, paper_key)
+        if v["coinage_rule"]:
+            logger.info("coinage guard: %s -- %s", paper_key, v["coinage_rule"])
+    await _save_registry(effects, registry)
+    return v
 
 
 def format_key_registry(registry: dict, top_n: int = REGISTRY_PROMPT_TOP_N) -> str:
@@ -1479,7 +1592,7 @@ async def _curate_stateless(effects, paper_key: str, doc: str) -> dict:
     for nudge in (
         "",
         '\n\nReturn ONLY the fenced JSON verdict object with "verdict" '
-        '("accept" or "deny"), "summary", and "issues".',
+        '("accept" or "deny"), "document_form", "summary", and "issues".',
     ):
         text = await _curate_turn(
             effects, doc + "\n\n---\n\n" + review_prompt + nudge, 4096
@@ -1492,23 +1605,80 @@ async def _curate_stateless(effects, paper_key: str, doc: str) -> dict:
         state["review"] = {"status": "review_failed", "summary": "", "issues": []}
         return state
 
-    verdict = "accepted" if review["verdict"] == "accept" else "denied"
-    state["review"] = {
-        "status": verdict,
-        "summary": str(review.get("summary") or "").strip(),
-        "issues": [str(i) for i in (review.get("issues") or [])][:20],
-        "deny_category": (
-            str(review.get("deny_category") or "").strip().lower()
-            if verdict == "denied"
-            else ""
-        ),
-    }
+    state["review"] = review_state_from(review)
+    verdict = state["review"]["status"]
     if verdict == "denied":
         return state
 
     registry = await _load_registry(effects)
     state["pack"] = await _pack_windowed(effects, doc, registry)
     return state
+
+
+# Document forms that are not scientific works. A relevant figure inside one
+# does not carry the document (operator ruling 2026-09-04: a faculty newsletter
+# with one LIBS spectrum was accepted, its review described a LIBS paper the
+# document does not contain, and the pack coined 227 keys of admission dates
+# and figure captions). The model names the form; this rule makes the
+# consequence deterministic instead of hoping the verdict follows.
+NON_PAPER_FORMS = frozenset(
+    {
+        "newsletter",
+        "magazine",
+        "brochure",
+        "press_release",
+        "event_programme",
+        "event_program",
+        "annual_report",
+        "advertisement",
+        "catalogue",
+        "catalog",
+        "website",
+        "slides",
+    }
+)
+
+
+def review_state_from(review: dict) -> dict:
+    """The booked review from a parsed verdict object, composition rule applied.
+
+    Shared by the stateless and the session review paths so the two cannot
+    drift. "deny_category" is kept verbatim when the model gave one (an
+    unexpected category is a signal about the prompt); a composition
+    downgrade sets it to corpus_fit and records why in "issues".
+    """
+    verdict = "accepted" if review.get("verdict") == "accept" else "denied"
+    form = (
+        str(review.get("document_form") or "")
+        .strip()
+        .lower()
+        .replace(" ", "_")
+        .replace("-", "_")
+    )
+    issues = [str(i) for i in (review.get("issues") or [])][:20]
+    deny_category = (
+        str(review.get("deny_category") or "").strip().lower()
+        if verdict == "denied"
+        else ""
+    )
+    if verdict == "accepted" and form in NON_PAPER_FORMS:
+        verdict = "denied"
+        deny_category = "corpus_fit"
+        issues = (
+            issues
+            + [
+                f"document form '{form}' is not a scientific work; an isolated "
+                "relevant figure or item does not carry the document "
+                "(composition rule)"
+            ]
+        )[:20]
+    return {
+        "status": verdict,
+        "summary": str(review.get("summary") or "").strip(),
+        "issues": issues,
+        "deny_category": deny_category,
+        "document_form": form,
+    }
 
 
 # ── Windowed packing ─────────────────────────────────────────────────
@@ -1538,7 +1708,10 @@ async def _curate_stateless(effects, paper_key: str, doc: str) -> dict:
 # values both times (289 -> 403, 66 -> 263) at no coinage cost. The August
 # coinage was the wording's, before the registry had absorbed those keys;
 # coinage is only comparable arm-to-arm on one day. So: original wording +
-# prior_keys block -- the best arm on both papers (243 and 160 values).
+# prior_keys block -- the best arm on both papers (243 and 160 values). The
+# first production pack under it coined 227 keys on a mis-accepted
+# newsletter; coinage is now the COINAGE GUARD's job (fold_pack_into_registry),
+# not the wording's, and the wording stays.
 _PACK_PREFACE = (
     "[This is part {n} of {total} of one paper — {sections} consecutive "
     'section(s) starting at "{heading}". Pack ONLY values stated in THIS '
@@ -2262,7 +2435,7 @@ async def action_curate_ingest_review(step_input):
             result = await effects.session_inference(
                 session_id,
                 'Return ONLY the fenced JSON verdict object with "verdict" '
-                '("accept" or "deny"), "summary", and "issues".',
+                '("accept" or "deny"), "document_form", "summary", and "issues".',
                 config_overrides={"max_tokens": 2048, "temperature": "t*0.4"},
             )
             review = parse_llm_json(result.text or "")
@@ -2277,22 +2450,11 @@ async def action_curate_ingest_review(step_input):
                 context_updates={"curate_state": state},
             )
 
-        verdict = "accepted" if review["verdict"] == "accept" else "denied"
-        state["review"] = {
-            "status": verdict,
-            "summary": str(review.get("summary") or "").strip(),
-            "issues": [str(i) for i in (review.get("issues") or [])][:20],
-            # WHAT COULD BE DONE ABOUT IT. A denial keeps the paper, so the
-            # only question that matters afterwards is whether anything can
-            # recover it. Unrecognized values are kept verbatim rather than
-            # coerced: an unexpected category is a signal about the prompt,
-            # and silently rewriting it to "other" would erase that.
-            "deny_category": (
-                str(review.get("deny_category") or "").strip().lower()
-                if verdict == "denied"
-                else ""
-            ),
-        }
+        # WHAT COULD BE DONE ABOUT IT lives in deny_category (kept verbatim);
+        # the composition rule lives in review_state_from, shared with the
+        # stateless path.
+        state["review"] = review_state_from(review)
+        verdict = state["review"]["status"]
         # Pin the post-review context: pack (turn 2) continues live; the
         # pack RETRY forks from here with the review still in context.
         snap = await effects.session_snapshot(session_id, _snapshot_key(paper_key))
@@ -2589,6 +2751,7 @@ async def action_curate_book_result(step_input):
     rec["review_summary"] = review.get("summary") or ""
     rec["review_issues"] = review.get("issues") or []
     rec["deny_category"] = review.get("deny_category") or ""
+    rec["review_document_form"] = review.get("document_form") or ""
     rec["tag_review_agreement"] = tag_review_agreement(rec)
     # A DENIAL CLEARS ANY PACK. Live 2026-08-20: two borderline papers
     # were accepted+packed, then re-reviewed ~2 min later by a round that
@@ -2648,11 +2811,12 @@ async def action_curate_book_result(step_input):
                     dataset_path, json.dumps(envelope, indent=1, ensure_ascii=False)
                 )
                 registry = await _load_registry(effects)
-                update_key_registry(registry, data, paper_key)
-                await _save_registry(effects, registry)
+                coinage = await fold_pack_into_registry(
+                    effects, registry, data, paper_key
+                )
                 rec["pack_status"] = "packed"
                 rec["dataset_path"] = dataset_path
-                rec["pack_quality"] = pack.get("quality") or {}
+                rec["pack_quality"] = {**(pack.get("quality") or {}), **coinage}
                 rec["failure_reason"] = ""
                 outcome = f"packed ({len(data)} keys)"
         elif pack.get("status") == "needs_repack":
