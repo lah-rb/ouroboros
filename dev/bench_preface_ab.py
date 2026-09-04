@@ -81,7 +81,22 @@ async def main() -> None:
                 continue
             doc = _doc_for(ROOT, key)
             t0 = time.time()
-            pack = await ca._pack_windowed(fx, doc, registry)
+            # Production's drain catches a transport fault (a server-side
+            # degenerate abort included) and retries the paper next round;
+            # give the bench the same allowance so one orbit does not end
+            # the arm.
+            pack = None
+            for tries in range(3):
+                try:
+                    pack = await ca._pack_windowed(fx, doc, registry)
+                    break
+                except ca._CurateTransportFault as e:
+                    print(
+                        f"{arm:<16} {key:<30} transport fault {tries+1}/3: {str(e)[:90]}",
+                        flush=True,
+                    )
+            if pack is None:
+                pack = {"status": "transport_fault", "quality": {}, "data": {}}
             q = pack.get("quality") or {}
             row = dict(
                 arm=arm,

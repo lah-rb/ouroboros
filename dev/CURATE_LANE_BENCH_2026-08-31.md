@@ -564,3 +564,37 @@ selectivity are recoverable by re-packing, and a polluted registry is
 corpus-wide and much harder to undo. Open: whether the recall cost belongs to
 the preface wording or the `prior_keys` block — they shipped together and were
 measured together.
+
+## Preface A/B: the wording costs recall, the prior_keys block buys it (2026-09-04)
+
+Four arms, same two papers, production `_pack_windowed` with only module
+attributes patched (`dev/bench_preface_ab.py`, qwen3-next on the remote
+seat). Cells are grounded values / new registry keys / windows passed.
+Coinage is measured against TODAY'S registry, which already contains the
+209 bespoke keys the Mars paper coined in August — so every arm's coinage
+reads far below the August numbers, and only arm-to-arm comparison is valid.
+
+| arm | 2006je002728 (Mars) | 2013je004605 | both papers |
+|---|---|---|---|
+| A hard/no-prior | 183 / 11 / 1/3 | 106 / 21 / 2/4 | **289** / 32 / 3/7 |
+| B soft/no-prior | FAILED / — / 0/3 | 66 / 17 / 2/4 | **66** / 17 / 2/7 |
+| C hard/prior | 243 / 8 / 1/3 | 160 / 22 / 2/4 | **403** / 30 / 3/7 |
+| D soft/prior | 223 / 5 / 1/3 | 40 / 10 / 1/4 | **263** / 15 / 2/7 |
+
+Two paired comparisons, both directions consistent:
+
+- **Wording (A→B, C→D):** the soft preface loses grounded values both with
+  and without prior keys (289→66, 403→263) and passes fewer windows (3/7→2/7
+  twice). It does halve coinage (32→17, 30→15).
+- **prior_keys block (A→C, B→D):** adds grounded values both times (289→403,
+  66→263) at no coinage cost (32→30, 17→15).
+
+So fb801b5's −32% recall belonged to the wording, and its −94% coinage was
+mostly the wording too (against the August registry). The block is a pure
+win. Arm C — the ORIGINAL preface plus the prior_keys block — is the best
+arm on both papers (243 and 160 values, 8 and 22 new keys). n = 2 papers,
+one sample each; arm B's Mars failure (0/3 windows at grounding 0.68) is the
+one outlier, and a re-run of B alone would say whether it is noise.
+
+**Not applied.** Production stays at arm D pending the operator's ruling;
+the candidate change is the one-line preface revert, keeping the block.
