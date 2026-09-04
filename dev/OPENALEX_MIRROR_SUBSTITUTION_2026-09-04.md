@@ -83,10 +83,17 @@ titles (match = at least half the stemmed terms present, minimum two):
 | ≥ half of terms | 36% | 22% |
 | ≥3 terms | 18% | 8% |
 
-Inside the 17-topic pool the union of all term sets is **1.19M works, 53k
-with an OA pdf**; recall of accepted 28% (denied 12%), and 22% (10%) once an
-OA pdf is required. Titles alone lose about half of what abstract/full-text
-search found — the expected cost of not having the abstract column.
+Combined with a topic pool, the union of all term sets:
+
+| topic set ∧ title terms | pool | with OA pdf | recall accepted | denied caught | accepted, OA pdf required |
+|---|---|---|---|---|---|
+| 17 topics | 1.19M | 53k | 28% | 12% | 22% |
+| 93 topics | 1.64M | 126k | 33% | 20% | 27% |
+
+Widening the topic set from 17 to 93 adds only 5 points of recall for a 38%
+larger pool: the title layer, not the topic layer, is the binding
+constraint. Titles alone lose about half of what abstract/full-text search
+found — the expected cost of not having the abstract column.
 
 ### Abstracts: the missing layer, costed
 
@@ -138,4 +145,3 @@ green). List: `~/tmp/openalex_mirror_oa_leads.json`.
 - Citation snowball via `works_refs`: how many accepted papers are reachable
   from the references of other accepted papers (fills in when the HDD pass
   lands).
-- The 93-topic ∧ title-term point on the recall/pool curve.
