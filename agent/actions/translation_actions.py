@@ -20,9 +20,15 @@ the corpus:
 
 Pass → extraction_status "extracted" + md_en_path (+ translated flag): the
 paper enters the curator like any other, and build_curator_doc prefers the
-English markdown. Fail → one retry at a higher temperature next round,
-then translate_failed with the gate's reasons. Mission-clean throughout:
-markdown + databank writes only.
+English markdown. Fail → warmer retries on later rounds, then
+translate_failed once the paper has spent TRANSLATE_MAX_ATTEMPTS attempts
+without converging. An ATTEMPT is any round that ends without a
+translation: a gate verdict, OR a chunk the server refused on both
+temperatures (its degenerate-generation guard, an empty answer). Only gate
+verdicts counted before 2026-09-04, so two unfixable chunks re-selected
+their papers for 16 hours -- 297 aborted streams, 23% of the local
+server's decode time -- with the counter sitting at zero. Mission-clean
+throughout: markdown + databank writes only.
 """
 
 from __future__ import annotations
@@ -67,7 +73,10 @@ TRANSLATE_MIN_NUMERIC = 0.98
 # chunk is a small sample (a few dozen tokens), so one boundary artifact
 # shouldn't force a retry; the assembly gate still holds 0.98 overall.
 _CHUNK_MIN_NUMERIC = 0.95
-TRANSLATE_MAX_ATTEMPTS = 2
+# Three, counting error-ended rounds (operator ruling 2026-09-04): a paper
+# that has not converged after its third attempt is marked translate_failed
+# with the reason, so a human can clear it, and never re-selected.
+TRANSLATE_MAX_ATTEMPTS = 3
 # Output budget per source TOKEN, applied when the server's tokenizer
 # answers (effects.token_count — the size_request idiom). The honest
 # expectation for a translation is ~1.0x source tokens across this
@@ -83,14 +92,16 @@ _MAX_REPEAT_WORDS = 200
 _TRANSLATE_CLAIMS: set[str] = set()
 # Papers whose last round ended in CHUNK failure(s). Selection is
 # finish-first by design — "a partially translated paper keeps being
-# selected until it completes" — but attempts only advance at ASSEMBLY,
-# so a chunk that fails every retry re-selects its paper forever without
-# ever burning an attempt. Live 2026-08-19: one degenerating 12.6k-token
-# chunk held the lane for hours while 87 eligible papers sat at zero
-# attempts. Deferred papers sort LAST, not out: banked parts survive, and
-# when nothing else is eligible the lane still returns to them rather
-# than idling. In-process on purpose, like the claims set — a restart
-# forgiving all deferrals is the right amnesty.
+# selected until it completes" — and until 2026-09-04 attempts advanced
+# only at ASSEMBLY, so a chunk that failed every retry re-selected its
+# paper forever without burning an attempt (live 2026-08-19: one
+# degenerating 12.6k-token chunk held the lane for hours while 87 eligible
+# papers sat at zero attempts; live 2026-09-03/04: two such chunks, 297
+# aborted streams). Deferral ORDERS the pool — deferred papers sort LAST,
+# not out, and banked parts survive — while the attempt cap BOUNDS the
+# loop: an error-ended round now counts as an attempt too. In-process on
+# purpose, like the claims set — a restart forgiving all deferrals is the
+# right amnesty.
 _TRANSLATE_DEFERRED: set[str] = set()
 
 
@@ -240,11 +251,14 @@ def _parts_path(key: str) -> str:
 async def _load_parts(
     effects, key: str, n_chunks: int, src_len: int, attempt: int
 ) -> dict[int, str]:
-    """Valid persisted chunk translations for THIS source and attempt.
+    """Valid persisted chunk translations for THIS source and epoch.
 
     A part is valid only if it was cut from the same chunking (n, src_len)
-    and the same attempt (a warmer retry re-translates everything —
-    mixing temperatures inside one assembly would blur the gate's verdict).
+    and the same epoch (a warmer retry after a FAILED GATE re-translates
+    everything — mixing temperatures inside one assembly would blur the
+    gate's verdict). The JSON field is still named "attempt": until
+    2026-09-04 attempt and epoch were the same number, and every part on
+    disk carries that name.
     """
     import json
 
@@ -403,6 +417,17 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
                 else "non-Latin"
             )
         attempts = int(rec.get("translate_attempts") or 0)
+        # Parts are keyed by EPOCH, not attempt. An epoch is one pass over
+        # the source at one temperature regime; it advances only when the
+        # assembly gate FAILS, because the warmer retry re-translates
+        # everything and parts from a colder pass must not mix into it. An
+        # attempt that ends in a chunk ERROR keeps its epoch: the chunks
+        # that banked are good, and re-translating them would spend decode
+        # on work the server already did. Records from before 2026-09-04
+        # carry no epoch; their attempt count IS their epoch (the two were
+        # the same number then).
+        raw_epoch = rec.get("translate_epoch")
+        epoch = int(raw_epoch if raw_epoch is not None else attempts)
         # Retry rounds run warmer: the first failure is often a too-literal
         # decode loop or an omitted passage; temperature is the lever.
         temperature = 0.3 if attempts == 0 else 0.7
@@ -411,7 +436,7 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
         # ROUND SLICE. Papers over the round budget make PROGRESS instead
         # of blocking: translate up to `budget` missing chunks, persist
         # them, and assemble+gate only when every chunk has a valid part.
-        done = await _load_parts(effects, key, len(chunks), len(src), attempts)
+        done = await _load_parts(effects, key, len(chunks), len(src), epoch)
         todo = [i for i in range(len(chunks)) if i not in done][:budget]
 
         # EXACT-TOKEN OUTPUT BUDGETS, one batched call for the round's
@@ -478,7 +503,7 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
                 # are serialized per path by append_file's lock, so
                 # concurrent chunks appending is safe.
                 await _append_parts(
-                    effects, key, {idx: text}, len(chunks), len(src), attempts
+                    effects, key, {idx: text}, len(chunks), len(src), epoch
                 )
                 return idx, text
 
@@ -492,15 +517,49 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
         done.update(fresh)
 
         if errors:
-            # Persisted what succeeded; the round ends without a verdict.
+            # Persisted what succeeded; the round ends without a translation,
+            # and that COUNTS as an attempt. Before 2026-09-04 only a gate
+            # verdict advanced the counter, so a chunk the server refused
+            # every time (its degenerate-generation guard: a Cyrillic chunk
+            # on a record tagged `en`, an OCR-damaged Spanish one echoing
+            # its own repetition) re-selected its paper for 16 hours. The
+            # EPOCH does not advance: banked chunks stay valid, so a
+            # transient fault costs a counter tick, not the banked work.
             # DEFER the paper so the next round tries someone else first —
-            # without this, finish-first re-offers it immediately and one
-            # unfixable chunk wedges the whole lane.
-            _TRANSLATE_DEFERRED.add(key)
-            return _decline(
-                f"{key}: {len(errors)} chunk failure(s), "
-                f"{len(done)}/{len(chunks)} banked ({str(errors[0])[:100]})"
+            # without this, finish-first re-offers it immediately.
+            attempts += 1
+            rec["translate_attempts"] = attempts
+            rec["translate_epoch"] = epoch
+            what = (
+                f"{len(errors)} chunk failure(s) ({str(errors[0])[:100]}), "
+                f"{len(done)}/{len(chunks)} banked"
             )
+            if attempts >= TRANSLATE_MAX_ATTEMPTS:
+                _TRANSLATE_DEFERRED.discard(key)
+                rec["extraction_status"] = "translate_failed"
+                rec["failure_reason"] = (
+                    f"translation: {what}; did not converge in {attempts} attempts"
+                )
+                await effects.write_file(_parts_path(key), "")
+                await append_extraction_records(effects, [rec])
+                summary = {
+                    "paper": key,
+                    "chunks": len(chunks),
+                    "status": "failed",
+                    "reason": what,
+                }
+                return StepOutput(
+                    result=summary,
+                    observations=f"translate failed {key}: {what}",
+                    context_updates={"translate_summary": summary},
+                )
+            _TRANSLATE_DEFERRED.add(key)
+            rec["failure_reason"] = (
+                f"translation (will retry warmer): {what}; "
+                f"attempt {attempts} of {TRANSLATE_MAX_ATTEMPTS}"
+            )
+            await append_extraction_records(effects, [rec])
+            return _decline(f"{key}: {what}")
         _TRANSLATE_DEFERRED.discard(key)  # a clean round earns the front again
         if len(done) < len(chunks):
             summary = {
@@ -527,6 +586,7 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
         # the space).
         await effects.write_file(_parts_path(key), "")
         rec["translate_attempts"] = attempts + 1
+        rec["translate_epoch"] = epoch
         if gate["passed"]:
             en_rel = (
                 md_rel[:-3] + ".en.md" if md_rel.endswith(".md") else md_rel + ".en"
@@ -546,7 +606,9 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
             status = "failed"
         else:
             # Stays extract_lingual; the bumped attempt count selects the
-            # warmer retry next round.
+            # warmer retry next round, and the bumped EPOCH retires this
+            # pass's parts so the retry re-translates everything.
+            rec["translate_epoch"] = epoch + 1
             rec["failure_reason"] = "translation (will retry warmer): " + "; ".join(
                 gate["problems"]
             )

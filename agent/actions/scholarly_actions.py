@@ -671,6 +671,7 @@ EXTRACTION_OWNED_FIELDS = frozenset(
         "translated",
         "translation_quality",
         "translate_attempts",
+        "translate_epoch",
         "book_progress",
         # Segment cursor for resumable extraction. WITHOUT THIS ENTRY the
         # field is silently filtered out on write, every resume starts at
