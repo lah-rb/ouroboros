@@ -730,7 +730,9 @@ async def test_a_small_paper_is_one_window_and_the_prompt_is_unchanged(monkeypat
         p for p in seen if "curator packing raw data" in p or "RAW DATA" in p
     ]
     assert len(pack_prompts) == 1, "one window -> exactly one pack turn"
-    assert not pack_prompts[0].startswith("[Part "), "no preface on a single window"
+    assert not pack_prompts[0].startswith(
+        "[This is part "
+    ), "no preface on a single window"
     assert (
         "Keys ALREADY USED" not in pack_prompts[0]
     ), "no prior-keys block on a single window"
@@ -792,12 +794,15 @@ async def test_a_large_paper_packs_window_by_window_and_a_fabricating_window_cos
         465
     ], "only the grounded window's peaks merged"
     assert packed["sample_count"] == 3 and packed["accumulations"] == 10
-    prefaced = [p for p in seen if p.startswith("[Part ")]
+    prefaced = [p for p in seen if p.startswith("[This is part ")]
     assert (
         len(prefaced) == 6
     ), "every pack turn on a multi-window doc carries its part-of-N preface"
-    assert "Part 2 of 4" in prefaced[2]
-    assert "Pack ONLY" not in prefaced[0], "the exhaustive wording is gone"
+    assert "part 2 of 4" in prefaced[2]
+    # The ORIGINAL wording, restored 2026-09-04: the four-arm A/B showed the
+    # softened wording cost grounded values (289 -> 66, 403 -> 263) while the
+    # prior_keys block below is what buys them back.
+    assert "Pack ONLY values stated in THIS part" in prefaced[0]
     # Later windows see the paper's own vocabulary so far; the first does not.
     assert "Keys ALREADY USED" not in prefaced[0]
     assert (

@@ -1527,19 +1527,22 @@ async def _curate_stateless(effects, paper_key: str, doc: str) -> dict:
 # preface, and its gates run once against the whole document -- so the
 # prompt and the turn count are byte-for-byte what they were.
 
-# The preface must not read as "pack every number in this part". The first
-# wording ("Pack ONLY values stated in THIS part") did: windowed packs coined a
-# median 25 new registry keys (p90 209) where whole-document packs coined 0
-# (p90 8-18), packing every stated quantity as its own bespoke scalar. The
-# per-window grounding gate already enforces "this part only", so the preface
-# now says what the model should DO -- pack this part as it would the whole
-# paper, in the registry's vocabulary -- and the prior_keys block hands later
-# windows the paper's own vocabulary so far.
+# THE WORDING IS THE ORIGINAL, ON PURPOSE (operator ruling 2026-09-04). fb801b5
+# softened it to "pack this part as you would the whole paper, with the same
+# selectivity and the registry's vocabulary" after the first windowed packs
+# coined a median 25 new registry keys (p90 209), and added the prior_keys
+# block in the same commit. A four-arm A/B on the two worst papers
+# (dev/bench_preface_ab.py; dev/CURATE_LANE_BENCH_2026-08-31.md) separated
+# the two: the soft wording LOST grounded values with and without the block
+# (289 -> 66, 403 -> 263) and passed fewer windows, while the block GAINED
+# values both times (289 -> 403, 66 -> 263) at no coinage cost. The August
+# coinage was the wording's, before the registry had absorbed those keys;
+# coinage is only comparable arm-to-arm on one day. So: original wording +
+# prior_keys block -- the best arm on both papers (243 and 160 values).
 _PACK_PREFACE = (
-    "[Part {n} of {total} of one paper — {sections} consecutive section(s) "
-    'starting at "{heading}". Pack this part as you would the whole paper, '
-    "with the same selectivity and the registry's vocabulary; values are "
-    "checked against this part only, and the parts are merged afterwards.]\n\n"
+    "[This is part {n} of {total} of one paper — {sections} consecutive "
+    'section(s) starting at "{heading}". Pack ONLY values stated in THIS '
+    "part; other parts are packed separately and merged.]\n\n"
 )
 
 
