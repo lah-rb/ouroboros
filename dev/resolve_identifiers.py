@@ -37,6 +37,7 @@ import collections
 import json
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -196,6 +197,21 @@ async def main_async(a) -> int:
     side = await _read_jsonl_records(fx, DATABANK_PATH)
     pick = wants_upgrade if a.upgrade else needs_identity
     todo = [k for k, r in sorted(bank.items()) if pick(r)]
+    # ONE table scan answers the whole cohort: a scan of the local snapshot
+    # costs the same for a thousand titles as for one, so the batch form is
+    # what makes a 57 GB local table cheaper than an API call per paper.
+    batch: dict = {}
+    if a.via == "local" and todo and not a.offline:
+        from dev.openalex_identity_index import DEFAULT_DB, IdentityIndex
+
+        path = os.environ.get("OUROBOROS_OPENALEX_IDENTITY_DB", DEFAULT_DB)
+        if os.path.exists(path):
+            t0 = time.time()
+            batch = IdentityIndex(path).resolve_batch({k: bank[k] for k in todo})
+            print(
+                f"local snapshot: {len(batch)} of {len(todo)} resolved in one scan "
+                f"({time.time()-t0:.0f}s)\n"
+            )
     if a.limit:
         todo = todo[: a.limit]
     print(f"papers needing identity: {len(todo)}{' (limited)' if a.limit else ''}\n")
@@ -207,7 +223,11 @@ async def main_async(a) -> int:
         ident, kind = record_identifier(rec)  # tiers 1, 2 and 4: free
         ident = openalex_id_short(ident) if kind == "openalex" else ident
         doi = ""
-        if (not ident or kind in _WEAK_TIERS) and not a.offline:
+        if (not ident or kind in _WEAK_TIERS) and key in batch:
+            l_ident, l_kind, l_doi = batch[key]
+            if l_ident:
+                ident, kind, doi = l_ident, f"{l_kind}*", l_doi
+        if (not ident or kind in _WEAK_TIERS) and not a.offline and key not in batch:
             # A CORE id identifies a copy; try for the work itself first.
             lookup = {
                 "openalex": lookup_openalex,

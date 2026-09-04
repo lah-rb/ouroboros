@@ -51,20 +51,21 @@ def norm_title(t: str | None) -> str:
 def build(mirror: str, db: str, threads: int = 8) -> None:
     """Extract the identity columns of every mirrored work into one table.
 
+    NO SECONDARY INDEXES, DELIBERATELY. A B-tree over 502M title strings
+    exhausted a 24 GB budget and died (measured 2026-09-04), and an FTS index
+    over the same column would be far larger. It is also unnecessary: the
+    table is columnar, so an equality filter on `title_norm` is a single
+    column scan -- **1.5 s warm, 3.5 s cold over 502M rows** -- and the real
+    workload is a few hundred titles at a time, which `resolve_batch` answers
+    in ONE scan rather than one scan each.
+
     NO DEDUPE. Partitions are keyed by `updated_date` and a work lives in
-    exactly the partition of its LATEST update -- verified 2026-09-03 over 30
-    partitions / 11.78M rows: 11,784,027 distinct ids, zero repeats. If that
-    ever stops holding the exact-title lookup returns near-duplicates and the
-    match gate picks one, which is survivable, but the check is cheap enough
-    to redo after a schema change.
+    exactly the partition of its latest update -- verified over 30 partitions
+    / 11.78M rows, zero repeated ids.
 
-    Measured on 6 real partitions (2.9 GB, 2.4M rows): scan 68 GB/min, exact
-    index 4 s, FTS 7 s, 0.61 GB of database per 2.4M rows -- so the full works
-    entity lands around 66 GB, which is why the database belongs on the SSD
-    and not beside the mirror on the HDD.
-
-    Do NOT run this while the mirror is still syncing: both hammer the same
-    USB spindle and the scan crawls.
+    Measured on the full mirror: 502,347,343 works with a title, 45 min scan,
+    57 GB of database. Do NOT run while the mirror is syncing -- both hammer
+    the same USB spindle.
     """
     src = os.path.join(mirror, "data", "parquet", "works", "**", "*.parquet")
     if not glob.glob(src, recursive=True):
@@ -75,6 +76,7 @@ def build(mirror: str, db: str, threads: int = 8) -> None:
     con = duckdb.connect(db)
     con.execute(f"PRAGMA threads={threads}")
     con.execute("PRAGMA memory_limit='24GB'")
+    con.execute("PRAGMA preserve_insertion_order=false")
     t0 = time.time()
     print(f"scanning {src} (identity columns only) ...", flush=True)
     con.execute(f"""
@@ -89,67 +91,42 @@ def build(mirror: str, db: str, threads: int = 8) -> None:
         WHERE title IS NOT NULL AND length(title) > 0
         """)
     n = con.execute("SELECT count(*) FROM works_identity").fetchone()[0]
-    print(f"  {n:,} works with a title in {(time.time()-t0)/60:.1f} min", flush=True)
-    t1 = time.time()
-    con.execute(
-        "CREATE INDEX IF NOT EXISTS idx_title_norm ON works_identity(title_norm)"
-    )
-    print(f"  exact-title index in {(time.time()-t1)/60:.1f} min", flush=True)
-    t2 = time.time()
-    con.execute("INSTALL fts; LOAD fts;")
-    con.execute(
-        "PRAGMA create_fts_index('works_identity', 'id', 'title', stemmer='porter', "
-        "stopwords='english', ignore='(\\\\.|[^a-z0-9])+', overwrite=1)"
-    )
-    print(f"  full-text index in {(time.time()-t2)/60:.1f} min", flush=True)
     con.execute("CHECKPOINT")
     con.close()
     print(
-        f"built {db}: {os.path.getsize(db)/1e9:.1f} GB in {(time.time()-t0)/60:.1f} min total"
+        f"built {db}: {n:,} works, {os.path.getsize(db)/1e9:.1f} GB in {(time.time()-t0)/60:.1f} min"
     )
 
 
 class IdentityIndex:
-    """Candidate retrieval over the local index; matching is the caller's."""
+    """Candidate retrieval over the local snapshot; matching is the caller's.
 
-    def __init__(self, db: str = DEFAULT_DB):
+    Exact normalised-title equality only. There is no fuzzy tier: BM25 over
+    502M titles needs an index this scale cannot afford, and the matcher
+    already refuses partial titles without a corroborating year, so a fuzzy
+    tier would mostly feed it candidates it would reject.
+    """
+
+    def __init__(self, db: str = DEFAULT_DB, threads: int = 8, memory: str = "16GB"):
         self.con = duckdb.connect(db, read_only=True)
-        self.con.execute("LOAD fts;")
+        self.con.execute(f"PRAGMA threads={threads}")
+        self.con.execute(f"PRAGMA memory_limit='{memory}'")
 
-    def exact(self, title: str) -> list[dict]:
+    def exact(self, title: str, limit: int = 5) -> list[dict]:
         key = norm_title(title)
         if not key:
             return []
         rows = self.con.execute(
-            "SELECT id, doi, title, year FROM works_identity WHERE title_norm = ? LIMIT 5",
-            [key],
-        ).fetchall()
-        return [
-            dict(id=r[0], doi=r[1], title=r[2], publication_year=r[3]) for r in rows
-        ]
-
-    def fuzzy(self, title: str, k: int = 5) -> list[dict]:
-        q = norm_title(title)
-        if not q:
-            return []
-        rows = self.con.execute(
-            """
-            SELECT id, doi, title, year
-            FROM (SELECT *, fts_main_works_identity.match_bm25(id, ?) AS score FROM works_identity)
-            WHERE score IS NOT NULL ORDER BY score DESC LIMIT ?
-            """,
-            [q, k],
+            "SELECT id, doi, title, year FROM works_identity WHERE title_norm = ? LIMIT ?",
+            [key, limit],
         ).fetchall()
         return [
             dict(id=r[0], doi=r[1], title=r[2], publication_year=r[3]) for r in rows
         ]
 
     def resolve(self, record: dict) -> tuple[str, str, str]:
-        """(identifier, kind, doi) for a record, or ("", "", ""). Exact
-        normalised title first, then BM25 candidates; `is_confident_match`
-        gates both, so a local index never lowers the bar."""
-        title = str(record.get("title") or "")
-        for work in self.exact(title) + self.fuzzy(title):
+        """(identifier, kind, doi) for one record, or ("", "", "")."""
+        for work in self.exact(str(record.get("title") or "")):
             if not is_confident_match(work, record):
                 continue
             doi = str(work.get("doi") or "").strip()
@@ -158,6 +135,48 @@ class IdentityIndex:
             if work.get("id"):
                 return str(work["id"]), "openalex", ""
         return "", "", ""
+
+    def resolve_batch(
+        self, records: dict[str, dict]
+    ) -> dict[str, tuple[str, str, str]]:
+        """{key: (identifier, kind, doi)} for many records in ONE table scan.
+
+        A scan costs the same whether it answers one title or a thousand, so
+        the batch form is what makes a 57 GB local table cheaper than an API
+        call per paper. Candidates are gated by `is_confident_match` exactly
+        as the single-record path is.
+        """
+        wanted = {}
+        for k, rec in records.items():
+            key = norm_title(rec.get("title"))
+            if key:
+                wanted.setdefault(key, []).append(k)
+        if not wanted:
+            return {}
+        self.con.execute("CREATE OR REPLACE TEMP TABLE _probe (title_norm VARCHAR)")
+        self.con.executemany("INSERT INTO _probe VALUES (?)", [[k] for k in wanted])
+        rows = self.con.execute("""
+            SELECT w.title_norm, w.id, w.doi, w.title, w.year
+            FROM works_identity w JOIN _probe p USING (title_norm)
+            """).fetchall()
+        cands: dict[str, list[dict]] = {}
+        for tn, wid, doi, title, year in rows:
+            cands.setdefault(tn, []).append(
+                dict(id=wid, doi=doi, title=title, publication_year=year)
+            )
+        out: dict[str, tuple[str, str, str]] = {}
+        for tn, keys in wanted.items():
+            for k in keys:
+                rec = records[k]
+                for work in cands.get(tn, []):
+                    if not is_confident_match(work, rec):
+                        continue
+                    doi = str(work.get("doi") or "").strip()
+                    out[k] = (
+                        (doi, "doi", doi) if doi else (str(work["id"]), "openalex", "")
+                    )
+                    break
+        return out
 
 
 def main() -> int:
@@ -179,10 +198,6 @@ def main() -> int:
     rec = {"title": a.title, "year": a.year}
     t0 = time.time()
     print("exact :", ix.exact(a.title)[:3])
-    print(
-        "fuzzy :",
-        [(w["doi"], w["title"][:50], w["publication_year"]) for w in ix.fuzzy(a.title)],
-    )
     print("resolve:", ix.resolve(rec), f"({(time.time()-t0)*1000:.0f} ms)")
     return 0
 
