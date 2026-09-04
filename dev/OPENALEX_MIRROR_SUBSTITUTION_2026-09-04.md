@@ -164,8 +164,47 @@ CORE-only 15% of acceptances. Storage: a metadata-only flip adds ~1.5 TB on
 top of the OpenAlex drive (133 GB free); S2ORC adds 180 GB; CORE full texts
 are terabytes. A 4 TB drive covers everything but CORE's full text.
 
-## Pending in this study
+## Citation snowball: the discriminating local route
 
-- Citation snowball via `works_refs`: how many accepted papers are reachable
-  from the references of other accepted papers (fills in when the HDD pass
-  lands).
+`works_refs` (id, referenced_works) answers both directions of the citation
+graph with two scans — the outgoing one cold from the HDD in 14 min, the
+incoming one 9 s once the 33.5 GB table sits in page cache — where the API
+path made one call per 50 ids and Semantic Scholar's references endpoint
+429'd on most of the corpus.
+
+| one hop from the 1,757 accepted papers | works | with OA pdf | since 2015 |
+|---|---|---|---|
+| works they cite | 50,501 | 10,339 | 16,837 |
+| works citing ≥1 of them | 144,652 | 40,169 | 121,623 |
+| works citing ≥2 of them | 14,493 | 4,880 | 12,874 |
+
+Recall against the verdicts: **45% of accepted papers are one hop from
+another accepted paper** (29% cited by one, 32% citing one) against 30% of
+denied papers (24% / 17%). Topics separated accepted from denied at a ratio
+of 1.6 with a 10M pool; citation proximity separates at 1.5 with a pool two
+orders of magnitude smaller, and the ≥2-citers pool (14.5k works) is the
+size of the mission's entire historical candidate list. The corpus's own
+biblio snowball converted 164 acceptances from 1,872 candidates (8.8%);
+this is the same mechanism without the meter, at any depth.
+
+## Verdict
+
+The snapshot replaces the API for **identity** (99% of DOIs, 58–70% of
+no-id papers by exact title), **enrichment** (page extents, languages,
+OpenAlex ids; not licenses), **OA locations** (Unpaywall is inside it) and
+the **citation snowball** (two scans, no meter). It replaces text-search
+**discovery** only partly: topics narrow 510M to 10M but do not carry the
+curator's verdict; titles recover half of what abstract search found. A
+local discovery loop that would stand on its own is the citation
+neighbourhood of the accepted set, unioned with topics ∧ text, where the
+text layer comes cheapest from Semantic Scholar's 54 GB abstracts dataset
+rather than a 4.5 h pass over OpenAlex's inverted index. Everything above
+except the fetch of the PDF itself can be local.
+
+Two engineering notes from the run: DuckDB materialised a FROM-clause
+`UNNEST` join over 10 billion reference rows and spilled >100 GB of temp
+into the process's cwd until the SSD was full (the mission survived; the
+temp cleaned itself on exit) — keep `unnest()` in the projection so it
+streams into the semi-join, and set `temp_directory` to the HDD before any
+large join. And keep the refs table warm: the 9 s incoming scan was from
+page cache; cold it is a quarter hour.
