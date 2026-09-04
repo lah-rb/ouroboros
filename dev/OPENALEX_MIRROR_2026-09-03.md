@@ -40,9 +40,12 @@ explicit "format it". ext4, label `openalex`, udisks auto-mounts it at
 **`/media/lah-rb/openalex`**; 5% reserved leaves 870 GB, ~86 GB headroom over
 the tree.
 
-**The disk is the bottleneck, not the network:** 97% busy at 31–50 MB/s
-writes with 8 streams; the Wi-Fi link (`wlo1`) carried 57 MB/s with headroom.
-Relaunched at 3 streams to cut head thrash. Realistic pull time 4–5 h.
+**Throughput scales with stream count — the limit is per-stream latency over
+Wi-Fi, not the disk.** 8 streams: 50 MB/s (10-min average). I read the disk's
+97% "busy" as head thrash and dropped to 3 streams: **25 MB/s** — half.
+`%busy` on a USB-bridged HDD counts time with any request outstanding and says
+nothing about capacity. Relaunched at 12 streams; the Wi-Fi link (`wlo1`)
+showed 57 MB/s inbound with 8, so the ceiling is somewhere above that.
 
 Formatting without sudo took three attempts: this udisks CLI has **no
 `format` verb**; brew's `gdbus` **cannot reach the system bus**; systemd's
