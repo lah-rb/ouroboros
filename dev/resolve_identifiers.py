@@ -168,6 +168,28 @@ async def lookup_crossref(effects, rec: dict) -> tuple[str, str, str]:
     return "", "", ""
 
 
+_LOCAL_INDEX = None
+
+
+async def lookup_local(effects, rec: dict) -> tuple[str, str, str]:
+    """(identifier, kind, doi) from the local OpenAlex identity index
+    (dev/openalex_identity_index.py): no rate limit, no credit, and it covers
+    the theses Crossref does not. Same is_confident_match gate as every other
+    tier -- a local index removes the meter, not the judgement."""
+    global _LOCAL_INDEX
+    if _LOCAL_INDEX is None:
+        from dev.openalex_identity_index import DEFAULT_DB, IdentityIndex
+
+        path = os.environ.get("OUROBOROS_OPENALEX_IDENTITY_DB", DEFAULT_DB)
+        if not os.path.exists(path):
+            return "", "", ""
+        _LOCAL_INDEX = IdentityIndex(path)
+    try:
+        return _LOCAL_INDEX.resolve(rec)
+    except Exception:  # noqa: BLE001 -- a lookup never fails a resolution
+        return "", "", ""
+
+
 async def main_async(a) -> int:
     fx = LocalEffects(a.root)
     bank = await read_databank(fx)
@@ -187,7 +209,11 @@ async def main_async(a) -> int:
         doi = ""
         if (not ident or kind in _WEAK_TIERS) and not a.offline:
             # A CORE id identifies a copy; try for the work itself first.
-            lookup = lookup_openalex if a.via == "openalex" else lookup_crossref
+            lookup = {
+                "openalex": lookup_openalex,
+                "crossref": lookup_crossref,
+                "local": lookup_local,
+            }[a.via]
             l_ident, l_kind, l_doi = await lookup(fx, rec)
             if l_ident:
                 ident, kind, doi = l_ident, l_kind, l_doi
@@ -244,9 +270,10 @@ def main() -> int:
     )
     ap.add_argument(
         "--via",
-        choices=("crossref", "openalex"),
-        default="crossref",
-        help="lookup index for the network tier (OpenAlex now meters by credit)",
+        choices=("local", "crossref", "openalex"),
+        default="local",
+        help="lookup index: the local OpenAlex mirror (default; no meter), "
+        "Crossref (free, misses theses), or the OpenAlex API (credit-metered)",
     )
     ap.add_argument("--apply", action="store_true")
     ap.add_argument(
