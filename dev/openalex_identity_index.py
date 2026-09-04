@@ -25,6 +25,7 @@ path uses. A local index removes the rate limit, not the judgement.
 from __future__ import annotations
 
 import argparse
+import glob
 import os
 import re
 import sys
@@ -48,7 +49,29 @@ def norm_title(t: str | None) -> str:
 
 
 def build(mirror: str, db: str, threads: int = 8) -> None:
+    """Extract the identity columns of every mirrored work into one table.
+
+    NO DEDUPE. Partitions are keyed by `updated_date` and a work lives in
+    exactly the partition of its LATEST update -- verified 2026-09-03 over 30
+    partitions / 11.78M rows: 11,784,027 distinct ids, zero repeats. If that
+    ever stops holding the exact-title lookup returns near-duplicates and the
+    match gate picks one, which is survivable, but the check is cheap enough
+    to redo after a schema change.
+
+    Measured on 6 real partitions (2.9 GB, 2.4M rows): scan 68 GB/min, exact
+    index 4 s, FTS 7 s, 0.61 GB of database per 2.4M rows -- so the full works
+    entity lands around 66 GB, which is why the database belongs on the SSD
+    and not beside the mirror on the HDD.
+
+    Do NOT run this while the mirror is still syncing: both hammer the same
+    USB spindle and the scan crawls.
+    """
     src = os.path.join(mirror, "data", "parquet", "works", "**", "*.parquet")
+    if not glob.glob(src, recursive=True):
+        raise SystemExit(
+            f"no parquet under {src} (a symlinked partition will NOT be globbed -- "
+            "point --mirror at the real tree)"
+        )
     con = duckdb.connect(db)
     con.execute(f"PRAGMA threads={threads}")
     con.execute("PRAGMA memory_limit='24GB'")
