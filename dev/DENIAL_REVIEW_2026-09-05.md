@@ -91,3 +91,42 @@ Quote the charter; do not restate it.
 - `dev/denial_family_guard.py` — the out-of-family downgrade pass
 - `prompts/curator/review_paper.yaml` — the loosened rule
 - `tests/test_curator_prompts.py` — asserts the composition and derived-value rules
+
+## Result
+
+All 1,857 standing denials were re-judged; `verify` confirmed every out file
+answered exactly its job file, key for key, with no foreign keys.
+
+| stage | recover | clean | borderline |
+|---|---|---|---|
+| first pass | 218 | 1,520 | 119 |
+| after second opinion (40 overturned) | 178 | 1,560 | 119 |
+| after family guard (2 downgraded) | **176** | 1,562 | 119 |
+
+**The second opinion overturned 40 of 149 old-brief recoveries — 27%.** Most
+were Mossbauer-only or XPS-only papers, exactly what the bad brief admitted;
+the rest were papers where an in-family technique was named as a method but no
+value of any kind survived extraction. That rate is the measure of the damage
+my brief would have done unchecked, and the reason the correction pass was not
+optional.
+
+**Where the yield actually is.** Recoveries by the ORIGINAL deny_category:
+
+| category | recovered | of total | rate |
+|---|---|---|---|
+| data_not_in_text | 81 | 228 | 36% |
+| corpus_fit | 93 | 1,450 | 6% |
+| extraction_damage | 2 | 21 | 10% |
+
+This corrects the framing the investigation started from. `corpus_fit` is by
+far the largest denial category and the one the prompt fix was aimed at, but
+`data_not_in_text` is where the loosening bites hardest: the curator was
+looking for a spectrum, not finding one, and recording that the data was absent
+when a peak or composition table was sitting in the text.
+
+**Booked:** 176 papers re-armed. The curate queue went 225 -> 402 awaiting
+review; standing denials 1,916 -> 1,740. Each re-armed record keeps its prior
+denial verbatim in the `RE-ARMED` summary, so the batch is reversible.
+
+Borderline verdicts (119) were deliberately left denied, per the operator's
+standing ruling that borderline denials stand.

@@ -92,6 +92,52 @@ async def prepare(a) -> int:
     return 0
 
 
+async def verify(a) -> int:
+    """Every out_NN.json must answer exactly its job_NN.json, key for key.
+
+    WHY THIS IS NOT OPTIONAL. The agents write their answers as files in a
+    shared directory, and one run reported a scratch file of its own being
+    overwritten by another agent mid-task. The job files themselves are
+    read-only and were checksum-verified unchanged, but "the answers I read
+    back are the answers to the questions I asked" is exactly the property a
+    shared filesystem does not give you for free. A foreign key here would
+    book a verdict against the wrong paper.
+    """
+    problems: collections.Counter = collections.Counter()
+    judged = 0
+    for jf in sorted(glob.glob(f"{a.inp}/job_*.json")):
+        n = os.path.basename(jf)[4:-5]
+        of = f"{a.inp}/out_{n}.json"
+        if not os.path.exists(of):
+            problems["missing"] += 1
+            continue
+        asked = [r["key"] for r in json.load(open(jf))]
+        try:
+            answered = json.load(open(of)).get("verdicts") or []
+        except Exception as e:  # noqa: BLE001
+            print(f"  UNREADABLE out_{n}: {e}")
+            problems["unreadable"] += 1
+            continue
+        judged += len(answered)
+        got = [str(v.get("key")) for v in answered]
+        if collections.Counter(got) != collections.Counter(asked):
+            foreign = set(got) - set(asked)
+            print(
+                f"  MISMATCH out_{n}: {len(asked)} asked, {len(got)} answered, "
+                f"{len(set(asked)-set(got))} missing, {len(foreign)} foreign"
+            )
+            for k in list(foreign)[:3]:
+                print(f"      foreign key: {k[:60]}")
+            problems["mismatch"] += 1
+        for v in answered:
+            if str(v.get("verdict")) not in ("recover", "clean", "borderline"):
+                print(f"  BAD VERDICT out_{n}: {v.get('verdict')!r}")
+                problems["verdict"] += 1
+    print(f"\n{judged} verdicts checked; problems: {dict(problems) or 'none'}")
+    fatal = problems["mismatch"] + problems["unreadable"] + problems["verdict"]
+    return 1 if fatal else 0
+
+
 async def book(a) -> int:
     fx = LocalEffects(a.root)
     bank = await read_databank(fx)
@@ -156,8 +202,10 @@ def main() -> int:
     b = sub.add_parser("book")
     b.add_argument("--in", dest="inp", required=True)
     b.add_argument("--apply", action="store_true")
+    v = sub.add_parser("verify")
+    v.add_argument("--in", dest="inp", required=True)
     a = ap.parse_args()
-    return asyncio.run({"prepare": prepare, "book": book}[a.cmd](a))
+    return asyncio.run({"prepare": prepare, "book": book, "verify": verify}[a.cmd](a))
 
 
 if __name__ == "__main__":
