@@ -465,6 +465,20 @@ def update_key_registry(registry: dict, data: dict, paper_key: str) -> dict:
             }
         else:
             entry["count"] = int(entry.get("count") or 0) + 1
+            # WIDEN, don't drift. _types_compatible already lets a paper with
+            # several values send list[T] where the registry says T, so the
+            # pack passes -- but the entry kept saying T forever and the
+            # registry stopped describing its own data. Worse, a model reading
+            # the registry block sees a scalar and coins the plural spelling
+            # instead, which is how 19 duplicate key pairs were manufactured
+            # (spectrometer_model/spectrometer_models). A container is the
+            # honest slot: list[T] holds one value, T cannot hold several.
+            actual = _type_name(value)
+            if actual == f"list[{entry.get('type')}]":
+                from datetime import datetime, timezone
+
+                entry["type"] = actual
+                entry["widened_at"] = datetime.now(timezone.utc).date().isoformat()
     return registry
 
 

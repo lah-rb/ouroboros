@@ -35,7 +35,7 @@ import json
 import re
 from dataclasses import dataclass, field
 
-from agent.actions.curation_actions import _estimate_doc_tokens
+from agent.actions.curation_actions import _estimate_doc_tokens, _type_name
 
 # Sized from the corpus measurement: 10-25k tokens is the 96% band.
 DEFAULT_TARGET_TOKENS = 18_000
@@ -261,7 +261,22 @@ def repair_shapes(data: dict, registry: dict) -> tuple[dict, list[dict]]:
     repairs: list[dict] = []
     for key, value in data.items():
         entry = registry.get(key)
-        if not entry or str(entry.get("type") or "") != "list[object]":
+        want = str(entry.get("type") or "") if entry else ""
+        # A SHALLOW list wants the bare value wrapped, not boxed in an object:
+        # registry list[string] met by "Renishaw inVia" becomes ["Renishaw
+        # inVia"]. Only list[object] needs the exemplar-field boxing below.
+        if want in ("list[string]", "list[number]", "list") and not isinstance(
+            value, list
+        ):
+            if value is None:
+                continue
+            elem = want[5:-1] if want.startswith("list[") else ""
+            if elem and _type_name(value) != elem:
+                continue  # a number under list[string] is drift, not a shape
+            out[key] = [value]
+            repairs.append({"key": key, "from": "scalar", "to": want, "n": 1})
+            continue
+        if want != "list[object]":
             continue
         field = _exemplar_field(entry, key)
         if isinstance(value, list):

@@ -191,3 +191,46 @@ def test_an_unrelatable_exemplar_is_left_alone_rather_than_guessed():
     }
     fixed, repairs = repair_shapes({"mystery_values": [1, 2]}, registry)
     assert fixed["mystery_values"] == [1, 2] and repairs == []
+
+
+def test_a_shallow_list_wants_the_bare_value_wrapped_not_boxed():
+    """Registry list[string] met by a bare string becomes a one-element list.
+
+    Before 2026-09-04 repair_shapes only handled list[object], so a scalar
+    under a shallow list type was left for the gate. The gate accepts it
+    (T and list[T] are one slot), but the corpus then held both shapes for
+    one key and models coined the plural spelling to escape -- which is how
+    19 duplicate key pairs were manufactured.
+    """
+    from agent.actions.pack_windows import repair_shapes
+
+    registry = {
+        "spectrometer_model": {"type": "list[string]", "count": 3},
+        "laser_wavelength_nm": {"type": "list[number]", "count": 2},
+        "already_a_list": {"type": "list[string]", "count": 1},
+        "wrong_element_type": {"type": "list[string]", "count": 1},
+        "bare_list": {"type": "list", "count": 1},
+    }
+    data, repairs = repair_shapes(
+        {
+            "spectrometer_model": "Renishaw inVia",
+            "laser_wavelength_nm": 532,
+            "already_a_list": ["Peru"],
+            "wrong_element_type": 7,
+            "bare_list": "x",
+        },
+        registry,
+    )
+    assert data["spectrometer_model"] == ["Renishaw inVia"]
+    assert data["laser_wavelength_nm"] == [532]
+    assert data["already_a_list"] == ["Peru"], "a list is left alone"
+    assert data["bare_list"] == ["x"], "a bare list type takes any single value"
+    assert data["wrong_element_type"] == 7, (
+        "a number under list[string] is DRIFT, not a shape problem -- left for "
+        "the registry check to fail rather than silently coerced"
+    )
+    assert {(r["key"], r["to"]) for r in repairs} == {
+        ("spectrometer_model", "list[string]"),
+        ("laser_wavelength_nm", "list[number]"),
+        ("bare_list", "list"),
+    }

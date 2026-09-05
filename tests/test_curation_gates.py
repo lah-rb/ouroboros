@@ -507,3 +507,28 @@ def test_review_state_denies_a_non_paper_form_that_the_model_accepted():
     assert dn["status"] == "denied" and dn["deny_category"] == "data_not_in_text"
     # No form given: nothing changes -- the rule only acts on a named non-paper form.
     assert review_state_from({"verdict": "accept"})["status"] == "accepted"
+
+
+def test_the_registry_widens_a_scalar_slot_instead_of_drifting():
+    """T -> list[T] when a paper honestly reports several values.
+
+    _types_compatible already lets the pack THROUGH, but before 2026-09-04
+    the entry kept saying T forever, so the registry stopped describing its
+    own data and the prompt kept showing a scalar -- which pushed models to
+    coin the plural spelling as a separate key.
+    """
+    reg = {"spectrometer_model": {"type": "string", "count": 4}}
+    update_key_registry(reg, {"spectrometer_model": ["A", "B"]}, "p9")
+    e = reg["spectrometer_model"]
+    assert e["type"] == "list[string]" and e["count"] == 5
+    assert e["widened_at"], "the widening is stamped, not silent"
+    # A widened slot still accepts the scalar form from the next paper.
+    assert registry_check({"spectrometer_model": "C"}, reg)["type_mismatches"] == []
+    # Real drift never widens.
+    drift = {"k": {"type": "number", "count": 1}}
+    update_key_registry(drift, {"k": "text"}, "p1")
+    assert drift["k"]["type"] == "number"
+    # Nor does a deeper container silently replace a shallow one.
+    deep = {"k2": {"type": "list[string]", "count": 1}}
+    update_key_registry(deep, {"k2": [{"a": 1}]}, "p2")
+    assert deep["k2"]["type"] == "list[string]"

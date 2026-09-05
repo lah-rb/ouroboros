@@ -93,3 +93,72 @@ files, zero alias chains, every canonical present in the registry.
   `number` in one key and `list[object]` in another
   (`uv_vis_absorption_peak_nm` / `_peaks_nm`). Resolving those needs a type
   decision first.
+
+## Follow-up: shallow lists, renames, suffix swaps (same day)
+
+Operator: "The clean repair is probably to merge the strings into a shallow
+list. Additionally, have agents rename the malformed keys, and swap the
+suffixes after a sanity check."
+
+### Why the type split kept regenerating
+
+`_types_compatible` already lets a paper send `list[T]` where the registry
+says `T`, so those packs PASS -- but `update_key_registry` only bumped the
+count and left the entry saying `T`. The registry therefore stopped
+describing its own data, the prompt kept showing a scalar, and models coined
+the plural spelling as a separate key to escape. That is the mechanism that
+manufactured the 19 duplicate pairs.
+
+Two code fixes close it:
+
+- `update_key_registry` **widens** `T` to `list[T]` when a paper honestly
+  sends several values, and stamps `widened_at`. Real drift (number vs
+  string) still never widens, and a deeper container never replaces a
+  shallow one.
+- `repair_shapes` wraps a bare value into a **shallow** list
+  ("Renishaw inVia" -> ["Renishaw inVia"]), where before it only boxed values
+  into `list[object]`. A number offered under `list[string]` is drift, not a
+  shape problem, and is still left for the gate to fail.
+
+### The migration
+
+All 19 pairs were checked first: in **every one** the plural side really
+holds multi-element values (['CaCO3','SiO4','FeTiO3','MgCO3'], [532, 638,
+785]), so there was no cheap collapse -- widening was the only clean repair.
+`dev/widen_scalar_keys.py` wrapped 3,079 scalars across 1,698 packs, folded
+41 values from the plural twins, and asserted the corpus leaf count as an
+invariant: 227,312 -> 227,308, the -4 being duplicate values merged where a
+paper held both spellings.
+
+### Renames and swaps
+
+`dev/apply_key_renames.py` -- 100 candidates from a mechanical sweep plus the
+review notes; **69 renamed, 30 deliberately left**. The agent kept every
+doubled token that is real notation (`ar_ar` argon dating, `pr_pr`
+interatomic distance, `w_w` weight-for-weight, `chi_chi` earthquake) and
+renamed only true errors: 58 keys spelling the SHERLOC camera WATSON as
+"watsom", `deplorization`->`depolarization`, four `icp_oess`->`icp_oes`,
+`them is_band_center_um`->`themis_band_center_um` (a stray space),
+`tme_observations`->`tem_observations`, and `bet_surface_area_g_m2` whose
+unit read backwards.
+
+`dev/apply_suffix_swaps.py` -- a corpus-wide sweep found 6 packs where a
+`_min` value exceeds its `_max`. The reviewer read the papers: **4 swaps, 2
+keeps**. The swaps are WATSON, where the packer keyed `_min` to the LABEL
+"min. working distance" rather than to the lower number. The keeps are the
+resolution trap: for nm/pixel a smaller number is finer, and both papers
+order coarse-to-fine ("from 26 nm/pixel up to 2.2 nm/pixel"), so `_min`
+holding the coarser value is defensible as written.
+
+Order was load-bearing: the swaps reference the misspelled `watsom_*` keys,
+so they had to run BEFORE the rename.
+
+### Residue found and fixed
+
+Stacking three migrations produced one self-alias (`icp_oes_instrument` ->
+itself, because the typo had held the canonical slot and the rename
+retargeted the alias onto its own key) and one two-step chain. Both are
+collapsed, and the rename applier now drops self-aliases and flattens chains
+itself. Final: 8,288 registry keys, 114 quarantined, 346 aliases, zero
+self-aliases, zero chains, zero aliased spellings left in data, zero
+malformed spellings left in the vocabulary.
