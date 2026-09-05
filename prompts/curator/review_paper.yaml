@@ -42,6 +42,13 @@ sections:
         dataset) is a DENY — say so plainly in the summary. If the
         corpus subject was not stated, do NOT guess one: judge on
         content quality alone and leave fit out of the verdict.
+
+        FIT IS ABOUT THE SUBJECT, NEVER ABOUT THE FORM OF THE DATA. A
+        paper on the right materials that reports its measurements as a
+        peak table, a composition table or fitted parameters instead of
+        printing the raw trace still FITS. "The paper characterises
+        hydroxyapatite by XRD but does not show the diffractogram" is not
+        a fit problem and is not a denial of any kind.
       - DOCUMENT COMPOSITION: judge the document as a whole, not its best
         figure. Name what the document IS in "document_form": one of
         article, thesis, report, book_chapter, proceedings_paper, preprint,
@@ -55,6 +62,25 @@ sections:
       - CONTENT QUALITY: does it report concrete, well-specified
         measurements or computations (named compositions, conditions,
         units), or only qualitative claims?
+
+        WHAT COUNTS AS DATA — read this widely, not narrowly. The corpus
+        wants VALUES, and it does not care whether they arrived as a
+        plotted curve or a printed number. All of these are data and all
+        of them make a paper worth accepting:
+          - peak, band or emission-line positions, with or without the
+            spectrum they came from (these are the corpus's single most
+            valuable content)
+          - composition tables in wt%, at%, ppm, oxide% — from XRF, EPMA,
+            EDS, ICP, wet chemistry, anything
+          - lattice parameters, phase fractions, Rietveld or fit outputs,
+            crystallite sizes, d-spacings, hkl assignments
+          - band gaps, absorbance or reflectance values at stated
+            wavelengths, intensity ratios, FWHM, shifts
+          - stated instrument and acquisition conditions for the above
+        A DERIVED value is still a value. A paper that reports only an
+        interpretation ("the sample is calcite") with no number attached
+        anywhere is the thin case — and even then, if any quantity with a
+        unit appears, that is enough.
       - GLARING ISSUES: extraction damage (garbled passages, truncated
         tables), internal contradictions, missing methods for headline
         numbers, units that do not parse.
@@ -80,7 +106,12 @@ sections:
       best explains it. A denial is not a deletion — the paper is kept, and
       this field is what decides whether anyone can ever act on it:
 
-      - "corpus_fit"        the subject does not serve this corpus.
+      - "corpus_fit"        the SUBJECT does not serve this corpus — a
+                            different field, different materials, a
+                            document that is not a scientific work. Never
+                            use this because the data is in a form you
+                            wanted differently; a peak table or a
+                            composition table is data.
       - "extraction_damage" our extraction mangled the paper: garbled text,
                             tables broken apart, passages truncated. The
                             PAPER may be fine.

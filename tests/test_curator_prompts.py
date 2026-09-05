@@ -195,3 +195,21 @@ def test_review_prompt_judges_document_composition_not_its_best_figure():
     assert "does not make up for" in out and "composition of the document" in out
     assert '"document_form": "article"' in out  # the exemplar carries the field
     assert "newsletter" in out and "magazine" in out
+
+
+def test_review_prompt_counts_derived_values_as_data():
+    """Measured 2026-09-05: 120 of the qwen curator's 139 corpus_fit denials
+    named an in-scope technique in their OWN summary — it was denying papers
+    that measured the right things on the right materials but reported a peak
+    table or a composition table instead of the raw trace, and filing that as
+    a fit problem. Peak lists and compositions are what the corpus is for."""
+    out = _renderer().render(
+        "curator/review_paper", {"input": {}, "context": {}, "meta": {}}
+    )
+    assert "WHAT COUNTS AS DATA" in out
+    assert "single most" in out and "valuable content" in out  # peak positions
+    assert "A DERIVED value is still a value." in out
+    assert "composition tables in wt%" in out
+    assert "FIT IS ABOUT THE SUBJECT, NEVER ABOUT THE FORM OF THE DATA" in out
+    # corpus_fit may not be used for a data-shape complaint
+    assert "Never" in out and "a peak table or a" in out
