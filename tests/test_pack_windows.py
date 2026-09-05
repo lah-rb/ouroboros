@@ -234,3 +234,51 @@ def test_a_shallow_list_wants_the_bare_value_wrapped_not_boxed():
         ("laser_wavelength_nm", "list[number]"),
         ("bare_list", "list"),
     }
+
+
+def test_repair_shapes_drops_null_valued_keys():
+    """A null is "not reported", not a value in the wrong shape.
+
+    Left in place it is fatal: NoneType matches no registry type and
+    _types_compatible cannot rescue it, so one unreported field fails an
+    otherwise good window. Live case 2026-09-05: doi_10.2351_1.4792615 lost
+    BOTH windows to four null laser/XRD parameters.
+    """
+    from agent.actions.curation_actions import registry_check
+    from agent.actions.pack_windows import repair_shapes
+
+    registry = {
+        "laser_pulse_duration_ns": {"type": "number"},
+        "xrd_wavelength_angstrom": {"type": "number"},
+        "mineral_name": {"type": "string"},
+    }
+    data = {
+        "laser_pulse_duration_ns": None,
+        "xrd_wavelength_angstrom": None,
+        "mineral_name": "quartz",
+    }
+    out, repairs = repair_shapes(data, registry)
+
+    assert "laser_pulse_duration_ns" not in out
+    assert "xrd_wavelength_angstrom" not in out
+    assert out["mineral_name"] == "quartz"  # a real value is untouched
+    assert {r["key"] for r in repairs} == {
+        "laser_pulse_duration_ns",
+        "xrd_wavelength_angstrom",
+    }
+    assert all(r["to"] == "dropped" for r in repairs)
+
+    # and the repaired data now passes the check the nulls used to fail
+    assert registry_check(out, registry)["type_mismatches"] == []
+
+
+def test_repair_shapes_null_under_a_list_registry_type_is_dropped_not_wrapped():
+    """The shallow-list wrap must not turn a null into [None]."""
+    from agent.actions.pack_windows import repair_shapes
+
+    registry = {"instrument_model": {"type": "list[string]"}}
+    out, repairs = repair_shapes({"instrument_model": None}, registry)
+    assert "instrument_model" not in out
+    assert repairs == [
+        {"key": "instrument_model", "from": "null", "to": "dropped", "n": 0}
+    ]

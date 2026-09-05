@@ -251,7 +251,7 @@ def _exemplar_field(entry: dict, key: str = "") -> str | None:
 
 def repair_shapes(data: dict, registry: dict) -> tuple[dict, list[dict]]:
     """Coerce grounded values into the registry's declared shape where that is
-    a pure re-wrapping; never invent or drop a value.
+    a pure re-wrapping; never invent a value, and never drop one that exists.
 
     Handled: registry ``list[object]`` met by a list containing non-object
     items (wrap each scalar as ``{<exemplar field>: value}``), or by a bare
@@ -260,6 +260,18 @@ def repair_shapes(data: dict, registry: dict) -> tuple[dict, list[dict]]:
     out = dict(data)
     repairs: list[dict] = []
     for key, value in data.items():
+        # A null is "not reported", not a value in the wrong shape, so removing
+        # the key removes nothing -- there was never a value under it. Left in
+        # place it is FATAL: _type_name(None) is "NoneType", which equals no
+        # declared type and which _types_compatible cannot rescue, so the key
+        # lands in type_mismatches and takes the whole window down with it.
+        # Measured 2026-09-05: doi_10.2351_1.4792615 lost BOTH its windows to
+        # four unreported laser/XRD parameters the model honestly emitted as
+        # null.
+        if value is None:
+            out.pop(key, None)
+            repairs.append({"key": key, "from": "null", "to": "dropped", "n": 0})
+            continue
         entry = registry.get(key)
         want = str(entry.get("type") or "") if entry else ""
         # A SHALLOW list wants the bare value wrapped, not boxed in an object:
@@ -268,8 +280,6 @@ def repair_shapes(data: dict, registry: dict) -> tuple[dict, list[dict]]:
         if want in ("list[string]", "list[number]", "list") and not isinstance(
             value, list
         ):
-            if value is None:
-                continue
             elem = want[5:-1] if want.startswith("list[") else ""
             if elem and _type_name(value) != elem:
                 continue  # a number under list[string] is drift, not a shape
@@ -292,7 +302,7 @@ def repair_shapes(data: dict, registry: dict) -> tuple[dict, list[dict]]:
         elif isinstance(value, dict):
             out[key] = [value]
             repairs.append({"key": key, "from": "object", "to": "list[object]", "n": 1})
-        elif value is not None and field:
+        elif field:
             out[key] = [{field: value}]
             repairs.append({"key": key, "from": "scalar", "to": "list[object]", "n": 1})
     return out, repairs
