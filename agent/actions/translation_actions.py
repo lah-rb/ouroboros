@@ -191,6 +191,40 @@ def _max_repeat_words(text: str, max_period: int = 12) -> int:
     return best
 
 
+_EN_FUNCTION_WORDS = frozenset(
+    "the and of to in is for with that this from were was are which by an be as on at "
+    "or these have has not also can between".split()
+)
+TRANSLATE_MIN_EN_RATIO = (
+    0.05  # calibrated on 1,890 English packs: p1 of true English ~0.07
+)
+_LATIN_WORD_RE = re.compile(r"[a-zA-Z]+")
+
+
+def _output_language_problem(out: str) -> str:
+    """'' when the translation reads as English; otherwise why not."""
+    letters = sum(1 for ch in out if ch.isalpha()) or 1
+    cjk = sum(
+        1 for ch in out if "\u3040" <= ch <= "\u30ff" or "\u4e00" <= ch <= "\u9fff"
+    )
+    cyr = sum(1 for ch in out if "\u0400" <= ch <= "\u04ff")
+    hangul = sum(1 for ch in out if "\uac00" <= ch <= "\ud7af")
+    for name, n in (("CJK", cjk), ("Cyrillic", cyr), ("Hangul", hangul)):
+        if n / letters >= 0.15:
+            return f"output not English: {name} is {n / letters:.0%} of letters"
+    words = _LATIN_WORD_RE.findall(out)
+    if len(words) < 200:
+        return ""  # too short to judge by function words
+    tokens = re.findall(r"\S+", out)
+    digit_tokens = sum(1 for t in tokens if any(ch.isdigit() for ch in t))
+    if tokens and digit_tokens / len(tokens) > 0.5:
+        return ""  # a table; function words are legitimately scarce
+    ratio = sum(1 for w in words if w.lower() in _EN_FUNCTION_WORDS) / len(words)
+    if ratio < TRANSLATE_MIN_EN_RATIO:
+        return f"output not English: function-word ratio {ratio:.3f} < {TRANSLATE_MIN_EN_RATIO}"
+    return ""
+
+
 def translation_gate(src: str, out: str) -> dict:
     """Deterministic verdict on one assembled translation."""
     numeric = _numeric_preservation(src, out)
@@ -199,6 +233,16 @@ def translation_gate(src: str, out: str) -> dict:
     ratio = len(re.sub(r"\s", "", out)) / src_len
     repeats = _max_repeat_words(out)
     problems = []
+    # THE OUTPUT MUST BE ENGLISH. Measured 2026-09-06: nine packs had been cut
+    # from an .en.md that was still Russian, Japanese or Spanish -- the gate
+    # checked numbers, image tags, length and repetition, never the language,
+    # so a model that echoed its source passed. Two tests: the source script
+    # must not dominate the output, and Latin output must carry English
+    # function words. Numeric-dense outputs (tables) legitimately have few
+    # function words, so the ratio test is skipped when digits dominate.
+    lang = _output_language_problem(out)
+    if lang:
+        problems.append(lang)
     if numeric < TRANSLATE_MIN_NUMERIC:
         problems.append(f"numeric preservation {numeric:.3f} < {TRANSLATE_MIN_NUMERIC}")
     if img_out != img_src:
@@ -542,6 +586,9 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
                 )
                 await effects.write_file(_parts_path(key), "")
                 await append_extraction_records(effects, [rec])
+                await _book_pack_state_after_translation(
+                    effects, rec, "failed", rec["failure_reason"]
+                )
                 summary = {
                     "paper": key,
                     "chunks": len(chunks),
@@ -600,10 +647,14 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
             }
             rec["failure_reason"] = ""
             status = "translated"
+            await _book_pack_state_after_translation(effects, rec, "translated", "")
         elif rec["translate_attempts"] >= TRANSLATE_MAX_ATTEMPTS:
             rec["extraction_status"] = "translate_failed"
             rec["failure_reason"] = "translation: " + "; ".join(gate["problems"])
             status = "failed"
+            await _book_pack_state_after_translation(
+                effects, rec, "failed", rec["failure_reason"]
+            )
         else:
             # Stays extract_lingual; the bumped attempt count selects the
             # warmer retry next round, and the bumped EPOCH retires this
@@ -631,6 +682,59 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
         ),
         context_updates={"translate_summary": summary},
     )
+
+
+async def _book_pack_state_after_translation(
+    effects, rec: dict, outcome: str, why: str
+) -> None:
+    """Keep the PACK honest about the language it was cut from.
+
+    OPERATOR RULING 2026-09-06: the corpus feeds continued pre-training of
+    models too small for multilingual packs, so a pack must be English. Two
+    consequences land here, on the papers side of the databank (pack_status
+    is not an extraction-owned field, so the extraction-side append the
+    translate round already makes cannot carry it):
+
+      translated  -> a paper that was PACKED from its original-language text
+                     (every lingual pack before the ruling) goes to
+                     needs_repack, so the English pack replaces it.
+      failed      -> an ACCEPTED paper whose translation did not converge is
+                     booked pack_failed: there is no English text to pack, and
+                     an original-language pack already cut must not stay
+                     `packed`, which is what the export reads.
+
+    Never raises -- a booking failure must not undo a translation.
+    """
+    from agent.actions.scholarly_actions import append_records
+
+    try:
+        if outcome == "translated" and rec.get("pack_status") == "packed":
+            await append_records(
+                effects,
+                [{**rec, "pack_status": "needs_repack", "failure_reason": ""}],
+            )
+        elif outcome == "failed" and rec.get("review_status") == "accepted":
+            prior = rec.get("pack_status") or ""
+            note = (
+                "translation did not converge; the existing pack was cut from "
+                "original-language text and must not stand"
+                if prior == "packed"
+                else "translation did not converge, so there is no English text to pack"
+            )
+            await append_records(
+                effects,
+                [
+                    {
+                        **rec,
+                        "pack_status": "pack_failed",
+                        "failure_reason": f"{why[:160]} | {note}",
+                    }
+                ],
+            )
+    except Exception:  # noqa: BLE001 -- see docstring
+        logger.exception(
+            "pack-state booking after translation failed for %s", rec.get("paper_key")
+        )
 
 
 def release_translation_keys(keys: list[str]) -> None:

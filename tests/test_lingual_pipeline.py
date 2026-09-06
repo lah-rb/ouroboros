@@ -298,7 +298,6 @@ async def test_book_segment_round_progress_and_assembly(monkeypatch, tmp_path):
     """Two-segment book: round 1 records progress, round 2 assembles the
     parts, applies the verdict, and cleans up."""
     import json as _json
-    import os
 
     import agent.actions.extraction_actions as ea  # noqa: F401
     from agent.actions.extraction_actions import (
@@ -742,7 +741,6 @@ async def test_a_chunk_is_banked_as_it_lands_not_at_the_end_of_the_round(monkeyp
 
     from agent.actions.translation_actions import (
         _TRANSLATE_CLAIMS,
-        _parts_path,
         action_translate_drain_batch,
         chunk_markdown,
     )
@@ -1179,3 +1177,83 @@ async def test_a_clean_spanish_batch_extraction_routes_to_lingual(tmp_path):
     bank = await read_databank(fx)
     assert bank["p1"]["extraction_status"] == "extract_lingual"
     assert bank["p1"].get("language") == "es"
+
+
+@pytest.mark.asyncio
+async def test_translation_success_sends_an_original_language_pack_back_for_repack():
+    """A paper PACKED from original-language text goes to needs_repack when
+    its English translation lands (operator ruling 2026-09-06: packs must be
+    English). Booked on the papers side, which the extraction-side append
+    cannot carry."""
+    import json
+
+    from agent.actions.scholarly_actions import read_databank
+    from agent.actions.translation_actions import _book_pack_state_after_translation
+    from agent.effects.mock import MockEffects
+
+    rec = {
+        "paper_key": "p",
+        "review_status": "accepted",
+        "pack_status": "packed",
+        "extraction_status": "extracted",
+        "translated": True,
+    }
+    fx = MockEffects(files={"databank/papers.jsonl": json.dumps(rec) + "\n"})
+    await _book_pack_state_after_translation(fx, rec, "translated", "")
+    after = (await read_databank(fx))["p"]
+    assert after["pack_status"] == "needs_repack"
+    assert after["review_status"] == "accepted"
+
+
+@pytest.mark.asyncio
+async def test_translation_failure_on_an_accepted_paper_books_pack_failed():
+    """No English text can exist, so the pack is terminal and honest -- and an
+    original-language pack already cut must not stay `packed`."""
+    import json
+
+    from agent.actions.scholarly_actions import read_databank
+    from agent.actions.translation_actions import _book_pack_state_after_translation
+    from agent.effects.mock import MockEffects
+
+    for prior in ("", "packed"):
+        rec = {
+            "paper_key": "p",
+            "review_status": "accepted",
+            "pack_status": prior,
+            "extraction_status": "translate_failed",
+        }
+        fx = MockEffects(files={"databank/papers.jsonl": json.dumps(rec) + "\n"})
+        await _book_pack_state_after_translation(
+            fx, rec, "failed", "translation: 3 attempts"
+        )
+        after = (await read_databank(fx))["p"]
+        assert after["pack_status"] == "pack_failed", prior
+        assert "translation" in after["failure_reason"]
+    # a DENIED paper's translation failure books nothing on the pack
+    rec = {"paper_key": "d", "review_status": "denied", "pack_status": ""}
+    fx = MockEffects(files={"databank/papers.jsonl": json.dumps(rec) + "\n"})
+    await _book_pack_state_after_translation(fx, rec, "failed", "x")
+    assert (await read_databank(fx))["d"].get("pack_status", "") == ""
+
+
+def test_gate_rejects_output_that_is_not_english():
+    """A model that echoes its source (or half-translates) must fail the gate.
+    Nine packs had been cut from .en.md files still in Russian, Japanese or
+    Spanish because the gate never looked at the language."""
+    from agent.actions.translation_actions import translation_gate
+
+    ru = "Спектры комбинационного рассеяния кварца были получены при 532 нм. " * 40
+    assert not translation_gate(ru, ru)["passed"]
+    assert any("not English" in p for p in translation_gate(ru, ru)["problems"])
+    es = (
+        "Los espectros Raman del cuarzo se obtuvieron a 532 nm con un láser verde. "
+        * 40
+    )
+    en = "The Raman spectra of quartz were obtained at 532 nm with a green laser. " * 40
+    assert any("not English" in p for p in translation_gate(es, es)["problems"])
+    assert not any("not English" in p for p in translation_gate(es, en)["problems"])
+    # a numeric table is not judged by function words
+    table = "| 465.2 | 1085.1 | 0.93 | 12.4 |\n" * 120
+    assert not any(
+        "not English" in p for p in translation_gate(table, table)["problems"]
+    )

@@ -753,7 +753,23 @@ def _curation_pending(record: dict) -> bool:
     if review in ("denied", "review_failed"):
         return False
     if review == "accepted":
-        return record.get("pack_status") not in ("packed", "pack_failed")
+        if record.get("pack_status") in ("packed", "pack_failed"):
+            return False
+        # AN ACCEPTED LINGUAL PAPER WAITS FOR ITS TRANSLATION. The review may
+        # judge the original -- the curator reads it fine -- but the pack must
+        # be English: the models this corpus feeds for continued pre-training
+        # are too small for multilingual packs (operator ruling 2026-09-06).
+        # The translate lane picks up exactly this state (accepted +
+        # extract_lingual + untranslated) and, on success, sets
+        # extraction_status back to "extracted" and translated=True, at which
+        # point the paper is pack-eligible again; on the third failure it
+        # becomes translate_failed, which is not a usable status and so falls
+        # out above.
+        if record.get("extraction_status") == "extract_lingual" and not record.get(
+            "translated"
+        ):
+            return False
+        return True
     return True  # review not yet run
 
 

@@ -532,3 +532,26 @@ def test_the_registry_widens_a_scalar_slot_instead_of_drifting():
     deep = {"k2": {"type": "list[string]", "count": 1}}
     update_key_registry(deep, {"k2": [{"a": 1}]}, "p2")
     assert deep["k2"]["type"] == "list[string]"
+
+
+def test_an_accepted_lingual_paper_waits_for_translation_before_packing():
+    """Review may run on the original; the PACK must be English (the
+    pre-training targets are too small for multilingual packs). An accepted
+    paper still flagged extract_lingual and untranslated is not pack-eligible;
+    once translation lands (extraction_status extracted, translated=True) it
+    is; an unreviewed lingual paper is still review-eligible."""
+    from agent.actions.curation_actions import _curation_pending
+
+    base = {"extraction_status": "extract_lingual", "figure_count": 0}
+    unreviewed = dict(base)
+    assert (
+        _curation_pending(unreviewed) is True
+    ), "the review still runs on the original"
+    accepted_untranslated = dict(base, review_status="accepted")
+    assert _curation_pending(accepted_untranslated) is False, "must wait for translate"
+    translated = dict(
+        base, review_status="accepted", extraction_status="extracted", translated=True
+    )
+    assert _curation_pending(translated) is True
+    already_packed = dict(translated, pack_status="packed")
+    assert _curation_pending(already_packed) is False
