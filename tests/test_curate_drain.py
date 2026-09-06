@@ -160,6 +160,48 @@ async def test_booked_shadow_is_timed_so_a_hand_rearm_is_seen_again():
         _clear_state()
 
 
+@pytest.mark.asyncio
+async def test_a_remote_lane_takes_the_papers_only_it_can_take_first(monkeypatch):
+    """Smallest-first hands every lane the same small paper. A remote lane
+    with a bigger seat must exhaust the papers beyond the LOCAL seat first --
+    nobody else can serve them -- and fall back to smallest-first only when
+    none remain. Local lanes are unaffected. Measured 2026-09-06: 30 of 31
+    verdicts in 4 h fell on local-band papers while 88 remote-only papers
+    waited and the remote lane judged one of them.
+    """
+    from agent.actions import curation_actions as ca
+
+    _clear_state()
+    # local usable = (15,000 - 14,000 overhead) * 1.1 margin * 3.3 chars/tok ~ 3,630 chars
+    monkeypatch.setattr(ca, "_CURATE_SEAT_TOKENS", 15_000)
+    fx = MockEffects(
+        files=_bank_files(
+            [_rec("small"), _rec("big")],
+            {"small": "s" * 100, "big": "b" * 5_000},
+        )
+    )
+    # a declared remote seat: without it the "largest seat" is the 15k local
+    # one and the 5,000-char paper would be PARKED as oversize, not selected
+    fx._llmvp_domains = {"curate_remote": {"seat_tokens": 100_000}}
+    bank = await read_databank(fx)
+    try:
+        # a local lane: smallest-first as ever
+        key, _ = await select_curate_paper(fx, bank, 1_000_000)
+        assert key == "small"
+        release_curate_keys([key])
+        # the same queue seen by a remote lane: the paper beyond the local seat first
+        fx._inference_domain = "curate_remote"
+        key, _ = await select_curate_paper(fx, bank, 1_000_000)
+        assert key == "big", "remote lane must take the remote-only paper first"
+        release_curate_keys([key])
+        # with the remote-only paper claimed elsewhere, it falls back to smallest-first
+        ca._CURATE_CLAIMS.add("big")
+        key, _ = await select_curate_paper(fx, bank, 1_000_000)
+        assert key == "small"
+    finally:
+        _clear_state()
+
+
 # ── Drain action ─────────────────────────────────────────────────────
 
 

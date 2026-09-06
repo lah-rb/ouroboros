@@ -241,3 +241,46 @@ async def test_a_failed_park_never_breaks_the_lane(monkeypatch):
         "agent.actions.scholarly_actions.append_extraction_records", boom
     )
     await park(object(), "k", "extract_oversize", "too big")  # must not raise
+
+
+@pytest.mark.asyncio
+async def test_park_preserves_the_papers_existing_sidecar_row(monkeypatch):
+    """A park must carry the paper's full extraction row, changing only what
+    it owns. The sidecar is last-row-wins, so the old three-field row erased
+    md_path, figure_count, extraction_quality (and translated/md_en_path on
+    translated papers) for every parked item -- measured 2026-09-06."""
+    import json
+    from types import SimpleNamespace
+
+    from agent.actions import drain_lane
+
+    prior = {
+        "paper_key": "k",
+        "extraction_status": "extracted",
+        "md_path": "databank/markdown/k.md",
+        "figure_count": 7,
+        "extraction_quality": {"numeric_match_rate": 0.98},
+        "translated": True,
+    }
+
+    class Effects:
+        async def read_file(self, path):
+            return SimpleNamespace(exists=True, content=json.dumps(prior) + "\n")
+
+    booked = []
+
+    async def fake_append(effects, records):
+        booked.extend(records)
+
+    monkeypatch.setattr(
+        "agent.actions.scholarly_actions.append_extraction_records", fake_append
+    )
+    await drain_lane.park(Effects(), "k", "extract_oversize", "too big")
+    assert len(booked) == 1
+    row = booked[0]
+    assert (
+        row["extraction_status"] == "extract_oversize"
+        and row["failure_reason"] == "too big"
+    )
+    for field in ("md_path", "figure_count", "extraction_quality", "translated"):
+        assert row[field] == prior[field], f"park erased {field}"

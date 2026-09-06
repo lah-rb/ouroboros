@@ -1462,7 +1462,13 @@ async def select_curate_paper(
     truncated (the compression ladder in `_build_doc_for` is what gets
     most of them under it).
     """
-    sized: list[tuple[int, int, int, str]] = []
+    sized: list[tuple[int, int, int, int, str]] = []
+    remote_lane = bool(getattr(effects, "_inference_domain", "") or "")
+    local_usable_chars = int(
+        (_CURATE_SEAT_TOKENS - _CURATE_TURN_OVERHEAD_TOKENS)
+        * _CURATE_OVERSIZE_PARK_MARGIN
+        * _CURATE_CHARS_PER_TOKEN
+    )
     for key, rec in databank.items():
         if key in _CURATE_CLAIMS or _recently_booked(key):
             continue
@@ -1508,7 +1514,16 @@ async def select_curate_paper(
         # is still the throughput policy; this only bounds the tail's latency,
         # which is otherwise unbounded when discovery keeps feeding small docs.
         aged = 0 if _CURATE_STARVED.get(key, 0) >= _CURATE_AGING_ROUNDS else 1
-        sized.append((_aspect_priority(rec), aged, chars, key))
+        # A REMOTE lane takes the papers ONLY IT can take first. Smallest-first
+        # hands every lane the same small paper, so the 256k remote lane spent
+        # its rounds on documents the five local lanes could serve while the
+        # tail only it can serve barely moved: measured 2026-09-06, 30 verdicts
+        # in 4 h on local-band papers, ONE on a remote-only paper, 88 waiting.
+        # Tier 0 = beyond the local seat; local lanes are always tier 1, so
+        # their ordering is untouched, and a remote lane with no remote-only
+        # work left falls through to the same smallest-first as everyone else.
+        remote_first = 0 if (remote_lane and floor_chars > local_usable_chars) else 1
+        sized.append((remote_first, _aspect_priority(rec), aged, chars, key))
     if not sized:
         return "", ""
 
@@ -1530,7 +1545,7 @@ async def select_curate_paper(
     # the next candidate rather than returned empty -- an empty return costs
     # the lane a 30 s idle backoff for a queue that has work in it.
     key = ""
-    for _, _, _, cand in sorted(sized):
+    for _, _, _, _, cand in sorted(sized):
         if cand not in _CURATE_CLAIMS:
             _CURATE_CLAIMS.add(cand)
             key = cand
@@ -1577,16 +1592,28 @@ async def _book_curate_oversize(effects, paper_key: str, reason: str) -> None:
     from agent.actions.scholarly_actions import append_extraction_records
 
     try:
-        await append_extraction_records(
-            effects,
-            [
-                {
-                    "paper_key": paper_key,
-                    "extraction_status": "curate_oversize",
-                    "failure_reason": reason[:300],
-                }
-            ],
+        # FULL ROW, NOT A STUB. The sidecar is last-row-wins on read, so a
+        # three-field park row shadowed md_path, figure_count,
+        # extraction_quality -- and translated/md_en_path on translated papers.
+        # Measured 2026-09-06: 0 of 28 parked rows still carried
+        # extraction_quality; the history beneath each still did. Same incident
+        # class as 2026-08-22 (never append partial databank rows). Read the
+        # key's current row and change only what the park owns.
+        from agent.actions.scholarly_actions import EXTRACTION_PATH, _read_jsonl_records
+
+        try:
+            current = (await _read_jsonl_records(effects, EXTRACTION_PATH)).get(
+                paper_key
+            ) or {}
+        except Exception:  # noqa: BLE001 -- enrichment only; a park must still land
+            current = {}
+        row = dict(current)
+        row.update(
+            paper_key=paper_key,
+            extraction_status="curate_oversize",
+            failure_reason=reason[:300],
         )
+        await append_extraction_records(effects, [row])
         logger.warning("curate oversize: parked %s — %s", paper_key, reason[:160])
     except Exception:  # noqa: BLE001 — a park must not break the lane
         logger.exception("failed to book curate_oversize for %s", paper_key)

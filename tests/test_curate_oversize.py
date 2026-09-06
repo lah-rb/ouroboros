@@ -231,3 +231,52 @@ async def test_fig_review_dead_server_declines_instead_of_booking():
     assert "unreachable" in (out.result or {}).get("reason", "")
     bank = await read_databank(fx)
     assert bank["p1"].get("figtext_status") is None  # NOT booked failed
+
+
+@pytest.mark.asyncio
+async def test_park_carries_the_full_sidecar_row_not_a_stub():
+    """A park must not erase the paper's extraction record.
+
+    The sidecar is last-row-wins, so a three-field park row shadowed
+    md_path, figure_count and extraction_quality -- and translated /
+    md_en_path on translated papers. Measured 2026-09-06: 0 of 28 parked
+    rows still carried extraction_quality; the history beneath each did.
+    """
+    _CURATE_CLAIMS.clear()
+    # figtext must be terminal or the paper is skipped before the size check
+    files = _bank_files(
+        [_rec("c1", figtext_status="figtext_done")], {"c1": CJK_MONSTER}
+    )
+    prior = {
+        "paper_key": "c1",
+        "extraction_status": "extracted",
+        "md_path": "databank/markdown/c1.md",
+        "figure_count": 25,
+        "extraction_method": "paddle",
+        "extraction_quality": {"numeric_match_rate": 0.99},
+        "translated": True,
+        "md_en_path": "databank/markdown/c1.en.md",
+    }
+    files["databank/extraction.jsonl"] = json.dumps(prior) + "\n"
+    fx = MockEffects(files=files)
+    bank = await read_databank(fx)
+    key, _ = await select_curate_paper(fx, bank, 10_000)
+    assert key == ""  # the monster was parked, not selected
+    rows = [
+        json.loads(ln)
+        for ln in (await fx.read_file("databank/extraction.jsonl")).content.splitlines()
+        if ln.strip()
+    ]
+    last = rows[-1]
+    assert last["extraction_status"] == "curate_oversize"
+    assert last["failure_reason"].startswith("curation:")
+    for field in (
+        "md_path",
+        "figure_count",
+        "extraction_method",
+        "extraction_quality",
+        "translated",
+        "md_en_path",
+    ):
+        assert last[field] == prior[field], f"park erased {field}"
+    _CURATE_CLAIMS.clear()

@@ -312,19 +312,30 @@ async def park(
     in-process caches to drop the key from, so a parked item does not keep
     occupying memory it will never use again.
     """
-    from agent.actions.scholarly_actions import append_extraction_records
+    from agent.actions.scholarly_actions import (
+        EXTRACTION_PATH,
+        _read_jsonl_records,
+        append_extraction_records,
+    )
 
     try:
-        await append_extraction_records(
-            effects,
-            [
-                {
-                    "paper_key": paper_key,
-                    "extraction_status": status,
-                    "failure_reason": reason[:300],
-                }
-            ],
+        # FULL ROW, NOT A STUB. The sidecar is last-row-wins on read, so a
+        # three-field park row shadowed every extraction field the paper had --
+        # md_path, figure_count, extraction_quality, and translated/md_en_path on
+        # translated papers. Measured 2026-09-06 on curate parks; this shared
+        # idiom did the same for every drain. Read the key's current row and
+        # change only what the park owns.
+        try:
+            current = (await _read_jsonl_records(effects, EXTRACTION_PATH)).get(
+                paper_key
+            ) or {}
+        except Exception:  # noqa: BLE001 -- enrichment only; a park must still land
+            current = {}
+        row = dict(current)
+        row.update(
+            paper_key=paper_key, extraction_status=status, failure_reason=reason[:300]
         )
+        await append_extraction_records(effects, [row])
         logger.warning("%s: parked %s — %s", status, paper_key, reason[:160])
     except Exception:  # noqa: BLE001 — a park must not break the lane
         logger.exception("failed to book %s for %s", status, paper_key)
