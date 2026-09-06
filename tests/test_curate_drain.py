@@ -11,11 +11,13 @@ the production booking path with claims released either way.
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 
 from agent.actions.curation_actions import (
     _CURATE_BOOKED,
+    _CURATE_BOOKED_SHADOW_S,
     _CURATE_CLAIMS,
     _CURATE_DOC_CACHE,
     _curate_doc_budget_chars,
@@ -115,6 +117,45 @@ async def test_selection_smallest_fitting_claims_and_oversize_skip():
         release_curate_keys([key, key2])
         key4, _ = await select_curate_paper(fx, bank, 1000)
         assert key4 == "small"
+    finally:
+        _clear_state()
+
+
+@pytest.mark.asyncio
+async def test_booked_shadow_is_timed_so_a_hand_rearm_is_seen_again():
+    """A terminal booking shadows its paper for _CURATE_BOOKED_SHADOW_S, not
+    for the life of the process.
+
+    The shadow exists for a seconds-wide race: a sibling lane selecting off a
+    databank snapshot taken just before this lane booked. It must NOT outlive
+    a deliberate re-arm on disk. Live case 2026-09-05: a paper booked
+    pack_failed (envelope: missing title) had its title filled and was set
+    needs_repack; it was the smallest eligible paper in the queue and every
+    lane skipped it for two hours because the process-lifetime set still held
+    it. Both papers here are pending on disk; 'rearmed' is the smaller, so
+    smallest-first picks it unless the shadow says otherwise.
+    """
+    _clear_state()
+    fx = MockEffects(
+        files=_bank_files(
+            [_rec("rearmed"), _rec("fresh")],
+            {"rearmed": "r" * 100, "fresh": "f" * 300},
+        )
+    )
+    bank = await read_databank(fx)
+    try:
+        # Just booked: the shadow holds, the sibling takes the next paper.
+        _CURATE_BOOKED["rearmed"] = time.monotonic()
+        key, _ = await select_curate_paper(fx, bank, 1000)
+        assert key == "fresh", "a fresh terminal booking must still be skipped"
+        release_curate_keys([key])
+
+        # Shadow expired: the on-disk state (pending) is trusted again, and
+        # the stale entry is pruned rather than left to accumulate.
+        _CURATE_BOOKED["rearmed"] = time.monotonic() - _CURATE_BOOKED_SHADOW_S - 1
+        key, doc = await select_curate_paper(fx, bank, 1000)
+        assert key == "rearmed" and len(doc) == 100
+        assert "rearmed" not in _CURATE_BOOKED, "expired shadow was not pruned"
     finally:
         _clear_state()
 

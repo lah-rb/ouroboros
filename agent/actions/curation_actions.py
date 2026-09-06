@@ -55,6 +55,7 @@ from agent.actions.drain_lane import (
 import difflib
 import json
 import os
+import time
 import logging
 import re
 
@@ -1136,16 +1137,42 @@ _CURATE_DOC_CACHE: dict[str, tuple[int, int]] = {}
 #: adding a sidecar write per round.
 _CURATE_STARVED: dict[str, int] = {}
 # Papers booked TERMINAL by this process (denied, review_failed, packed,
-# pack_failed). The claim set guards work in flight; once a round books and
-# releases, the only guard left is the on-disk status -- and a sibling lane's
-# `databank` argument is a snapshot it read seconds earlier, before that
-# booking landed. Measured 2026-09-01: twice in one hour a lane selected a
-# paper 4-8 s BEFORE its sibling's round ended, on a snapshot taken before the
-# sibling booked, and curated it again (one pack record overwritten by the
-# second run). Selection skips anything in this set regardless of what the
-# snapshot says. Process-lifetime, not timed: a terminal booking is never
-# undone by the pipeline, only by hand.
-_CURATE_BOOKED: set[str] = set()
+# pack_failed), keyed to WHEN. The claim set guards work in flight; once a
+# round books and releases, the only guard left is the on-disk status -- and a
+# sibling lane's `databank` argument is a snapshot it read seconds earlier,
+# before that booking landed. Measured 2026-09-01: twice in one hour a lane
+# selected a paper 4-8 s BEFORE its sibling's round ended, on a snapshot taken
+# before the sibling booked, and curated it again (one pack record overwritten
+# by the second run). Selection skips anything booked here regardless of what
+# the snapshot says -- for _CURATE_BOOKED_SHADOW_S, not for the life of the
+# process.
+#
+# WHY TIMED. The first cut was process-lifetime, reasoning that "a terminal
+# booking is never undone by the pipeline, only by hand" -- and by hand is
+# exactly what happened. Measured 2026-09-05: a paper booked pack_failed
+# (envelope: missing title) 77 min into a run had its title filled and was
+# re-armed needs_repack on disk; it was the SMALLEST eligible paper in the
+# queue (8.4k-token floor) and every lane skipped it for two hours while
+# reviewing 10-50k papers around it, because this set still held it. A
+# long-running mission is exactly where fixes land while it runs. The race
+# this guards is seconds wide; the shadow is 120 s, fifteen times the
+# measured window, after which the on-disk status is trusted again.
+_CURATE_BOOKED: dict[str, float] = {}
+_CURATE_BOOKED_SHADOW_S = 120.0
+
+
+def _recently_booked(key: str) -> bool:
+    """Is `key` still inside the post-booking shadow? Expired entries are
+    dropped here so the map cannot grow with every booking a run makes."""
+    at = _CURATE_BOOKED.get(key)
+    if at is None:
+        return False
+    if time.monotonic() - at < _CURATE_BOOKED_SHADOW_S:
+        return True
+    _CURATE_BOOKED.pop(key, None)
+    return False
+
+
 #: Rounds over budget before a paper is promoted to the head of its tier.
 _CURATE_AGING_ROUNDS = 25
 
@@ -1437,7 +1464,7 @@ async def select_curate_paper(
     """
     sized: list[tuple[int, int, int, str]] = []
     for key, rec in databank.items():
-        if key in _CURATE_CLAIMS or key in _CURATE_BOOKED:
+        if key in _CURATE_CLAIMS or _recently_booked(key):
             continue
         if not _curation_pending(rec):
             continue
@@ -2013,7 +2040,7 @@ async def action_curate_drain_batch(step_input):
             # stale snapshot. A booking that itself failed leaves the paper
             # pending and is deliberately NOT recorded.
             if _booked_terminal(out, state):
-                _CURATE_BOOKED.add(key)
+                _CURATE_BOOKED[key] = time.monotonic()
         finally:
             release_curate_keys([key])
         outcomes.append(
