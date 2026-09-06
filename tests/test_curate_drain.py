@@ -338,6 +338,67 @@ async def test_the_pack_reads_the_raw_doc_even_when_the_review_saw_a_compressed_
     _clear_state()
 
 
+@pytest.mark.asyncio
+async def test_an_accepted_lingual_paper_is_reviewed_but_not_packed_this_round():
+    """The selection-time gate cannot see a verdict reached inside the round,
+    so a lingual paper accepted here must not be packed from its original text
+    (measured 2026-09-06 13:05: a Spanish paper, 19 raw windows, 2,687
+    non-English leaves). One inference call (the review), pack_status left
+    EMPTY (not pack_failed), and the paper is not curation-pending until
+    translation lands."""
+    from agent.actions import curation_actions as ca
+
+    _clear_state()
+    fx = MockEffects(
+        files=_bank_files(
+            [_rec("es", extraction_status="extract_lingual", language="es")],
+            {"es": "Los espectros Raman del cuarzo se obtuvieron a 532 nm. " * 30},
+        ),
+        pool_health={"kvPoolTokens": 65536},
+        inference_responses=[
+            json.dumps({"verdict": "accept", "summary": "in scope", "issues": []})
+        ],
+    )
+    out = await action_curate_drain_batch(_si(fx))
+    assert out.result["attempted"] == 1
+    calls = [c for c in fx.calls if c.method == "run_inference"]
+    assert len(calls) == 1, "review only -- no pack turn on original-language text"
+    rec = (await read_databank(fx))["es"]
+    assert rec["review_status"] == "accepted"
+    assert not rec.get("pack_status"), "pack must be left EMPTY, not pack_failed"
+    assert "translation" in rec["failure_reason"]
+    assert ca._curation_pending(rec) is False, "gated until the translation lands"
+
+
+@pytest.mark.asyncio
+async def test_a_paper_the_extraction_flag_missed_is_caught_by_its_text_and_flagged():
+    """extraction_status 'extracted' but Spanish text: the text-level check
+    defers the pack AND writes extract_lingual so the translate lane queues it."""
+    _clear_state()
+    fx = MockEffects(
+        files=_bank_files(
+            [_rec("es2")],  # extraction_status extracted -- the flag missed it
+            {
+                "es2": "# Resultados\n"
+                + "Los espectros Raman del cuarzo se obtuvieron a 532 nm con un láser verde. "
+                * 40
+            },
+        ),
+        pool_health={"kvPoolTokens": 65536},
+        inference_responses=[
+            json.dumps({"verdict": "accept", "summary": "in scope", "issues": []})
+        ],
+    )
+    out = await action_curate_drain_batch(_si(fx))
+    assert out.result["attempted"] == 1
+    assert len([c for c in fx.calls if c.method == "run_inference"]) == 1
+    rec = (await read_databank(fx))["es2"]
+    assert rec["review_status"] == "accepted" and not rec.get("pack_status")
+    assert (
+        rec["extraction_status"] == "extract_lingual"
+    ), "flagged so translation queues"
+
+
 # ── Drain action ─────────────────────────────────────────────────────
 
 

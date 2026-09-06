@@ -1686,7 +1686,9 @@ async def _curate_turn(effects, prompt: str, max_tokens: int):
     return text
 
 
-async def _curate_stateless(effects, paper_key: str, doc: str) -> dict:
+async def _curate_stateless(
+    effects, paper_key: str, doc: str, rec: dict | None = None
+) -> dict:
     """Review + pack via stateless turns; returns book_result-shaped state.
 
     Model-quality failures (unparseable review, gates failed twice) come
@@ -1720,6 +1722,58 @@ async def _curate_stateless(effects, paper_key: str, doc: str) -> dict:
     state["review"] = review_state_from(review)
     verdict = state["review"]["status"]
     if verdict == "denied":
+        return state
+
+    # AN ACCEPTED LINGUAL PAPER IS NOT PACKED HERE. The _curation_pending gate
+    # (2026-09-06) holds accepted-but-untranslated papers out of the pack, but
+    # it is evaluated at SELECTION, when a paper about to be reviewed is
+    # legitimately pending -- so a paper accepted in THIS round went straight
+    # on to be packed from its original text (measured 13:05: a Spanish
+    # mortars-and-paints paper, 19 raw windows, 2,687 non-English leaves).
+    # The pack must be English, so the review books and the pack waits: the
+    # translate lane picks up accepted + extract_lingual + untranslated, and
+    # on success the paper is pack-eligible again. Two detectors, because the
+    # extraction flag missed 16 of ~115 Latin-script non-English papers in
+    # the pending queue: the flag, and the text itself.
+    lingual = bool(rec) and (
+        rec.get("extraction_status") == "extract_lingual" and not rec.get("translated")
+    )
+    if not lingual and rec is not None and not rec.get("translated"):
+        from agent.actions.translation_actions import _output_language_problem
+
+        why = _output_language_problem(doc)
+        if why:
+            lingual = True
+            try:  # the flag missed it: mark the extraction row so translation queues
+                from agent.actions.scholarly_actions import (
+                    EXTRACTION_PATH,
+                    _read_jsonl_records,
+                    append_extraction_records,
+                )
+
+                current = (await _read_jsonl_records(effects, EXTRACTION_PATH)).get(
+                    paper_key
+                ) or {}
+                row = dict(current)
+                row.update(
+                    paper_key=paper_key,
+                    extraction_status="extract_lingual",
+                    translated=False,
+                    failure_reason="",
+                )
+                await append_extraction_records(effects, [row])
+            except Exception:  # noqa: BLE001 -- flagging is best-effort
+                logger.exception("could not flag %s as lingual", paper_key)
+            logger.info(
+                "curate: %s reads as non-English (%s); pack deferred", paper_key, why
+            )
+    if lingual:
+        state["pack"] = {
+            "status": "awaiting_translation",
+            "reason": "accepted; pack deferred until an English translation exists",
+            "attempts": 0,
+            "quality": {},
+        }
         return state
 
     registry = await _load_registry(effects)
@@ -2144,7 +2198,7 @@ async def action_curate_drain_batch(step_input):
                 state = (
                     await _pack_only_raw(effects, key, rec)
                     if pack_only
-                    else await _curate_stateless(effects, key, doc)
+                    else await _curate_stateless(effects, key, doc, rec=rec)
                 )
             except _CurateTransportFault as e:
                 if _CURATE_OVERSIZE_FAULT_MARKER in str(e):
@@ -3004,6 +3058,16 @@ async def action_curate_book_result(step_input):
         elif pack.get("status") == "needs_repack":
             rec["pack_status"] = "needs_repack"
             outcome = "needs_repack"
+        elif pack.get("status") == "awaiting_translation":
+            # Not a failure: the review stands, the pack waits for English text.
+            # An EMPTY pack_status is what the translation gate in
+            # _curation_pending reads as "not yet packed"; pack_failed here
+            # would be terminal and wrong.
+            rec["pack_status"] = ""
+            rec["failure_reason"] = str(
+                pack.get("reason") or "pack deferred: awaiting translation"
+            )
+            outcome = "accepted; pack awaiting translation"
         else:
             rec["pack_status"] = "pack_failed"
             rec["failure_reason"] = f"pack: {pack.get('reason') or 'no pack state'}"
