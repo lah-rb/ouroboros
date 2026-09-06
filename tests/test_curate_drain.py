@@ -304,6 +304,40 @@ async def test_pack_only_raw_carries_the_verdict_and_windows_the_raw_doc(monkeyp
     _clear_state()
 
 
+@pytest.mark.asyncio
+async def test_the_pack_reads_the_raw_doc_even_when_the_review_saw_a_compressed_one(
+    monkeypatch,
+):
+    """A fact in a paragraph the compression dropped can never be packed, so
+    the pack windows the uncompressed doc regardless of what the review saw
+    (operator ruling 2026-09-06)."""
+    from agent.actions import curation_actions as ca
+
+    _clear_state()
+    fx = MockEffects(
+        files=_bank_files([_rec("p")], {"p": "unused here"}),
+        pool_health={"kvPoolTokens": 65536},
+        inference_responses=[
+            json.dumps({"verdict": "accept", "summary": "ok", "issues": []}),
+            json.dumps({"raman_band_cm1": 465}),
+        ],
+    )
+
+    async def fake_raw(effects, key):
+        return "# Results\nRAW PARAGRAPH the compression dropped: band at 465 cm-1.\n"
+
+    monkeypatch.setattr(ca, "_raw_curator_doc", fake_raw)
+    state = await ca._curate_stateless(fx, "p", "COMPRESSED REVIEW DOC")
+    calls = [c for c in fx.calls if c.method == "run_inference"]
+    assert len(calls) == 2, "one review turn, one pack turn"
+    review_prompt, pack_prompt = json.dumps(calls[0].args), json.dumps(calls[1].args)
+    assert "COMPRESSED REVIEW DOC" in review_prompt
+    assert "RAW PARAGRAPH" in pack_prompt and "COMPRESSED REVIEW DOC" not in pack_prompt
+    assert state["pack"]["status"] == "packed"
+    assert state["pack_doc_form"] == "raw"
+    _clear_state()
+
+
 # ── Drain action ─────────────────────────────────────────────────────
 
 

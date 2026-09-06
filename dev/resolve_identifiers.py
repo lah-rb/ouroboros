@@ -196,7 +196,17 @@ async def main_async(a) -> int:
     bank = await read_databank(fx)
     side = await _read_jsonl_records(fx, DATABANK_PATH)
     pick = wants_upgrade if a.upgrade else needs_identity
-    todo = [k for k, r in sorted(bank.items()) if pick(r)]
+    if a.keys:
+        # Explicit keys bypass the scope filter: the operator is pointing at
+        # papers the automatic sweep would skip -- e.g. parked curate_oversize
+        # theses that need an identity before an accept can pack them.
+        wanted = [k.strip() for k in a.keys.split(",") if k.strip()]
+        missing = [k for k in wanted if k not in bank]
+        if missing:
+            print(f"not in databank: {missing}")
+        todo = [k for k in wanted if k in bank]
+    else:
+        todo = [k for k, r in sorted(bank.items()) if pick(r)]
     # ONE table scan answers the whole cohort: a scan of the local snapshot
     # costs the same for a thousand titles as for one, so the batch form is
     # what makes a 57 GB local table cheaper than an API call per paper.
@@ -296,6 +306,11 @@ def main() -> int:
         "Crossref (free, misses theses), or the OpenAlex API (credit-metered)",
     )
     ap.add_argument("--apply", action="store_true")
+    ap.add_argument(
+        "--keys",
+        default="",
+        help="comma-separated paper keys to resolve regardless of scope (parked papers included)",
+    )
     ap.add_argument(
         "--upgrade",
         action="store_true",

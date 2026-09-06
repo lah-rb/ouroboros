@@ -1699,8 +1699,31 @@ async def _curate_stateless(effects, paper_key: str, doc: str) -> dict:
         return state
 
     registry = await _load_registry(effects)
-    state["pack"] = await _pack_windowed(effects, doc, registry)
+    # THE PACK READS THE WHOLE PAPER. The review is a judgement and may see a
+    # compressed doc; the pack is an extraction, and a fact in a paragraph
+    # the compression dropped can never be packed (operator ruling
+    # 2026-09-06: "we cannot pack facts the LLM never sees -- even with the
+    # cost, the loss of facts is far more detrimental"). Windows are
+    # seat-independent, so the raw doc is always available to them; the
+    # price is 2-4x more pack turns on the largest papers and page furniture
+    # reaching the packer, where the grounding gate and coinage guard hold.
+    state["pack"] = await _pack_windowed(
+        effects, await _raw_curator_doc(effects, paper_key), registry
+    )
+    state["pack_doc_form"] = "raw"
     return state
+
+
+async def _raw_curator_doc(effects, paper_key: str) -> str:
+    """The UNCOMPRESSED curator doc: raw markdown (the gated English
+    translation when one exists) with figtext anchored -- what the pack
+    reads. Kept apart from _build_doc_for so building it never overwrites
+    the review form recorded in _DOC_FORMS."""
+    fc = await effects.read_file(f"databank/markdown/{paper_key}.en.md")
+    if not getattr(fc, "exists", False):
+        fc = await effects.read_file(f"databank/markdown/{paper_key}.md")
+    md = fc.content if getattr(fc, "exists", False) else ""
+    return build_curator_doc(md, await _load_figtext(effects, paper_key))
 
 
 async def _pack_only_raw(effects, paper_key: str, rec: dict) -> dict:
@@ -1719,7 +1742,7 @@ async def _pack_only_raw(effects, paper_key: str, rec: dict) -> dict:
     reference lists and page furniture reach the packer, where the coinage
     guard and the grounding gate -- not compression -- have to hold the line.
     """
-    doc = await _build_doc_for(effects, paper_key, budget_chars=0)
+    doc = await _raw_curator_doc(effects, paper_key)
     _DOC_FORMS[paper_key] = "raw-oversize"
     registry = await _load_registry(effects)
     return {
@@ -1733,6 +1756,7 @@ async def _pack_only_raw(effects, paper_key: str, rec: dict) -> dict:
             "document_form": str(rec.get("review_document_form") or ""),
         },
         "pack": await _pack_windowed(effects, doc, registry),
+        "pack_doc_form": "raw-oversize",
     }
 
 
@@ -2875,6 +2899,12 @@ async def action_curate_book_result(step_input):
     # later audit of compressed-doc verdicts.
     rec["review_doc_form"] = _DOC_FORMS.pop(paper_key, "") or rec.get(
         "review_doc_form", ""
+    )
+    # Which text the PACK was cut from -- "raw" on the normal path since
+    # 2026-09-06, "raw-oversize" for accepted papers beyond every seat. Kept
+    # beside review_doc_form because the two no longer describe one doc.
+    rec["pack_doc_form"] = str(state.get("pack_doc_form") or "") or rec.get(
+        "pack_doc_form", ""
     )
     rec["review_summary"] = review.get("summary") or ""
     rec["review_issues"] = review.get("issues") or []
