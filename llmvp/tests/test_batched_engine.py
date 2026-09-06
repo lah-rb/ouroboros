@@ -912,3 +912,31 @@ def test_a_clean_decode_resets_the_pressure_run():
     assert eng._consecutive_pressure == 1
     eng._step()
     assert eng._consecutive_pressure == 0
+
+
+def test_start_publishes_the_empty_pool_before_any_request(monkeypatch):
+    """A freshly started engine must leave a snapshot in BUS.latest().
+
+    Every other publish is an occupancy change, so an idle engine that has
+    served nothing has published nothing -- and a scheduler subscribing to
+    it gets no first frame, polls the same empty latest(), settles on its
+    legacy rung with cells unknown, and never sends the request that would
+    have seeded the bus (measured 2026-09-06). The frame is published from
+    start() BEFORE the decode thread exists, the one race-free moment; no
+    loop is bound here, exactly as at boot, and latest() must still be set.
+    """
+    from inference.capacity import CapacityBus
+
+    bus = CapacityBus()
+    monkeypatch.setattr("inference.capacity.BUS", bus)
+    eng = _mk_engine()
+    assert bus.latest() is None, "nothing may be published before start()"
+    eng.start()
+    try:
+        snap = bus.latest()
+        assert snap is not None, "start() must publish the initial snapshot"
+        assert snap.serving is True
+        assert snap.waiting == 0
+        assert snap.seats_free == snap.seats_total, "a fresh pool is fully available"
+    finally:
+        eng.shutdown()

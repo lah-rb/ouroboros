@@ -561,6 +561,24 @@ class BatchedEngine:
     # -- lifecycle -------------------------------------------------------
 
     def start(self) -> None:
+        # Publish the empty, fully-available pool BEFORE the decode thread
+        # exists. Engine state is quiescent here, which is the precondition
+        # capacity_fields() documents (it walks _streams/_seats that the
+        # decode thread mutates), so this is the one moment a publish from
+        # the caller's thread is race-free.
+        #
+        # WHY. Every other publish is an occupancy change (admit, retire,
+        # pause, resume), so a freshly booted engine that receives no request
+        # has published NOTHING: Subscription.capacity has no first frame to
+        # yield and health.capacity (the poll rung) reads the same empty
+        # BUS.latest(). Measured 2026-09-06 05:03: a mission started against
+        # such an engine settled its feed on `legacy` (cells unknown), its
+        # local lanes were admitted with free_cells=0, sized a budget nothing
+        # fit, and idled -- so no request was ever sent to seed the bus. One
+        # 4-token completion flipped it to ws with 125,104 free cells in 2 s.
+        # A scheduler must never depend on traffic to learn that the pool is
+        # empty; the engine says so the moment it can.
+        self._publish_capacity()
         self._thread = threading.Thread(
             target=self._run, name="llmvp-decode", daemon=True
         )
