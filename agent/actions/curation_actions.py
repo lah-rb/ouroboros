@@ -1463,6 +1463,7 @@ async def select_curate_paper(
     most of them under it).
     """
     sized: list[tuple[int, int, int, int, str]] = []
+    pack_only: set[str] = set()
     remote_lane = bool(getattr(effects, "_inference_domain", "") or "")
     local_usable_chars = int(
         (_CURATE_SEAT_TOKENS - _CURATE_TURN_OVERHEAD_TOKENS)
@@ -1492,9 +1493,26 @@ async def select_curate_paper(
         # other over-budget paper) and left for the lane that fits.
         floor_tokens = int(floor_chars / _CURATE_CHARS_PER_TOKEN)
         largest_seat = _largest_seat_tokens(effects)
-        if floor_chars > 0 and floor_tokens > int(
+        over_every_seat = floor_chars > 0 and floor_tokens > int(
             (largest_seat - _CURATE_TURN_OVERHEAD_TOKENS) * _CURATE_OVERSIZE_PARK_MARGIN
-        ):
+        )
+        if over_every_seat and rec.get("review_status") == "accepted":
+            # PACK-ONLY OVER RAW TEXT. The review needs the whole document
+            # under one seat; the pack does not -- _pack_windowed cuts
+            # section-bounded windows, and a window is seat-independent. Until
+            # now the pack windowed the COMPRESSED review doc, so an accepted
+            # paper whose deepest compression still exceeded every seat was
+            # parked as if it could never be judged. Measured 2026-09-06: six
+            # spectroscopy-rich theses (278k-443k-token floors, 107-677
+            # in-scope technique mentions) sat parked for exactly this reason.
+            # An operator accept now routes them here: no review turn, windows
+            # cut from the uncompressed curator doc, sorted LAST within the
+            # lane's tier (the most expensive work there is) and never
+            # remote-first (any lane can window raw; the local ones are faster).
+            pack_only.add(key)
+            sized.append((1, _aspect_priority(rec), 1, 10**12, key))
+            continue
+        if over_every_seat:
             await _book_curate_oversize(
                 effects,
                 key,
@@ -1552,6 +1570,8 @@ async def select_curate_paper(
             break
     if not key:
         return "", ""
+    if key in pack_only:
+        return key, ""  # the drain reads an empty doc on an accepted paper as pack-only
     try:
         doc = await _build_doc_for(effects, key, budget_chars)
     except BaseException:
@@ -1681,6 +1701,39 @@ async def _curate_stateless(effects, paper_key: str, doc: str) -> dict:
     registry = await _load_registry(effects)
     state["pack"] = await _pack_windowed(effects, doc, registry)
     return state
+
+
+async def _pack_only_raw(effects, paper_key: str, rec: dict) -> dict:
+    """Pack an already-accepted paper from its UNCOMPRESSED curator doc.
+
+    No review turn: the verdict on record is carried through verbatim so the
+    booking rewrites it unchanged and books only the pack. The doc is
+    _build_doc_for at budget 0 -- the raw markdown (English translation when
+    one exists) with figtext anchored -- which _pack_windowed cuts into
+    section-bounded windows exactly as it does for a compressed doc. The
+    form is recorded as "raw-oversize" so the artifact says which text it was
+    cut from; every other pack form is unchanged.
+
+    What this trades, deliberately: a compressed doc is 2-4x smaller on the
+    largest theses, so raw windows cost that many more pack turns, and
+    reference lists and page furniture reach the packer, where the coinage
+    guard and the grounding gate -- not compression -- have to hold the line.
+    """
+    doc = await _build_doc_for(effects, paper_key, budget_chars=0)
+    _DOC_FORMS[paper_key] = "raw-oversize"
+    registry = await _load_registry(effects)
+    return {
+        "paper_key": paper_key,
+        "session_id": "",
+        "review": {
+            "status": "accepted",
+            "summary": str(rec.get("review_summary") or ""),
+            "issues": list(rec.get("review_issues") or []),
+            "deny_category": "",
+            "document_form": str(rec.get("review_document_form") or ""),
+        },
+        "pack": await _pack_windowed(effects, doc, registry),
+    }
 
 
 # Document forms that are not scientific works. A relevant figure inside one
@@ -2029,15 +2082,22 @@ async def action_curate_drain_batch(step_input):
         key, doc = await select_curate_paper(effects, databank, budget_chars)
         if not key:
             return _summary_out(outcomes, "nothing unclaimed fits the seat budget")
+        rec = databank.get(key) or {}
+        pack_only = not doc and rec.get("review_status") == "accepted"
         if claim is not None:
             # Hand back what this document did not need. A 20k-token paper
             # must not hold a 55k claim for the length of the unit, or the
             # "several small docs give us parallelism" half of the design
             # never happens — the first lane would sit on the whole pool.
-            claim.resize(_estimate_doc_tokens(doc) + _CURATE_TURN_OVERHEAD_TOKENS)
+            need = _pack_window_sizes()[1] if pack_only else _estimate_doc_tokens(doc)
+            claim.resize(need + _CURATE_TURN_OVERHEAD_TOKENS)
         try:
             try:
-                state = await _curate_stateless(effects, key, doc)
+                state = (
+                    await _pack_only_raw(effects, key, rec)
+                    if pack_only
+                    else await _curate_stateless(effects, key, doc)
+                )
             except _CurateTransportFault as e:
                 if _CURATE_OVERSIZE_FAULT_MARKER in str(e):
                     # The engine's own verdict that this doc can never fit a

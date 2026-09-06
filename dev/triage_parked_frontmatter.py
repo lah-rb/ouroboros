@@ -391,6 +391,27 @@ async def main_async(a) -> int:
     if deny_rows:
         await append_records(fx, deny_rows)
         print(f"booked {len(deny_rows)} denials to papers.jsonl")
+        # A DENIED paper must not stay parked. The park exists to keep doomed
+        # tokens out of the curate lanes; a denial already does that through
+        # review_status, so leaving curate_oversize in place only pollutes the
+        # park -- which is meant to list papers still AWAITING a decision.
+        # Measured 2026-09-06: 26 of 37 parked papers were already denied here.
+        # Restore the pre-park extraction row from the append-only history so
+        # the un-park also heals the fields the old three-field park row wiped.
+        unpark_rows = []
+        for r in deny:
+            prior = _pre_park_row(a.root, r["key"])
+            merged = dict(prior or bank[r["key"]])
+            merged["paper_key"] = r["key"]
+            if merged.get("extraction_status") == "curate_oversize":
+                merged["extraction_status"] = "extracted"
+            merged["failure_reason"] = ""
+            merged["updated_at"] = now
+            unpark_rows.append(merged)
+        await append_extraction_records(fx, unpark_rows)
+        print(
+            f"un-parked {len(unpark_rows)} denied papers (extraction row restored from history)"
+        )
 
     if a.unpark:
         up_rows = []
@@ -407,6 +428,31 @@ async def main_async(a) -> int:
                 f"un-parked {len(up_rows)} papers in extraction.jsonl (extraction_status=extracted)"
             )
     return 0
+
+
+def _pre_park_row(root: str, key: str) -> dict | None:
+    """The paper's last extraction row BEFORE it was parked, from the
+    append-only sidecar; None if it was never anything but parked."""
+    import json as _json
+    import os as _os
+
+    path = _os.path.join(root, "databank", "extraction.jsonl")
+    last = None
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    r = _json.loads(line)
+                except Exception:  # noqa: BLE001
+                    continue
+                if (
+                    r.get("paper_key") == key
+                    and r.get("extraction_status") != "curate_oversize"
+                ):
+                    last = r
+    except OSError:
+        return None
+    return last
 
 
 def main() -> int:

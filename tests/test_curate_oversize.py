@@ -280,3 +280,30 @@ async def test_park_carries_the_full_sidecar_row_not_a_stub():
     ):
         assert last[field] == prior[field], f"park erased {field}"
     _CURATE_CLAIMS.clear()
+
+
+@pytest.mark.asyncio
+async def test_an_accepted_paper_beyond_every_seat_is_pack_only_not_parked():
+    """The review needs the whole doc under a seat; the pack does not. An
+    accepted paper whose deepest compression still exceeds every seat must
+    be selected for a pack-only turn over raw text, not parked."""
+    _CURATE_CLAIMS.clear()
+    fx = MockEffects(
+        files=_bank_files(
+            [
+                _rec(
+                    "c1",
+                    review_status="accepted",
+                    review_summary="in scope",
+                    figtext_status="figtext_done",
+                )
+            ],
+            {"c1": CJK_MONSTER},
+        )
+    )
+    bank = await read_databank(fx)
+    key, doc = await select_curate_paper(fx, bank, 10_000)
+    assert key == "c1" and doc == "", "pack-only is signalled by an empty doc"
+    after = await read_databank(fx)
+    assert after["c1"]["extraction_status"] != "curate_oversize", "must not be parked"
+    _CURATE_CLAIMS.clear()

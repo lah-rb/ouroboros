@@ -202,6 +202,108 @@ async def test_a_remote_lane_takes_the_papers_only_it_can_take_first(monkeypatch
         _clear_state()
 
 
+@pytest.mark.asyncio
+async def test_drain_routes_an_accepted_oversize_paper_to_pack_only(monkeypatch):
+    """When the selector hands back an accepted paper with an EMPTY doc, the
+    drain must take the pack-only path and never the review path."""
+    from agent.actions import curation_actions as ca
+
+    _clear_state()
+    fx = MockEffects(
+        files=_bank_files(
+            [
+                _rec(
+                    "big",
+                    review_status="accepted",
+                    review_summary="quartz Raman",
+                    figtext_status="figtext_done",
+                )
+            ],
+            {"big": "x"},
+        ),
+        pool_health={"kvPoolTokens": 65536},
+    )
+    seen = {}
+
+    async def fake_select(effects, databank, budget):
+        ca._CURATE_CLAIMS.add("big")
+        return "big", ""  # the pack-only signal
+
+    async def fake_pack_only(effects, key, rec):
+        seen["pack_only"] = (key, rec.get("review_summary"))
+        return {
+            "paper_key": key,
+            "session_id": "",
+            "review": {
+                "status": "accepted",
+                "summary": rec["review_summary"],
+                "issues": [],
+                "deny_category": "",
+                "document_form": "",
+            },
+            "pack": {
+                "status": "packed",
+                "data": {"raman_band_cm1": 465},
+                "quality": {},
+            },
+        }
+
+    async def never_review(*a, **k):
+        raise AssertionError("review path must not run for an accepted oversize paper")
+
+    monkeypatch.setattr(ca, "select_curate_paper", fake_select)
+    monkeypatch.setattr(ca, "_pack_only_raw", fake_pack_only)
+    monkeypatch.setattr(ca, "_curate_stateless", never_review)
+    out = await action_curate_drain_batch(_si(fx))
+    assert out.result["attempted"] == 1
+    assert seen["pack_only"] == ("big", "quartz Raman")
+    rec = (await read_databank(fx))["big"]
+    assert (
+        rec["review_status"] == "accepted" and rec["review_summary"] == "quartz Raman"
+    )
+    assert rec["pack_status"] == "packed"
+
+
+@pytest.mark.asyncio
+async def test_pack_only_raw_carries_the_verdict_and_windows_the_raw_doc(monkeypatch):
+    """_pack_only_raw: no review turn, the verdict on record carried through
+    verbatim, the doc cut at budget 0 (raw), form recorded as raw-oversize."""
+    from agent.actions import curation_actions as ca
+
+    _clear_state()
+    md = "# Results\nRaman band at 465 cm-1 for quartz.\n"
+    fx = MockEffects(
+        files=_bank_files(
+            [
+                _rec(
+                    "p",
+                    review_status="accepted",
+                    review_summary="quartz Raman",
+                    review_issues=["thin"],
+                )
+            ],
+            {"p": md},
+        ),
+        pool_health={"kvPoolTokens": 65536},
+        inference_responses=[json.dumps({"raman_band_cm1": 465})],
+    )
+    rec = (await read_databank(fx))["p"]
+    state = await ca._pack_only_raw(fx, "p", rec)
+    calls = [c for c in fx.calls if c.method == "run_inference"]
+    assert len(calls) == 1, "exactly one pack turn, no review turn"
+    assert "465" in json.dumps(calls[0].args), "the window is cut from the raw doc"
+    assert state["review"] == {
+        "status": "accepted",
+        "summary": "quartz Raman",
+        "issues": ["thin"],
+        "deny_category": "",
+        "document_form": "",
+    }
+    assert state["pack"]["status"] == "packed"
+    assert ca._DOC_FORMS["p"] == "raw-oversize"
+    _clear_state()
+
+
 # ── Drain action ─────────────────────────────────────────────────────
 
 
