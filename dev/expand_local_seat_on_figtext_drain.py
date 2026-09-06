@@ -334,6 +334,53 @@ def wait_llmvp_ready(
     return False, f"not ready within {timeout:.0f}s (last health {health()})"
 
 
+def _ensure_capacity_feed(mission_log: str, wait_s: float = 60.0) -> None:
+    """Make sure the mission's capacity feed reaches `ws`; kick the server if not.
+
+    THE DEADLOCK THIS BREAKS (measured 2026-09-06 05:03). A freshly booted
+    LLMVP has published no capacity snapshot -- the engine publishes only on
+    request lifecycle events -- so a mission that connects to an idle server
+    gets no first frame on the subscription and nothing from the poll rung
+    either, and settles on `legacy` (cells unknown). Local lanes are then
+    admitted with zero known cells, decline every paper on budget, and never
+    send the request that would seed the bus. The remote lane's traffic goes
+    to the other server. Nothing moves until SOMETHING asks the local engine
+    for tokens: one 4-token completion flipped `legacy -> ws
+    (free_cells=125104)` in two seconds.
+    """
+    t0 = time.time()
+    while time.time() - t0 < wait_s:
+        text = (
+            open(mission_log, encoding="utf-8", errors="replace").read()
+            if os.path.exists(mission_log)
+            else ""
+        )
+        if re.search(r"capacity feed: \w+ -> ws", text):
+            log("capacity feed: ws (live cells)")
+            return
+        if "capacity feed: none -> legacy" in text or "-> poll" in text:
+            break
+        time.sleep(2)
+    log(
+        "capacity feed not on ws yet -- kicking the local engine with a 4-token completion"
+    )
+    graphql(
+        '{ completion(request: { prompt: "Reply with the single word OK.", maxTokens: 4 }) { text } }',
+        timeout=120,
+    )
+    t1 = time.time()
+    while time.time() - t1 < 45:
+        text = open(mission_log, encoding="utf-8", errors="replace").read()
+        m = re.search(r"capacity feed: \w+ -> ws \(([^)]*)\)", text)
+        if m:
+            log(f"capacity feed: ws after kick ({m.group(1)})")
+            return
+        time.sleep(2)
+    log(
+        "WARNING: capacity feed still not on ws after the kick -- local lanes will idle; investigate"
+    )
+
+
 def start_mission(base_env: dict[str, str], extra: dict[str, str], tag: str) -> str:
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     logf = os.path.join(TMP, f"run_v25_{tag}_{stamp}.log")
@@ -368,6 +415,7 @@ def start_mission(base_env: dict[str, str], extra: dict[str, str], tag: str) -> 
     pids = mission_pids()
     if not pids:
         raise RuntimeError("mission did not come up")
+    _ensure_capacity_feed(logf)
     log(
         f"mission up {pids} -> {logf}  env: "
         + " ".join(
