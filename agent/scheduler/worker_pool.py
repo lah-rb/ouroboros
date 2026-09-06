@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -581,7 +582,44 @@ def _remote_curate_lanes() -> int:
         return 4
 
 
+def _disabled_lanes() -> set:
+    """Lane names switched off for THIS run: OUROBOROS_DISABLE_LANES, a
+    comma-separated list (e.g. "ocr"). Empty means every lane runs.
+
+    WHY AN ENV SWITCH. The 3060 layer-split rung ([40,12] @ 131,072 cells,
+    measured stable 2026-08-22) needs paddle NOT resident on CUDA1, and
+    paddle is loaded on demand by the ocr lane's extract_batch subprocess.
+    The lane list was hardcoded, so the only way to hold paddle off was to
+    edit code -- which is what the experiment leg did, and why re-applying
+    the rung was never a config-only operation. This makes it one: the
+    operator names the lane, the pool never builds it, nothing ever asks
+    for paddle. Same shape as OUROBOROS_REMOTE_CURATE_LANES.
+    """
+    raw = os.environ.get("OUROBOROS_DISABLE_LANES", "")
+    return {s.strip() for s in raw.split(",") if s.strip()}
+
+
 def lanes_for_scraper() -> List[Lane]:
+    """The scraper's lanes, minus any the operator disabled for this run."""
+    off = _disabled_lanes()
+    lanes = _all_scraper_lanes()
+    if off:
+        known = {ln.name for ln in lanes}
+        for name in sorted(off - known):
+            logger.warning(
+                "OUROBOROS_DISABLE_LANES names %r, which is not a lane (known: %s)",
+                name,
+                ", ".join(sorted(known)),
+            )
+        kept = [ln for ln in lanes if ln.name not in off]
+        logger.info(
+            "lanes disabled for this run: %s", ", ".join(sorted(off & known)) or "-"
+        )
+        return kept
+    return lanes
+
+
+def _all_scraper_lanes() -> List[Lane]:
     """The scraper's four drains as lanes.
 
     est_kv values are the measured p95 context per turn plus that lane's

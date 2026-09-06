@@ -193,3 +193,27 @@ def test_remote_lane_count_follows_the_environment(monkeypatch):
     assert (
         len([ln for ln in lanes_for_scraper() if ln.name.startswith("curate_r")]) == 4
     )
+
+
+def test_disable_lanes_env_removes_named_lanes_only(monkeypatch):
+    """OUROBOROS_DISABLE_LANES=ocr must drop exactly the ocr lane.
+
+    The 3060 layer-split rung needs paddle off CUDA1, and paddle is loaded
+    on demand by the ocr lane's subprocess; with no switch, the only way to
+    hold it off was editing code. Everything else must be untouched.
+    """
+    monkeypatch.delenv("OUROBOROS_DISABLE_LANES", raising=False)
+    before = {ln.name for ln in lanes_for_scraper()}
+    assert "ocr" in before
+
+    monkeypatch.setenv("OUROBOROS_DISABLE_LANES", "ocr")
+    after = {ln.name for ln in lanes_for_scraper()}
+    assert "ocr" not in after
+    assert after == before - {"ocr"}
+
+
+def test_disable_lanes_env_tolerates_spaces_and_unknown_names(monkeypatch):
+    monkeypatch.setenv("OUROBOROS_DISABLE_LANES", " ocr , not_a_lane ,")
+    names = {ln.name for ln in lanes_for_scraper()}
+    assert "ocr" not in names
+    assert "figtext" in names and "curate" in names
