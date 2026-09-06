@@ -369,14 +369,30 @@ def _tag_priority(record: dict) -> int:
     return 0 if tiers & {"exact", "close"} else 1
 
 
+def _doc_size_hint(record: dict) -> int:
+    """Length proxy from fields the record already carries -- no file read.
+    extraction_quality.pages is present on ~7,700 rows; 0 when unknown, which
+    sorts unknown-length papers first rather than last (a deliberate bias:
+    most rows without pages are small older extractions)."""
+    q = record.get("extraction_quality") or {}
+    try:
+        return int(q.get("pages") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def select_translation_paper(databank: dict) -> str | None:
     """One unclaimed ACCEPTED extract_lingual paper with retry budget left.
 
     Post-acceptance by design (see _translation_pending): curation reads
     originals, so only papers the curator accepted spend translate seats.
-    Ordered by (tag strength, key): relevance first, then deterministic —
-    which doubles as finish-first: a partially translated paper keeps
-    being selected until it completes."""
+    Ordered by (tag strength, size, key): relevance first, then SMALLEST
+    first, then deterministic -- which still doubles as finish-first: a
+    partially translated paper keeps being selected until it completes.
+    Smallest-first is the throughput policy (2026-09-06): translation time
+    scales with length, and one 300-450k-token thesis would hold a lane for
+    hours while dozens of 12k-token papers waited behind it; recovered packs
+    per hour is the objective."""
     from agent.actions.extraction_actions import _translation_pending
 
     eligible = [
@@ -390,7 +406,12 @@ def select_translation_paper(databank: dict) -> str | None:
         return None
     return min(
         eligible,
-        key=lambda k: (k in _TRANSLATE_DEFERRED, _tag_priority(databank[k]), k),
+        key=lambda k: (
+            k in _TRANSLATE_DEFERRED,
+            _tag_priority(databank[k]),
+            _doc_size_hint(databank[k]),
+            k,
+        ),
     )
 
 

@@ -1257,3 +1257,30 @@ def test_gate_rejects_output_that_is_not_english():
     assert not any(
         "not English" in p for p in translation_gate(table, table)["problems"]
     )
+
+
+def test_translation_selects_smallest_first_within_a_tag_tier():
+    """Recovered packs per hour is the objective: among equally-tagged papers
+    the shortest translates first; a strong tag still outranks size."""
+    from agent.actions.translation_actions import (
+        _TRANSLATE_CLAIMS,
+        select_translation_paper,
+    )
+
+    base = {
+        "extraction_status": "extract_lingual",
+        "review_status": "accepted",
+        "md_path": "x.md",
+    }
+    bank = {
+        "big": {**base, "extraction_quality": {"pages": 300}},
+        "small": {**base, "extraction_quality": {"pages": 10}},
+        "mid": {**base, "extraction_quality": {"pages": 40}},
+    }
+    _TRANSLATE_CLAIMS.clear()
+    try:
+        assert select_translation_paper(bank) == "small"
+        bank["big"]["tags"] = [{"relevance": "exact"}]
+        assert select_translation_paper(bank) == "big", "tag strength outranks size"
+    finally:
+        _TRANSLATE_CLAIMS.clear()

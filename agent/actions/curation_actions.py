@@ -1526,7 +1526,15 @@ async def select_curate_paper(
             # lane's tier (the most expensive work there is) and never
             # remote-first (any lane can window raw; the local ones are faster).
             pack_only.add(key)
-            sized.append((1, _aspect_priority(rec), 1, 10**12, key))
+            # FIRST in its tier, not last. Pack-only work is pure yield: the
+            # review is already done and a 300-450k-token thesis carries
+            # thousands of numeric leaves (calibrated 2026-09-06 at ~1.25
+            # leaves per numeric table row; the two English theses ~4-6k
+            # between them for ~40 pack turns). Sorting it last -- the first
+            # cut -- parked that yield behind a day of ordinary reviews.
+            # aspect priority is a REVIEW-coverage ordering; it has no meaning for a
+            # paper already accepted, so pack-only outranks it within the tier.
+            sized.append((1, 0, 0, 0, key))
             continue
         if over_every_seat:
             await _book_curate_oversize(

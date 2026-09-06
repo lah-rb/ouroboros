@@ -307,3 +307,32 @@ async def test_an_accepted_paper_beyond_every_seat_is_pack_only_not_parked():
     after = await read_databank(fx)
     assert after["c1"]["extraction_status"] != "curate_oversize", "must not be parked"
     _CURATE_CLAIMS.clear()
+
+
+@pytest.mark.asyncio
+async def test_pack_only_work_is_selected_before_ordinary_reviews():
+    """Pack-only is pure yield -- the review is done and a thesis carries
+    thousands of leaves -- so it heads its tier instead of trailing a day of
+    ordinary reviews (the first cut sorted it last)."""
+    _CURATE_CLAIMS.clear()
+    fx = MockEffects(
+        files=_bank_files(
+            [
+                _rec("small"),  # unreviewed, tiny: smallest-first would pick it first
+                _rec(
+                    "thesis",
+                    review_status="accepted",
+                    review_summary="in scope",
+                    figtext_status="figtext_done",
+                ),
+            ],
+            {"small": "x" * 100, "thesis": CJK_MONSTER},
+        )
+    )
+    bank = await read_databank(fx)
+    key, doc = await select_curate_paper(fx, bank, 10_000)
+    assert key == "thesis" and doc == "", "pack-only must come first"
+    # a sibling lane, with the thesis still claimed, gets the ordinary paper
+    key, _ = await select_curate_paper(fx, bank, 10_000)
+    assert key == "small"
+    _CURATE_CLAIMS.clear()
