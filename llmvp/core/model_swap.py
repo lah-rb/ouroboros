@@ -33,10 +33,9 @@ import logging
 import time
 from typing import Any, Dict, Optional
 
-import yaml
 
 from core import model_registry
-from core.config import Config, get_config, set_config
+from core.config import get_config, load_named_config, set_config
 from inference.backends.factory import get_backend, shutdown_backend_async
 from inference.metadata import reset_model_metadata
 from inference.tokenizer import reset_tokenizer_cache
@@ -143,7 +142,9 @@ async def swap_model(
 
     async with _lock:
         t_start = time.perf_counter()
-        target_path = model_registry.resolve(name)
+        # KeyError with the known-model list if the name is not in the
+        # registry — the path itself is re-resolved by the loader below.
+        model_registry.resolve(name)
         if model_registry.remote_config(name) is not None:
             raise KeyError(
                 f"{name!r} is a remote provider entry — always available, "
@@ -160,9 +161,12 @@ async def swap_model(
             }
 
         # Fail-fast validation BEFORE any teardown — a bad target config
-        # must never interrupt service.
-        raw = yaml.safe_load(target_path.read_text(encoding="utf-8"))
-        target_config = Config(**raw)
+        # must never interrupt service. Through the boot loader, so an
+        # `extends:` child swaps and LLMVP_MODELS_ROOT / LLMVP_N_CTX apply
+        # (the target becomes the PRIMARY, so the n_ctx override is right).
+        target_config = load_named_config(
+            name, apply_n_ctx=True, root=model_registry.CONFIGS_DIR
+        )
         old_config = get_config()
 
         # Late import: lifecycle has no reverse import of this module, but

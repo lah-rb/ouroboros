@@ -1334,7 +1334,12 @@ def _redirect_model_paths(raw_cfg: dict, log) -> None:
     if not root:
         return
     base = Path(root).expanduser()
-    for section, key in (("model", "path"), ("vision", "mmproj_path")):
+    # BOTH weights files live under `model:` — every config keeps mmproj_path
+    # there. This used to look for a `vision:` section that no config has (and
+    # that Config, being extra="forbid", could not even carry), so the
+    # projector was never re-rooted: a redirected model.path booted a vision
+    # model whose mmproj still pointed at the other machine's disk.
+    for section, key in (("model", "path"), ("model", "mmproj_path")):
         block = raw_cfg.get(section)
         if not isinstance(block, dict) or not block.get(key):
             continue
@@ -1353,6 +1358,75 @@ def _redirect_model_paths(raw_cfg: dict, log) -> None:
             block[key] = str(candidate)
 
 
+def _resolve_raw_config(
+    cfg_path: Path, log, *, apply_n_ctx: bool, root: Optional[Path] = None
+) -> tuple[dict, Optional[str], list[str]]:
+    """Read a config file into the raw dict Config() validates: inheritance,
+    then the per-machine adjustments, then the cache-strategy shorthand.
+
+    ONE LOADER FOR EVERY DOOR. Boot (load_config), hot-load of a secondary
+    (resident_models.load) and swap (model_swap) all read configs; until
+    2026-09-06 only boot ran this sequence, and the other two did
+    `Config(**yaml.safe_load(fh))` — so `extends:` children could not be
+    hot-loaded at all (extra="forbid" rejects the key) and LLMVP_MODELS_ROOT
+    never applied to them. Live cost: `loadModel("paddle-ocr-vl")` on the
+    second machine died at "cannot size weights at /home/lah-rb/models/…",
+    the FIRST machine's path, with the redirect that exists for exactly this
+    sitting unused one call away.
+
+    `apply_n_ctx` is the one per-machine adjustment that is PRIMARY-ONLY:
+    LLMVP_N_CTX is the host's ceiling for the model it SERVES, and applying
+    it to a secondary would grow paddle's deliberately minimal 4096-token
+    text pool to the host ceiling.
+    """
+    raw_cfg, base_name, overridden = _load_raw_with_inheritance(cfg_path, root)
+    _redirect_model_paths(raw_cfg, log)
+    if apply_n_ctx:
+        _override_n_ctx(raw_cfg, log)
+    _strategy = raw_cfg.get("cache_strategy")
+    _applied = expand_cache_strategy(raw_cfg)
+    if _applied:
+        log.info("🧩 cache_strategy: %s → %s", _strategy, ", ".join(_applied))
+    elif _strategy:
+        log.info(
+            "🧩 cache_strategy: %s (every implied flag already stated)",
+            _strategy,
+        )
+    return raw_cfg, base_name, overridden
+
+
+def _build_config(raw_cfg: dict) -> Config:
+    """Validate a resolved raw dict, minus the documentation-only keys."""
+    return Config(**{k: v for k, v in raw_cfg.items() if k not in DOC_ONLY_KEYS})
+
+
+def load_named_config(
+    name: str, *, apply_n_ctx: bool = False, root: Optional[Path] = None
+) -> Config:
+    """A registry NAME -> validated Config, through the same loader as boot.
+
+    For hot-loading a secondary or validating a swap target. Never touches
+    the served config (`set_config`) or the boot resolution record — those
+    describe the primary. Unknown names raise KeyError with the message the
+    models query points at.
+    """
+    log = logging.getLogger("llm-mvp")
+    cfg_path = resolve_config_path(name, root)
+    if cfg_path is None:
+        raise KeyError(f"unknown model config {name!r} — see the models query")
+    raw_cfg, base_name, overridden = _resolve_raw_config(
+        cfg_path, log, apply_n_ctx=apply_n_ctx, root=root
+    )
+    if base_name:
+        log.info(
+            "🧬 Config %s extends %s — overrides: %s",
+            cfg_path.stem,
+            base_name,
+            ", ".join(overridden) or "(none)",
+        )
+    return _build_config(raw_cfg)
+
+
 def load_config(path: Optional[Path] = None) -> Config:
     """
     Load configuration from YAML file.
@@ -1369,7 +1443,9 @@ def load_config(path: Optional[Path] = None) -> Config:
         if not cfg_path.is_file():
             raise FileNotFoundError(f"Configuration file not found: {cfg_path}")
 
-        raw_cfg, base_name, overridden = _load_raw_with_inheritance(cfg_path)
+        raw_cfg, base_name, overridden = _resolve_raw_config(
+            cfg_path, log, apply_n_ctx=True
+        )
 
         # A config used to be self-contained and greppable. Inheritance trades
         # that for concision, so the resolved shape has to be VISIBLE at boot —
@@ -1399,27 +1475,11 @@ def load_config(path: Optional[Path] = None) -> Config:
         # tracked absolute path.
         #
         # LLMVP_MODELS_ROOT redirects by BASENAME when the configured path is
-        # absent locally. It never overrides a path that resolves — a machine
-        # whose config is correct is untouched — so this is a fallback, not a
-        # policy, and configs stay the single statement of WHICH weights a
-        # model uses.
-        _redirect_model_paths(raw_cfg, log)
-        _override_n_ctx(raw_cfg, log)
-
-        # Resolve the strategy shorthand BEFORE construction, so every
-        # validator below sees one consistent config and none of them has to
-        # care whether the flags were written out or named.
-        _strategy = raw_cfg.get("cache_strategy")
-        _applied = expand_cache_strategy(raw_cfg)
-        if _applied:
-            log.info("🧩 cache_strategy: %s → %s", _strategy, ", ".join(_applied))
-        elif _strategy:
-            log.info(
-                "🧩 cache_strategy: %s (every implied flag already stated)",
-                _strategy,
-            )
-
-        config = Config(**{k: v for k, v in raw_cfg.items() if k not in DOC_ONLY_KEYS})
+        # absent locally (applied inside _resolve_raw_config, for every door).
+        # It never overrides a path that resolves — a machine whose config is
+        # correct is untouched — so this is a fallback, not a policy, and
+        # configs stay the single statement of WHICH weights a model uses.
+        config = _build_config(raw_cfg)
         set_config(config)
         return config
     except Exception as exc:

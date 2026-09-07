@@ -570,7 +570,7 @@ async def load(name: str) -> Any:
     import time
 
     from core import model_registry
-    from core.config import Config, resolve_config_path
+    from core.config import load_named_config
     from inference.backends.factory import create_backend
 
     if name in _registry.burned:
@@ -591,13 +591,10 @@ async def load(name: str) -> Any:
                 f"loading it here would allocate a second copy"
             )
 
-        path = resolve_config_path(name)
-        if path is None:
-            raise KeyError(f"unknown model config {name!r} — see the models query")
-        import yaml
-
-        with open(path, encoding="utf-8") as fh:
-            cfg = Config(**yaml.safe_load(fh))
+        # THE SAME LOADER AS BOOT (extends:, LLMVP_MODELS_ROOT). A raw
+        # yaml.safe_load here is what made the second machine's loadModel
+        # fail at the first machine's absolute weights path.
+        cfg = load_named_config(name)
 
         ok, why, facts = admission_check(cfg)
         if not ok:

@@ -76,6 +76,46 @@ Boot logs what resolved, and you should read it rather than trust the file:
   in `DOC_ONLY_KEYS`. Record what an experiment answered *with* the experiment —
   a config that has served its purpose should say so.
 
+## Per-machine settings
+
+The configs are SHARED between machines (this repo runs on a CUDA box and an
+Apple Silicon box), but weights paths, device layouts and context ceilings
+are properties of a HOST. Three mechanisms keep one tracked file honest on
+both, and none of them edits a shared yaml:
+
+- **`active_config.txt`** (gitignored) — which config the server boots. Per
+  machine by construction; the tracked `active_config.txt.example` is the
+  fallback. Tracking it once cost three rebases in an afternoon.
+
+- **`LLMVP_MODELS_ROOT`** — the models directory on THIS host. A `model.path`
+  or `model.mmproj_path` that does not exist as written is re-rooted onto
+  `$LLMVP_MODELS_ROOT/<basename>`; a path that resolves is never touched, so a
+  correct config is never second-guessed. Applies on boot **and** on
+  `loadModel`/`swapModel` (both go through the same loader since
+  2026-09-06 — before that a hot-load read the raw yaml and died at the other
+  machine's absolute path). The redirect is by BASENAME: keep the file names
+  the yaml states, or symlink to them. Set it in the server's environment:
+
+  ```
+  cd llmvp && LLMVP_MODELS_ROOT=<models dir on this host> \
+      [LD_LIBRARY_PATH=/home/lah-rb/cuda-libs   # CUDA hosts: the pinned cuBLAS] \
+      setsid nohup .venv/bin/python api/main.py > ~/tmp/llmvp_launch_$(date +%Y%m%d-%H%M%S).log 2>&1 &
+  ```
+
+- **`LLMVP_N_CTX`** — this host's context ceiling for the PRIMARY it serves
+  (clamped to the model's `probe_verified_n_ctx`). Primary only, deliberately:
+  a secondary like paddle keeps its own minimal `n_ctx`.
+
+**Device layout is a variant, not an env var.** A model whose base yaml
+describes one box's GPUs gets `<model>-<host>.yaml` with `extends:` and ONLY
+the device keys (`main_gpu`, `split_mode`, `tensor_split`,
+`vision_projector_device`, `vision_pool_size`) — see `paddle-ocr-vl-mac.yaml`.
+Two rules: restate `model.name` to the variant's own stem (the vision path
+reports `visionModel = model.name`, and a strict client refuses a mismatch),
+and have the client name the variant — a mission's `llmvp_domains["ocr"]`
+carries `{"endpoint": ..., "model": "paddle-ocr-vl-mac"}` because a registry
+name is host-local.
+
 ## Adding a config
 
 A new **model** goes in root, self-contained. Compute its KV geometry from the
