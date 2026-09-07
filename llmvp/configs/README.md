@@ -111,8 +111,11 @@ describes one box's GPUs gets `<model>-<host>.yaml` with `extends:` and ONLY
 the device keys (`main_gpu`, `split_mode`, `tensor_split`,
 `vision_projector_device`, `vision_pool_size`) — see `paddle-ocr-vl-mac.yaml`.
 Two rules: restate `model.name` to the variant's own stem (the vision path
-reports `visionModel = model.name`, and a strict client refuses a mismatch),
-and have the client name the variant — a mission's `llmvp_domains["ocr"]`
+reports `visionModel = model.name`, and a strict client refuses a mismatch for
+any SECONDARY — the active primary is exempt, because a request addressed to
+it cannot be answered by the wrong model and its inherited `model.name` may
+legitimately differ from its stem, as `muse-glimmer-30b-cuda` does), and have
+the client name the variant — a mission's `llmvp_domains["ocr"]`
 carries `{"endpoint": ..., "model": "paddle-ocr-vl-mac"}` because a registry
 name is host-local.
 

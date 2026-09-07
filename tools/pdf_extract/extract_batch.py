@@ -551,6 +551,7 @@ def _vision_completion(
     max_tokens: int,
     temperature: float,
     timeout: float = 600.0,
+    strict: bool = True,
 ) -> tuple[str, str]:
     """One `visionCompletion` for one image. Returns (text, served model).
 
@@ -559,10 +560,19 @@ def _vision_completion(
     WHOLE request for one undeclared field, and top_p was never transported
     on the vision path anyway (the REST shim dropped it on the floor).
 
-    STRICT: the answer must come from the model that was asked for. LLMVP's
-    routing already refuses a cold name rather than answering with the
-    primary, and this is the client-side half of that contract — a mismatch
-    is an error, never an accepted transcription.
+    STRICT (default): the answer must come from the model that was asked
+    for. LLMVP's routing already refuses a cold name rather than answering
+    with the primary, and this is the client-side half of that contract — a
+    mismatch is an error, never an accepted transcription. The server reports
+    `visionModel` as the served config's `model.name`, so a SECONDARY's yaml
+    must keep model.name equal to its registry stem (paddle-ocr-vl and the
+    -mac variant do; configs/README.md states the rule).
+
+    `strict=False` is for a request addressed to the ACTIVE PRIMARY, whose
+    model.name legitimately differs from its stem (muse-glimmer-30b-cuda
+    inherits `muse-glimmer-30b`): asking the primary for its own vision
+    cannot be answered by the wrong model, and requiring the name to match
+    would refuse every page. Live: the first end-to-end run did exactly that.
     """
     variables = {
         "request": {
@@ -576,7 +586,7 @@ def _vision_completion(
     data = _graphql(base_url, _VISION_MUTATION, variables, timeout)
     res = data.get("visionCompletion") or {}
     served = str(res.get("visionModel") or "")
-    if served and served != model:
+    if strict and served and served != model:
         raise RuntimeError(f"vision request for {model!r} was served by {served!r}")
     return str(res.get("text") or ""), served
 
@@ -599,12 +609,17 @@ class _GraphQLVisionRecognizer:
     transported on this path).
     """
 
-    def __init__(self, base_url: str, model: str, max_concurrency: int = 1):
+    def __init__(
+        self, base_url: str, model: str, max_concurrency: int = 1, strict: bool = True
+    ):
         import threading
         import types
 
         self.base_url = base_url.rstrip("/")
         self.model = model
+        # False only when `model` is the fleet's ACTIVE PRIMARY (see
+        # _vision_completion); a secondary is always checked.
+        self.strict = bool(strict)
         self.max_concurrency = max(1, int(max_concurrency or 1))
         # The pipeline reads this to size how many blocks it batches into one
         # predict() call; 8192 is paddlex's own value for a GenAI client.
@@ -618,7 +633,13 @@ class _GraphQLVisionRecognizer:
         prompt = str(item.get("query") or "OCR:")
         try:
             text, served = _vision_completion(
-                self.base_url, self.model, data_uri, prompt, max_tokens, temperature
+                self.base_url,
+                self.model,
+                data_uri,
+                prompt,
+                max_tokens,
+                temperature,
+                strict=self.strict,
             )
         except RuntimeError as exc:
             # A RESIDENT SECONDARY IS COLD AFTER EVERY SERVER BOUNCE. The
@@ -635,7 +656,13 @@ class _GraphQLVisionRecognizer:
                     if not ok:
                         raise RuntimeError(f"loadModel refused: {why}") from exc
             text, served = _vision_completion(
-                self.base_url, self.model, data_uri, prompt, max_tokens, temperature
+                self.base_url,
+                self.model,
+                data_uri,
+                prompt,
+                max_tokens,
+                temperature,
+                strict=self.strict,
             )
         if served:
             self.last_vision_model = served
@@ -700,7 +727,15 @@ def _build_pipe(backend: str, model: str, port: int, concurrency: int, llmvp_url
         inner.vl_rec_model.close()
     except Exception:  # noqa: BLE001 — the placeholder client owns nothing
         pass
-    recognizer = _GraphQLVisionRecognizer(llmvp_url, model or _LLMVP_MODEL, concurrency)
+    name = model or _LLMVP_MODEL
+    # The preflight already proved the name is servable; one more registry
+    # read tells us WHICH kind: a secondary is held to the strict served-model
+    # check, the active primary is exempt (its model.name may differ from its
+    # stem). An unreachable registry here defaults to strict.
+    states = _llmvp_models(llmvp_url) or {}
+    recognizer = _GraphQLVisionRecognizer(
+        llmvp_url, name, concurrency, strict=states.get(name) != "active"
+    )
     inner.vl_rec_model = recognizer
     pipe._ouro_recognizer = recognizer  # read back for the report
     return pipe
@@ -970,6 +1005,7 @@ def _page_transcribe(
     *,
     base_url: str = _LLMVP_URL,
     model: str = _LLMVP_MODEL,
+    strict: bool = True,
 ) -> str:
     """One full-page transcription through the fleet's GraphQL vision path.
 
@@ -987,6 +1023,7 @@ def _page_transcribe(
         _PAGE_MODE_MAX_TOKENS,
         temperature,
         timeout,
+        strict=strict,
     )
     return text
 
@@ -1371,6 +1408,9 @@ def extract_paper(
                             top_p,
                             base_url=llmvp_url,
                             model=llmvp_model,
+                            strict=getattr(
+                                getattr(pipe, "_ouro_recognizer", None), "strict", True
+                            ),
                         ).strip()
                         report["vision_model"] = llmvp_model
                     except Exception as exc:  # noqa: BLE001 — fall back per page

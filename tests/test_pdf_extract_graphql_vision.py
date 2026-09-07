@@ -246,3 +246,35 @@ def test_page_mode_posts_the_page_prompt_over_graphql(server):
     assert req["maxTokens"] == _MOD._PAGE_MODE_MAX_TOKENS
     assert req["model"] == _MODEL
     assert "topP" not in req
+
+
+# ── the primary is exempt from the served-name check; a secondary is not ──
+
+
+def test_the_active_primary_may_answer_under_its_model_name(server):
+    """Live 2026-09-06: asking muse-glimmer-30b-cuda (registry stem) was
+    answered as 'muse-glimmer-30b' (its inherited model.name) and the strict
+    check refused every page. A request addressed to the PRIMARY cannot be
+    served by the wrong model, so strictness is for secondaries only."""
+    server["respond"] = lambda body: _vision_ok("ok", served="muse-glimmer-30b")
+    text, served = _MOD._vision_completion(
+        _URL,
+        "muse-glimmer-30b-cuda",
+        "data:image/png;base64,AAAA",
+        "OCR:",
+        8,
+        0,
+        strict=False,
+    )
+    assert (text, served) == ("ok", "muse-glimmer-30b")
+    rec = _MOD._GraphQLVisionRecognizer(_URL, "muse-glimmer-30b-cuda", 1, strict=False)
+    out = list(rec.predict([{"image": _crop(0, 0, 0), "query": "OCR:"}]))
+    assert out[0]["result"] == "ok" and rec.last_vision_model == "muse-glimmer-30b"
+
+
+def test_a_secondary_is_always_held_to_the_served_name(server):
+    server["respond"] = lambda body: _vision_ok("x", served="muse-glimmer-30b")
+    rec = _MOD._GraphQLVisionRecognizer(_URL, _MODEL, 1)  # strict by default
+    assert rec.strict is True
+    with pytest.raises(RuntimeError, match="served by"):
+        list(rec.predict([{"image": _crop(0, 0, 0), "query": "OCR:"}]))
