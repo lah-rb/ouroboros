@@ -4,17 +4,22 @@
 One agent dispatch = one invocation of this script = one OS process
 (crash isolation: the bake-off showed long-lived vision servers
 accumulate state and die mid-batch; per-batch processes bound the blast
-radius). The script owns its own VLM server child for the batch —
-llama-server by default, mlx_vlm.server as a station-dependent opt-in
-(--vl-backend; MLX is ~1.15x faster and exists on one machine, llama.cpp
-is fidelity-identical and runs everywhere).
+radius). The VL model is reached one of three ways (--vl-backend):
+`llmvp` (default) talks to the RUNNING fleet server over its GraphQL API
+— paddle is a hot secondary there, named per request, exactly as every
+other lane addresses every other model; `llamacpp` / `mlx` spawn a private
+server child for the batch (a station with no fleet server). The llmvp
+path deliberately uses NO OpenAI-shim route: LLMVP's `/v1` shim is
+optional and absent on the remote fleet, and a tool that needed it would
+fail there silently-shaped.
 
 Pipeline per paper:
   1. pymupdf renders pages (160 dpi) and extracts the per-page text
      layer — the publisher's own text, used ONLY as the verification
      oracle, never as output (one output dialect: the engine's).
-  2. PaddleOCR-VL (layout pipeline native, VLM over an OpenAI-shaped
-     endpoint) produces per-page markdown; pages join into
+  2. PaddleOCR-VL (layout detection native in this venv; per-region VL
+     recognition via the fleet's GraphQL `visionCompletion`, or a spawned
+     server's OpenAI API) produces per-page markdown; pages join into
      databank/markdown/<paper_key>.md.
   3. Figure crops from the pipeline are deduped (dHash) and filtered
      (size/entropy) into databank/figures/<paper_key>/fig_NN.png; the
@@ -53,8 +58,9 @@ Usage:
   .venv/bin/python extract_batch.py --pdfs a.pdf b.pdf \
       --databank-dir /path/to/databank \
       [--keys key_a key_b] [--dpi 160] \
-      [--vl-backend llamacpp|mlx] [--model <gguf|mlx dir>] \
-      [--mmproj mmproj.gguf] [--vl-parallel 4]
+      [--vl-backend llmvp|llamacpp|mlx] [--llmvp-url http://host:8008] \
+      [--model <registry name | gguf | mlx dir>] [--mmproj mmproj.gguf] \
+      [--vl-parallel 4] [--text-mode region|auto|page]
 
 Weights default to the backend's entry under models/ (gitignored,
 operator-placed), overridable per station with OUROBOROS_PADDLE_GGUF /
@@ -253,9 +259,42 @@ _LLAMA_SERVER = os.environ.get("OUROBOROS_LLAMA_SERVER", "llama-server")
 # The fleet server: paddle held hot as a Phase 2b secondary rather than
 # spawned per batch. No weights load, no teardown, and the OCR stage becomes
 # visible to LLMVP's model management instead of being a private subprocess.
-# The port is the SERVER's, so nothing here picks a free one.
+# The port is the SERVER's, so nothing here picks a free one. The URL is a
+# BASE (scheme://host:port); the tool appends /graphql itself. --llmvp-url
+# overrides the env, and the agent passes it explicitly when the ocr lane is
+# routed to another host (mission config llmvp_domains["ocr"]).
 _LLMVP_URL = os.environ.get("OUROBOROS_LLMVP_URL", "http://127.0.0.1:8008")
 _LLMVP_MODEL = os.environ.get("OUROBOROS_LLMVP_VL_MODEL", "paddle-ocr-vl")
+
+# paddlex insists on constructing ITS OWN OpenAI-shaped client for the VL
+# recognition step (GenAIConfig.backend is a closed set of server kinds, none
+# of them GraphQL). It never contacts that URL at construction when a model
+# name is supplied, so the llmvp backend hands it an address nothing listens
+# on and then REPLACES the recognizer object with the GraphQL one below. Port
+# 1 is reserved and unbound on every host; if the swap ever failed to take,
+# the first crop would refuse loudly here instead of quietly going to a shim.
+_PLACEHOLDER_VL_URL = "http://127.0.0.1:1/"
+
+# Verbatim copy of agent/effects/inference.py VISION_MUTATION — this venv
+# cannot import the agent package, and the two must not drift: the selected
+# fields are what LLMVP's VisionCompletionResponse offers. `visionModel` is
+# the STRICT check (which model actually answered), not a nicety.
+_VISION_MUTATION = """
+mutation VisionCompletion($request: VisionCompletionRequest!) {
+    visionCompletion(request: $request) {
+        text
+        generatedTokens
+        promptTokens
+        imageCount
+        visionModel
+        decodeMs
+    }
+}
+"""
+_MODELS_QUERY = "{ models { name state } }"
+_LOAD_MUTATION = (
+    "mutation($n:String!){ loadModel(name:$n){ ok state footprintGb detail } }"
+)
 
 # Weights live in models/ (gitignored — operator-placed, as the MLX model
 # always has been). Env overrides let a station point elsewhere without a
@@ -338,11 +377,12 @@ def _vl_pipe_kwargs(backend: str, model: str, port: int, concurrency: int = 0) -
     so the name IS the model) and left unset for a spawned llama.cpp server,
     whose model is fixed at spawn and discovered from /v1/models.
 
-    `llmvp` is the FLEET server: no subprocess, no spawn, paddle already hot
-    beside the primary as a Phase 2b secondary. The name MUST be sent there —
-    LLMVP serves several models from one port and its routing is strict, so
-    an unnamed request would be answered by the primary rather than by
-    paddle. That is also the reason its /v1/models lists the hot entries.
+    `llmvp` is the FLEET server, and paddlex's own client never reaches it:
+    the pipeline is constructed against _PLACEHOLDER_VL_URL (nothing listens
+    there) purely so paddlex will build its layout + assembly machinery, and
+    _build_pipe then swaps the VL recognizer for _GraphQLVisionRecognizer.
+    The api model name is still set: paddlex only calls the server at
+    construction when the name is MISSING (it would ask /models for one).
     """
     kwargs: dict = {
         "vl_rec_backend": "mlx-vlm-server" if backend == "mlx" else "llama-cpp-server",
@@ -351,31 +391,64 @@ def _vl_pipe_kwargs(backend: str, model: str, port: int, concurrency: int = 0) -
     if backend == "mlx":
         kwargs["vl_rec_api_model_name"] = model
     elif backend == "llmvp":
-        # THE /v1 IS LOAD-BEARING. paddlex builds an AsyncOpenAI client from
-        # this URL, and the OpenAI SDK appends "/chat/completions" to it —
-        # so a bare host posts to /chat/completions. llama-server answers
-        # there AND at /v1/chat/completions, which is why the spawned backend
-        # gets away with a root URL; LLMVP mounts its shim only under /v1 and
-        # 404s. Cost one live run to find.
-        kwargs["vl_rec_server_url"] = f"{_LLMVP_URL.rstrip('/')}/v1/"
+        kwargs["vl_rec_server_url"] = _PLACEHOLDER_VL_URL
         kwargs["vl_rec_api_model_name"] = model or _LLMVP_MODEL
     if concurrency:
         kwargs["vl_rec_max_concurrency"] = concurrency
     return kwargs
 
 
-def _llmvp_models(port: int, timeout: float = 3.0) -> Optional[set]:
-    """Model ids the fleet server will serve, or None if it is not answering."""
+def _graphql(base_url: str, query: str, variables: dict | None, timeout: float) -> dict:
+    """One GraphQL POST to the fleet server; returns the `data` object.
+
+    THE TOOL'S ONLY TRANSPORT to LLMVP. A GraphQL error is raised as a
+    RuntimeError carrying the server's message verbatim, because the message
+    IS the routing verdict ("model 'x' is a local config but is not hot",
+    "unknown model 'y'") and callers branch on it.
+    """
+    body = {"query": query}
+    if variables is not None:
+        body["variables"] = variables
+    req = urllib.request.Request(
+        f"{base_url.rstrip('/')}/graphql",
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        out = json.loads(resp.read())
+    errors = out.get("errors") if isinstance(out, dict) else None
+    if errors:
+        first = errors[0] if isinstance(errors, list) and errors else errors
+        msg = first.get("message") if isinstance(first, dict) else str(first)
+        raise RuntimeError(str(msg or "GraphQL error"))
+    return (out.get("data") or {}) if isinstance(out, dict) else {}
+
+
+def _llmvp_models(base_url: str, timeout: float = 3.0) -> Optional[dict]:
+    """{registry name: state} from the fleet server, or None if it is not
+    answering. State is "active" (the primary), "hot" (a resident secondary)
+    or "cold" (a config with no weights loaded).
+
+    TAKES THE BASE URL, NOT A PORT, and asks GraphQL, not /v1/models: the
+    preflight once rebuilt the address as 127.0.0.1:<port> and asked the
+    REST shim — so pointing OUROBOROS_LLMVP_URL at another host asked the
+    LOCAL server whether it could serve the OCR model and, on a miss, called
+    loadModel on it: the opposite of the intent (the reason to aim OCR at a
+    remote fleet is to keep paddle OFF this box's GPU). And the shim is
+    optional — the remote fleet does not mount it at all.
+    """
     try:
-        with urllib.request.urlopen(
-            f"http://127.0.0.1:{port}/v1/models", timeout=timeout
-        ) as r:
-            return {m.get("id") for m in json.load(r).get("data", [])}
+        data = _graphql(base_url, _MODELS_QUERY, None, timeout)
     except Exception:  # noqa: BLE001 — down, starting, or not listening
         return None
+    return {
+        str(m.get("name")): str(m.get("state") or "")
+        for m in (data.get("models") or [])
+        if isinstance(m, dict) and m.get("name")
+    }
 
 
-def _llmvp_load(port: int, model: str, timeout: float = 300.0) -> tuple[bool, str]:
+def _llmvp_load(base_url: str, model: str, timeout: float = 300.0) -> tuple[bool, str]:
     """Ask LLMVP to make ``model`` hot. Returns (ok, detail).
 
     THIS IS ORCHESTRATION, NOT A SIDE EFFECT OF INFERENCE, and the distinction
@@ -385,46 +458,38 @@ def _llmvp_load(port: int, model: str, timeout: float = 300.0) -> tuple[bool, st
     reports what it hears — including a governor refusal, which is a sizing
     decision the operator needs to read rather than a crash.
     """
-    q = {
-        "query": "mutation($n:String!){ loadModel(name:$n){ ok state "
-        "footprintGb detail } }",
-        "variables": {"n": model},
-    }
-    req = urllib.request.Request(
-        f"http://127.0.0.1:{port}/graphql",
-        data=json.dumps(q).encode(),
-        headers={"Content-Type": "application/json"},
-    )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            body = json.load(r)
+        data = _graphql(base_url, _LOAD_MUTATION, {"n": model}, timeout)
     except Exception as exc:  # noqa: BLE001 — report, the caller decides
         return False, f"{type(exc).__name__}: {exc}"
-    if body.get("errors"):
-        return False, json.dumps(body["errors"])[:300]
-    res = (body.get("data") or {}).get("loadModel") or {}
-    return bool(res.get("ok")), res.get("detail") or ""
+    res = data.get("loadModel") or {}
+    return bool(res.get("ok")), str(res.get("detail") or "")
 
 
-def _ensure_llmvp_model(port: int, model: str) -> tuple[bool, str]:
+def _ensure_llmvp_model(base_url: str, model: str) -> tuple[bool, str]:
     """Server up AND ``model`` servable, loading it if it is merely cold.
 
     Readiness and routability are one question here: LLMVP serves several
     models from one port with STRICT routing, so a server that is up but has
     not loaded the OCR model would refuse every crop. Resolving it before any
     page is rendered turns a per-crop failure into one clear startup answer.
+    A name the registry does not know fails fast without a loadModel — the
+    server would only KeyError, and the fix is a config, not a load.
     """
-    names = _llmvp_models(port)
-    if names is None:
+    states = _llmvp_models(base_url)
+    if states is None:
         return False, "not reachable"
-    if model in names:
+    if model not in states:
+        known = ", ".join(sorted(states)) or "(none)"
+        return False, f"unknown model {model!r}; registry has: {known}"
+    if states[model] in ("hot", "active"):
         return True, "already hot"
-    ok, detail = _llmvp_load(port, model)
+    ok, detail = _llmvp_load(base_url, model)
     if not ok:
         return False, f"loadModel refused: {detail}"
-    names = _llmvp_models(port)
-    if names is None or model not in names:
-        return False, "loadModel reported ok but the model is not listed"
+    states = _llmvp_models(base_url)
+    if states is None or states.get(model) not in ("hot", "active"):
+        return False, "loadModel reported ok but the model is not hot"
     return True, "loaded"
 
 
@@ -442,6 +507,203 @@ def _wait_health(port: int, timeout: float = 120.0) -> bool:
         except Exception:
             time.sleep(2)
     return False
+
+
+# ── VL recognition over GraphQL (the llmvp backend) ──────────────────
+#
+# paddlex's PaddleOCR-VL pipeline is two models: PP-DocLayoutV3 finds the
+# blocks (local, this venv) and a VL model reads each crop with a per-block
+# query ("OCR:", "Table Recognition:", "Formula Recognition:", ...). The
+# second is a plain object the pipeline holds at `vl_rec_model` and uses
+# three ways — .predict(items, **kw), .close(), and
+# .batch_sampler.batch_size — so it can be replaced with one that speaks
+# LLMVP's GraphQL. The prompts, the PNG encoding and the sampling are the
+# stock client's, so only the ENVELOPE changes; fidelity is unaffected.
+
+
+def _encode_png_data_uri(image) -> str:
+    """A region crop (numpy BGR array) or raw PNG bytes as a data URI.
+
+    Byte-for-byte what paddlex's stock client sends to a llama-cpp-server
+    backend: BGR -> RGB, PNG (not JPEG), base64 — and NO resize, because the
+    stock client only forwards min/max_pixels to vllm/fastdeploy.
+    """
+    if isinstance(image, (bytes, bytearray)):
+        png = bytes(image)
+    else:
+        import io
+
+        arr = image
+        if getattr(arr, "ndim", 0) == 3 and arr.shape[-1] >= 3:
+            arr = arr[:, :, :3][:, :, ::-1]  # BGR -> RGB (what cv2 BGR2RGB does)
+        img = Image.fromarray(arr)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        png = buf.getvalue()
+    return "data:image/png;base64," + base64.b64encode(png).decode("ascii")
+
+
+def _vision_completion(
+    base_url: str,
+    model: str,
+    data_uri: str,
+    prompt: str,
+    max_tokens: int,
+    temperature: float,
+    timeout: float = 600.0,
+) -> tuple[str, str]:
+    """One `visionCompletion` for one image. Returns (text, served model).
+
+    Fields are exactly LLMVP's VisionCompletionRequest: prompt, images, model,
+    maxTokens, temperature. NO topP and NO requestId — GraphQL rejects the
+    WHOLE request for one undeclared field, and top_p was never transported
+    on the vision path anyway (the REST shim dropped it on the floor).
+
+    STRICT: the answer must come from the model that was asked for. LLMVP's
+    routing already refuses a cold name rather than answering with the
+    primary, and this is the client-side half of that contract — a mismatch
+    is an error, never an accepted transcription.
+    """
+    variables = {
+        "request": {
+            "prompt": prompt,
+            "images": [{"url": data_uri}],
+            "model": model,
+            "maxTokens": int(max_tokens),
+            "temperature": float(temperature),
+        }
+    }
+    data = _graphql(base_url, _VISION_MUTATION, variables, timeout)
+    res = data.get("visionCompletion") or {}
+    served = str(res.get("visionModel") or "")
+    if served and served != model:
+        raise RuntimeError(f"vision request for {model!r} was served by {served!r}")
+    return str(res.get("text") or ""), served
+
+
+class _GraphQLVisionRecognizer:
+    """Drop-in for paddlex's VL recognizer, speaking LLMVP GraphQL.
+
+    Duck-types the three members the PaddleOCR-VL pipeline touches. Results
+    come back IN INPUT ORDER as the pipeline's own DocVLMResult dicts
+    (`{**item, "result": text}` — the stock format_doc_vlm_result_dict shape),
+    because the assembly step indexes them positionally and then writes
+    `["image"]` into each.
+
+    Kwargs the pipeline passes and this ignores, with the reason each is safe:
+    `use_cache` (a local-engine flag), `min_pixels`/`max_pixels` (the stock
+    client forwards them only to vllm/fastdeploy — llama-cpp-server never saw
+    them), `skip_special_tokens` (a local-engine postprocess; the tool never
+    enables spotting, so it is always True and the server's own seal already
+    strips the template tokens), `top_p` (not in the GraphQL schema; never
+    transported on this path).
+    """
+
+    def __init__(self, base_url: str, model: str, max_concurrency: int = 1):
+        import threading
+        import types
+
+        self.base_url = base_url.rstrip("/")
+        self.model = model
+        self.max_concurrency = max(1, int(max_concurrency or 1))
+        # The pipeline reads this to size how many blocks it batches into one
+        # predict() call; 8192 is paddlex's own value for a GenAI client.
+        self.batch_sampler = types.SimpleNamespace(batch_size=8192)
+        self.last_vision_model = ""
+        self._lock = threading.Lock()
+        self._warmed = False
+
+    def _one(self, item: dict, max_tokens: int, temperature: float) -> str:
+        data_uri = _encode_png_data_uri(item["image"])
+        prompt = str(item.get("query") or "OCR:")
+        try:
+            text, served = _vision_completion(
+                self.base_url, self.model, data_uri, prompt, max_tokens, temperature
+            )
+        except RuntimeError as exc:
+            # A RESIDENT SECONDARY IS COLD AFTER EVERY SERVER BOUNCE. The
+            # preflight normally warms it, but a bounce mid-batch (or a
+            # sibling process unloading it) shows up here as "not hot".
+            # Load it ONCE per recognizer and retry that request once —
+            # preocr_triage's idiom; anything else propagates.
+            if "not hot" not in str(exc).lower():
+                raise
+            with self._lock:
+                if not self._warmed:
+                    self._warmed = True
+                    ok, why = _llmvp_load(self.base_url, self.model)
+                    if not ok:
+                        raise RuntimeError(f"loadModel refused: {why}") from exc
+            text, served = _vision_completion(
+                self.base_url, self.model, data_uri, prompt, max_tokens, temperature
+            )
+        if served:
+            self.last_vision_model = served
+        return text
+
+    def predict(self, items, **kw):
+        from concurrent.futures import ThreadPoolExecutor
+
+        try:
+            from paddlex.inference.models.doc_vlm.result import DocVLMResult
+        except Exception:  # noqa: BLE001 — outside the tool venv (tests)
+            DocVLMResult = dict  # noqa: N806
+
+        items = list(items)
+        max_tokens = int(kw.get("max_new_tokens") or 4096)
+        temperature = kw.get("temperature")
+        temperature = 0.0 if temperature is None else float(temperature)
+        with ThreadPoolExecutor(max_workers=self.max_concurrency) as pool:
+            texts = list(
+                pool.map(lambda it: self._one(it, max_tokens, temperature), items)
+            )
+        for item, text in zip(items, texts):
+            out = {k: v for k, v in item.items()}
+            out["result"] = text
+            yield DocVLMResult(out)
+
+    def close(self) -> None:
+        return None
+
+
+def _build_pipe(backend: str, model: str, port: int, concurrency: int, llmvp_url: str):
+    """The PaddleOCRVL pipeline for `backend` — ONE factory, so this tool and
+    pdf_extract_one.py cannot drift apart.
+
+    For `llmvp` the stock VL recognizer is swapped for _GraphQLVisionRecognizer
+    on the INNER paddlex pipeline. The outer object paddlex returns is an
+    AutoParallel wrapper whose __getattr__ forwards READS to `_pipeline` but
+    does not intercept writes — assigning on the wrapper would set a dead
+    attribute and leave the stock OpenAI client in place. Asserted, so a
+    paddlex upgrade that moves the seam fails loudly rather than silently
+    reverting to the shim.
+    """
+    from paddleocr import PaddleOCRVL
+
+    pipe = PaddleOCRVL(
+        **_vl_pipe_kwargs(
+            backend, model, port, concurrency=concurrency if backend == "llmvp" else 0
+        )
+    )
+    if backend != "llmvp":
+        return pipe
+    outer = pipe.paddlex_pipeline
+    if getattr(outer, "multi_device_inference", False):
+        raise RuntimeError("llmvp backend: multi-device paddlex pipelines unsupported")
+    inner = getattr(outer, "_pipeline", None)
+    if inner is None or not hasattr(inner, "vl_rec_model"):
+        raise RuntimeError(
+            "llmvp backend: paddlex pipeline has no `_pipeline.vl_rec_model` seam "
+            "(paddlex upgrade?) — refusing rather than falling back to the shim"
+        )
+    try:
+        inner.vl_rec_model.close()
+    except Exception:  # noqa: BLE001 — the placeholder client owns nothing
+        pass
+    recognizer = _GraphQLVisionRecognizer(llmvp_url, model or _LLMVP_MODEL, concurrency)
+    inner.vl_rec_model = recognizer
+    pipe._ouro_recognizer = recognizer  # read back for the report
+    return pipe
 
 
 # ── Text normalization (shared by all verification checks) ───────────
@@ -705,42 +967,28 @@ def _page_transcribe(
     temperature: float,
     top_p: float,
     timeout: float = 300.0,
+    *,
+    base_url: str = _LLMVP_URL,
+    model: str = _LLMVP_MODEL,
 ) -> str:
-    """One full-page transcription through the fleet vision endpoint.
+    """One full-page transcription through the fleet's GraphQL vision path.
 
-    Sends `model` the same way _ensure_llmvp_model names it, so the call
-    routes identically on the production fleet server (paddle as a hot
-    secondary) and on a standalone campaign server (paddle as primary,
-    served under its config stem)."""
-    payload = {
-        "model": _LLMVP_MODEL,
-        "max_tokens": _PAGE_MODE_MAX_TOKENS,
-        "temperature": temperature,
-        "top_p": top_p,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": "data:image/png;base64,"
-                            + base64.b64encode(png_bytes).decode("ascii")
-                        },
-                    },
-                    {"type": "text", "text": _PAGE_PROMPT},
-                ],
-            }
-        ],
-    }
-    req = urllib.request.Request(
-        f"{_LLMVP_URL.rstrip('/')}/v1/vision",
-        data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"},
+    Names the model the same way _ensure_llmvp_model does, so the call routes
+    identically on the production fleet (paddle as a hot secondary) and on a
+    standalone campaign server (paddle as primary). `top_p` is accepted for
+    signature stability and NOT transported: the GraphQL request has no such
+    field, and the REST shim this replaced silently dropped it too."""
+    del top_p
+    text, _served = _vision_completion(
+        base_url,
+        model,
+        _encode_png_data_uri(png_bytes),
+        _PAGE_PROMPT,
+        _PAGE_MODE_MAX_TOKENS,
+        temperature,
+        timeout,
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        out = json.loads(resp.read())
-    return (out.get("choices") or [{}])[0].get("message", {}).get("content") or ""
+    return text
 
 
 def _harvest_page_figures(page, out_dir: str, dpi: int) -> int:
@@ -1019,6 +1267,8 @@ def extract_paper(
     top_p: float = 0.95,
     page_range: tuple | None = None,
     text_mode: str = "region",
+    llmvp_url: str = _LLMVP_URL,
+    llmvp_model: str = _LLMVP_MODEL,
 ) -> dict:
     """``page_range=(a, b)`` extracts pages [a, b) only — the BOOK SEGMENT
     mode. An explicit range is operator intent, so the oversize referral is
@@ -1055,6 +1305,10 @@ def extract_paper(
         "pages_page_mode": 0,
         "pages_region_mode": 0,
         "page_mode_fallbacks": 0,
+        # Which model ANSWERED (LLMVP's visionModel), "" for spawned servers.
+        # Observable from the drain's own JSON, so a mis-routed batch is
+        # visible without reading server logs.
+        "vision_model": "",
         "seconds": 0.0,
         "error": "",
     }
@@ -1112,8 +1366,13 @@ def extract_paper(
                 if route == "page":
                     try:
                         page_md = _page_transcribe(
-                            pix.tobytes("png"), temperature, top_p
+                            pix.tobytes("png"),
+                            temperature,
+                            top_p,
+                            base_url=llmvp_url,
+                            model=llmvp_model,
                         ).strip()
+                        report["vision_model"] = llmvp_model
                     except Exception as exc:  # noqa: BLE001 — fall back per page
                         print(
                             f"page-mode fallback p{i}: "
@@ -1221,6 +1480,11 @@ def extract_paper(
         # until there is enough of it to calibrate against.
         report["table_token_leak"] = len(_TABLE_TOKEN_LEAK.findall(joined))
         report["largest_table_rows"] = _largest_table_rows(joined)
+        served = getattr(
+            getattr(pipe, "_ouro_recognizer", None), "last_vision_model", ""
+        )
+        if served:
+            report["vision_model"] = str(served)
     except Exception as e:  # noqa: BLE001 - report, don't crash the batch
         report["error"] = f"{type(e).__name__}: {e}"
         if os.path.isdir(fig_dir) and not os.listdir(fig_dir):
@@ -1258,6 +1522,13 @@ def main() -> int:
         default="",
         help="projector GGUF for --vl-backend llamacpp "
         "(default: the entry under models/)",
+    )
+    ap.add_argument(
+        "--llmvp-url",
+        default=_LLMVP_URL,
+        help="fleet server BASE URL for --vl-backend llmvp (scheme://host:port; "
+        "the tool speaks its GraphQL at /graphql). The agent passes this "
+        f"explicitly when the ocr lane is routed remotely; default {_LLMVP_URL}",
     )
     ap.add_argument(
         "--vl-parallel",
@@ -1332,13 +1603,13 @@ def main() -> int:
     # alongside the hot one).
     server = None
     if args.vl_backend == "llmvp":
-        port = int(_LLMVP_URL.rsplit(":", 1)[-1])
-        ok, why = _ensure_llmvp_model(port, args.model)
+        port = 0  # nothing is spawned; the fleet server owns its port
+        ok, why = _ensure_llmvp_model(args.llmvp_url, args.model)
         if not ok:
             print(
                 json.dumps(
                     {
-                        "error": f"LLMVP at {_LLMVP_URL} cannot serve "
+                        "error": f"LLMVP at {args.llmvp_url} cannot serve "
                         f"{args.model!r}: {why}. Start the server, or use "
                         f"--vl-backend llamacpp to spawn a private one."
                     }
@@ -1358,18 +1629,11 @@ def main() -> int:
         if server is not None and not _wait_health(port):
             print(json.dumps({"error": f"{args.vl_backend} server failed to start"}))
             return 3
-        from paddleocr import PaddleOCRVL
-
-        pipe = PaddleOCRVL(
-            **_vl_pipe_kwargs(
-                args.vl_backend,
-                args.model,
-                port,
-                # The fleet server's parallelism is its OWN vision_pool_size,
-                # not a flag here — but the CLIENT still has to fan out to use
-                # it, so the crop concurrency is passed through.
-                concurrency=args.vl_parallel if args.vl_backend == "llmvp" else 0,
-            ),
+        # The fleet server's parallelism is its OWN vision_pool_size, not a
+        # flag here — but the CLIENT still has to fan out to use it, so the
+        # crop concurrency is passed through (extra requests queue there).
+        pipe = _build_pipe(
+            args.vl_backend, args.model, port, args.vl_parallel, args.llmvp_url
         )
         for pdf, key in zip(args.pdfs, keys):
             pr = None
@@ -1386,6 +1650,8 @@ def main() -> int:
                 top_p=args.vl_top_p,
                 page_range=pr,
                 text_mode=args.text_mode,
+                llmvp_url=args.llmvp_url,
+                llmvp_model=args.model,
             )
             print(json.dumps(report, ensure_ascii=False), flush=True)
     finally:

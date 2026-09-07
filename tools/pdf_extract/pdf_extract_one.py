@@ -41,11 +41,12 @@ import time
 from extract_batch import (
     _DEFAULT_MMPROJ,
     _DEFAULT_VL_BACKEND,
+    _LLMVP_URL,
     _VL_BACKENDS,
+    _build_pipe,
     _default_vl_model,
     _free_port,
     _spawn_vl_server,
-    _vl_pipe_kwargs,
     _wait_health,
 )
 
@@ -66,15 +67,20 @@ def extract_pymupdf(pdf_path: str) -> str:
 
 
 def extract_paddle(
-    pdf_path: str, model: str, dpi: int, port: int, backend: str = _DEFAULT_VL_BACKEND
+    pdf_path: str,
+    model: str,
+    dpi: int,
+    port: int,
+    backend: str = _DEFAULT_VL_BACKEND,
+    llmvp_url: str = _LLMVP_URL,
 ) -> str:
     """PaddleOCR-VL page loop from extract_batch.extract_paper, layout-only:
-    no figure sidecars, no databank paths, no verification tallies."""
+    no figure sidecars, no databank paths, no verification tallies. Same
+    _build_pipe as the batch tool, so the llmvp backend goes over GraphQL
+    here too rather than keeping a private copy of the retired shim path."""
     import fitz  # pymupdf
 
-    from paddleocr import PaddleOCRVL
-
-    pipe = PaddleOCRVL(**_vl_pipe_kwargs(backend, model, port))
+    pipe = _build_pipe(backend, model, port, 1, llmvp_url)
     doc = fitz.open(pdf_path)
     page_mds: list[str] = []
     with tempfile.TemporaryDirectory(prefix="pdfx1_") as tmp:

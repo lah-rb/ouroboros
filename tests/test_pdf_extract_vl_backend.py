@@ -160,10 +160,13 @@ def test_llmvp_needs_no_local_weights_and_spawns_nothing():
     paddle beside the hot one."""
     kwargs = _MOD._vl_pipe_kwargs("llmvp", "", 8008)
     assert kwargs["vl_rec_api_model_name"] == _MOD._LLMVP_MODEL
-    # THE /v1 IS LOAD-BEARING: AsyncOpenAI appends "/chat/completions", and
-    # LLMVP mounts its shim only under /v1 (llama-server answers at both,
-    # which is why the spawned backend gets away with a root URL).
-    assert kwargs["vl_rec_server_url"].endswith("/v1/")
+    # paddlex's own OpenAI client never reaches the fleet: it is built against
+    # an address nothing listens on and then REPLACED by the GraphQL
+    # recognizer (_build_pipe). The name is still supplied because paddlex
+    # only contacts the server at construction when the name is missing.
+    assert kwargs["vl_rec_server_url"] == _MOD._PLACEHOLDER_VL_URL
+    assert "/v1/" not in kwargs["vl_rec_server_url"]
+    assert "8008" not in kwargs["vl_rec_server_url"], "the fleet is never the target"
     with pytest.raises(ValueError, match="nothing to spawn"):
         _MOD._spawn_vl_server("llmvp", "m", "p", 1)
 
