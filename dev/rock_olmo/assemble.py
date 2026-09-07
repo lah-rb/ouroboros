@@ -7,14 +7,11 @@ that would have needed a model — pulling reported peak positions out of
 paper prose — was already paid for and is banked as structured fields in
 the packs.
 
-SURFACE-FORM VARIATION WITHOUT A MODEL. Rendering 2,800 records from one
-template per view would teach the template rather than the relation —
-the same failure the multi-view design exists to avoid, reintroduced at
-the sentence level. So each view carries several phrasings and picks one
-by a STABLE HASH of the record's identity: varied across the corpus,
-identical on every re-run, and no fabrication risk. If a trained model
-still parrots the phrasing, that is the evidence that buys paraphrase
-inference — and it will then be known which views need it.
+SURFACE-FORM VARIATION lives in templates.py (corpus v4). The v3 record
+stream rendered ONE frame per view; a `phrasing` word was stored on each
+record and never rendered, so it varied nothing (measured 2026-09-07: 400
+inverse records, 11 distinct openings — the templating §17/§18 paid for).
+That dead field is gone; this module keeps the v3 wording as frame 0.
 
 WEIGHTING IS VIEWS-AS-WEIGHT (operator ruling). A species emits every
 view it can support and no more: well-covered species naturally reach 7
@@ -36,15 +33,14 @@ import hashlib
 import json
 import os
 import re
-from typing import Any, Iterable, Iterator
+from typing import Any, Iterable
 
-from holdout import elements, select_holdout
+from holdout import select_holdout
 from interconnect import build_views
 from reference_layer import (
     REF_ROOT,
     iter_ecostress,
     iter_rruff,
-    load_asd_lines,
     load_cif_features,
     load_mindat_structure,
     pick_peaks,
@@ -328,19 +324,6 @@ def select_reference_only(
     return [species for _, _, species in ranked[:budget]]
 
 
-#: Alternative phrasings per view, selected by stable hash so the corpus
-#: varies in surface form without varying between runs. Deliberately
-#: modest — the goal is to break the single-template signature, not to
-#: simulate prose diversity, which is what a paraphrase model would be
-#: for if this proves insufficient.
-PHRASINGS = {
-    "forward": ("states", "reports", "characterises"),
-    "inverse": ("identifies", "indicates", "points to"),
-    "cross_modal": ("joint", "multimodal", "combined"),
-    "contrastive": ("discriminate", "separate", "distinguish"),
-    "corroboration": ("compare", "corroborate", "check"),
-}
-
 #: Corroborations emitted per species. Uncapped, this view produced 79%
 #: of paper-backed records and swamped the other four.
 MAX_CORROBORATIONS_PER_SPECIES = 6
@@ -448,9 +431,6 @@ def assemble(
             }
         )
         for view in views:
-            variants = PHRASINGS.get(view["view"])
-            if variants:
-                view["phrasing"] = stable_choice(list(variants), species, view["view"])
             view.update({"split": split, "origin": origin, "formula": formula})
             records.append(view)
             stats[f"{view['view']}:{split}"] += 1

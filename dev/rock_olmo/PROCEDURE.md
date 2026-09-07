@@ -1042,3 +1042,119 @@ uniform prose makes the LM worse. On current evidence the language model
 is the wrong container for these facts — the regression/retrieval path
 holds them better, and the LM's role should be the interface, not the
 store.
+
+---
+
+## 19. Corpus v4 / full-parameter two-stage run — pre-registration
+
+Written 2026-09-07 BEFORE any v4 corpus is built or any weight is trained,
+under the §16 rule: the instrument is fixed before the experiment. Numbers
+marked *measured* are filled in by the smoke and probe steps and may not be
+edited after stage 1 starts.
+
+### Why this run exists
+
+§11, §17 and §18 established that the LoRA passes learned output shapes and
+not facts, and this session measured why:
+
+1. **Truncation.** `emit.MARKDOWN_CHUNK_CHARS = 12_000` was sized for the
+   4,096-token window; `train_lora.py` cut at 2,048. Run 1 trained on
+   11.78M of 16.93M tokens. On the 2026-09-07 corpus 87.7 % of markdown
+   chunks exceed 2,048 tokens (59.6 % of tokens kept) against 11.5 % at 4,096
+   (91.4 % kept).
+2. **LoRA ≠ continued pretraining.** 24M of 1.48B parameters at lr 1e-4, no
+   replay; §18 measured damage to the name pathway (0.4208 → 0.3880,
+   t = −5.01) — a forgetting signature.
+3. **Templating.** `assemble.PHRASINGS` is stored and never rendered; 400
+   inverse records carry 11 distinct openings; 3,318 identical structure
+   views homogenised generation (§17) and representation (§18).
+4. **Competing targets.** species → formula (one string) was learned;
+   species → bands (several lists per prompt) was not.
+
+### Design (operator decisions 2026-09-07)
+
+- **Stage 1**: continued pretraining, FULL weights, fp32 master + bf16
+  autocast, seq 4,096, boundary-aware packing, both GPUs via an explicit
+  device map. Prose corpus: accepted papers with FIGTEXT INLINED at the
+  figure anchor (`build_curator_doc`), `.en.md` preferred, binder ×4, pack
+  prose, reference prose from every dataset with a reader plus ROD, HOM,
+  webmineral and mindat prose (licence-tagged), and ~17 % replay from OLMo's
+  own midtraining mix biased toward scientific text (pes2o ≫ wiki > dclm).
+  lr 4e-5 constant after a 5 % warmup. **Two epochs committed** (~172M
+  tokens).
+- **Stage 2**: the anneal — prompt → completion shapes from a TEMPLATE
+  LIBRARY (≥10 statement frames + ≥4 question frames per view; probe frames
+  never trained), single-valued targets (one canonical band list per
+  species + modality, measurement-keyed prompts otherwise), loss on
+  completions only, 70 % shapes / 22 % carried stage-1 prose / 8 % replay,
+  linear decay 4e-5 → 0, two epochs of ~12M tokens.
+- **No species holdout.** Everything trains. Generalisation probe =
+  ~100 REFERENCE-ONLY RRUFF species (in no paper, ≥2 spectra), excluded from
+  every view; recall is measured on SEEN species — the oracle's real job.
+- **Parity cap lifted** (`reference_only_budget=None`).
+
+### Token targets
+
+Operator addition (2026-09-07, after approval): **the reference datasets bear
+repetition in stage 1 alongside the binder papers.** Templated reference
+facts (RRUFF, ROD, ECOSTRESS, mindat structure, AMCSD, WURM, NIST, SSHADE)
+are presented 4x as FOUR DISTINCT FRAMES (never copies — §17/§18); the
+encyclopaedic sheets (HOM, webmineral, mindat prose) 3x as copies, like the
+binder shelf. Papers and replay stay at 1x.
+
+| stage | source | repeats | approx. weighted tokens |
+|---|---|---|---|
+| 1 | papers markdown (2,057) + inlined figtext | 1 | ~60M |
+| 1 | binder shelf | 4 | ~5M |
+| 1 | pack prose | 1 | ~1M |
+| 1 | templated reference facts (RRUFF/ROD/ECOSTRESS/mindat-struct/AMCSD/WURM/NIST/SSHADE) | 4 (distinct frames) | ~6M |
+| 1 | HOM + webmineral + mindat prose | 3 (copies) | ~39M |
+| 1 | replay (pes2o ≫ wiki > dclm) | 1 | ~20M (~15 % of stage) |
+| 2 | shapes / carried prose / replay | — | 70 / 22 / 8 |
+
+Stage 1 ≈ 130M weighted tokens per epoch, two epochs ≈ 260M; at the
+planning pace of 3–5M tok/h that is 52–87 h. The smoke test replaces the
+pace figure before stage 1 starts.
+
+Manifest reports realised shares; ±2 points of target is a pass.
+
+### Predictions, falsifiable
+
+1. **Papers val loss falls ≥ 10 % from base after stage 1** (run 1/2 moved
+   ~10 % on their own eval sets; a much larger move is an artefact to
+   investigate).
+2. **Replay val loss stays within +3 % of base at both stages.** This is the
+   forgetting bound; §18's damage would show here first.
+3. **Structure-prompt polymorph similarity stays ≤ base (0.476).** Run 2 rose
+   to 0.784; the template library and carried prose exist to prevent that.
+4. **Seen-species recall at stage 2**: formula ≥ 80 %, crystal system ≥ 70 %,
+   ≥ 2 of 3 strongest bands within ±10 cm⁻¹ for ≥ 50 %, inverse top-1
+   ≥ 40 %; trained-frame minus probe-frame gap ≤ 15 points.
+5. **Reference-only probe species**: bands near floor (never seen), but
+   formula / crystal-system accuracy ≥ base — a drop is §18-style damage.
+6. **§18 instrument**: name-mode paired delta ≥ 0 (run 2: −0.0327).
+7. **Expected NOT to work**: bands for species with a single noisy spectrum,
+   and anything about the 14 binder papers still without a PDF.
+
+### Licence gate
+
+HOM (© Mineral Data Publishing 2001), webmineral (scraped) and mindat prose
+(NC API terms) are INCLUDED for this private research run by operator
+decision; every record and the manifest carry `license: restricted-<source>`
+so they can be excluded from any published artefact or a later run.
+
+### Measured (fill before stage 1; frozen after)
+
+- device map split: **4 layers + embeddings on the 3060**, measured 2026-09-07 by `device_map.py --probe` (fp32 params, fused AdamW, bf16 autocast, grad ckpt, 1×4096, 4 timed steps):
+
+| 3060 layers | ok | peak 3090 GiB | peak 3060 GiB | headroom | tok/h (probe) |
+|---|---|---|---|---|---|
+| 2 | False | 22.03 | 6.35 | 1.53 | 0.00M |
+| 3 | False | 22.4 | 8.11 | 1.16 | 9.72M |
+| 4 | True | 21.24 | 9.27 | 2.32 | 9.64M |
+| 5 | True | 20.09 | 10.43 | 1.2 | 9.14M |
+
+  Chosen for throughput with ≥1.5 GiB headroom on both cards: 4 layers → 9.64M tok/h in the probe (no eval/checkpoint overhead). Planning pace revised 3–5M → ~8–9M tok/h; two epochs of ~260M ≈ 29–33 h.
+- tokens/hour, stage 1: _measured by `train_full.py --smoke`_ (planning
+  figure 3–5M → 35–60 h for two epochs)
+- base-model numbers for predictions 1–6: _measured by step 12_
