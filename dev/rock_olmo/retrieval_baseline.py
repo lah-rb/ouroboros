@@ -79,12 +79,12 @@ def main() -> None:
         help="MUST match the head run's --seed; a different seed is a "
         "different species split and the two are then not comparable",
     )
+    ap.add_argument("--holdout-file", default=None)
     args = ap.parse_args()
     data = json.load(open(DATA))
-    hp = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "holdout_species.json"
-    )
-    holdout = set(json.load(open(hp))) if os.path.exists(hp) else set()
+    from holdout import load_holdout_file
+
+    holdout = load_holdout_file(getattr(args, "holdout_file", None))
     tr, va, he = build_split(data, holdout, seed=args.seed)
 
     comps = {n: composition(data[n]["formula"]) for n in data}

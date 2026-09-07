@@ -29,7 +29,6 @@ import sys
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "1")
 
 import torch  # noqa: E402
-import torch.nn.functional as F  # noqa: E402
 from transformers import AutoModel, AutoTokenizer  # noqa: E402
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -56,18 +55,13 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=20260824)
     ap.add_argument("--prompt-mode", default="both")
     ap.add_argument("--device", default="cpu")
+    ap.add_argument("--holdout-file", default=None)
     args = ap.parse_args()
 
     data = json.load(open(DATA))
-    holdout = set(
-        json.load(
-            open(
-                os.path.join(
-                    os.path.dirname(os.path.abspath(__file__)), "holdout_species.json"
-                )
-            )
-        )
-    )
+    from holdout import load_holdout_file
+
+    holdout = load_holdout_file(getattr(args, "holdout_file", None))
     tr, va, he = build_split(data, holdout, seed=args.seed)
 
     comps = {n: composition(data[n]["formula"]) for n in data}

@@ -167,6 +167,17 @@ def main() -> None:
         "question from whether it can generate the answer.",
     )
     ap.add_argument(
+        "--lm-model",
+        default=None,
+        help="a FULL checkpoint dir (corpus v4) to use as the frozen backbone; "
+        "the §18 instrument for the full-parameter run",
+    )
+    ap.add_argument(
+        "--holdout-file",
+        default=None,
+        help="species to withhold (default: probe_species.json, else holdout_species.json)",
+    )
+    ap.add_argument(
         "--seed",
         type=int,
         default=20260824,
@@ -201,12 +212,9 @@ def main() -> None:
     out_dir = OUT + (args.tag or ("-lora" if args.lora else ""))
 
     data = json.load(open(DATA))
-    holdout_path = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "holdout_species.json"
-    )
-    holdout = (
-        set(json.load(open(holdout_path))) if os.path.exists(holdout_path) else set()
-    )
+    from holdout import load_holdout_file
+
+    holdout = load_holdout_file(args.holdout_file)
     tr_names, va_names, he_names = build_split(data, holdout, seed=args.seed)
     train, val, held = (make_rows(data, n) for n in (tr_names, va_names, he_names))
     print(f"species train/val/holdout: {len(tr_names)}/{len(va_names)}/{len(he_names)}")
@@ -223,7 +231,17 @@ def main() -> None:
         else args.device
     )
     _dtype = torch.float32 if dev == "cpu" else torch.bfloat16
-    if args.lm_adapter:
+    if args.lm_model:
+        # A FULL checkpoint (corpus v4, full-parameter run): load the causal
+        # LM and take its inner transformer as the encoder.
+        from transformers import AutoModelForCausalLM
+
+        _lm = AutoModelForCausalLM.from_pretrained(
+            os.path.expanduser(args.lm_model), dtype=_dtype
+        )
+        backbone = _lm.model.to(dev)
+        print(f"backbone: full model {args.lm_model}", flush=True)
+    elif args.lm_adapter:
         # The adapter was trained on AutoModelForCausalLM, whose module
         # names carry a `model.` prefix the bare AutoModel does not have.
         # Load the causal LM, merge the LoRA into the weights, then take
@@ -278,6 +296,10 @@ def main() -> None:
     # M modes over S seeds needs M backbone passes, not M*S. Skipped under
     # --lora, where the backbone weights move and yesterday's vectors are wrong.
     _bk = os.path.basename(BASE)
+    if args.lm_model:
+        _bk += "+" + os.path.basename(
+            os.path.normpath(os.path.expanduser(args.lm_model))
+        )
     if args.lm_adapter:
         _bk += "+" + os.path.basename(
             os.path.normpath(os.path.expanduser(args.lm_adapter))

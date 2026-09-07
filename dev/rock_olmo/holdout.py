@@ -240,3 +240,27 @@ def select_holdout(species_papers: dict, formulas: dict) -> dict:
                     picks.append(s)
         chosen[label] = sorted(picks)
     return chosen
+
+
+def load_holdout_file(path: str | None = None) -> set[str]:
+    """The species every instrument withholds: probe_species.json (corpus v4,
+    shape {"species": [...]}) when present, else the legacy
+    holdout_species.json (a bare list). Missing file -> empty set."""
+    import json
+    import os
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidates = (
+        [path]
+        if path
+        else [
+            os.path.join(here, "probe_species.json"),
+            os.path.join(here, "holdout_species.json"),
+        ]
+    )
+    for cand in candidates:
+        if cand and os.path.exists(cand):
+            data = json.load(open(cand))
+            names = data["species"] if isinstance(data, dict) else data
+            return set(names)
+    return set()

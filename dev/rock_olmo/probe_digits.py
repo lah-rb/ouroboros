@@ -18,11 +18,9 @@ import os
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 import torch  # noqa: E402
-from peft import PeftModel  # noqa: E402
 from transformers import AutoModelForCausalLM, AutoTokenizer  # noqa: E402
 
 BASE = os.path.expanduser("~/models/OLMo-2-0425-1B")
-ADAPTER = os.path.expanduser("~/models/olmo2-1b-spectra-lora")
 
 PROMPTS = [
     # inverse: real calcite bands -> which mineral?
@@ -37,11 +35,13 @@ PROMPTS = [
 ]
 
 
-def load(with_adapter: bool):
+def load(path: str):
+    """One full checkpoint (fp32 on CPU). Corpus v4 trains full weights, so
+    there is no adapter to attach and no in-place PEFT hazard."""
     tok = AutoTokenizer.from_pretrained(BASE)
-    model = AutoModelForCausalLM.from_pretrained(BASE, dtype=torch.float32)
-    if with_adapter:
-        model = PeftModel.from_pretrained(model, ADAPTER)
+    model = AutoModelForCausalLM.from_pretrained(
+        os.path.expanduser(path), dtype=torch.float32
+    )
     model.eval()
     return tok, model
 
@@ -82,26 +82,17 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--max-new", type=int, default=24)
     ap.add_argument("--topk", type=int, default=5)
-    ap.add_argument(
-        "--base-too", action="store_true", help="also probe the untuned base"
-    )
+    ap.add_argument("--models", default=f"base={BASE}", help="name=DIR[,name=DIR...]")
     args = ap.parse_args()
-
-    print("=" * 72)
-    print("LoRA-TUNED")
-    print("=" * 72)
-    tok, model = load(True)
-    for p in PROMPTS:
-        probe(tok, model, p, args.max_new, args.topk)
-
-    if args.base_too:
-        print("\n" + "=" * 72)
-        print("BASE (untuned) — the control")
+    for item in args.models.split(","):
+        name, path = item.split("=", 1)
         print("=" * 72)
+        print(name.upper())
+        print("=" * 72)
+        tok, model = load(path)
+        for p in PROMPTS:
+            probe(tok, model, p, args.max_new, args.topk)
         del model
-        tok, base = load(False)
-        for p in PROMPTS[:3]:
-            probe(tok, base, p, args.max_new, args.topk)
 
 
 if __name__ == "__main__":

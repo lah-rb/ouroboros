@@ -33,11 +33,9 @@ import os
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")
 
 import torch  # noqa: E402
-from peft import PeftModel  # noqa: E402
 from transformers import AutoModelForCausalLM, AutoTokenizer  # noqa: E402
 
 BASE = os.path.expanduser("~/models/OLMo-2-0425-1B")
-ADAPTER = os.path.expanduser("~/models/olmo2-1b-spectra-lora")
 
 PAIRS = [
     ("Anatase", "Rutile", "TiO2"),
@@ -73,56 +71,42 @@ def similarity(a: str, b: str) -> float:
     return difflib.SequenceMatcher(None, a, b).ratio()
 
 
+def load_models(spec: str) -> dict:
+    """name=DIR[,name=DIR...] -> {name: model}. Plain full checkpoints, one
+    independent instance each (the v3 PEFT in-place hazard no longer applies:
+    corpus v4 trains full weights)."""
+    out = {}
+    for item in spec.split(","):
+        name, path = item.split("=", 1)
+        out[name] = AutoModelForCausalLM.from_pretrained(
+            os.path.expanduser(path), dtype=torch.bfloat16, device_map={"": 0}
+        ).eval()
+    return out
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--max-new", type=int, default=28)
-    ap.add_argument("--base-too", action="store_true")
+    ap.add_argument("--models", default=f"base={BASE}", help="name=DIR[,name=DIR...]")
+    ap.add_argument("--out", default=os.path.expanduser("~/tmp/probe_polymorph.json"))
     args = ap.parse_args()
 
     tok = AutoTokenizer.from_pretrained(BASE)
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
-    # TWO INDEPENDENT INSTANCES. PeftModel.from_pretrained injects LoRA
-    # layers into the model it is given IN PLACE, so keeping a reference to
-    # the "base" model and then wrapping it leaves both names pointing at
-    # the same tuned object. The first version of this probe did exactly
-    # that and reported byte-identical base and tuned output — which reads
-    # as "the adapter does nothing" when it actually means "there was no
-    # control". A comparison needs two models, not two names.
-    models = {}
-    if args.base_too:
-        models["base"] = AutoModelForCausalLM.from_pretrained(
-            BASE, dtype=torch.bfloat16, device_map={"": 0}
-        ).eval()
-    tuned_base = AutoModelForCausalLM.from_pretrained(
-        BASE, dtype=torch.bfloat16, device_map={"": 0}
-    ).eval()
-    models["tuned"] = PeftModel.from_pretrained(tuned_base, ADAPTER).eval()
-    # Prove the adapter actually changed the weights, rather than trusting
-    # that a load with no error means a load with effect.
-    import peft
+    models = load_models(args.models)
+    from holdout import load_holdout_file
 
-    n_lora = sum(
-        1 for n, _ in models["tuned"].named_parameters() if "lora" in n.lower()
-    )
-    print(f"adapter check: {n_lora} LoRA tensors present in the tuned model")
-    assert n_lora > 0, "adapter did not attach"
+    probe = load_holdout_file()  # corpus v4: the reference-only probe set
 
-    holdout = set(
-        json.load(
-            open(
-                os.path.join(
-                    os.path.dirname(os.path.abspath(__file__)), "holdout_species.json"
-                )
-            )
-        )
-    )
-
+    report = {}
     for name, model in models.items():
         print(f"\n{'='*74}\n{name.upper()}\n{'='*74}")
+        report[name] = {}
         for kind, tpl in TEMPLATES.items():
             print(f"\n--- prompt: \"{tpl.format(species='X', formula='Y')}\" ---")
             sims = []
+            pairs = []
             for a, b, formula in PAIRS:
                 ta = generate(
                     tok, model, tpl.format(species=a, formula=formula), args.max_new
@@ -132,19 +116,38 @@ def main() -> None:
                 )
                 s = similarity(ta, tb)
                 sims.append(s)
+                pairs.append(
+                    {
+                        "a": a,
+                        "b": b,
+                        "formula": formula,
+                        "similarity": round(s, 3),
+                        "gen_a": ta[:160],
+                        "gen_b": tb[:160],
+                    }
+                )
                 flag = (
                     "IDENTICAL" if s > 0.99 else ("near-dup" if s > 0.85 else "differs")
                 )
-                ha = "*" if a in holdout else " "
-                hb = "*" if b in holdout else " "
+                ha = "*" if a in probe else " "
+                hb = "*" if b in probe else " "
                 print(f"  {a}{ha} vs {b}{hb}  ({formula})   similarity {s:.2f}  {flag}")
                 print(f"      {a}: {ta[:88]}")
                 print(f"      {b}: {tb[:88]}")
+            mean = sum(sims) / len(sims)
+            identical = sum(1 for s in sims if s > 0.99)
+            report[name][kind] = {
+                "mean_similarity": round(mean, 3),
+                "identical_pairs": identical,
+                "pairs": pairs,
+            }
             print(
-                f"  MEAN pairwise similarity: {sum(sims)/len(sims):.3f}   "
-                f"(1.00 = the run-1 failure; lower = genuinely distinguishing)"
+                f"  MEAN pairwise similarity: {mean:.3f}   identical {identical}/{len(sims)}   (1.00 = the run-1 failure; lower = distinguishing)"
             )
-    print("\n* = held out of training entirely")
+    json.dump(report, open(args.out, "w"), indent=1)
+    print(
+        f"\n* = in the reference-only probe set (never trained on); everything else was SEEN in corpus v4\n-> {args.out}"
+    )
 
 
 if __name__ == "__main__":
