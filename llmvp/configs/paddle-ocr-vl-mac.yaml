@@ -15,13 +15,28 @@
 # dead end (memory: the batched single-context engine is what scales there).
 # Widen only by measurement on this host.
 #
-# Weights: inherited paths are the CUDA box's; on this host they resolve via
-# LLMVP_MODELS_ROOT=<models dir> in the server's environment (basename
-# redirect — the files must keep the basenames the base yaml states).
+# Weights: STATED EXPLICITLY (2026-09-06), not left to the LLMVP_MODELS_ROOT
+# basename redirect. Per-machine paths belong in the per-machine file — the
+# rule muse-glimmer-30b-cuda records — and the redirect could not have worked
+# here anyway: it requires the local files to keep the base yaml's basenames,
+# and this host's are `PaddleOCR-VL-1.6-Q8_0.gguf` (dash, not dot) and
+# `-mmproj` (not `-GGUF-mmproj`).
+#
+# NOT YET SERVEABLE ON THIS HOST. Both paths below are the repo's canonical
+# location and are symlinks that currently DANGLE — their targets
+# (.lmstudio/models/{mradermacher,PaddlePaddle}/PaddleOCR-VL-1.6-GGUF/) do
+# not exist on this machine; the 1.6 weights have never been fetched here.
+# Stated anyway because this is where they belong and the tooling already
+# expects those basenames: fetch the Q8_0 + mmproj into the symlink targets
+# (or repoint the links) and this config serves with no further edit. A KV
+# preflight failure naming these paths is the correct, loud symptom — the
+# redirect's silent no-resolution was the wrong one.
 extends: paddle-ocr-vl
 
 model:
   name: paddle-ocr-vl-mac
+  path: /Users/lah-rb/Repos/ouroboros/tools/pdf_extract/models/PaddleOCR-VL-1.6-Q8_0.gguf
+  mmproj_path: /Users/lah-rb/Repos/ouroboros/tools/pdf_extract/models/PaddleOCR-VL-1.6-mmproj.gguf
   main_gpu: 0
   split_mode: none
   vision_projector_device: null   # mtmd default device (Metal)

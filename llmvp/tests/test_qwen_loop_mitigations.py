@@ -90,11 +90,19 @@ def test_there_are_qwen_configs_to_check():
 
 @pytest.mark.parametrize("path", _qwen_config_paths(), ids=_qwen_ids())
 def test_qwen_configs_carry_loop_posture(path):
-    import yaml
+    from pathlib import Path
 
-    from core.config import Config
+    from core.config import Config, _load_raw_with_inheritance
 
-    cfg = Config.model_validate(yaml.safe_load(path.read_text()))
+    # Resolve `extends:` before validating. The posture properties are
+    # inheritable and SHOULD be inherited — a variant config that differs
+    # only in path/name carries the base's loop mitigations by definition.
+    # Reading the raw file instead made every extends-based qwen config fail
+    # this guard on missing required keys, which reads as "the posture is
+    # absent" when it is present via the base (2026-09-06,
+    # qwen3-next-80b-a3 instruct variant).
+    raw, _base, _over = _load_raw_with_inheritance(path, Path(path).parent)
+    cfg = Config.model_validate(raw)
     gen = cfg.generation
     # DRY removed 2026-07-22 (isolation test): it converted the catchable
     # coherent orbit into an uncatchable noise-slot loop. The rest of the

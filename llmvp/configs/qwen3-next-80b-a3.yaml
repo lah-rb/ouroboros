@@ -1,0 +1,46 @@
+# Qwen3-Next-80B-A3B-**Instruct** — the non-coder sibling of
+# qwen3-next-coder-80b-a3, borrowed for the scraper curator's big-document
+# turns while this machine's compute is on loan.
+#
+# WHY AN EXTENDS AND NOT A COPY. The coder is a fine-tune OF this instruct,
+# so the runtime facts genuinely are shared: same architecture, same hybrid
+# DeltaNet cache behaviour (probe_verified_cache RC3), same measured
+# KV/token, same 262144 probe-verified ceiling, same vendor sampling profile,
+# same session_full_replay constraint from upstream llama.cpp #22384. The
+# earlier quick config was a byte-identical copy with only `path` swapped,
+# which meant it silently inherited two things that are NOT shared:
+#   * model.name — it reported itself as "...-coder-..." in every log,
+#     trace, and tier record;
+#   * knowledge.tokens_bin — it wrote the INSTRUCT's static-prefix tokens
+#     into the coder's cache file. Same tokenizer family, so nothing
+#     corrupted, but whichever model booted last owned the file and the
+#     other silently rebuilt it. Two names, one artifact.
+# Everything below is exactly what differs. Anything not stated here is the
+# coder's, on purpose — including the degeneration history, which is a
+# FAMILY fact (the APEX-quant note in the base covers the coder build; this
+# instruct runs the unsloth UD-Q4_K_XL quant and has not been separately
+# characterised for orbit propensity — see the caveat under tier below).
+extends: qwen3-next-coder-80b-a3
+
+model:
+  name: "qwen3-next-80b-a3"
+  # --probe-context reads the RAW child file with no inheritance resolution,
+  # so path and n_ctx are restated here even though extends would supply
+  # n_ctx (the muse-cuda precedent).
+  path: /Users/lah-rb/.lmstudio/models/unsloth/Qwen3-Next-80B-A3B-Instruct-GGUF/Qwen3-Next-80B-A3B-Instruct-UD-Q4_K_XL.gguf
+  n_ctx: 262144
+
+knowledge:
+  # Its OWN token cache. Sharing the coder's file made the two models fight
+  # over one artifact; the tokenizer is the same, so the only symptom was a
+  # silent rebuild on every alternation.
+  tokens_bin: "./data/qwen3-next-80b-a3.tokens.bin"
+
+# ── TIER EXPECTATION (doc-only) ────────────────────────────────────
+# Inherited league is right (same family, same class of work), but the
+# base's status describes the CODER on APEX. This build has never been
+# panel-run, and its quant differs — the base's "zero guard events over 448
+# generations" is evidence about the APEX coder, NOT about this file.
+tier:
+  league: grinder  # LOAD-BEARING — agent/tier/runner.py:config_league
+  status: not_yet_run  # unsloth UD-Q4_K_XL instruct; base's APEX evidence does not transfer
