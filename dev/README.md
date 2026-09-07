@@ -93,6 +93,7 @@ banked (memories / dev/archive/docs/) — do not let this directory re-rot.
 ## Curator / scholarly ops
 - `second_opinion_denials.py` — reflip denials for the gemma second-opinion pass.
 - `redownload_unresolved.py` — alternate-repository OA PDF retry.
+- `ingest_reading_list.py` — hand-ingest of the operator's foundational reading lists (`~/Downloads/ResearchDocs` + a second sweep for FTIR/EDS/XPS, 2026-09-06). `--stage pdfs` books already-fetched PDFs as `status=acquired` + `access_status=oa_pdf` (all `_extraction_pending` needs); `--stage pending` books the ones no sanctioned location would serve as candidates with the location recorded AND burnt in `oa_attempted`, routing them to the recovery lane instead of a proven wall, and re-arms records wrongly parked at `access_status="closed"` (which **no stage ever re-works**). Every row carries **`binder: true`** unless marked otherwise — that flag is the BINDER SET: `rock_olmo/emit.py` relabels a flagged paper's pack prose and markdown to `binder_text`/`binder_markdown` (weight 4, same as the reference datasets; `emit_corpus(..., binder_weight=N)` overrides per call). Title keys are the first 80 title characters, so two reports with a shared title stem (the Lyon NASA pair) need the report number FIRST. Dry-run default; appends in ONE atomic O_APPEND write because the mission's append lock is in-process only.
 - `repair_econ.py` — regenerate-vs-diagnose economics from production notes.
 
 ## Adaptive-reasoning provenance (router DEMOTED to experimental 2026-07-25)

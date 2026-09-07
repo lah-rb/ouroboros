@@ -65,11 +65,64 @@ SOURCE_WEIGHT = {
     "nist_libs": 4,
     "paper_text": 1,
     "paper_markdown": 1,
+    # THE BINDER SET. Operator-directed (2026-09-06): the foundational
+    # works of each technique -- Raman 1928, Moseley 1913, Laue 1912,
+    # Coblentz 1905, Castaing 1951, the Stark-width and X-ray-wavelength
+    # tables -- are the conceptual glue the application papers hang from,
+    # and a 1B model needs to see them more than once for the rest to
+    # land. A paper is in the set when its papers.jsonl row carries
+    # `binder: true` (set by dev/ingest_reading_list.py); its pack prose
+    # and its full markdown are then relabelled to these sources and
+    # presented at the reference-dataset rate. The aspect-discovered
+    # "Spectroscopy technique physics" papers are NOT automatically in:
+    # that sweep is noisy (abstract-only records, phase-diagram notes),
+    # and the binder is meant to be a curated shelf, not a search result.
+    "binder_text": 4,
+    "binder_markdown": 4,
 }
 
 
 def _slug(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").strip())
+
+
+def binder_keys(path: str | None = None) -> set[str]:
+    """paper_keys whose LAST papers.jsonl row carries a truthy `binder`.
+
+    Last-row-wins is the databank's contract (every booking re-appends
+    the full record), so a later row that drops or clears the flag
+    removes the paper from the set -- which is what makes un-flagging
+    possible without editing history.
+    """
+    path = path or os.path.join(CORPUS, "databank", "papers.jsonl")
+    flags: dict[str, bool] = {}
+    try:
+        fh = open(path, encoding="utf-8")
+    except OSError:
+        return set()
+    with fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except Exception:
+                continue
+            key = row.get("paper_key")
+            if key:
+                flags[key] = bool(row.get("binder"))
+    return {k for k, v in flags.items() if v}
+
+
+def relabel_binder(records: list[dict], keys: set[str], label: str) -> int:
+    """Point binder papers' records at a weighted source. Returns how many."""
+    n = 0
+    for rec in records:
+        if (rec.get("provenance") or {}).get("paper_key") in keys:
+            rec["source"] = label
+            n += 1
+    return n
 
 
 def species_mentioned(text: str, names: dict[str, str]) -> list[str]:
@@ -289,9 +342,18 @@ def verify_no_leak(records: list[dict], holdout: set[str]) -> list[dict]:
 
 
 def emit_corpus(
-    out_dir: str, shards: int = 8, seed: int = 20260824, include_markdown: bool = True
+    out_dir: str,
+    shards: int = 8,
+    seed: int = 20260824,
+    include_markdown: bool = True,
+    binder_weight: int | None = None,
 ) -> dict:
-    """Assemble every source, weight, verify, shuffle, shard, write."""
+    """Assemble every source, weight, verify, shuffle, shard, write.
+
+    ``binder_weight`` overrides SOURCE_WEIGHT for the binder sources on
+    this call only -- the lever for "run the foundations over a few more
+    times" without editing the module.
+    """
     ima = load_ima()
     species_papers = json.load(
         open(
@@ -318,6 +380,12 @@ def emit_corpus(
     for rec in papers:
         rec["source"] = "paper_text"
     md = markdown_records(holdout) if include_markdown else []
+    binder = binder_keys()
+    binder_text_n = relabel_binder(papers, binder, "binder_text")
+    binder_md_n = relabel_binder(md, binder, "binder_markdown")
+    weights = dict(SOURCE_WEIGHT)
+    if binder_weight is not None:
+        weights["binder_text"] = weights["binder_markdown"] = int(binder_weight)
 
     everything = inter + sshade + libs + papers + md
     train = [r for r in everything if r.get("split") == "train"]
@@ -327,7 +395,7 @@ def emit_corpus(
 
     weighted: list[dict] = []
     for rec in train:
-        for i in range(SOURCE_WEIGHT.get(rec["source"], 1)):
+        for i in range(weights.get(rec["source"], 1)):
             copy = dict(rec)
             copy["presentation"] = i
             weighted.append(copy)
@@ -347,6 +415,12 @@ def emit_corpus(
                 for s in sorted({r["source"] for r in train})
             },
             "tokens_weighted_est": sum(len(r["text"]) // 4 for r in weighted),
+            "binder": {
+                "flagged_papers": len(binder),
+                "text_records": binder_text_n,
+                "markdown_records": binder_md_n,
+                "weight": weights["binder_text"],
+            },
         },
     }
     if leaks:
