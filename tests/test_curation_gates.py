@@ -555,3 +555,38 @@ def test_an_accepted_lingual_paper_waits_for_translation_before_packing():
     assert _curation_pending(translated) is True
     already_packed = dict(translated, pack_status="packed")
     assert _curation_pending(already_packed) is False
+
+
+# ── raised-dot decimals (OCR of pre-1950s typography) ─────────────────
+_CDOT_MD = (
+    "<table><tr><td>Cu</td><td>63\\cdot 57</td><td>477</td></tr>"
+    "<tr><td>Zn</td><td>65\\cdot 37</td><td>39\\cdot 4</td></tr></table>\n"
+    "Silver 107·88. The constant k = 2\\cdot 10^{-3} throughout.\n"
+)
+
+
+def test_cdot_decimal_document_grounds_point_parsed_values():
+    # Barkla 1911 as paddle renders it: a correctly packed 63.57 must ground.
+    data = {"atomic_weight_cu": 63.57, "atomic_weight_zn": 65.37, "lambda": 39.4}
+    result = grounding_check(data, _CDOT_MD)
+    assert result["passed"] is True
+    assert result["ungrounded"] == []
+
+
+def test_unicode_middle_dot_decimal_grounds():
+    result = grounding_check({"atomic_weight_ag": 107.88}, _CDOT_MD)
+    assert result["passed"] is True
+
+
+def test_cdot_power_of_ten_product_is_not_a_decimal():
+    # "2\cdot 10^{-3}" is multiplication: neither 2.10 nor 0.002 may ground
+    # from it (0.002 is a conversion the paper never states).
+    for value in (2.10, 0.002):
+        result = grounding_check({"k": value}, _CDOT_MD)
+        assert result["passed"] is False, value
+
+
+def test_plain_document_unchanged_by_cdot_variant():
+    # No raised dots anywhere: behaviour is byte-identical to before.
+    assert grounding_check({"x": 63.57}, "Cu 63 and 57 separately")["passed"] is False
+    assert grounding_check({"x": 4.4}, _FIXTURE_MD)["passed"] is True
