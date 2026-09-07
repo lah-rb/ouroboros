@@ -200,6 +200,65 @@ _DEFAULT_VL_BACKEND = os.environ.get("OUROBOROS_FIG_BACKEND", "llmvp")
 _LLMVP_URL = os.environ.get("OUROBOROS_LLMVP_URL", "http://127.0.0.1:8008").rstrip("/")
 
 
+# Verbatim copy of agent/effects/inference.py VISION_MUTATION (this venv
+# cannot import the agent package). `visionModel` names the model that
+# actually answered — the served-model provenance figtext records per paper.
+_VISION_MUTATION = """
+mutation VisionCompletion($request: VisionCompletionRequest!) {
+    visionCompletion(request: $request) {
+        text
+        generatedTokens
+        promptTokens
+        imageCount
+        visionModel
+        decodeMs
+    }
+}
+"""
+
+
+def _graphql_vision(
+    url: str,
+    prompt: str,
+    data_uri: str,
+    max_tokens: int,
+    temperature: float,
+    model: str = "",
+    timeout: float = 300.0,
+) -> tuple[str, str]:
+    """One `visionCompletion` over LLMVP's GraphQL. Returns (text, served).
+
+    Fields are exactly VisionCompletionRequest's; `model` is sent only when
+    given (the figtext default is the fleet's PRIMARY — muse vision — which
+    is what an unnamed request routes to). GraphQL errors are raised with
+    the server's message verbatim.
+    """
+    request: dict = {
+        "prompt": prompt,
+        "images": [{"url": data_uri}],
+        "maxTokens": int(max_tokens),
+        "temperature": float(temperature),
+    }
+    if model:
+        request["model"] = model
+    req = urllib.request.Request(
+        f"{url}/graphql",
+        data=json.dumps(
+            {"query": _VISION_MUTATION, "variables": {"request": request}}
+        ).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        out = json.loads(resp.read())
+    if out.get("errors"):
+        first = out["errors"][0]
+        raise RuntimeError(
+            str(first.get("message") if isinstance(first, dict) else first)
+        )
+    res = (out.get("data") or {}).get("visionCompletion") or {}
+    return str(res.get("text") or "").strip(), str(res.get("visionModel") or "")
+
+
 def _llmvp_ready(url: str, timeout: float = 5.0) -> bool:
     """LLMVP's health lives on GraphQL — there is no REST /health.
 
@@ -270,13 +329,26 @@ def _chat_figure(
 ) -> tuple[str, str]:
     """One vision call with the figure attached. Returns (text, served model).
 
-    Both backends take the SAME OpenAI-shaped message with a base64 data URI
-    and answer with the same choices[0].message.content, so only the URL and
-    the model field differ. Base64 rather than a path on purpose: LLMVP reads
+    Two transports. The fleet (`endpoint` ends in /graphql) is asked through
+    LLMVP's `visionCompletion`, like every other lane asks every other model
+    — the OpenAI shim is optional there and absent on the remote fleet. A
+    spawned mlx_vlm.server (any other endpoint) takes the OpenAI-shaped chat
+    message it always did. Base64 rather than a path on both: LLMVP reads
     paths only under model.vision_image_roots, and the figure lives wherever
     the mission's workspace happens to be.
     """
     b64 = base64.b64encode(_read_at_floor(image_path)).decode()
+    prompt = _FIG_PROMPT.format(caption=caption or "(no caption located)")
+    if endpoint.endswith("/graphql"):
+        text, served = _graphql_vision(
+            endpoint[: -len("/graphql")],
+            prompt,
+            f"data:image/png;base64,{b64}",
+            _MAX_FIGTEXT_TOKENS,
+            0.2,
+            model=model if send_model else "",
+        )
+        return text, served or model
     payload = {
         "max_tokens": _MAX_FIGTEXT_TOKENS,
         "temperature": 0.2,
@@ -284,12 +356,7 @@ def _chat_figure(
             {
                 "role": "user",
                 "content": [
-                    {
-                        "type": "text",
-                        "text": _FIG_PROMPT.format(
-                            caption=caption or "(no caption located)"
-                        ),
-                    },
+                    {"type": "text", "text": prompt},
                     {
                         "type": "image_url",
                         "image_url": {"url": f"data:image/png;base64,{b64}"},
@@ -454,7 +521,7 @@ def main() -> int:
                 )
             )
             return 3
-        endpoint, send_model = f"{url}/v1/vision", False
+        endpoint, send_model = f"{url}/graphql", False
     else:
         if not args.model:
             print(json.dumps({"error": "--model is required for --vl-backend mlx"}))
@@ -469,7 +536,12 @@ def main() -> int:
         if not _wait_health(port):
             print(json.dumps({"error": "mlx server failed to start"}))
             return 3
-        endpoint, send_model = f"http://127.0.0.1:{port}/v1/chat/completions", True
+        # A SPAWNED mlx_vlm.server speaks its own OpenAI API — this is not the
+        # LLMVP shim, and the no-shim guard exempts lines carrying this marker.
+        endpoint, send_model = (
+            f"http://127.0.0.1:{port}/v1/chat/completions",  # private mlx_vlm.server, not the LLMVP shim
+            True,
+        )
 
     try:
         # --max-figures is a POOL across the whole call: each paper draws

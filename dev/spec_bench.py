@@ -3,7 +3,8 @@
 
 The server's `decodeTpsRecent` (a prefill-excluded decode rate that rises as drafted
 tokens are accepted) is the DECISION metric; chars/s incl-prefill is a cross-check.
-Non-streaming (the shim doesn't emit SSE). Two prompts:
+Over LLMVP's GraphQL createCompletion (the OpenAI shim is optional and off on
+the corpus fleet; nothing in Ouroboros speaks it). Two prompts:
   REWRITE  — reproduce a real source file verbatim: the rewrite-heavy win case, where the
              prior file is in-context so the n-gram draft accepts long runs (the shape of
              the agent's generate_rewrite turns).
@@ -19,8 +20,11 @@ import sys
 import time
 import urllib.request
 
-URL = "http://localhost:8008/v1/completions"
 GQL = "http://localhost:8008/graphql"
+_COMPLETION = (
+    "mutation($request: CompletionRequest!) { createCompletion(request: $request) "
+    "{ text tokensGenerated } }"
+)
 
 _cand = glob.glob("/tmp/marathon_*bytecode-vm*/vm/vm.py") or glob.glob(
     "/tmp/marathon_*/**/*.py"
@@ -56,17 +60,23 @@ def decode_tps_recent():
 def gen(prompt, max_tokens):
     t0 = time.time()
     d = _post(
-        URL,
+        GQL,
         {
-            "prompt": prompt,
-            "max_tokens": max_tokens,
-            "temperature": 0.0,
-            "stream": False,
+            "query": _COMPLETION,
+            "variables": {
+                "request": {
+                    "prompt": prompt,
+                    "maxTokens": max_tokens,
+                    "temperature": 0.0,
+                }
+            },
         },
         600,
     )
     wall = time.time() - t0
-    txt = (d.get("choices") or [{}])[0].get("text", "")
+    if d.get("errors"):
+        raise RuntimeError(d["errors"][0].get("message") or d["errors"][0])
+    txt = ((d.get("data") or {}).get("createCompletion") or {}).get("text") or ""
     return len(txt), wall
 
 

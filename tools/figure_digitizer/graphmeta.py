@@ -141,7 +141,21 @@ def hints(working_dir: str, key: str) -> list[FigtextHint]:
 
 # ── The structured ask ────────────────────────────────────────────────
 
-VISION_URL = "http://127.0.0.1:8008/v1/vision"
+# LLMVP's GraphQL endpoint, not the optional OpenAI shim.
+LLMVP_URL = os.environ.get("OUROBOROS_LLMVP_URL", "http://127.0.0.1:8008").rstrip("/")
+VISION_URL = f"{LLMVP_URL}/graphql"
+_VISION_MUTATION = """
+mutation VisionCompletion($request: VisionCompletionRequest!) {
+    visionCompletion(request: $request) {
+        text
+        generatedTokens
+        promptTokens
+        imageCount
+        visionModel
+        decodeMs
+    }
+}
+"""
 
 # No bare count appears anywhere in this prompt. A number the task can
 # contradict ("list 5-9 ticks") outranks the prose beside it, and the model
@@ -234,20 +248,15 @@ def ask_structured(
     mime = "jpeg" if ext in ("jpg", "jpeg") else ext
     payload = json.dumps(
         {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": STRUCTURED_PROMPT},
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/{mime};base64,{b64}"},
-                        },
-                    ],
+            "query": _VISION_MUTATION,
+            "variables": {
+                "request": {
+                    "prompt": STRUCTURED_PROMPT,
+                    "images": [{"url": f"data:image/{mime};base64,{b64}"}],
+                    "maxTokens": max_tokens,
+                    "temperature": 0.1,
                 }
-            ],
-            "max_tokens": max_tokens,
-            "temperature": 0.1,
+            },
         }
     ).encode()
     req = urllib.request.Request(
@@ -259,9 +268,8 @@ def ask_structured(
     except Exception:  # noqa: BLE001 — an unreachable server is a datum
         return None
     text = ""
-    if isinstance(body, dict):
-        choices = body.get("choices") or []
-        if choices:
-            text = (choices[0].get("message") or {}).get("content", "") or ""
-        text = text or body.get("content", "") or body.get("text", "") or ""
+    if isinstance(body, dict) and not body.get("errors"):
+        text = ((body.get("data") or {}).get("visionCompletion") or {}).get(
+            "text"
+        ) or ""
     return parse_structured(text)

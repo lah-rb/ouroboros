@@ -618,8 +618,8 @@ CURATE_GOAL_SIGNATURE = "corpus-curate"
 _FIG_TOOL_PY = "tools/fig_review/.venv/bin/python"
 _FIG_TOOL_SCRIPT = "tools/fig_review/fig_review.py"
 
-# WHO READS THE FIGURES. Default llmvp: the fleet server's /v1/vision, i.e.
-# whatever model the active config serves. That settles the open FIG_MODEL
+# WHO READS THE FIGURES. Default llmvp: the fleet server's GraphQL
+# visionCompletion, i.e. whatever model the active config serves. That settles the open FIG_MODEL
 # question by removing it — model choice belongs to LLMVP's config, not to a
 # constant in a curation action.
 #
@@ -1058,8 +1058,8 @@ async def action_figtext_drain_batch(step_input):
     """Describe a bounded, claimed slice of undescribed figures — the
     figtext_drain flow's one work step, built to ride as a parallel branch.
 
-    Delegates to action_fig_review_batch (the bake-off-validated
-    /v1/vision pipeline); muse vision runs on its own vision contexts, so
+    Delegates to action_fig_review_batch (the bake-off-validated fleet
+    vision pipeline, over GraphQL); muse vision runs on its own contexts, so
     this consumes NO batched text seats (measured vision+text
     serialization 0.068). Preflights the tool venv: a missing interpreter
     DECLINES the round instead of booking figtext_failed on papers the
