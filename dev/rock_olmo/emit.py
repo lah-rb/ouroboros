@@ -28,27 +28,34 @@ from __future__ import annotations
 
 import csv
 import glob
-import hashlib
 import json
 import os
 import random
 import re
 from typing import Iterator
 
-from assemble import assemble, load_ima, stable_choice
+from assemble import assemble, load_ima
 from libs_layer import (
     DEFAULT_T,
     TEMPERATURE_PAIR,
     predict_species_lines,
 )
-from holdout import elements, select_holdout
+from holdout import select_holdout
 from interconnect import view_libs_predicted, view_libs_temperature
-from reference_layer import REF_ROOT, load_asd_lines
+from reference_layer import REF_ROOT
 from training_form import canonicalize
 
 CORPUS = os.path.expanduser("~/corpora/ouroboros-spectra")
 DATASET = os.path.join(CORPUS, "databank", "dataset")
 MARKDOWN = os.path.join(CORPUS, "databank", "markdown")
+
+#: Filled by markdown_records; reported by emit_corpus. Reset per emit.
+NORMALIZATION_STATS: dict[str, int] = {
+    "docs_cdot": 0,
+    "subs_cdot": 0,
+    "docs_comma": 0,
+    "subs_comma": 0,
+}
 
 #: Speed of light in cm/s — SSHADE catalogues spectral range in Hz, and
 #: wavenumber is the unit the field reads. cm-1 = Hz / c. This is an
@@ -379,6 +386,8 @@ def emit_corpus(
     papers = paper_records(holdout)
     for rec in papers:
         rec["source"] = "paper_text"
+    for k_ in NORMALIZATION_STATS:
+        NORMALIZATION_STATS[k_] = 0
     md = markdown_records(holdout) if include_markdown else []
     binder = binder_keys()
     binder_text_n = relabel_binder(papers, binder, "binder_text")
@@ -415,6 +424,7 @@ def emit_corpus(
                 for s in sorted({r["source"] for r in train})
             },
             "tokens_weighted_est": sum(len(r["text"]) // 4 for r in weighted),
+            "decimal_normalization": dict(NORMALIZATION_STATS),
             "binder": {
                 "flagged_papers": len(binder),
                 "text_records": binder_text_n,
@@ -452,6 +462,45 @@ MARKDOWN_CHUNK_CHARS = 12_000
 #: memory): the extractor occasionally loops a passage, and training on
 #: it teaches the loop.
 _MAX_PARAGRAPH_REPEATS = 3
+
+
+#: DECIMAL NORMALISATION FOR THE 1B MODEL (operator direction, 2026-09-07).
+#: The corpus writes decimals three ways: the standard point; the pre-1950s
+#: raised dot, which paddle renders as LaTeX ``63\cdot 57`` in table cells
+#: (or keeps as U+00B7); and the continental decimal comma. A 1B model should
+#: not spend capacity learning three conventions for one thing, so the
+#: TRAINING TEXT is normalised to the point here, at serialisation — the
+#: databank markdown stays the OCR ground truth (the pack grounding gate
+#: matches all three forms against it, so nothing downstream depends on this
+#: rewrite). Same placement principle as training_form.canonicalize.
+#:
+#: The raised dot converts wherever digits flank it, EXCEPT before a power
+#: of ten ("2\cdot 10^{-3}" is a product). The comma converts only in a
+#: document that has demonstrably committed to the convention: at least
+#: five measurement-shaped comma decimals (two-plus digits before the
+#: comma, one or two after, not a chain), the same evidence bar the
+#: curator's grounding gate uses (curation_actions._decimal_comma_variant),
+#: because an unconditional rewrite turns "samples 1,2 and 3" into "1.2".
+_CDOT_DECIMAL_RE = re.compile(
+    r"(?<=\d) ?(?:\\cdot|[\u00b7\u2219\u2022]) ?(?=\d)(?!10 ?[\^{])"
+)
+_DECIMAL_COMMA_RE = re.compile(r"(?<=\d),(?=\d{1,2}\b)(?!\d{1,2},)")
+_DECIMAL_COMMA_EVIDENCE_RE = re.compile(r"(?<!\d)\d{2,},(?=\d{1,2}\b)(?!\d{1,2},)")
+COMMA_CONVENTION_MIN_EVIDENCE = 5
+
+
+def normalize_decimals(text: str, *, commas: bool = True) -> tuple[str, dict]:
+    """Rewrite raised-dot (and, when the document uses them, comma) decimals
+    to the point. Returns (text, {"cdot": n, "comma": n})."""
+    out, n_cdot = _CDOT_DECIMAL_RE.subn(".", text)
+    n_comma = 0
+    if (
+        commas
+        and len(_DECIMAL_COMMA_EVIDENCE_RE.findall(out))
+        >= COMMA_CONVENTION_MIN_EVIDENCE
+    ):
+        out, n_comma = _DECIMAL_COMMA_RE.subn(".", out)
+    return out, {"cdot": n_cdot, "comma": n_comma}
 
 
 def _drop_degenerate(text: str) -> str:
@@ -538,6 +587,11 @@ def markdown_records(holdout: set[str]) -> list[dict]:
             continue
         leaked = species_mentioned(text, lowered)
         text = _drop_degenerate(text)
+        text, norm = normalize_decimals(text)
+        for k_, v_ in norm.items():
+            if v_:
+                NORMALIZATION_STATS[f"docs_{k_}"] += 1
+                NORMALIZATION_STATS[f"subs_{k_}"] += v_
         for i, chunk in enumerate(_chunk(text)):
             out.append(
                 {
