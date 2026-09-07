@@ -44,3 +44,11 @@ def test_comma_pass_can_be_disabled_and_is_idempotent():
     once, _ = normalize_decimals(text)
     twice, n2 = normalize_decimals(once)
     assert once == twice and n2 == {"cdot": 0, "comma": 0}
+
+
+def test_four_place_comma_decimals_convert_and_vote():
+    doc = "zwischen 0,0555 und 0,0571, also etwa bei 0,0563; 0,1234 und 0,9876; 1,234 counts"
+    out, n = normalize_decimals(doc)
+    assert "0.0571" in out and "0.9876" in out
+    assert "1,234 counts" in out  # a three-digit tail stays a thousands group
+    assert n["comma"] == 5

@@ -484,8 +484,10 @@ _MAX_PARAGRAPH_REPEATS = 3
 _CDOT_DECIMAL_RE = re.compile(
     r"(?<=\d) ?(?:\\cdot|[\u00b7\u2219\u2022]) ?(?=\d)(?!10 ?[\^{])"
 )
-_DECIMAL_COMMA_RE = re.compile(r"(?<=\d),(?=\d{1,2}\b)(?!\d{1,2},)")
-_DECIMAL_COMMA_EVIDENCE_RE = re.compile(r"(?<!\d)\d{2,},(?=\d{1,2}\b)(?!\d{1,2},)")
+_DECIMAL_COMMA_RE = re.compile(r"(?<=\d),(?=\d{1,2}\b|\d{4,}\b)(?!\d{1,2},)")
+_DECIMAL_COMMA_EVIDENCE_RE = re.compile(
+    r"(?<!\d)\d{2,},(?=\d{1,2}\b)(?!\d{1,2},)|(?<!\d)\d+,(?=\d{4,}\b)"
+)
 COMMA_CONVENTION_MIN_EVIDENCE = 5
 
 

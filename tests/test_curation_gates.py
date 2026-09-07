@@ -590,3 +590,24 @@ def test_plain_document_unchanged_by_cdot_variant():
     # No raised dots anywhere: behaviour is byte-identical to before.
     assert grounding_check({"x": 63.57}, "Cu 63 and 57 separately")["passed"] is False
     assert grounding_check({"x": 4.4}, _FIXTURE_MD)["passed"] is True
+
+
+def test_sub_unity_four_place_comma_decimals_ground():
+    # Laue 1912: "zwischen 0,0555 und 0,0571, also etwa bei 0,0563" — single
+    # leading digit, four places. Enough of them must engage the convention
+    # and each must then convert.
+    doc = (
+        "Die Werte liegen zwischen 0,0555 und 0,0571, also etwa bei 0,0563; "
+        "weiter 0,1234 und 0,9876 sowie 1,90.10^{-9} cm. Siehe [1,2] und Fig. 3,4."
+    )
+    result = grounding_check({"r": [0.0555, 0.0571, 0.0563, 0.1234, 0.9876, 1.90]}, doc)
+    assert result["passed"] is True, result["ungrounded"]
+    # Without the four-place values the same citation pairs do NOT engage the
+    # convention (the pre-existing contract, test_enumeration_commas_...).
+    assert grounding_check({"x": 1.2}, "Siehe [1,2] und Fig. 3,4.")["passed"] is False
+
+
+def test_thousands_groups_still_not_decimals_under_wider_tail():
+    doc = "0,0555 0,0571 0,0563 0,1234 0,9876 counts: 1,234 and 12,345,678"
+    assert grounding_check({"n": 1.234}, doc)["passed"] is False
+    assert grounding_check({"n": 12.345}, doc)["passed"] is False

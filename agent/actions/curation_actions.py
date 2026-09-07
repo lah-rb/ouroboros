@@ -172,7 +172,11 @@ def _numeric_leaf_tokens(value, path: str = "") -> list[tuple[str, str]]:
 #:     document is a comma-convention one, which then grounds a
 #:     fabricated "1.2". Caught by test_point_convention_document_is_
 #:     left_alone before this ever ran on the corpus.
-_DECIMAL_COMMA_RE = re.compile(r"(?<=\d),(?=\d{1,2}\b)(?!\d{1,2},)")
+#: 4+ digits after the comma are ALSO a decimal ("0,0571"): a thousands group
+#: is exactly three, so only {3} is ambiguous. Laue 1912 (found 2026-09-07)
+#: writes every ratio as 0,0555 / 0,0563 / 0,0571 — none matched, the paper
+#: grounded at 0.39 while right.
+_DECIMAL_COMMA_RE = re.compile(r"(?<=\d),(?=\d{1,2}\b|\d{4,}\b)(?!\d{1,2},)")
 #: A point used the same way, for deciding which convention a doc follows.
 _DECIMAL_POINT_RE = re.compile(r"\d\.\d")
 
@@ -184,7 +188,12 @@ _DECIMAL_POINT_RE = re.compile(r"\d\.\d")
 #: enumerations all pair single digits, while real measurements
 #: ("57,65 %", "1486,6 eV", "45,3 emu/g") carry a multi-digit integer
 #: part. Counting only those keeps a bibliography from voting.
-_DECIMAL_COMMA_EVIDENCE_RE = re.compile(r"(?<!\d)\d{2,},(?=\d{1,2}\b)(?!\d{1,2},)")
+_DECIMAL_COMMA_EVIDENCE_RE = re.compile(
+    # two-plus digits before + 1-2 after ("57,65"), OR any digits before +
+    # 4-plus after ("0,0571"): a four-digit tail is neither a thousands
+    # group nor a citation pair, so a leading zero still votes.
+    r"(?<!\d)\d{2,},(?=\d{1,2}\b)(?!\d{1,2},)|(?<!\d)\d+,(?=\d{4,}\b)"
+)
 
 
 def _decimal_comma_variant(doc_n: str) -> str:
