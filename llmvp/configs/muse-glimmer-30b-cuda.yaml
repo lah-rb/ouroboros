@@ -48,9 +48,16 @@ model:
   # metrics live in ~/tools/ouroboros-ops/LAYER_SPLIT_EXPERIMENT.md —
   # [40,12]@131072 was the stable rung, 80.9 completions/h over 5.5 h,
   # zero faults. Re-apply it whenever paddle next drains.
-  n_ctx: 65536
+  n_ctx: 131072
   probe_verified_weights_bytes: 19653957984
   probe_verified_n_ctx: 91136
+  # ── 3060 LAYER-SPLIT RE-APPLIED 20260906 by dev/expand_local_seat_on_figtext_drain.py:
+  # paddle drained, figtext drained; the [40, 12]@131072 rung measured stable
+  # 5.5 h / zero faults on 2026-08-22 (LAYER_SPLIT_EXPERIMENT.md). ocr lane is
+  # disabled in the mission (OUROBOROS_DISABLE_LANES=ocr) so paddle is never
+  # loaded onto CUDA1 beside these layers. Revert = the .bak beside this run's log.
+  split_mode: layer
+  tensor_split: [40, 12]
   # The base declares vision_n_ctx 131072 — an M1 sizing (7 GB of lazy KV
   # against 123 GB) that on this card is a landmine: never built, costing
   # nothing, until one stray vision request tries to allocate 6.5 GiB into
