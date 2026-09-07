@@ -72,6 +72,9 @@ class SonnetEffects(LocalEffects):
         self._llmvp_domains = {"sonnet": {"model": MODEL}}
         self.calls = 0
         self.call_seconds = 0.0
+        #: Set when the provider answered with a limit message; the driver then
+        #: stops claiming new papers instead of booking partial packs.
+        self.limited = False
 
     def _call(self, prompt: str) -> tuple[str, str]:
         cmd = [
@@ -136,6 +139,21 @@ class SonnetEffects(LocalEffects):
                     fh,
                     ensure_ascii=False,
                 )
+        if any(
+            m in (text or "").lower()
+            for m in ("session limit", "usage limit", "rate limit")
+        ):
+            # A LIMIT IS NOT A VERDICT. Returned as text it parses as "not a
+            # JSON object", the window fails twice, and the paper books a
+            # PARTIAL pack that reads as a model failure -- 2026-09-07: 21
+            # windows across 5 papers were lost that way before this check.
+            self.limited = True
+            return InferenceResult(
+                text="",
+                tokens_generated=0,
+                finished=False,
+                error=f"provider limit: {(text or '').strip()[:120]}",
+            )
         if err and not text.strip():
             return InferenceResult(
                 text="", tokens_generated=0, finished=False, error=err
@@ -203,6 +221,12 @@ def _log(path: str, row: dict) -> None:
 async def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--keys", nargs="*", default=None)
+    ap.add_argument(
+        "--repack",
+        action="store_true",
+        help="re-pack papers already marked packed (windows lost to a provider "
+        "limit, or a since-fixed gate); the artifact is rewritten whole",
+    )
     ap.add_argument("--concurrency", type=int, default=4)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument(
@@ -218,7 +242,7 @@ async def main() -> int:
             r.get("binder") and r.get("review_status") == "accepted"
         ):
             continue
-        if r.get("pack_status") == "packed":
+        if r.get("pack_status") == "packed" and not args.repack:
             continue
         if args.keys and k not in args.keys:
             continue
@@ -238,6 +262,9 @@ async def main() -> int:
 
     async def guarded(k, r):
         async with sem:
+            if eff.limited:
+                print(f"  SKIPPED (provider limit) {k[:60]}", flush=True)
+                return {"paper_key": k, "status": "skipped_limit"}
             res = await pack_one(eff, k, r, lock, args.log)
             print(
                 f"  [{datetime.now().strftime('%H:%M:%S')}] {res.get('status'):16s} "
