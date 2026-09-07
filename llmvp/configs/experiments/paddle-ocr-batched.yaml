@@ -1,0 +1,50 @@
+# PaddleOCR-VL on the BATCHED multi-seq engine — the 2026-08-29 unlock.
+#
+# WHY. The OCR-lane recheck (dev/OCR_LANE_2026-08-29.md, recheck section)
+# reinstated batched-beats-pools at OCR request shape: 2.27x at N=8 engine-
+# level, with the ratio curve reproducing the figtext-shape curve at every N.
+# The M-RoPE blocker turned out to be one accounting guard, now replaced by
+# cell-debt accounting (SeqSlot.cell_debt); hardware verdicts on paddle
+# (probe_vision_kv_integrity.py, PROBE_JOINT_STEP=1): neighbour KV
+# byte-identical across an install, the joint multi-seq token step LEGAL,
+# install stall 3 ms.
+#
+# GEOMETRY. 8 seats x 8192 = 65,536 unified cells. A crop request is ~150
+# prompt tokens + <= 512 out + ~190 media cells (a full page ~1,240 media
+# cells + a longer answer) — 8192/seat holds either with slack. KV at 0.5B
+# is 2 KB/token-ish; the whole 65k pool is well under a GB on the 3060
+# beside 0.6 GB weights + 1 GB projector.
+#
+# THE POOL PATH STAYS. vision_pool_size 2 remains the fallback (any install
+# failure costs a request a slower answer, never an error), and production
+# keeps running the pool config until the operator flips the pointer.
+#
+# NOT A ROUTING TARGET until the ramp gates pass (throughput up, recall
+# held, zero faults) — same P5 discipline as the figtext cutover.
+
+extends: paddle-ocr-vl
+
+app:
+  port: 8008
+  openai_shim: true
+
+model:
+  # Batched-engine requirements (config validation enforces the trio).
+  n_ctx: 65536
+  swa_full: true
+  kv_unified: true
+  resident_seq_cache: true
+  vision_batched: true
+  vision_batched_max_streams: 8
+  # Per-stream encode (2026-08-29): 2 mtmd contexts so concurrent crops
+  # encode in parallel — encode is the constant 57-73 ms / ~38% of a crop
+  # request that kept the first batched cell throughput-flat. Each extra
+  # context is ~0.9 GB projector on CUDA1; the preflight prices it.
+  vision_batched_encoders: 2
+  # Fallback pool geometry — unchanged from production.
+  vision_n_ctx: 32768
+  vision_pool_size: 2
+
+resources:
+  decode_mode: "batched"
+  max_concurrent_requests: 8

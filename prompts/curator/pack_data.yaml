@@ -30,11 +30,40 @@ sections:
 
       {context.key_registry_block}
 
+  - id: prior_keys
+    when: context.prior_keys
+    content: |
+      Keys ALREADY USED by earlier parts of THIS paper — reuse them for the
+      same quantities rather than coining a variant spelling:
+
+      {context.prior_keys}
+
   - id: instruction
     content: |
       Extract the paper's useful RAW DATA into one flat-ish JSON object:
       measured/computed values with their conditions, named
       compositions, processing parameters, model/method identifiers.
+
+      PEAK, BAND AND LINE POSITIONS ARE THE CORPUS'S MOST VALUABLE
+      CONTENT — pack them EXHAUSTIVELY, not as a sample. If the paper
+      reports spectral positions (Raman/FTIR wavenumbers, emission or
+      absorption wavelengths, XRD 2-theta or d-spacings, band gaps),
+      every one it states belongs in the pack, from tables as well as
+      body text:
+          ftir_peak_wavenumber_cm-1, raman_peak_wavenumber_cm-1,
+          uvvis_peak_nm, emission_line_nm, xrd_2theta_deg, band_gap_ev
+      each a list of objects carrying the position plus, when the paper
+      states them, its assignment and which sample it belongs to:
+          ✅ "raman_peak_wavenumber_cm-1": [
+               {"peak_cm-1": 1091, "assignment": "CO3 v1 symmetric stretch",
+                "sample": "dawsonite"},
+               {"peak_cm-1": 1366, "assignment": "v3 antisymmetric stretch",
+                "sample": "dawsonite"}]
+      A table of forty peaks is FORTY GROUNDED FACTS. "Sparse beats
+      complete" below is a rule against INVENTING — it is not a reason
+      to stop early on values the paper actually prints. Recording the
+      instrument and the spectral range while omitting the peaks
+      measured with it keeps the conditions and discards the result.
 
       Rules:
       - REUSE a registry key whenever an equivalent exists — do NOT
@@ -58,10 +87,25 @@ sections:
       - Numbers VERBATIM from the paper (text, tables, or the labeled
         figure readings). Never average, convert units, extrapolate, or
         estimate — if the paper says "approximately 1.2 GPa", pack 1.2.
+      - UNIT CONVERSION IS THE FAILURE THAT COSTS WHOLE PAPERS. The
+        value must be COPYABLE FROM THE PAGE: carry the unit in the
+        KEY and the printed digits in the value. Normalising a
+        magnitude looks helpful and is rejected, because the gate
+        matches the number as PRINTED:
+            paper prints "3.551 MHz"  ✅ {"frequency_mhz": 3.551}
+                                      ❌ {"frequency_hz": 3551000}
+            paper prints "44 nm"      ✅ {"particle_size_nm": 44}
+                                      ❌ {"particle_size_m": 4.4e-08}
+            paper prints "1.28 GPa"   ✅ {"tensile_strength_gpa": 1.28}
+                                      ❌ {"tensile_strength_mpa": 1280}
+        Same for percentages, temperatures and wavelengths. When the
+        printed form and your preferred unit disagree, the printed form
+        wins — or omit the value.
       - Include the source conditions a value is meaningless without
         (temperature, composition, processing state).
       - Omit what the paper does not state. Sparse and grounded beats
-        complete and invented.
+        complete and invented — this governs values the paper never
+        gives, NOT how many of the values it does give you record.
 
   - id: gate_feedback
     when: context.gate_feedback
@@ -85,7 +129,9 @@ sections:
       }
       ```
 
-      ❌ WRONG — invented average, unit conversion, synonym key:
+      ❌ WRONG — invented average, converted unit, synonym key
+      (the paper printed 759 MPa and 1.28 GPa; none of these three
+      values can be found on the page):
       ```json
       {"yield_strength_gpa_avg": 0.76, "tensile_strength_megapascals": 1280}
       ```

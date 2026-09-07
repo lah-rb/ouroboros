@@ -221,7 +221,14 @@ class FakeCtx:
         self.seq_add_calls = []
 
     def decode(self, batch):
-        self.decoded_batches.append(list(batch.rows))
+        # A REAL LlamaBatch (the engine's lazy embd batch for vision
+        # installs) has no .rows; record its row count instead so embd
+        # decodes still register as decode calls.
+        self.decoded_batches.append(
+            list(batch.rows)
+            if hasattr(batch, "rows")
+            else [("embd", int(batch.batch.n_tokens))]
+        )
         if self.decode_script:
             code = self.decode_script.pop(0)
             if isinstance(code, Exception):
@@ -783,3 +790,153 @@ def test_output_bridge_end_and_error_semantics():
         assert seen == ["partial"]
 
     asyncio.run(scenario())
+
+
+# ── the pressure ladder must actually descend (2026-08-24/25 wedge) ──
+#
+# Every pre-existing pressure test here scripts the SECOND decode to
+# succeed, or hand-sets the budget to the floor. Neither exercises
+# repeated pressure, which is exactly why an oscillation that ran
+# 2,288,327 times in production was never caught by this file.
+
+
+def test_the_prefill_budget_never_rises_between_two_pressure_events():
+    """The direct regression. Growth used to run once per _step, so the
+    halving was undone before the next batch was built and the budget
+    oscillated between two values forever."""
+    ctx = FakeCtx(decode_script=[1, 1])
+    eng = _engine_with(ctx, samplers={"a": FakeSampler([10, EOG])}, prefill_chunk=64)
+    req = _req("a", [100, 101, 102])
+    req._stream_id = "a"
+    eng._admit(req)
+
+    eng._step()
+    assert eng._live_prefill_budget == 32  # 64 -> 32
+    eng._step()
+    # On the old code this reads 32 again (grown back to 64, halved to 32).
+    assert eng._live_prefill_budget == 16
+
+
+def test_repeated_pressure_descends_the_ladder_to_the_floor():
+    ctx = FakeCtx(decode_script=[1] * 7)
+    eng = _engine_with(ctx, samplers={"a": FakeSampler([10, EOG])}, prefill_chunk=64)
+    req = _req("a", [100, 101, 102])
+    req._stream_id = "a"
+    eng._admit(req)
+
+    seen = []
+    for _ in range(7):
+        eng._step()
+        seen.append(eng._live_prefill_budget)
+    # Strictly decreasing until it pins at the floor, and it MUST reach it —
+    # rung 2 (evict) is unreachable while the budget stays above _MIN.
+    assert seen[0] == 32
+    assert min(seen) == 16
+    assert seen == sorted(seen, reverse=True)
+
+
+def test_the_budget_climbs_only_after_clean_steps():
+    """Growth on evidence, not on the passage of a step."""
+    ctx = FakeCtx(decode_script=[1] + [0] * 8)
+    eng = _engine_with(ctx, samplers={"a": FakeSampler([10] * 12)}, prefill_chunk=64)
+    req = _req("a", [100, 101, 102])
+    req._stream_id = "a"
+    eng._admit(req)
+
+    eng._step()
+    assert eng._live_prefill_budget == 32
+    for _ in range(3):  # _PREFILL_RECOVERY_STEPS - 1
+        eng._step()
+        assert eng._live_prefill_budget == 32
+    eng._step()
+    assert eng._live_prefill_budget == 64
+
+
+def test_sustained_pressure_yields_the_decode_thread():
+    from inference import batched_engine as be
+
+    ctx = FakeCtx()
+    eng = _engine_with(ctx, samplers={}, prefill_chunk=64)
+    slept = []
+    eng._sleep = slept.append
+
+    eng._consecutive_pressure = be._PRESSURE_BACKOFF_AFTER
+    eng._pressure_backoff()
+    assert len(slept) == 1 and 0 < slept[0] <= be._PRESSURE_BACKOFF_MAX_S
+
+    # NEVER sleep on pending control work: a control op is a seat release,
+    # which is the very thing that relieves the pressure.
+    slept.clear()
+    eng._control_inbox = [("fn", "fut")]
+    eng._pressure_backoff()
+    assert slept == []
+
+
+def test_pressure_below_the_threshold_does_not_yield():
+    from inference import batched_engine as be
+
+    eng = _engine_with(FakeCtx(), samplers={}, prefill_chunk=64)
+    slept = []
+    eng._sleep = slept.append
+    eng._consecutive_pressure = be._PRESSURE_BACKOFF_AFTER - 1
+    eng._pressure_backoff()
+    assert slept == []
+
+
+def test_pressure_that_cannot_be_relieved_clears_the_engine():
+    """The backstop. Spinning is not a recoverable state; an empty pool is —
+    every caller retries."""
+    from inference import batched_engine as be
+
+    ctx = FakeCtx()
+    eng = _engine_with(ctx, samplers={"a": FakeSampler([10, EOG])}, prefill_chunk=64)
+    req = _req("a", [100, 101, 102])
+    req._stream_id = "a"
+    eng._admit(req)
+    assert eng._streams
+
+    eng._sleep = lambda _s: None
+    eng._consecutive_pressure = be._PRESSURE_GIVE_UP
+    eng._pressure_backoff()
+    assert eng._streams == {}
+    assert eng._consecutive_pressure == 0
+
+
+def test_a_clean_decode_resets_the_pressure_run():
+    ctx = FakeCtx(decode_script=[1, 0])
+    eng = _engine_with(ctx, samplers={"a": FakeSampler([10, EOG])}, prefill_chunk=64)
+    req = _req("a", [100, 101, 102])
+    req._stream_id = "a"
+    eng._admit(req)
+    eng._step()
+    assert eng._consecutive_pressure == 1
+    eng._step()
+    assert eng._consecutive_pressure == 0
+
+
+def test_start_publishes_the_empty_pool_before_any_request(monkeypatch):
+    """A freshly started engine must leave a snapshot in BUS.latest().
+
+    Every other publish is an occupancy change, so an idle engine that has
+    served nothing has published nothing -- and a scheduler subscribing to
+    it gets no first frame, polls the same empty latest(), settles on its
+    legacy rung with cells unknown, and never sends the request that would
+    have seeded the bus (measured 2026-09-06). The frame is published from
+    start() BEFORE the decode thread exists, the one race-free moment; no
+    loop is bound here, exactly as at boot, and latest() must still be set.
+    """
+    from inference.capacity import CapacityBus
+
+    bus = CapacityBus()
+    monkeypatch.setattr("inference.capacity.BUS", bus)
+    eng = _mk_engine()
+    assert bus.latest() is None, "nothing may be published before start()"
+    eng.start()
+    try:
+        snap = bus.latest()
+        assert snap is not None, "start() must publish the initial snapshot"
+        assert snap.serving is True
+        assert snap.waiting == 0
+        assert snap.seats_free == snap.seats_total, "a fresh pool is fully available"
+    finally:
+        eng.shutdown()

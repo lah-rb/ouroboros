@@ -289,6 +289,22 @@ async def run_agent(
     # runs without a dispatch is pathological at any budget.
     consecutive_entry = 0
     max_consecutive_entry = (max_cycles + 3) if max_cycles is not None else 50
+    # A DELAYED self-tail-call is a paced stand-down, not a spin, and the
+    # distinction became load-bearing when the worker pool arrived: the
+    # controller yielding so continuous lanes can run is the pool working
+    # as designed, but this guard predates the pool and reads any
+    # non-dispatching cycle as a livelock. It killed a healthy mission
+    # after 50 stand-downs (2026-09-01) while the lanes were packing
+    # papers throughout.
+    #
+    # So paced yields get their own, far larger ceiling instead of an
+    # exemption: a hot loop still trips at 50, while a controller waiting
+    # on the drains can wait for hours. The wall-clock budget remains the
+    # outer bound, and the pool's own shutdown report says what the lanes
+    # did — this counter was never the thing that could tell.
+    consecutive_yield = 0
+    max_consecutive_yield = 2000
+    yielded_deliberately = False
 
     while True:
         # Clean pause drain: a mission paused out-of-band (`mission pause`
@@ -329,14 +345,28 @@ async def run_agent(
 
         # Safety: catch entry flow self-loops
         if current_flow == entry_flow:
-            consecutive_entry += 1
-            if consecutive_entry > max_consecutive_entry:
-                raise RuntimeError(
-                    f"Entry flow {entry_flow!r} ran {consecutive_entry} times "
-                    f"without dispatching work. Possible infinite loop."
-                )
+            if yielded_deliberately:
+                # Paced stand-down (a tail call that asked to sleep). Not a
+                # spin: the lanes hold the work and the controller is
+                # staying out of their way.
+                consecutive_yield += 1
+                if consecutive_yield > max_consecutive_yield:
+                    raise RuntimeError(
+                        f"Entry flow {entry_flow!r} stood down "
+                        f"{consecutive_yield} times without ever dispatching "
+                        f"work. The drains are not clearing."
+                    )
+            else:
+                consecutive_entry += 1
+                if consecutive_entry > max_consecutive_entry:
+                    raise RuntimeError(
+                        f"Entry flow {entry_flow!r} ran {consecutive_entry} "
+                        f"times without dispatching work. Possible infinite "
+                        f"loop."
+                    )
         else:
             consecutive_entry = 0
+            consecutive_yield = 0
 
         if current_flow not in registry:
             raise RuntimeError(
@@ -671,6 +701,10 @@ async def run_agent(
                 f"Mission parked as paused — resume with `mission resume` or `start`."
             )
 
+        # A delay is the flow saying "I am waiting on purpose" — carried to
+        # the next iteration's self-loop check so a paced stand-down is not
+        # mistaken for a hot loop.
+        yielded_deliberately = bool(outcome.delay_seconds and outcome.delay_seconds > 0)
         if outcome.delay_seconds and outcome.delay_seconds > 0:
             await asyncio.sleep(outcome.delay_seconds)
 

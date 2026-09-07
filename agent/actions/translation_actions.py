@@ -20,9 +20,15 @@ the corpus:
 
 Pass → extraction_status "extracted" + md_en_path (+ translated flag): the
 paper enters the curator like any other, and build_curator_doc prefers the
-English markdown. Fail → one retry at a higher temperature next round,
-then translate_failed with the gate's reasons. Mission-clean throughout:
-markdown + databank writes only.
+English markdown. Fail → warmer retries on later rounds, then
+translate_failed once the paper has spent TRANSLATE_MAX_ATTEMPTS attempts
+without converging. An ATTEMPT is any round that ends without a
+translation: a gate verdict, OR a chunk the server refused on both
+temperatures (its degenerate-generation guard, an empty answer). Only gate
+verdicts counted before 2026-09-04, so two unfixable chunks re-selected
+their papers for 16 hours -- 297 aborted streams, 23% of the local
+server's decode time -- with the counter sitting at zero. Mission-clean
+throughout: markdown + databank writes only.
 """
 
 from __future__ import annotations
@@ -47,12 +53,30 @@ _CHUNK_CHARS = 12_000
 # refine_queries turn and the engine's slack keep the rest.
 _TRANSLATE_SEATS = 2
 
+# Language-code → name for the prompt's source hint. Codes the corpus has
+# actually produced (the extraction-side stopword vote + catalog metadata);
+# an unknown code passes through verbatim — a code beats "cyrillic"-by-bug.
+_LANGUAGE_NAMES = {
+    "es": "Spanish",
+    "fr": "French",
+    "pt": "Portuguese",
+    "de": "German",
+    "it": "Italian",
+    "ru": "Russian",
+    "ja": "Japanese",
+    "zh": "Chinese",
+    "ko": "Korean",
+}
+
 TRANSLATE_MIN_NUMERIC = 0.98
 # Per-chunk retry threshold — looser than the assembly bar on purpose: a
 # chunk is a small sample (a few dozen tokens), so one boundary artifact
 # shouldn't force a retry; the assembly gate still holds 0.98 overall.
 _CHUNK_MIN_NUMERIC = 0.95
-TRANSLATE_MAX_ATTEMPTS = 2
+# Three, counting error-ended rounds (operator ruling 2026-09-04): a paper
+# that has not converged after its third attempt is marked translate_failed
+# with the reason, so a human can clear it, and never re-selected.
+TRANSLATE_MAX_ATTEMPTS = 3
 # Output budget per source TOKEN, applied when the server's tokenizer
 # answers (effects.token_count — the size_request idiom). The honest
 # expectation for a translation is ~1.0x source tokens across this
@@ -68,14 +92,16 @@ _MAX_REPEAT_WORDS = 200
 _TRANSLATE_CLAIMS: set[str] = set()
 # Papers whose last round ended in CHUNK failure(s). Selection is
 # finish-first by design — "a partially translated paper keeps being
-# selected until it completes" — but attempts only advance at ASSEMBLY,
-# so a chunk that fails every retry re-selects its paper forever without
-# ever burning an attempt. Live 2026-08-19: one degenerating 12.6k-token
-# chunk held the lane for hours while 87 eligible papers sat at zero
-# attempts. Deferred papers sort LAST, not out: banked parts survive, and
-# when nothing else is eligible the lane still returns to them rather
-# than idling. In-process on purpose, like the claims set — a restart
-# forgiving all deferrals is the right amnesty.
+# selected until it completes" — and until 2026-09-04 attempts advanced
+# only at ASSEMBLY, so a chunk that failed every retry re-selected its
+# paper forever without burning an attempt (live 2026-08-19: one
+# degenerating 12.6k-token chunk held the lane for hours while 87 eligible
+# papers sat at zero attempts; live 2026-09-03/04: two such chunks, 297
+# aborted streams). Deferral ORDERS the pool — deferred papers sort LAST,
+# not out, and banked parts survive — while the attempt cap BOUNDS the
+# loop: an error-ended round now counts as an attempt too. In-process on
+# purpose, like the claims set — a restart forgiving all deferrals is the
+# right amnesty.
 _TRANSLATE_DEFERRED: set[str] = set()
 
 
@@ -165,6 +191,40 @@ def _max_repeat_words(text: str, max_period: int = 12) -> int:
     return best
 
 
+_EN_FUNCTION_WORDS = frozenset(
+    "the and of to in is for with that this from were was are which by an be as on at "
+    "or these have has not also can between".split()
+)
+TRANSLATE_MIN_EN_RATIO = (
+    0.05  # calibrated on 1,890 English packs: p1 of true English ~0.07
+)
+_LATIN_WORD_RE = re.compile(r"[a-zA-Z]+")
+
+
+def _output_language_problem(out: str) -> str:
+    """'' when the translation reads as English; otherwise why not."""
+    letters = sum(1 for ch in out if ch.isalpha()) or 1
+    cjk = sum(
+        1 for ch in out if "\u3040" <= ch <= "\u30ff" or "\u4e00" <= ch <= "\u9fff"
+    )
+    cyr = sum(1 for ch in out if "\u0400" <= ch <= "\u04ff")
+    hangul = sum(1 for ch in out if "\uac00" <= ch <= "\ud7af")
+    for name, n in (("CJK", cjk), ("Cyrillic", cyr), ("Hangul", hangul)):
+        if n / letters >= 0.15:
+            return f"output not English: {name} is {n / letters:.0%} of letters"
+    words = _LATIN_WORD_RE.findall(out)
+    if len(words) < 200:
+        return ""  # too short to judge by function words
+    tokens = re.findall(r"\S+", out)
+    digit_tokens = sum(1 for t in tokens if any(ch.isdigit() for ch in t))
+    if tokens and digit_tokens / len(tokens) > 0.5:
+        return ""  # a table; function words are legitimately scarce
+    ratio = sum(1 for w in words if w.lower() in _EN_FUNCTION_WORDS) / len(words)
+    if ratio < TRANSLATE_MIN_EN_RATIO:
+        return f"output not English: function-word ratio {ratio:.3f} < {TRANSLATE_MIN_EN_RATIO}"
+    return ""
+
+
 def translation_gate(src: str, out: str) -> dict:
     """Deterministic verdict on one assembled translation."""
     numeric = _numeric_preservation(src, out)
@@ -173,6 +233,16 @@ def translation_gate(src: str, out: str) -> dict:
     ratio = len(re.sub(r"\s", "", out)) / src_len
     repeats = _max_repeat_words(out)
     problems = []
+    # THE OUTPUT MUST BE ENGLISH. Measured 2026-09-06: nine packs had been cut
+    # from an .en.md that was still Russian, Japanese or Spanish -- the gate
+    # checked numbers, image tags, length and repetition, never the language,
+    # so a model that echoed its source passed. Two tests: the source script
+    # must not dominate the output, and Latin output must carry English
+    # function words. Numeric-dense outputs (tables) legitimately have few
+    # function words, so the ratio test is skipped when digits dominate.
+    lang = _output_language_problem(out)
+    if lang:
+        problems.append(lang)
     if numeric < TRANSLATE_MIN_NUMERIC:
         problems.append(f"numeric preservation {numeric:.3f} < {TRANSLATE_MIN_NUMERIC}")
     if img_out != img_src:
@@ -225,11 +295,14 @@ def _parts_path(key: str) -> str:
 async def _load_parts(
     effects, key: str, n_chunks: int, src_len: int, attempt: int
 ) -> dict[int, str]:
-    """Valid persisted chunk translations for THIS source and attempt.
+    """Valid persisted chunk translations for THIS source and epoch.
 
     A part is valid only if it was cut from the same chunking (n, src_len)
-    and the same attempt (a warmer retry re-translates everything —
-    mixing temperatures inside one assembly would blur the gate's verdict).
+    and the same epoch (a warmer retry after a FAILED GATE re-translates
+    everything — mixing temperatures inside one assembly would blur the
+    gate's verdict). The JSON field is still named "attempt": until
+    2026-09-04 attempt and epoch were the same number, and every part on
+    disk carries that name.
     """
     import json
 
@@ -296,12 +369,30 @@ def _tag_priority(record: dict) -> int:
     return 0 if tiers & {"exact", "close"} else 1
 
 
-def select_translation_paper(databank: dict) -> str | None:
-    """One unclaimed extract_lingual paper with retry budget left.
+def _doc_size_hint(record: dict) -> int:
+    """Length proxy from fields the record already carries -- no file read.
+    extraction_quality.pages is present on ~7,700 rows; 0 when unknown, which
+    sorts unknown-length papers first rather than last (a deliberate bias:
+    most rows without pages are small older extractions)."""
+    q = record.get("extraction_quality") or {}
+    try:
+        return int(q.get("pages") or 0)
+    except (TypeError, ValueError):
+        return 0
 
-    Ordered by (tag strength, key): relevance first, then deterministic —
-    which doubles as finish-first: a partially translated paper keeps
-    being selected until it completes."""
+
+def select_translation_paper(databank: dict) -> str | None:
+    """One unclaimed ACCEPTED extract_lingual paper with retry budget left.
+
+    Post-acceptance by design (see _translation_pending): curation reads
+    originals, so only papers the curator accepted spend translate seats.
+    Ordered by (tag strength, size, key): relevance first, then SMALLEST
+    first, then deterministic -- which still doubles as finish-first: a
+    partially translated paper keeps being selected until it completes.
+    Smallest-first is the throughput policy (2026-09-06): translation time
+    scales with length, and one 300-450k-token thesis would hold a lane for
+    hours while dozens of 12k-token papers waited behind it; recovered packs
+    per hour is the objective."""
     from agent.actions.extraction_actions import _translation_pending
 
     eligible = [
@@ -315,7 +406,12 @@ def select_translation_paper(databank: dict) -> str | None:
         return None
     return min(
         eligible,
-        key=lambda k: (k in _TRANSLATE_DEFERRED, _tag_priority(databank[k]), k),
+        key=lambda k: (
+            k in _TRANSLATE_DEFERRED,
+            _tag_priority(databank[k]),
+            _doc_size_hint(databank[k]),
+            k,
+        ),
     )
 
 
@@ -363,13 +459,40 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
     try:
         import asyncio
 
+        # SOURCE HINT. The record's `language` (the extraction-side vote,
+        # present on ~88% of the lingual cohort) beats any script guess —
+        # the old profile-max fired unconditionally and its default was
+        # dead code (max over a non-empty literal tuple), so every
+        # Latin-script Spanish/French/German paper was prompted "source
+        # script: cyrillic". Language first; a real non-Latin script
+        # second (only when actually present); the honest unknown last.
+        lang = str(rec.get("language") or "").strip().lower()
         profile = rec.get("script_profile") or {}
-        hint = max(
-            (s for s in ("cyrillic", "cjk", "hangul", "greek")),
-            key=lambda s: float(profile.get(s) or 0.0),
-            default="non-Latin",
-        )
+        if lang and lang != "en":
+            hint = _LANGUAGE_NAMES.get(lang, lang)
+        else:
+            present = [
+                s
+                for s in ("cyrillic", "cjk", "hangul", "greek")
+                if float(profile.get(s) or 0.0) >= 0.05
+            ]
+            hint = (
+                max(present, key=lambda s: float(profile.get(s) or 0.0))
+                if present
+                else "non-Latin"
+            )
         attempts = int(rec.get("translate_attempts") or 0)
+        # Parts are keyed by EPOCH, not attempt. An epoch is one pass over
+        # the source at one temperature regime; it advances only when the
+        # assembly gate FAILS, because the warmer retry re-translates
+        # everything and parts from a colder pass must not mix into it. An
+        # attempt that ends in a chunk ERROR keeps its epoch: the chunks
+        # that banked are good, and re-translating them would spend decode
+        # on work the server already did. Records from before 2026-09-04
+        # carry no epoch; their attempt count IS their epoch (the two were
+        # the same number then).
+        raw_epoch = rec.get("translate_epoch")
+        epoch = int(raw_epoch if raw_epoch is not None else attempts)
         # Retry rounds run warmer: the first failure is often a too-literal
         # decode loop or an omitted passage; temperature is the lever.
         temperature = 0.3 if attempts == 0 else 0.7
@@ -378,7 +501,7 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
         # ROUND SLICE. Papers over the round budget make PROGRESS instead
         # of blocking: translate up to `budget` missing chunks, persist
         # them, and assemble+gate only when every chunk has a valid part.
-        done = await _load_parts(effects, key, len(chunks), len(src), attempts)
+        done = await _load_parts(effects, key, len(chunks), len(src), epoch)
         todo = [i for i in range(len(chunks)) if i not in done][:budget]
 
         # EXACT-TOKEN OUTPUT BUDGETS, one batched call for the round's
@@ -445,7 +568,7 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
                 # are serialized per path by append_file's lock, so
                 # concurrent chunks appending is safe.
                 await _append_parts(
-                    effects, key, {idx: text}, len(chunks), len(src), attempts
+                    effects, key, {idx: text}, len(chunks), len(src), epoch
                 )
                 return idx, text
 
@@ -459,15 +582,52 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
         done.update(fresh)
 
         if errors:
-            # Persisted what succeeded; the round ends without a verdict.
+            # Persisted what succeeded; the round ends without a translation,
+            # and that COUNTS as an attempt. Before 2026-09-04 only a gate
+            # verdict advanced the counter, so a chunk the server refused
+            # every time (its degenerate-generation guard: a Cyrillic chunk
+            # on a record tagged `en`, an OCR-damaged Spanish one echoing
+            # its own repetition) re-selected its paper for 16 hours. The
+            # EPOCH does not advance: banked chunks stay valid, so a
+            # transient fault costs a counter tick, not the banked work.
             # DEFER the paper so the next round tries someone else first —
-            # without this, finish-first re-offers it immediately and one
-            # unfixable chunk wedges the whole lane.
-            _TRANSLATE_DEFERRED.add(key)
-            return _decline(
-                f"{key}: {len(errors)} chunk failure(s), "
-                f"{len(done)}/{len(chunks)} banked ({str(errors[0])[:100]})"
+            # without this, finish-first re-offers it immediately.
+            attempts += 1
+            rec["translate_attempts"] = attempts
+            rec["translate_epoch"] = epoch
+            what = (
+                f"{len(errors)} chunk failure(s) ({str(errors[0])[:100]}), "
+                f"{len(done)}/{len(chunks)} banked"
             )
+            if attempts >= TRANSLATE_MAX_ATTEMPTS:
+                _TRANSLATE_DEFERRED.discard(key)
+                rec["extraction_status"] = "translate_failed"
+                rec["failure_reason"] = (
+                    f"translation: {what}; did not converge in {attempts} attempts"
+                )
+                await effects.write_file(_parts_path(key), "")
+                await append_extraction_records(effects, [rec])
+                await _book_pack_state_after_translation(
+                    effects, rec, "failed", rec["failure_reason"]
+                )
+                summary = {
+                    "paper": key,
+                    "chunks": len(chunks),
+                    "status": "failed",
+                    "reason": what,
+                }
+                return StepOutput(
+                    result=summary,
+                    observations=f"translate failed {key}: {what}",
+                    context_updates={"translate_summary": summary},
+                )
+            _TRANSLATE_DEFERRED.add(key)
+            rec["failure_reason"] = (
+                f"translation (will retry warmer): {what}; "
+                f"attempt {attempts} of {TRANSLATE_MAX_ATTEMPTS}"
+            )
+            await append_extraction_records(effects, [rec])
+            return _decline(f"{key}: {what}")
         _TRANSLATE_DEFERRED.discard(key)  # a clean round earns the front again
         if len(done) < len(chunks):
             summary = {
@@ -494,6 +654,7 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
         # the space).
         await effects.write_file(_parts_path(key), "")
         rec["translate_attempts"] = attempts + 1
+        rec["translate_epoch"] = epoch
         if gate["passed"]:
             en_rel = (
                 md_rel[:-3] + ".en.md" if md_rel.endswith(".md") else md_rel + ".en"
@@ -507,13 +668,19 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
             }
             rec["failure_reason"] = ""
             status = "translated"
+            await _book_pack_state_after_translation(effects, rec, "translated", "")
         elif rec["translate_attempts"] >= TRANSLATE_MAX_ATTEMPTS:
             rec["extraction_status"] = "translate_failed"
             rec["failure_reason"] = "translation: " + "; ".join(gate["problems"])
             status = "failed"
+            await _book_pack_state_after_translation(
+                effects, rec, "failed", rec["failure_reason"]
+            )
         else:
             # Stays extract_lingual; the bumped attempt count selects the
-            # warmer retry next round.
+            # warmer retry next round, and the bumped EPOCH retires this
+            # pass's parts so the retry re-translates everything.
+            rec["translate_epoch"] = epoch + 1
             rec["failure_reason"] = "translation (will retry warmer): " + "; ".join(
                 gate["problems"]
             )
@@ -536,6 +703,59 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
         ),
         context_updates={"translate_summary": summary},
     )
+
+
+async def _book_pack_state_after_translation(
+    effects, rec: dict, outcome: str, why: str
+) -> None:
+    """Keep the PACK honest about the language it was cut from.
+
+    OPERATOR RULING 2026-09-06: the corpus feeds continued pre-training of
+    models too small for multilingual packs, so a pack must be English. Two
+    consequences land here, on the papers side of the databank (pack_status
+    is not an extraction-owned field, so the extraction-side append the
+    translate round already makes cannot carry it):
+
+      translated  -> a paper that was PACKED from its original-language text
+                     (every lingual pack before the ruling) goes to
+                     needs_repack, so the English pack replaces it.
+      failed      -> an ACCEPTED paper whose translation did not converge is
+                     booked pack_failed: there is no English text to pack, and
+                     an original-language pack already cut must not stay
+                     `packed`, which is what the export reads.
+
+    Never raises -- a booking failure must not undo a translation.
+    """
+    from agent.actions.scholarly_actions import append_records
+
+    try:
+        if outcome == "translated" and rec.get("pack_status") == "packed":
+            await append_records(
+                effects,
+                [{**rec, "pack_status": "needs_repack", "failure_reason": ""}],
+            )
+        elif outcome == "failed" and rec.get("review_status") == "accepted":
+            prior = rec.get("pack_status") or ""
+            note = (
+                "translation did not converge; the existing pack was cut from "
+                "original-language text and must not stand"
+                if prior == "packed"
+                else "translation did not converge, so there is no English text to pack"
+            )
+            await append_records(
+                effects,
+                [
+                    {
+                        **rec,
+                        "pack_status": "pack_failed",
+                        "failure_reason": f"{why[:160]} | {note}",
+                    }
+                ],
+            )
+    except Exception:  # noqa: BLE001 -- see docstring
+        logger.exception(
+            "pack-state booking after translation failed for %s", rec.get("paper_key")
+        )
 
 
 def release_translation_keys(keys: list[str]) -> None:

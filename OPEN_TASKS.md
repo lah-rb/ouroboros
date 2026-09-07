@@ -33,6 +33,16 @@ the run logs, and git history; ten closed items were deleted.*
 - Server restarts are cheap and pre-approved when a soured/wedged server
   is burning hours (SIGSTOP mission processes → SIGTERM server →
   relaunch → SIGCONT; the agent retry loops ride through).
+- **A resident SECONDARY is cold after every bounce.** `paddle-ocr-vl` does
+  not come up with LLMVP — it loads on demand, and the FIRST request warms
+  it *while itself failing* `is a local config but is not hot`. Restarting
+  the server with the `LD_LIBRARY_PATH` cuBLAS pin is only half the
+  procedure; a secondary needs an explicit `loadModel`, or the first
+  requests after every restart silently no-op. Pre-OCR triage now retries
+  once on that error, so the gate self-heals — but anything else calling a
+  secondary does not, and a no-op window LOOKS healthy: the triage summary
+  reported "4 judged, 4 kept" while judging nothing. That cost a wrong
+  conclusion about a prompt fix on 2026-08-25.
 - **Serving geometry is measured, not guessed.** KV per-token laws, the
   swa_full ceilings, and the preflight guard live in the config headers
   (`llmvp/configs/*.yaml`) and the `kv-geometry-before-swarm` memory. Compute

@@ -14,6 +14,7 @@ See dev/EXTRACTION_GATE_CALIBRATION_2026-08-14.md.
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
@@ -1237,3 +1238,88 @@ async def test_a_prose_doc_with_low_span_still_fails(tmp_path):
     )
     bank = await read_databank(fx)
     assert bank["p1"]["extraction_status"] != "extracted"
+
+
+# ── remote ocr lane: the tool is told WHERE and WHICH, explicitly ─────
+
+
+def _argv_seen_for(fx) -> list[str]:
+    """Run one segment through the batch action and return the argv used."""
+    seen: list[list[str]] = []
+
+    async def record(command, working_dir=None, timeout=30):
+        seen.append(list(command))
+        return CommandResult(
+            return_code=0,
+            stdout=_seg_report("a", 0, 25, total=25),
+            stderr="",
+            command="x",
+        )
+
+    fx.run_command = record
+    asyncio.run(action_extract_pdf_batch(_si(inputs=_batch_inputs(["a"]), effects=fx)))
+    assert seen, "the tool was never invoked"
+    return seen[0]
+
+
+def test_a_domained_ocr_lane_hands_the_tool_its_fleet_and_model():
+    fx = _fx([_bank_line("a")])
+    fx._inference_domain = "ocr"
+    fx._llmvp_domains = {
+        "ocr": {
+            "endpoint": "http://192.168.1.209:8008/graphql",
+            "model": "paddle-ocr-vl-mac",
+        }
+    }
+    argv = _argv_seen_for(fx)
+    i = argv.index("--llmvp-url")
+    assert argv[i + 1] == "http://192.168.1.209:8008", "BASE url, /graphql stripped"
+    assert argv[argv.index("--model") + 1] == "paddle-ocr-vl-mac"
+    assert argv.index("--vl-backend") < i < argv.index("--page-range")
+
+
+def test_no_ocr_domain_leaves_the_argv_byte_identical():
+    import os
+
+    import agent.actions.extraction_actions as ea
+
+    fx = _fx([_bank_line("a")])
+    argv = _argv_seen_for(fx)
+    root = ea._repo_root()
+    assert argv == [
+        os.path.join(root, ea._TOOL_PY),
+        os.path.join(root, ea._TOOL_SCRIPT),
+        "--pdfs",
+        argv[3],
+        "--keys",
+        "a",
+        "--databank-dir",
+        argv[7],
+        "--vl-backend",
+        ea._VL_BACKEND,
+        "--page-range",
+        argv[11],
+    ]
+    assert "--llmvp-url" not in argv and "--model" not in argv
+
+
+def test_only_the_ocr_domain_routes_the_ocr_tool():
+    """An effects object stamped with another lane's domain (or none) never
+    redirects paddle; and an ocr stamp without an ocr route stays local."""
+    import agent.actions.extraction_actions as ea
+
+    fx = _fx([_bank_line("a")])
+    fx._inference_domain = "curate_remote"
+    fx._llmvp_domains = {
+        "curate_remote": {"endpoint": "http://x:8008/graphql"},
+        "ocr": {"endpoint": "http://y:8008/graphql", "model": "paddle-ocr-vl-mac"},
+    }
+    assert ea._ocr_route_argv(fx) == [], "a curate-stamped caller never routes OCR"
+    fx._inference_domain = "ocr"
+    fx._llmvp_domains = {"curate_remote": {"endpoint": "http://x:8008/graphql"}}
+    assert ea._ocr_route_argv(fx) == [], "ocr stamped but no ocr route -> local"
+    fx._llmvp_domains = {"ocr": {"endpoint": "http://y:8008/graphql"}}
+    assert ea._ocr_route_argv(fx) == [
+        "--llmvp-url",
+        "http://y:8008",
+    ], "no model -> url only"

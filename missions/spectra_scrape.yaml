@@ -29,9 +29,9 @@ objective: >
   identify what was measured (a named mineral, pigment, alloy, oxide,
   polymer, or biological material) and present the instrument's actual
   output, as a plotted spectrum or diffractogram, a peak/band assignment
-  table, or tabulated line intensities. Papers that only discuss a
-  technique, model it, or review it without showing measured data are
-  out of scope.
+  table, or tabulated line intensities. Papers that merely mention a
+  technique in passing are out of scope (see the foundations rule below
+  for theory papers).
 
   Cover these families of technique. Atomic emission from a
   laser or electrical spark: laser-induced breakdown spectroscopy
@@ -58,6 +58,24 @@ objective: >
   papers, because only their full text can be mined, and prefer breadth
   of material systems and instruments over repeated coverage of any
   single well-studied system.
+
+  Also collect, as FOUNDATIONS for the above: (1) papers on the physics
+  of these techniques - the theory of Raman scattering and selection
+  rules, the plasma physics and diagnostics underlying LIBS and spark
+  emission (Boltzmann and Saha analysis, line broadening, matrix
+  effects, calibration-free methods), diffraction physics and structure
+  refinement, vibrational mode and factor-group analysis, luminescence
+  mechanisms, and quantitative calibration and chemometrics theory; and
+  (2) technical and geological papers on mineral formation and
+  chemistry - phase stability and phase diagrams, polymorphism and
+  phase transformations, crystal chemistry and solid solution, igneous,
+  metamorphic and hydrothermal petrogenesis, alteration and weathering,
+  and the geochemistry that controls mineral composition. A foundations
+  paper earns its place by rigorous physical or chemical content that
+  grounds the interpretation of measured spectra, even when it presents
+  no new spectra of its own. Application surveys that merely mention a
+  technique, with neither measured data nor foundational analysis,
+  remain out of scope.
 
 flow_set: scraper
 

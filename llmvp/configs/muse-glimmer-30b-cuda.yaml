@@ -48,9 +48,16 @@ model:
   # metrics live in ~/tools/ouroboros-ops/LAYER_SPLIT_EXPERIMENT.md —
   # [40,12]@131072 was the stable rung, 80.9 completions/h over 5.5 h,
   # zero faults. Re-apply it whenever paddle next drains.
-  n_ctx: 65536
+  n_ctx: 131072
   probe_verified_weights_bytes: 19653957984
   probe_verified_n_ctx: 91136
+  # ── 3060 LAYER-SPLIT RE-APPLIED 20260906 by dev/expand_local_seat_on_figtext_drain.py:
+  # paddle drained, figtext drained; the [40, 12]@131072 rung measured stable
+  # 5.5 h / zero faults on 2026-08-22 (LAYER_SPLIT_EXPERIMENT.md). ocr lane is
+  # disabled in the mission (OUROBOROS_DISABLE_LANES=ocr) so paddle is never
+  # loaded onto CUDA1 beside these layers. Revert = the .bak beside this run's log.
+  split_mode: layer
+  tensor_split: [40, 12]
   # The base declares vision_n_ctx 131072 — an M1 sizing (7 GB of lazy KV
   # against 123 GB) that on this card is a landmine: never built, costing
   # nothing, until one stray vision request tries to allocate 6.5 GiB into
@@ -64,6 +71,27 @@ model:
   # existed only because the un-split 3090 could not hold more beside
   # the 65k text pool).
   vision_n_ctx: 8192
+  # ── BATCHED VISION LEG (2026-08-26, dev/BATCHED_VISION doc) ────────
+  # Vision decodes as ordinary streams in the shared batched context;
+  # the 8192x1 pool above stays resident as the automatic fallback.
+  # P5 ramp: raise max_streams 1 -> 2 -> 3 watching figs/h, install p95
+  # and vision_fallbacks in health.
+  vision_batched: true
+  # 2 -> 3 (P5 ramp step 1, 2026-08-26 21:40; 2-stream soak closed at
+  # 415 figs/h, zero faults over 6 h).
+  # 3 -> 4 (P5 ramp step 2, 2026-08-27 08:05; 3-stream leg held 510-600
+  # figs/h with zero faults). Encode measured at 21-26% duty on the 3060
+  # (ceiling ~4-5x away); the contended resource is 3090 decode
+  # bandwidth, so expect +10-20% or flat — revert to 3 if flat.
+  # 4 -> 3 (step-2 verdict, 2026-08-27 08:45): 41 min at 4 streams
+  # measured 532 figs/h vs the 3-stream leg's 510-600 — FLAT, exactly
+  # the decode-bandwidth prediction. Reverted per the pre-registered
+  # rule; the extra concurrency only taxed per-figure latency and held
+  # a 4th seat from the text lanes. The FOUR fig lanes stay: at server
+  # cap 3 they keep the streams saturated through tool-overhead gaps.
+  # 3090 decode bandwidth is the wall; the next real multiplier is a
+  # second GPU.
+  vision_batched_max_streams: 3
   # PROJECTOR ON THE 3060. GPU0 holds weights + the batched cell and has
   # ~2.9 GiB slack; the vision graph needs its KV (0.85 GiB) AND a compute
   # buffer (measured 1.18 GiB at reserve, 2026-08-16) — adding the ~1.3 GiB

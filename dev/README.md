@@ -35,6 +35,35 @@ banked (memories / dev/archive/docs/) — do not let this directory re-rot.
   (glm-4.7-flash measured at exactly half its predicted KV).
 
 ## LLMVP serving acceptance & perf
+
+- `BATCHED_VISION_2026-08-26.md` — vision decode inside the batched
+  multi-seq engine: P0 probe verdicts (KV-integrity GO), predictions,
+  build log. Probes live in `llmvp/probe_vision_*.py`.
+
+- `OCR_LANE_2026-08-29.md` — **can the figtext treatment be repeated on OCR?
+  No.** Phase 0 refuted both levers before any product code: decode is 12.8 %
+  of a crop request (so the batched path is the wrong architecture — it
+  serializes encode) and pool width 2/4/8 is flat (so do not widen
+  `vision_pool_size` or add `ocr*` lanes). OCR is bound by a ~92 ms FIXED
+  per-request serving cost that scales with nothing. Probes:
+  `llmvp/probe_ocr_{proxy,sweep,floor,analyze,stage_split}.py`.
+
+- `FIGURE_DIGITIZER_2026-08-30.md` — **reading published spectrum plots as
+  matrices instead of vision consumables** (Phase 1a: relocation + tiering).
+  Corrects a claim I made to the operator: plot curves are recoverable as
+  VECTOR paths in only 8% of LIBS papers (6.2% of figures), not two thirds —
+  the high segment counts are text glyph outlines, so the raster CV path is
+  tier 1. Crops carry no link back to their PDF, but NCC relocation
+  re-derives page + rect at **100%** (median ncc 0.9972), so no extractor
+  change is needed. Tier-N (native embedded image) available for **80%** of
+  figures — but at a median **1.79×** gain, not the 2.8× an earlier small
+  probe suggested: publishers standardise on 300 dpi, so the gain is pinned
+  near 300/160. Wide survey plots therefore stay unresolvable at the line
+  level; assignment has to refuse there. Four measurement-caught bugs, all
+  mine, incl. a 40-page sweep cap that faked a 12% relocation failure rate and
+  a figtext veto that was silently dropping 1,929 real spectrum figures.
+  Tool: `tools/figure_digitizer/`; artifacts: `databank/figdata/`.
+
 - `batched_parity.py` — batched-decode determinism/isolation parity. `duo_soak.py` — multi-seat soak + latch-heal.
 - `snapshot_stress.py` — snapshot-tier acceptance. `cache_strategy_stress.py` / `cache_compat_matrix.{py,sh}` — KV strategy & per-model compat. **The compat matrix is the sweep harness — extend it, don't rebuild it** (`CACHE_SWEEP_PLAN.md` §sweep: raise depth 3→12, record the new `session_strategy` health fields, needle past the window).
 - `caching/FEATURE_MATRIX.md` — **the operational view (2026-07-30)**: there are only THREE deployable strategies (pool+replay / pool+resident / batched+resident — batched hard-requires resident, so full_replay is unreachable there), and this maps all 15 cache/state features onto them with measured benefit, measured cost, and a per-model "what you can layer today" verdict. Read it before enabling any cache feature on a model. Headline: five features are on by config and OFF in reality, four of them under the production batched shape, and three announce it only at log.debug.
@@ -64,6 +93,7 @@ banked (memories / dev/archive/docs/) — do not let this directory re-rot.
 ## Curator / scholarly ops
 - `second_opinion_denials.py` — reflip denials for the gemma second-opinion pass.
 - `redownload_unresolved.py` — alternate-repository OA PDF retry.
+- `ingest_reading_list.py` — hand-ingest of the operator's foundational reading lists (`~/Downloads/ResearchDocs` + a second sweep for FTIR/EDS/XPS, 2026-09-06). `--stage pdfs` books already-fetched PDFs as `status=acquired` + `access_status=oa_pdf` (all `_extraction_pending` needs); `--stage pending` books the ones no sanctioned location would serve as candidates with the location recorded AND burnt in `oa_attempted`, routing them to the recovery lane instead of a proven wall, and re-arms records wrongly parked at `access_status="closed"` (which **no stage ever re-works**). Every row carries **`binder: true`** unless marked otherwise — that flag is the BINDER SET: `rock_olmo/emit.py` relabels a flagged paper's pack prose and markdown to `binder_text`/`binder_markdown` (weight 4, same as the reference datasets; `emit_corpus(..., binder_weight=N)` overrides per call). Title keys are the first 80 title characters, so two reports with a shared title stem (the Lyon NASA pair) need the report number FIRST. Dry-run default; appends in ONE atomic O_APPEND write because the mission's append lock is in-process only.
 - `repair_econ.py` — regenerate-vs-diagnose economics from production notes.
 
 ## Adaptive-reasoning provenance (router DEMOTED to experimental 2026-07-25)
@@ -87,3 +117,12 @@ Data: `trusted_labels_v1.json` (2,129 gold), `label_quarantine_v1.json`
 ## Archive
 - `archive/docs/` — finalized design docs with closing-status stamps.
 - `archive/` (rest) — pre-cleanup archived material.
+- `OPENALEX_MIRROR_2026-09-03.md` — OpenAlex API now meters by credit; the CC0 parquet snapshot (784 GB) mirrored to a dedicated USB drive with a local DuckDB title→DOI index; the disk, not the network, is the bottleneck.
+- `OPENALEX_MIRROR_SUBSTITUTION_2026-09-04.md` — can the mirror replace the API? 99% DOI coverage; topics recall 64–96% of accepted at 10M–67M pools but do not separate accepted from denied; title terms carry half of what abstract search did; enrichment is a JOIN (`openalex_local_enrich.py`); 228 fresh OA leads.
+- `coinage_quarantine.py` — review the pack coinage guard's quarantine (keys a pack coined past 40 new and 2× reused on a mature registry, held out of `key_registry.json`): list / promote-shared / promote / drop / drop-paper, backups beside both files.
+- `apply_key_compaction.py` — validate + apply an agent-proposed registry compaction (aliases, quarantine promotions, drops); refuses cross-unit, cross-type, digit-parameterised, min/max and chained merges. Results: `KEY_COMPACTION_2026-09-04.md`.
+- `widen_scalar_keys.py` / `apply_key_renames.py` / `apply_suffix_swaps.py` — the 2026-09-04 follow-ups: unify a scalar key and its plural twin onto a shallow list (corpus leaf count asserted as the invariant), rename malformed keys, swap _min/_max values a reviewer confirmed against the paper.
+- [DENIAL_REVIEW_2026-09-05.md](DENIAL_REVIEW_2026-09-05.md) — the review prompt contradicted the charter (a peak table IS an accepted form); 68% of muse / 88% of qwen corpus_fit denials name an in-scope technique in their own summary. Fix, re-judgement run, and the bad-brief error that produced `denial_family_guard.py`.
+- [expand_local_seat_on_figtext_drain.py](expand_local_seat_on_figtext_drain.py) — waits for figtext to drain, then re-applies the proven 3060 layer-split rung ([40,12] @ 131,072 cells) so local lanes can curate the 100k+ tail beside the remote lane; exact-revert fallback, relaunches the mission with `OUROBOROS_DISABLE_LANES=ocr`. Result in `~/tmp/seat_expansion_result.json`.
+- [heal_parked_oversize.py](heal_parked_oversize.py) — the `curate_oversize` park used to append a 3-field row and wipe the paper's extraction record (last-row-wins); this restores each parked paper's full pre-park row from the append-only history and un-parks the ones a seat can now take. Dry-run default.
+- [export_exclusions.py](export_exclusions.py) — the packs a training export must skip: packed from non-English text and awaiting translation + repack (packs must be English, ruling 2026-09-06). Run before every export.

@@ -33,6 +33,12 @@ import time
 
 from agent.models import StepInput, StepOutput
 from agent.paths import repo_root as _repo_root
+from agent.actions.drain_lane import (
+    ClaimSet,
+    decline,
+    drain_budget,
+    select_cost_bounded,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +53,24 @@ EXTRACT_TIMEOUT_S = 1800
 # pages; 600 s covers the sub-oversize population with margin, and anything
 # larger routes to the book lane instead.
 _EXTRACT_ITEM_TIMEOUT_S = int(os.environ.get("OUROBOROS_EXTRACT_ITEM_TIMEOUT_S", "600"))
+
+
+def _ocr_drain_pages() -> int:
+    """PAGES a drain round may claim, across all its papers.
+
+    The round's real budget. OUROBOROS_OCR_DRAIN_PDFS caps how many PAPERS a
+    round takes, and on its own that let round duration swing ~20x — this
+    queue holds 6-page notes beside 100-page reviews, and only the long rounds
+    hit EXTRACT_TIMEOUT_S and lose their tail to `unjudged`.
+
+    120 reproduces today's typical round (4 papers x ~33 pages) so the change
+    is a variance reduction, not a throughput change: at the 5.7 s/page
+    measured on this rig (2026-08-29 sweep, 10.4-11.3 pages/min) that is
+    ~12 min against a 30-min EXTRACT_TIMEOUT_S, which leaves room for a slow
+    paper without letting three long ones walk the round past its own budget.
+    """
+    return drain_budget("OUROBOROS_OCR_DRAIN_PAGES", 120)
+
 
 # Statuses this stage will not revisit. extract_unverified belongs here:
 # another OCR pass over a scan with no text layer yields the same
@@ -67,6 +91,27 @@ _TERMINAL_EXTRACTION = (
     # here so the sweep stops offering it; it is a REVIEW QUEUE, not a
     # rejection — see the oversize branch below.
     "extract_oversize",
+    # Pre-OCR triage read the first page and found no geological subject —
+    # a polymer FTIR study, a sensor-network paper, a nuclear-institute
+    # annual report. Measured: 25 of a hand-labelled 40 in the queue.
+    #
+    # A DISTINCT status, deliberately, and not extract_failed: nothing here
+    # failed. This is a REVIEW QUEUE like extract_oversize — the verdict and
+    # its reason are recorded, so a human can list them
+    # (`extraction_status == "extract_off_topic"`) and clear the field to
+    # send any of them back through. Reviews are NOT skipped: their
+    # reference lists feed citation mining, so they stay in the queue at
+    # low priority.
+    "extract_off_topic",
+    # The curate stage's park for a doc whose DEEPEST compression still
+    # exceeds the engine's per-stream seat (measured script-aware, or
+    # refused by the engine itself at admission). Terminal HERE so the OCR
+    # sweep never re-selects a paper whose markdown already exists — the
+    # problem is curation geometry, not extraction. A REVIEW QUEUE like the
+    # two above: reason recorded, clearable by hand. Distinct from
+    # extract_oversize (a PDF too big to OCR), which the book lane segments;
+    # this status must NOT be picked up by that lane.
+    "curate_oversize",
 )
 
 # QUALITY POLICY — recalibrated 2026-08-14 against blind judgement.
@@ -472,6 +517,40 @@ _TOOL_SCRIPT = "tools/pdf_extract/extract_batch.py"
 # opt-in. Records written earlier keep their own method string — they WERE
 # extracted that way, and the field is only ever written, never filtered on.
 _VL_BACKEND = os.environ.get("OUROBOROS_VL_BACKEND", "llmvp")
+
+
+def _ocr_route_argv(effects) -> list[str]:
+    """Extra tool argv when the ocr lane is routed to another fleet.
+
+    The lane's domain is stamped on its ChildEffects (`_inference_domain`)
+    and resolved against the mission's `llmvp_domains` — the same two reads
+    curation makes to name the model a remote pack was produced on. The
+    tool gets the BASE url (LLMVP's GraphQL lives at /graphql on it) and the
+    remote's registry name for paddle, passed EXPLICITLY rather than via
+    inherited env: a subprocess that reads OUROBOROS_LLMVP_URL from the
+    agent's environment cannot be routed per lane. No domain -> [] and the
+    argv is byte-identical to before.
+    """
+    domain = str(getattr(effects, "_inference_domain", "") or "")
+    routes = getattr(effects, "_llmvp_domains", None) or {}
+    # Only the ocr lane's OWN domain routes the OCR tool. worker_pool stamps
+    # "ocr" on the lane exactly when llmvp_domains carries that key; effects
+    # stamped with any other domain (or none) leave the tool on the default
+    # fleet, so a curate-routed caller can never redirect paddle by accident.
+    if domain != "ocr" or not isinstance(routes, dict):
+        return []
+    route = routes.get(domain) or {}
+    endpoint = str(route.get("endpoint") or "").strip()
+    model = str(route.get("model") or "").strip()
+    if not endpoint:
+        return []
+    base = endpoint.removesuffix("/graphql").rstrip("/")
+    out = ["--llmvp-url", base]
+    if model:
+        out += ["--model", model]
+    return out
+
+
 _EXTRACTION_METHODS = {
     # Same weights, same quant, three ways of reaching them — the suffix says
     # which, because that is the part a later audit cannot reconstruct.
@@ -525,10 +604,21 @@ def acquisition_is_truncated(record: dict, pdf_pages: int) -> bool:
 
 
 def _translation_pending(record: dict) -> bool:
-    """A record the TRANSLATION drain owes work to: lingual verdict with a
-    markdown on disk to translate."""
-    return record.get("extraction_status") == "extract_lingual" and bool(
-        record.get("md_path")
+    """A record the TRANSLATION drain owes work to: an ACCEPTED lingual
+    paper with a markdown on disk to translate.
+
+    POST-ACCEPTANCE BY DESIGN (2026-08-22 lane-closure decision, executed
+    2026-08-29): the curator reviews originals accurately — all 22
+    untranslated non-en denials were substantive content verdicts — and 5
+    of 27 verdicted translations had been spent on papers the curator then
+    denied. So lingual papers flow to curation AS-IS (_EXTRACTION_USABLE
+    includes extract_lingual), and only the accepted ones spend translate
+    seats: the papers that have already paid the acceptance tax.
+    """
+    return (
+        record.get("extraction_status") == "extract_lingual"
+        and bool(record.get("md_path"))
+        and record.get("review_status") == "accepted"
     )
 
 
@@ -553,38 +643,152 @@ def _extraction_pending(record: dict) -> bool:
 # one asyncio loop with no awaits between check and claim. IN-PROCESS
 # ONLY: a second agent process would need a flock'd claim file (the events
 # queue is the precedent); until then, one mission = one process stands.
-_OCR_CLAIMS: set[str] = set()
+_OCR_CLAIMS = ClaimSet("ocr")
+
+# Page counts for papers the extractor has never opened. pymupdf reads only
+# the xref to answer page_count (0.6 ms measured), but a round still must not
+# stat the whole queue — select_cost_bounded sizes lazily, and this caches
+# what it does read for the life of the process. Page counts do not change.
+_PDF_PAGES: dict[str, int] = {}
 
 
-def select_ocr_batch(databank: dict, max_pdfs: int) -> list[str]:
-    """Pick up to max_pdfs unclaimed pending keys and CLAIM them. Callers
-    must release_ocr_keys() in a finally.
+def _pdf_page_count(path: str) -> int:
+    """Pages in a PDF, cached. 0 when it cannot be read."""
+    if path in _PDF_PAGES:
+        return _PDF_PAGES[path]
+    n = 0
+    try:
+        import pymupdf
+
+        doc = pymupdf.open(path)
+        n = int(doc.page_count)
+        doc.close()
+    except Exception:  # noqa: BLE001 — an unreadable PDF is sized, not raised
+        logger.debug("page count failed for %s", path, exc_info=True)
+    _PDF_PAGES[path] = n
+    return n
+
+
+def _pages_remaining(record: dict, working_dir: str) -> int:
+    """Pages this paper still owes the OCR lane — the round's real cost.
+
+    A resumable extraction banks its cursor in extract_progress, so a
+    part-extracted paper costs only what is left. A fresh paper has no banked
+    total and the PDF is opened to count.
+
+    Returns 1 rather than 0 for an unreadable path: an item whose cost cannot
+    be measured must still be selectable (the extraction ladder is where a
+    missing PDF gets its verdict), and a zero cost would let unlimited
+    unreadable papers into one round.
+    """
+    prog = record.get("extract_progress") or {}
+    total = int(prog.get("total_pages") or 0)
+    if total:
+        done = 0
+        parts = prog.get("parts") or []
+        try:
+            done = sum(int(p.get("pages") or 0) for p in parts)
+        except (AttributeError, TypeError, ValueError):
+            done = 0
+        return max(1, total - done)
+    rel = str(record.get("pdf_path") or "")
+    if not rel:
+        return 1
+    path = rel if os.path.isabs(rel) else os.path.join(working_dir, rel)
+    return _pdf_page_count(path) or 1
+
+
+def select_ocr_batch(
+    databank: dict,
+    max_pdfs: int,
+    *,
+    working_dir: str = "",
+    max_pages: int = 0,
+) -> list[str]:
+    """Pick unclaimed pending keys and CLAIM them. Callers must
+    release_ocr_keys() in a finally.
+
+    BOUNDED BY PAGES AS WELL AS PAPERS when `working_dir` is given. Paper
+    count alone is a poor budget: this queue holds 6-page notes and 100-page
+    reviews, so a four-paper round varied ~20x in duration against one fixed
+    EXTRACT_TIMEOUT_S, and the long rounds are the ones that hit it and lose
+    their tail to `unjudged`. Pages are what a round actually spends.
+
+    `max_pdfs` remains a hard ceiling, so this can only make rounds smaller or
+    more even than the count-bounded form it replaces. Without `working_dir`
+    (page costs are unresolvable) the behaviour is exactly the old one.
 
     Order: papers already PART-EXTRACTED first, then needs_reextract, then
-    the rest. Finish-first matters more than it looks — a half-extracted
-    paper is holding banked part files and a page cursor, and every round
-    that starts something else instead leaves that work unfinished on disk
-    while the queue grows around it. A bounded retry still outranks fresh
-    work for the original reason: it should not queue behind the backlog.
+    by CONTENT PRIORITY, then the rest. Finish-first matters more than it
+    looks — a half-extracted paper is holding banked part files and a page
+    cursor, and every round that starts something else instead leaves that
+    work unfinished on disk while the queue grows around it. A bounded retry
+    still outranks fresh work for the original reason: it should not queue
+    behind the backlog.
+
+    `content_priority` is the pre-OCR triage's verdict (0 thin-bin, 1 normal,
+    2 review). It sorts BELOW the two durability rules on purpose: finishing
+    banked work and honouring a retry both beat starting a better paper.
+    Untriaged papers default to 1, so a queue with no triage keeps exactly
+    its previous order.
     """
-    pending = [
-        (k, r)
-        for k, r in databank.items()
-        if _extraction_pending(r) and r.get("pdf_path") and k not in _OCR_CLAIMS
-    ]
-    pending.sort(
-        key=lambda kr: (
-            not (kr[1].get("extract_progress") or {}).get("parts"),
-            kr[1].get("extraction_status") != "needs_reextract",
+
+    def _content_priority(rec: dict) -> int:
+        try:
+            v = rec.get("content_priority")
+            return int(v) if v is not None and str(v) != "" else 1
+        except (TypeError, ValueError):
+            return 1
+
+    def _order(key: str, rec: dict) -> tuple:
+        return (
+            not (rec.get("extract_progress") or {}).get("parts"),
+            rec.get("extraction_status") != "needs_reextract",
+            _content_priority(rec),
+            # SMALLEST-REMAINING WITHIN A TIER — the throughput policy the
+            # curate and figtext selectors already run ("the drain eats each
+            # tier from the short end"). Without it the first three keys TIE
+            # for almost the whole queue (untriaged papers are all
+            # (True, True, 1)), the head is therefore arbitrary, and a big
+            # head triggers the never-starve escape EVERY round: measured
+            # live 2026-08-29, four consecutive rounds selected ONE paper of
+            # 217 / 264 / 80 / 540 pages instead of four small ones, holding
+            # OCR near 2.4 pages/min against a measured 9.7-11.3 while the
+            # 3060 idled. Page cost is cached per path (_PDF_PAGES), so
+            # sizing the whole candidate list costs one 0.6 ms PDF open per
+            # NEW paper and nothing thereafter.
+            _pages_remaining(rec, working_dir),
         )
+
+    def _pending(rec: dict) -> bool:
+        return bool(_extraction_pending(rec) and rec.get("pdf_path"))
+
+    if not working_dir:
+        # No workspace root: page costs are unresolvable, so keep the
+        # count-bounded behaviour exactly. Cost 1 per paper makes the shared
+        # packer reproduce `pending[:max_pdfs]`.
+        return select_cost_bounded(
+            databank,
+            budget=max_pdfs,
+            pending=_pending,
+            cost=lambda k, r: 1,
+            sort_key=_order,
+            claims=_OCR_CLAIMS,
+            max_items=max_pdfs,
+        )
+    return select_cost_bounded(
+        databank,
+        budget=max_pages if max_pages > 0 else _ocr_drain_pages(),
+        pending=_pending,
+        cost=lambda k, r: _pages_remaining(r, working_dir),
+        sort_key=_order,
+        claims=_OCR_CLAIMS,
+        max_items=max_pdfs,
     )
-    keys = [k for k, _ in pending[:max_pdfs]]
-    _OCR_CLAIMS.update(keys)
-    return keys
 
 
 def release_ocr_keys(keys: list[str]) -> None:
-    _OCR_CLAIMS.difference_update(keys)
+    _OCR_CLAIMS.release(keys)
 
 
 # ── book segments (the oversize interleave) ───────────────────────────
@@ -761,6 +965,7 @@ async def _book_segment_round(
             os.path.join(working_dir, "databank"),
             "--vl-backend",
             _VL_BACKEND,
+            *_ocr_route_argv(effects),
             "--page-range",
             f"{start}:{start + seg}",
         ]
@@ -943,6 +1148,96 @@ async def _book_segment_round(
         release_ocr_keys([key])
 
 
+async def _triage_claimed(step_input, effects, databank: dict, keys: list[str]) -> dict:
+    """Triage claimed papers; return {'keep': [...], 'counts': {...}}.
+
+    NEVER raises into the drain. Triage is an optimisation: if the vision
+    model is unreachable, the prompt changes, or anything else goes wrong,
+    every paper keeps its place and the round proceeds exactly as it did
+    before this existed. A triage outage must not become an OCR outage.
+
+    Books two fields to the sidecar for each paper it judges — `content_bin`
+    and `content_priority` — plus a terminal `extract_off_topic` for papers
+    whose first page is confidently not geological. That status is a REVIEW
+    QUEUE, not a rejection: distinct from extract_failed, reason recorded,
+    clearable by hand.
+    """
+    from agent.actions import preocr_triage as pt
+    from agent.actions.scholarly_actions import append_extraction_records
+
+    budget = pt.TRIAGE_BUDGET
+    counts = {"triaged": 0, "off_topic": 0, "unknown": 0, "corrupt": 0}
+    if budget <= 0 or not keys:
+        return {"keep": keys, "counts": counts}
+
+    keep: list[str] = []
+    records: list[dict] = []
+    for key in keys:
+        rec = databank.get(key) or {}
+        # Already judged in an earlier round — do not pay for it twice.
+        if rec.get("content_priority") not in (None, ""):
+            keep.append(key)
+            continue
+        if counts["triaged"] >= budget:
+            keep.append(key)  # over budget this round; judge it next time
+            continue
+        pdf = rec.get("pdf_path")
+        if not pdf:
+            keep.append(key)
+            continue
+        try:
+            v = await pt.triage_one(effects, key, pdf)
+        except Exception:  # noqa: BLE001 — an optimisation must not break the lane
+            logger.exception("pre-OCR triage errored on %s — keeping it", key)
+            keep.append(key)
+            continue
+        counts["triaged"] += 1
+        verdict = v.get("verdict")
+        row = {
+            "paper_key": key,
+            "content_bin": v.get("bin") or "",
+            "content_priority": int(v.get("priority", 1)),
+        }
+        if verdict == "off_topic":
+            counts["off_topic"] += 1
+            row["extraction_status"] = "extract_off_topic"
+            row["failure_reason"] = v.get("reason", "")[:200]
+            logger.info("🚦 triage: %s -> off_topic (%s)", key, v.get("reason", ""))
+        elif verdict == "corrupt":
+            counts["corrupt"] += 1
+            row["extraction_status"] = "extract_failed"
+            row["failure_reason"] = v.get("reason", "")[:200]
+            logger.warning("🚦 triage: %s -> corrupt (%s)", key, v.get("reason", ""))
+        else:
+            if verdict == "unknown":
+                counts["unknown"] += 1
+            keep.append(key)
+        records.append(row)
+
+    # ALWAYS report, even when every paper was kept. A round that logs only
+    # its removals is indistinguishable from a round that never ran — which
+    # is precisely how this looked on its first live bounce: four papers had
+    # been judged and booked, and the log said nothing at all.
+    if counts["triaged"]:
+        logger.info(
+            "🚦 pre-OCR triage: %d judged — %d kept, %d off-topic, %d unreadable, "
+            "%d corrupt",
+            counts["triaged"],
+            counts["triaged"] - counts["off_topic"] - counts["corrupt"],
+            counts["off_topic"],
+            counts["unknown"],
+            counts["corrupt"],
+        )
+    if records:
+        try:
+            await append_extraction_records(effects, records)
+        except Exception:  # noqa: BLE001
+            logger.exception("pre-OCR triage could not book verdicts")
+            # The verdicts are lost but the papers are not: anything not kept
+            # was removed from THIS round only and is pending again next time.
+    return {"keep": keep, "counts": counts}
+
+
 async def action_ocr_drain_batch(step_input: StepInput) -> StepOutput:
     """Drain a bounded slice of the OCR backlog — the ocr_drain flow's one
     work step, built to run as a PARALLEL BRANCH beside discovery.
@@ -951,43 +1246,45 @@ async def action_ocr_drain_batch(step_input: StepInput) -> StepOutput:
     (action_extract_pdf_batch) appends extraction.jsonl — no mission writes,
     so it satisfies the branch ownership contract without exceptions.
 
-    Inputs: working_directory; env OUROBOROS_OCR_DRAIN_PDFS bounds the
-    slice (default 4 ≈ one discovery dispatch of paddle work at ~65 s/paper;
-    0 disables). Result: attempted, extracted, reason.
+    Inputs: working_directory. The slice is bounded BOTH ways:
+    OUROBOROS_OCR_DRAIN_PDFS caps papers (default 4; 0 disables) and
+    OUROBOROS_OCR_DRAIN_PAGES caps the pages behind them (default 120), so a
+    round of long papers no longer runs ~20x a round of short ones.
+    Result: attempted, extracted, reason.
     """
     from agent.actions.scholarly_actions import read_databank
 
     effects = step_input.effects
-    raw = os.environ.get("OUROBOROS_OCR_DRAIN_PDFS", "").strip()
-    try:
-        max_pdfs = int(raw) if raw else 4
-    except ValueError:
-        max_pdfs = 4
+    max_pdfs = drain_budget("OUROBOROS_OCR_DRAIN_PDFS", 4)
+
+    def _decline(reason: str) -> StepOutput:
+        return decline(reason, summary_key="ocr_summary", counters={"attempted": 0})
+
     if max_pdfs <= 0:
-        return StepOutput(
-            result={"attempted": 0, "reason": "disabled"},
-            observations="OCR drain disabled",
-        )
+        return _decline("disabled")
     if effects is None:
-        return StepOutput(
-            result={"attempted": 0, "reason": "no effects"},
-            observations="OCR drain: no effects",
+        return _decline("no effects")
+
+    # Resolved BEFORE selection: page-cost bounding needs the workspace root
+    # to resolve the (workspace-relative) pdf_path of a paper the extractor
+    # has never opened. Falls back to the mission, which always knows its own
+    # working directory — the acquire step is dispatched with params {}, and
+    # reading the input alone once silently disabled a whole lane.
+    working_dir = str(
+        step_input.inputs.get("working_directory")
+        or getattr(
+            getattr(step_input.context.get("mission"), "config", None),
+            "working_directory",
+            "",
         )
+        or ""
+    )
 
     databank = await read_databank(effects)
-    keys = select_ocr_batch(databank, max_pdfs)
+    keys = select_ocr_batch(databank, max_pdfs, working_dir=working_dir)
     if not keys:
         # Regular queue empty — spend the round on one BOOK SEGMENT instead
         # (the oversize interleave; see _book_segment_round).
-        working_dir = str(
-            step_input.inputs.get("working_directory")
-            or getattr(
-                getattr(step_input.context.get("mission"), "config", None),
-                "working_directory",
-                "",
-            )
-            or ""
-        )
         if working_dir:
             book = await _book_segment_round(step_input, working_dir)
             logger.info("📚 book lane: %s", book)
@@ -1004,21 +1301,36 @@ async def action_ocr_drain_batch(step_input: StepInput) -> StepOutput:
                 observations=f"OCR drain: {note}",
                 context_updates={"ocr_summary": summary},
             )
-        summary = {"attempted": 0, "reason": "nothing unclaimed pending"}
-        return StepOutput(
-            result=summary,
-            observations="OCR drain: nothing unclaimed pending",
-            context_updates={"ocr_summary": summary},
-        )
+        return _decline("nothing unclaimed pending")
+    claimed = list(keys)
     try:
+        # PRE-OCR TRIAGE. Read each claimed paper's FIRST PAGE before spending
+        # ~290s of OCR on it: paddle transcribes the page (~3s), muse reads
+        # the TEXT (~13s) and returns a technique bin plus a priority.
+        #
+        # Inside the existing try/finally on purpose — the keys are already
+        # claimed, so a triage that books-and-drops costs the lane nothing
+        # extra and cannot leak a claim.
+        triaged = await _triage_claimed(step_input, effects, databank, keys)
+        keys = triaged["keep"]
+        if not keys:
+            summary = {"attempted": 0, "triage": triaged["counts"]}
+            return StepOutput(
+                result=summary,
+                observations=(
+                    "OCR drain: every claimed paper was triaged out "
+                    f"({triaged['counts']})"
+                ),
+                context_updates={"ocr_summary": summary},
+            )
         sub = step_input.model_copy(
             update={"inputs": {**dict(step_input.inputs or {}), "paper_keys": keys}}
         )
         out = await action_extract_pdf_batch(sub)
         result = dict(out.result or {})
     finally:
-        release_ocr_keys(keys)
-    summary = {"attempted": len(keys), **result}
+        release_ocr_keys(claimed)
+    summary = {"attempted": len(keys), "triage": triaged["counts"], **result}
     obs = f"OCR drain: {len(keys)} pdf(s) — {out.observations}"
     # UNDER-FILLED ROUND RIDES A BOOK SEGMENT TOO. The strict
     # empty-queue-only gate starved the book lane: acquisition keeps the
@@ -1243,6 +1555,7 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
             os.path.join(working_dir, "databank"),
             "--vl-backend",
             _VL_BACKEND,
+            *_ocr_route_argv(effects),
             "--page-range",
             f"{a}:{b}",
         ]
@@ -1617,9 +1930,13 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
                     f"span={rep.get('span_pass_rate', 0):.2f})"
                 )
             else:
-                reason = "no report from toolchain" + (
-                    " (command timed out)" if result.timed_out else ""
-                )
+                # `detail` is _extract_one's explanation for the missing
+                # report ("timed out", "exit N", "exited cleanly with no
+                # output"). The previous line referenced `result.timed_out`
+                # — a name that does not exist in this scope, so every trip
+                # through this branch raised NameError instead of booking
+                # the failure reason (found by ruff F821, 2026-08-26).
+                reason = "no report from toolchain" + (f" ({detail})" if detail else "")
             # WHAT THE RUN PRODUCED IS RECORDED EVEN WHEN THE GATE REJECTS IT.
             # figure_count used to be written only on the success path, so a
             # rejected paper carried figure_count=0 while its figures sat on

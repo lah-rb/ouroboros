@@ -23,7 +23,8 @@
 # text decoders are ~0.6. So OCR belongs paired with the TEXT lane.
 #
 # ── VISION-ONLY ENTRY, deliberately ─────────────────────────────────
-# Reachable only through POST /v1/vision (or visionCompletion) with
+# Reachable only through the GraphQL `visionCompletion` mutation (the
+# optional OpenAI shim's /v1/vision reaches the same function) with
 # `model: paddle-ocr-vl`. The TEXT path must not route here and cannot:
 # run_completion builds its prompt from the ACTIVE config's tokenizer and
 # static buffer, so a text request routed to a secondary would tokenize with
@@ -37,11 +38,18 @@
 #
 # family: paddleocr resolves PaddleOCRChatHandler via
 # inference/vision_handlers._FAMILY_HANDLERS, matching general.architecture in
-# the GGUF. There is no formats/paddleocr.yaml and none is needed —
-# vision_text.stop_strings returns [] for a family it does not know, and this
-# model's template closes on its own `</s>` (eos id 2), which llama.cpp honours
-# natively. The template is a plain
+# the GGUF. formats/paddleocr.yaml (added 2026-08-29 for the batched path)
+# gives the seal — `</s>` plus `<|end_of_sentence|>` — so vision_text strips
+# the template's own terminators; the model closes on `</s>` (eos id 2)
+# natively either way. The template is a plain
 # `User: <|IMAGE_START|><|IMAGE_PLACEHOLDER|><|IMAGE_END|>{text}\nAssistant:\n`.
+#
+# PER-MACHINE DEVICE KEYS. main_gpu / split_mode / vision_projector_device /
+# vision_pool_size below describe THIS box (3090 + 3060). Another host does not
+# edit them: it adds `paddle-ocr-vl-<host>.yaml` with `extends: paddle-ocr-vl`
+# overriding only the device keys (see paddle-ocr-vl-mac.yaml), restates
+# `model.name` to its own stem, and the ocr lane's domain names that variant.
+# Weights paths are re-rooted by LLMVP_MODELS_ROOT (configs/README.md).
 #
 # ── Budget ───────────────────────────────────────────────────────────
 # weights 498 MB (Q8_0) + projector 882 MB + KV.
@@ -88,13 +96,27 @@ model:
   n_ctx: 4096
   # Vision: the window OCR crops actually land in.
   vision_n_ctx: 32768
-  # 2, not the subprocess path's 4. That 4 was its measured saturation point
-  # on the M1 and was carried here untested; 4 x 32768 KV is 2.25 GB and it
-  # was never admitted — the pool that OOMed the server was this one. Two
-  # concurrent crops is the width the batched bench actually supports:
-  # vision+vision serialized at S=0.093 (dev/batched_modality_mix.py), i.e.
-  # the second crop is ~free. Raise it once the governor can prove the KV
-  # fits on CUDA1 and a bench shows 4 still pays.
+  # 2, AND MEASURED TO BE THE RIGHT NUMBER — not a hedge any more.
+  #
+  # The old reason for 2 was an OOM: the preflight counted ONE vision context
+  # instead of vision_pool_size, approved "1.49GB OK" for 4 x 32768, and then
+  # died building the pool it had just approved. That governor bug is fixed
+  # (llama_cpp_backend.py, "TIMES THE POOL WIDTH"), so the hazard is gone.
+  #
+  # Width was then swept on the real tool over real PDFs, iso-memory
+  # (vision_n_ctx is per CONTEXT, so 2x32768, 4x16384 and 8x8192 all preflight
+  # at 2.09 GB — verified byte-identical). Throughput on one workload:
+  #
+  #     2 x 32768 -> 11.26 pages/min      <- this config
+  #     4 x 16384 -> 10.37 pages/min
+  #     8 x  8192 -> 10.82 pages/min
+  #
+  # WIDTH BUYS NOTHING. An OCR request is ~80% FIXED per-request serving cost
+  # (~92 ms that scales with neither image area, output length, prompt length
+  # nor n_ctx); only ~14% is encode+decode+transport, and the fixed part does
+  # not parallelize across contexts. Do not raise this expecting throughput —
+  # raise DEFAULT_LANE_MAX_INFLIGHT["paddle"] with it and you get a deeper
+  # queue and noisier telemetry. See dev/OCR_LANE_2026-08-29.md.
   vision_pool_size: 2
   # The projector cannot follow main_gpu — mtmd takes use_gpu, not a device —
   # so left alone it lands on CUDA0 where muse already sits (that OOM killed

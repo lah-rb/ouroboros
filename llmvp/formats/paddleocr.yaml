@@ -1,0 +1,79 @@
+# PaddleOCR-VL format schema — the batched-vision render path.
+#
+# WHY THIS EXISTS. The dedicated vision pool renders paddle prompts through
+# the fork's PaddleOCRChatHandler CHAT_FORMAT (llama_multimodal.py:3304); the
+# batched path renders through the repo's OWN family renderer
+# (inference/vision_batched.render_vision_prompt), which needs a schema.
+# This file transcribes the handler template byte-for-byte:
+#
+#   <|begin_of_sentence|>User: <|IMAGE_START|>{img}<|IMAGE_END|>{text}\n
+#   Assistant:\n
+#
+# and assistant history closes with </s>. Hardware verdicts for the path
+# itself: probe_vision_kv_integrity.py on paddle, 2026-08-29 — neighbour KV
+# byte-identical, joint multi-seq step legal, install stall 3 ms.
+#
+# THE CLS TOKEN RIDES THE USER OPEN. Paddle's template opens the PROMPT with
+# <|begin_of_sentence|> once. Vision requests are one-shot — a fresh seq, one
+# user message, cleared after — so folding it into the user msg_open
+# reproduces the handler bytes exactly. A multi-turn text session through
+# this schema would repeat the cls per user turn; paddle is a vision-only
+# entry (its config's text pool is never a target), so that case does not
+# arise — but this schema is NOT a general chat template. Do not promote it
+# to one without moving the cls to a proper prefix.
+
+family: paddleocr
+display_name: "PaddleOCR-VL"
+
+tokens:
+  # Defaults serve the ASSISTANT frame: "Assistant" + "" + ":\n" is the
+  # generation prompt, matching the handler's 'Assistant:\n'. The role name
+  # lives in msg_open (with roles.assistant empty) because this is a
+  # TEXT-role family — there is no structural opener token — and the schema
+  # invariant (test_format_schema_loading) requires a non-empty msg_open so
+  # turns are unambiguously delimited. User/system frames override via
+  # role_tokens below, so this default only ever renders assistant frames.
+  msg_open: "Assistant"
+  msg_content: ":\n"
+  msg_close: "</s>"
+  gen_stop: "</s>"
+  history_close: "</s>"
+  extra_gen_stops: ["<|end_of_sentence|>"]
+  media_open: "<|IMAGE_START|>"
+  media_close: "<|IMAGE_END|>"
+
+roles:
+  system: "system"
+  user: "user"
+  assistant: ""
+
+role_tokens:
+  user:
+    msg_open: "<|begin_of_sentence|>User: "
+    msg_content: ""
+    msg_close: "\n"
+  system:
+    msg_open: ""
+    msg_content: ""
+    msg_close: "\n"
+
+thinking:
+  style: none
+
+system_block:
+  identity: ""
+  reasoning_default: ""
+  template: "{persona}"
+
+traits:
+  fold_system_into_first_user: false
+  supports_developer_role: false
+
+generation:
+  # Production paddle sampling — greedy loops deterministically on some
+  # pages (see configs/paddle-ocr-vl.yaml), so temperature is load-bearing.
+  temperature: 0.8
+  top_p: 0.95
+  top_k: 0
+  min_p: 0.0
+  repeat_penalty: 1.0

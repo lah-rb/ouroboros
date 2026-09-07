@@ -213,6 +213,26 @@ class CapacityModel:
         )
         return token
 
+    def resize(self, token: str, est_kv: int) -> None:
+        """The unit now knows what it will ACTUALLY draw.
+
+        DOWNWARD ONLY. Shrinking hands the difference to the sibling lanes
+        immediately, which is what lets several small documents run in
+        parallel instead of the first lane sitting on the whole pool.
+        Growing is refused because it is a second admission decision, and
+        this model is an optimizer with the engine as the authority — see
+        the safety argument in the module docstring.
+        """
+        r = self._pending.get(token)
+        if r is None:
+            return
+        try:
+            est_kv = int(est_kv)
+        except (TypeError, ValueError):
+            return
+        if 0 < est_kv < r.est_kv:
+            r.est_kv = est_kv
+
     def release(self, token: str) -> None:
         """The request finished — exact, and the common case."""
         self._pending.pop(token, None)

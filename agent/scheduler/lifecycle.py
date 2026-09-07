@@ -87,7 +87,10 @@ async def worker_pool_for(
 
         pool = WorkerPool(
             effects=effects,
-            lanes=lanes_for_scraper(),
+            # The mission's per-domain routing decides the ocr lane's shape
+            # (local paddle vs a remote fleet) — read off the effects, where
+            # LocalEffects already holds it.
+            lanes=lanes_for_scraper(getattr(effects, "_llmvp_domains", None)),
             capacity_model=CapacityModel(feed),
             flow_registry=_load_flows(flows_dir),
             action_registry=build_action_registry(),

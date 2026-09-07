@@ -484,6 +484,34 @@ model:
   # only: vision_n_ctx x kv_bytes_per_token x width. Paddle at 32768 is
   # 0.56 GB per context. Default: 1
   vision_pool_size: 1
+
+  # [O] Type: bool — route vision requests through the batched multi-seq
+  #     TEXT engine instead of the dedicated vision-context pool. Image
+  #     embeddings are encoded once by a process-wide mtmd context and
+  #     decoded onto an ordinary working seat's seq, so N concurrent
+  #     vision streams cost KV only (~0.4 GB at 8192) instead of a
+  #     ~1.2 GB compute buffer per dedicated context. Requires
+  #     decode_mode: batched; the pool path remains the fallback and
+  #     serves whenever this is false or an install fails. Probe-gated:
+  #     see dev/BATCHED_VISION_2026-08-26.md (neighbour-KV byte
+  #     identity verified before this flag existed).
+  vision_batched: false
+  # [O] Type: int — client-side cap on concurrent batched-vision
+  #     streams (a semaphore in run_vision_completion). Seats are the
+  #     hard bound; this keeps vision from starving text lanes.
+  vision_batched_max_streams: 3
+  # [O] Type: int — parallel mtmd ENCODER contexts for the batched path
+  #     (an encode is a ViT+projector forward; one context runs one at a
+  #     time). 1 = the single process-wide encoder. Each extra context
+  #     uploads a full projector copy on the projector device (~1 GB for
+  #     paddle's mmproj) and the preflight prices it. Raise when encode
+  #     is the measured serial stage — paddle crops pay a constant
+  #     57-73 ms minimum-grid encode (~38% of a request), which kept the
+  #     first batched-serving cell throughput-flat (2026-08-29,
+  #     dev/OCR_LANE_2026-08-29.md). Health exposes
+  #     encoder_wait_ms_last: sustained tens of ms at load means this is
+  #     set too low.
+  vision_batched_encoders: 1
   # [O] Type: bool — offload the mtmd projector to the GPU.
   # TRUE DOES NOT MEAN "the model's GPU". The handler's signature is
   # (mmproj_path, verbose, use_gpu, image_min_tokens, image_max_tokens, ...)

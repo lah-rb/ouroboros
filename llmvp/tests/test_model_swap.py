@@ -330,3 +330,16 @@ def test_metadata_keyed_by_model_path(catalog, active_alpha):
 
     md.reset_model_metadata()
     assert md.get_model_metadata() is None
+
+
+def test_an_extends_child_is_a_valid_swap_target(swap_harness, catalog):
+    """Swap used to read the raw yaml straight into Config(), so a variant
+    carrying `extends:` was refused (extra="forbid") and LLMVP_MODELS_ROOT never
+    applied. Both doors go through the boot loader now."""
+    (catalog.dir / "gamma.yaml").write_text(
+        yaml.safe_dump({"extends": "alpha", "model": {"name": "gamma-model"}})
+    )
+    result = asyncio.run(model_swap.swap_model("gamma"))
+    assert result["ok"] is True
+    assert get_config().model.name == "gamma-model"
+    assert get_config().model.family == "chatml", "inherited from alpha"

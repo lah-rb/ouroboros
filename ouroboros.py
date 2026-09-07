@@ -632,6 +632,7 @@ def cmd_start(args: argparse.Namespace) -> None:
     effects = LocalEffects(
         working_directory=working_dir,
         llmvp_endpoint=mission.config.llmvp_endpoint,
+        llmvp_domains=getattr(mission.config, "llmvp_domains", None),
         trace_thinking=getattr(args, "trace_thinking", False),
         trace_prompts=getattr(args, "trace_prompts", False),
     )

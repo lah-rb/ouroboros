@@ -148,7 +148,12 @@ app:
   log_level: "info"
   cors_origins: ["*"]
   backend_timeout: 180
-  openai_shim: true
+  # OFF (2026-09-06). Every Ouroboros consumer speaks GraphQL now — OCR,
+  # figtext, vl_inspect, the digitizer, preocr triage — so nothing in the
+  # pipeline needs the OpenAI shim, and leaving it mounted is how a retired
+  # route gets used silently. External harnesses (Terminus/Harbor/tau bench
+  # configs) enable it per config; this one serves the corpus mission.
+  openai_shim: false
 
 graphql:
   max_query_depth: 10

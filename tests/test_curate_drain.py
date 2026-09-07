@@ -11,10 +11,13 @@ the production booking path with claims released either way.
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 
 from agent.actions.curation_actions import (
+    _CURATE_BOOKED,
+    _CURATE_BOOKED_SHADOW_S,
     _CURATE_CLAIMS,
     _CURATE_DOC_CACHE,
     _curate_doc_budget_chars,
@@ -60,6 +63,7 @@ def _rec(key: str, **extra) -> dict:
 def _clear_state():
     _CURATE_CLAIMS.clear()
     _CURATE_DOC_CACHE.clear()
+    _CURATE_BOOKED.clear()
 
 
 # ── Budget derivation ────────────────────────────────────────────────
@@ -115,6 +119,284 @@ async def test_selection_smallest_fitting_claims_and_oversize_skip():
         assert key4 == "small"
     finally:
         _clear_state()
+
+
+@pytest.mark.asyncio
+async def test_booked_shadow_is_timed_so_a_hand_rearm_is_seen_again():
+    """A terminal booking shadows its paper for _CURATE_BOOKED_SHADOW_S, not
+    for the life of the process.
+
+    The shadow exists for a seconds-wide race: a sibling lane selecting off a
+    databank snapshot taken just before this lane booked. It must NOT outlive
+    a deliberate re-arm on disk. Live case 2026-09-05: a paper booked
+    pack_failed (envelope: missing title) had its title filled and was set
+    needs_repack; it was the smallest eligible paper in the queue and every
+    lane skipped it for two hours because the process-lifetime set still held
+    it. Both papers here are pending on disk; 'rearmed' is the smaller, so
+    smallest-first picks it unless the shadow says otherwise.
+    """
+    _clear_state()
+    fx = MockEffects(
+        files=_bank_files(
+            [_rec("rearmed"), _rec("fresh")],
+            {"rearmed": "r" * 100, "fresh": "f" * 300},
+        )
+    )
+    bank = await read_databank(fx)
+    try:
+        # Just booked: the shadow holds, the sibling takes the next paper.
+        _CURATE_BOOKED["rearmed"] = time.monotonic()
+        key, _ = await select_curate_paper(fx, bank, 1000)
+        assert key == "fresh", "a fresh terminal booking must still be skipped"
+        release_curate_keys([key])
+
+        # Shadow expired: the on-disk state (pending) is trusted again, and
+        # the stale entry is pruned rather than left to accumulate.
+        _CURATE_BOOKED["rearmed"] = time.monotonic() - _CURATE_BOOKED_SHADOW_S - 1
+        key, doc = await select_curate_paper(fx, bank, 1000)
+        assert key == "rearmed" and len(doc) == 100
+        assert "rearmed" not in _CURATE_BOOKED, "expired shadow was not pruned"
+    finally:
+        _clear_state()
+
+
+@pytest.mark.asyncio
+async def test_a_remote_lane_takes_the_papers_only_it_can_take_first(monkeypatch):
+    """Smallest-first hands every lane the same small paper. A remote lane
+    with a bigger seat must exhaust the papers beyond the LOCAL seat first --
+    nobody else can serve them -- and fall back to smallest-first only when
+    none remain. Local lanes are unaffected. Measured 2026-09-06: 30 of 31
+    verdicts in 4 h fell on local-band papers while 88 remote-only papers
+    waited and the remote lane judged one of them.
+    """
+    from agent.actions import curation_actions as ca
+
+    _clear_state()
+    # local usable = (15,000 - 14,000 overhead) * 1.1 margin * 3.3 chars/tok ~ 3,630 chars
+    monkeypatch.setattr(ca, "_CURATE_SEAT_TOKENS", 15_000)
+    fx = MockEffects(
+        files=_bank_files(
+            [_rec("small"), _rec("big")],
+            {"small": "s" * 100, "big": "b" * 5_000},
+        )
+    )
+    # a declared remote seat: without it the "largest seat" is the 15k local
+    # one and the 5,000-char paper would be PARKED as oversize, not selected
+    fx._llmvp_domains = {"curate_remote": {"seat_tokens": 100_000}}
+    bank = await read_databank(fx)
+    try:
+        # a local lane: smallest-first as ever
+        key, _ = await select_curate_paper(fx, bank, 1_000_000)
+        assert key == "small"
+        release_curate_keys([key])
+        # the same queue seen by a remote lane: the paper beyond the local seat first
+        fx._inference_domain = "curate_remote"
+        key, _ = await select_curate_paper(fx, bank, 1_000_000)
+        assert key == "big", "remote lane must take the remote-only paper first"
+        release_curate_keys([key])
+        # with the remote-only paper claimed elsewhere, it falls back to smallest-first
+        ca._CURATE_CLAIMS.add("big")
+        key, _ = await select_curate_paper(fx, bank, 1_000_000)
+        assert key == "small"
+    finally:
+        _clear_state()
+
+
+@pytest.mark.asyncio
+async def test_drain_routes_an_accepted_oversize_paper_to_pack_only(monkeypatch):
+    """When the selector hands back an accepted paper with an EMPTY doc, the
+    drain must take the pack-only path and never the review path."""
+    from agent.actions import curation_actions as ca
+
+    _clear_state()
+    fx = MockEffects(
+        files=_bank_files(
+            [
+                _rec(
+                    "big",
+                    review_status="accepted",
+                    review_summary="quartz Raman",
+                    figtext_status="figtext_done",
+                )
+            ],
+            {"big": "x"},
+        ),
+        pool_health={"kvPoolTokens": 65536},
+    )
+    seen = {}
+
+    async def fake_select(effects, databank, budget):
+        ca._CURATE_CLAIMS.add("big")
+        return "big", ""  # the pack-only signal
+
+    async def fake_pack_only(effects, key, rec):
+        seen["pack_only"] = (key, rec.get("review_summary"))
+        return {
+            "paper_key": key,
+            "session_id": "",
+            "review": {
+                "status": "accepted",
+                "summary": rec["review_summary"],
+                "issues": [],
+                "deny_category": "",
+                "document_form": "",
+            },
+            "pack": {
+                "status": "packed",
+                "data": {"raman_band_cm1": 465},
+                "quality": {},
+            },
+        }
+
+    async def never_review(*a, **k):
+        raise AssertionError("review path must not run for an accepted oversize paper")
+
+    monkeypatch.setattr(ca, "select_curate_paper", fake_select)
+    monkeypatch.setattr(ca, "_pack_only_raw", fake_pack_only)
+    monkeypatch.setattr(ca, "_curate_stateless", never_review)
+    out = await action_curate_drain_batch(_si(fx))
+    assert out.result["attempted"] == 1
+    assert seen["pack_only"] == ("big", "quartz Raman")
+    rec = (await read_databank(fx))["big"]
+    assert (
+        rec["review_status"] == "accepted" and rec["review_summary"] == "quartz Raman"
+    )
+    assert rec["pack_status"] == "packed"
+
+
+@pytest.mark.asyncio
+async def test_pack_only_raw_carries_the_verdict_and_windows_the_raw_doc(monkeypatch):
+    """_pack_only_raw: no review turn, the verdict on record carried through
+    verbatim, the doc cut at budget 0 (raw), form recorded as raw-oversize."""
+    from agent.actions import curation_actions as ca
+
+    _clear_state()
+    md = "# Results\nRaman band at 465 cm-1 for quartz.\n"
+    fx = MockEffects(
+        files=_bank_files(
+            [
+                _rec(
+                    "p",
+                    review_status="accepted",
+                    review_summary="quartz Raman",
+                    review_issues=["thin"],
+                )
+            ],
+            {"p": md},
+        ),
+        pool_health={"kvPoolTokens": 65536},
+        inference_responses=[json.dumps({"raman_band_cm1": 465})],
+    )
+    rec = (await read_databank(fx))["p"]
+    state = await ca._pack_only_raw(fx, "p", rec)
+    calls = [c for c in fx.calls if c.method == "run_inference"]
+    assert len(calls) == 1, "exactly one pack turn, no review turn"
+    assert "465" in json.dumps(calls[0].args), "the window is cut from the raw doc"
+    assert state["review"] == {
+        "status": "accepted",
+        "summary": "quartz Raman",
+        "issues": ["thin"],
+        "deny_category": "",
+        "document_form": "",
+    }
+    assert state["pack"]["status"] == "packed"
+    assert ca._DOC_FORMS["p"] == "raw-oversize"
+    _clear_state()
+
+
+@pytest.mark.asyncio
+async def test_the_pack_reads_the_raw_doc_even_when_the_review_saw_a_compressed_one(
+    monkeypatch,
+):
+    """A fact in a paragraph the compression dropped can never be packed, so
+    the pack windows the uncompressed doc regardless of what the review saw
+    (operator ruling 2026-09-06)."""
+    from agent.actions import curation_actions as ca
+
+    _clear_state()
+    fx = MockEffects(
+        files=_bank_files([_rec("p")], {"p": "unused here"}),
+        pool_health={"kvPoolTokens": 65536},
+        inference_responses=[
+            json.dumps({"verdict": "accept", "summary": "ok", "issues": []}),
+            json.dumps({"raman_band_cm1": 465}),
+        ],
+    )
+
+    async def fake_raw(effects, key):
+        return "# Results\nRAW PARAGRAPH the compression dropped: band at 465 cm-1.\n"
+
+    monkeypatch.setattr(ca, "_raw_curator_doc", fake_raw)
+    state = await ca._curate_stateless(fx, "p", "COMPRESSED REVIEW DOC")
+    calls = [c for c in fx.calls if c.method == "run_inference"]
+    assert len(calls) == 2, "one review turn, one pack turn"
+    review_prompt, pack_prompt = json.dumps(calls[0].args), json.dumps(calls[1].args)
+    assert "COMPRESSED REVIEW DOC" in review_prompt
+    assert "RAW PARAGRAPH" in pack_prompt and "COMPRESSED REVIEW DOC" not in pack_prompt
+    assert state["pack"]["status"] == "packed"
+    assert state["pack_doc_form"] == "raw"
+    _clear_state()
+
+
+@pytest.mark.asyncio
+async def test_an_accepted_lingual_paper_is_reviewed_but_not_packed_this_round():
+    """The selection-time gate cannot see a verdict reached inside the round,
+    so a lingual paper accepted here must not be packed from its original text
+    (measured 2026-09-06 13:05: a Spanish paper, 19 raw windows, 2,687
+    non-English leaves). One inference call (the review), pack_status left
+    EMPTY (not pack_failed), and the paper is not curation-pending until
+    translation lands."""
+    from agent.actions import curation_actions as ca
+
+    _clear_state()
+    fx = MockEffects(
+        files=_bank_files(
+            [_rec("es", extraction_status="extract_lingual", language="es")],
+            {"es": "Los espectros Raman del cuarzo se obtuvieron a 532 nm. " * 30},
+        ),
+        pool_health={"kvPoolTokens": 65536},
+        inference_responses=[
+            json.dumps({"verdict": "accept", "summary": "in scope", "issues": []})
+        ],
+    )
+    out = await action_curate_drain_batch(_si(fx))
+    assert out.result["attempted"] == 1
+    calls = [c for c in fx.calls if c.method == "run_inference"]
+    assert len(calls) == 1, "review only -- no pack turn on original-language text"
+    rec = (await read_databank(fx))["es"]
+    assert rec["review_status"] == "accepted"
+    assert not rec.get("pack_status"), "pack must be left EMPTY, not pack_failed"
+    assert "translation" in rec["failure_reason"]
+    assert ca._curation_pending(rec) is False, "gated until the translation lands"
+
+
+@pytest.mark.asyncio
+async def test_a_paper_the_extraction_flag_missed_is_caught_by_its_text_and_flagged():
+    """extraction_status 'extracted' but Spanish text: the text-level check
+    defers the pack AND writes extract_lingual so the translate lane queues it."""
+    _clear_state()
+    fx = MockEffects(
+        files=_bank_files(
+            [_rec("es2")],  # extraction_status extracted -- the flag missed it
+            {
+                "es2": "# Resultados\n"
+                + "Los espectros Raman del cuarzo se obtuvieron a 532 nm con un láser verde. "
+                * 40
+            },
+        ),
+        pool_health={"kvPoolTokens": 65536},
+        inference_responses=[
+            json.dumps({"verdict": "accept", "summary": "in scope", "issues": []})
+        ],
+    )
+    out = await action_curate_drain_batch(_si(fx))
+    assert out.result["attempted"] == 1
+    assert len([c for c in fx.calls if c.method == "run_inference"]) == 1
+    rec = (await read_databank(fx))["es2"]
+    assert rec["review_status"] == "accepted" and not rec.get("pack_status")
+    assert (
+        rec["extraction_status"] == "extract_lingual"
+    ), "flagged so translation queues"
 
 
 # ── Drain action ─────────────────────────────────────────────────────
@@ -295,3 +577,583 @@ async def test_priority_is_finite_and_untagged_papers_still_run():
     second, _ = await select_curate_paper(fx, bank, 1000)
     assert first == "libs" and second == "plain"
     release_curate_keys([first, second])
+
+
+# ── the dynamic budget (2026-08-25) ──────────────────────────────────
+#
+# Before this, the budget came from `kvPoolTokens` — the STATIC CONFIGURED
+# n_ctx, not what is free. Every curate lane therefore sized as though it
+# were the only consumer, four lanes oversubscribed the pool ~4x, and the
+# resulting 31,244-token prompt wedged the engine for 3h38m.
+
+
+class _Snap:
+    """A capacity snapshot shaped like agent/effects/capacity.py's."""
+
+    def __init__(self, **kw):
+        self.knows_kv = kw.pop("knows_kv", True)
+        self.serving = kw.pop("serving", True)
+        self.engine_fatal = kw.pop("engine_fatal", None)
+        self.waiting = kw.pop("waiting", 0)
+        self.free_cells = kw.pop("free_cells", 0)
+        self.n_ctx_seq = kw.pop("n_ctx_seq", 0)
+
+
+class _CapEffects(MockEffects):
+    def __init__(self, snap, **kw):
+        super().__init__(**kw)
+        self._snap = snap
+
+    async def capacity_snapshot(self):
+        return self._snap
+
+
+@pytest.mark.asyncio
+async def test_the_budget_follows_live_free_cells_not_the_configured_cell():
+    _clear_state()
+    fx = _CapEffects(_Snap(free_cells=30_000), pool_health={"kvPoolTokens": 65536})
+    got = await _curate_doc_budget_chars(fx)
+    # (30,000 - 14,000 overhead) * 3.3
+    assert got == int((30_000 - 14_000) * 3.3)
+    # And emphatically NOT the static-cell answer.
+    assert got < await _curate_doc_budget_chars(
+        MockEffects(pool_health={"kvPoolTokens": 65536})
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_dispatcher_claim_beats_the_snapshot():
+    """The snapshot has not seen the sibling lanes' reservations; the claim
+    has. Sizing off the snapshot when a claim exists re-creates the
+    oversubscription the claim exists to prevent."""
+    _clear_state()
+    fx = _CapEffects(_Snap(free_cells=60_000), pool_health={"kvPoolTokens": 65536})
+    got = await _curate_doc_budget_chars(fx, claim_tokens=40_000)
+    assert got == int((40_000 - 14_000) * 3.3)
+
+
+@pytest.mark.asyncio
+async def test_the_budget_is_capped_by_the_per_seat_window():
+    """A SEAT's window can be smaller than the pool, and the engine rejects
+    a prompt against the seat, not the cell. Without this cap the action
+    builds a document the engine will refuse."""
+    _clear_state()
+    fx = _CapEffects(_Snap(free_cells=120_000, n_ctx_seq=32_768))
+    assert await _curate_doc_budget_chars(fx) == int((32_768 - 14_000) * 3.3)
+
+
+@pytest.mark.asyncio
+async def test_a_parked_or_head_blocked_server_yields_no_budget():
+    _clear_state()
+    for snap in (
+        _Snap(free_cells=60_000, serving=False),
+        _Snap(free_cells=60_000, engine_fatal="boom"),
+        _Snap(free_cells=60_000, waiting=3),
+    ):
+        assert await _curate_doc_budget_chars(_CapEffects(snap)) == 0
+
+
+@pytest.mark.asyncio
+async def test_a_degraded_feed_falls_back_to_the_static_cell():
+    """Correct BECAUSE degradation collapses the pool to width 1: with no
+    signal exactly one unit runs, so the whole cell is not oversubscription.
+    This rung must reproduce the pre-2026-08-25 number exactly."""
+    _clear_state()
+    legacy = await _curate_doc_budget_chars(
+        MockEffects(pool_health={"kvPoolTokens": 65536})
+    )
+    assert legacy == int((65_536 - 36_000) * 3.3)
+
+    none_snap = _CapEffects(None, pool_health={"kvPoolTokens": 65536})
+    assert await _curate_doc_budget_chars(none_snap) == legacy
+
+    unknown = _CapEffects(
+        _Snap(free_cells=60_000, knows_kv=False), pool_health={"kvPoolTokens": 65536}
+    )
+    assert await _curate_doc_budget_chars(unknown) == legacy
+
+
+# ── remote lanes size against THEIR engine, not ours ──────────────────
+
+
+class _QueuedLocalSnapshot:
+    """What the local feed looked like when the leak bit: queued and nearly
+    full. Rung 3 returns 0 on this -- correctly, for a LOCAL lane."""
+
+    knows_kv = True
+    serving = True
+    engine_fatal = None
+    waiting = 2
+    free_cells = 487
+    n_ctx_seq = 65_536
+
+
+class _LaneFx:
+    def __init__(self, domain="", routes=None):
+        self._inference_domain = domain
+        self._llmvp_domains = routes or {}
+
+    async def capacity_snapshot(self):
+        return _QueuedLocalSnapshot()
+
+    async def inference_pool_health(self):
+        return {"kvPoolTokens": 65_536}
+
+
+@pytest.mark.asyncio
+async def test_a_remote_lane_budget_comes_from_its_own_seat_not_the_local_pool(
+    monkeypatch,
+):
+    """CAUGHT LIVE (2026-09-01): 40 of 46 remote rounds declined 'nothing
+    unclaimed fits the seat budget' while the remote engine sat idle. The
+    lane held no local claim, fell to rung 3, and sized its document against
+    the LOCAL server's leftover cells."""
+    from agent.actions.curation_actions import (
+        _CURATE_CHARS_PER_TOKEN,
+        _CURATE_TURN_OVERHEAD_TOKENS,
+    )
+
+    monkeypatch.delenv("OUROBOROS_CURATE_DOC_CHARS", raising=False)
+    remote = _LaneFx("curate_remote", {"curate_remote": {"seat_tokens": 131_072}})
+    got = await _curate_doc_budget_chars(remote)
+    want = int((131_072 - _CURATE_TURN_OVERHEAD_TOKENS) * _CURATE_CHARS_PER_TOKEN)
+    assert got == want, "remote budget did not come from the declared seat"
+
+    # The very same local conditions must still stop a LOCAL lane cold.
+    assert await _curate_doc_budget_chars(_LaneFx()) == 0
+
+
+@pytest.mark.asyncio
+async def test_an_undeclared_remote_seat_is_assumed_to_be_shaped_like_ours(
+    monkeypatch,
+):
+    from agent.actions.curation_actions import (
+        _CURATE_CHARS_PER_TOKEN,
+        _CURATE_SEAT_TOKENS,
+        _CURATE_TURN_OVERHEAD_TOKENS,
+    )
+
+    monkeypatch.delenv("OUROBOROS_CURATE_DOC_CHARS", raising=False)
+    remote = _LaneFx("curate_remote", {"curate_remote": {"endpoint": "http://x"}})
+    got = await _curate_doc_budget_chars(remote)
+    want = int(
+        (_CURATE_SEAT_TOKENS - _CURATE_TURN_OVERHEAD_TOKENS) * _CURATE_CHARS_PER_TOKEN
+    )
+    assert got == want
+
+
+# ── the claim must be atomic with the check ───────────────────────────
+
+
+def _yielding_build(monkeypatch):
+    """Open the race window on purpose: make _build_doc_for yield to the
+    event loop once before doing its work. MockEffects awaits never actually
+    suspend, so without this four gathered selectors run back to back and the
+    race cannot show -- on the OLD code as well as the new."""
+    import asyncio
+
+    import agent.actions.curation_actions as CA
+
+    real = CA._build_doc_for
+
+    async def _slow(effects, key, budget):
+        await asyncio.sleep(0)
+        return await real(effects, key, budget)
+
+    monkeypatch.setattr(CA, "_build_doc_for", _slow)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_selectors_cannot_claim_the_same_paper(monkeypatch):
+    """CAUGHT LIVE (2026-09-01): three remote lanes and one local lane, launched
+    within 24 s on a cold size cache, all selected doi_10.34321_22063 and all
+    curated it -- 2.5 lane-hours for a paper one lane finished in 7 min. The
+    claim was taken AFTER the awaits, so every selector in the window saw it
+    unclaimed."""
+    import asyncio
+
+    _clear_state()
+    _yielding_build(monkeypatch)
+    fx = MockEffects(files=_bank_files([_rec("solo")], {"solo": "x" * 100}))
+    bank = await read_databank(fx)
+    try:
+        results = await asyncio.gather(
+            *[select_curate_paper(fx, bank, 1000) for _ in range(4)]
+        )
+        claimed = [k for k, _ in results if k]
+        assert claimed == ["solo"], f"double-claim: {claimed}"
+    finally:
+        _clear_state()
+
+
+@pytest.mark.asyncio
+async def test_a_lost_race_falls_through_to_the_next_paper(monkeypatch):
+    """A sibling winning the claim must not idle this lane: with two papers
+    pending and four selectors, exactly two DISTINCT keys come back."""
+    import asyncio
+
+    _clear_state()
+    _yielding_build(monkeypatch)
+    fx = MockEffects(
+        files=_bank_files([_rec("a"), _rec("b")], {"a": "x" * 100, "b": "y" * 200})
+    )
+    bank = await read_databank(fx)
+    try:
+        results = await asyncio.gather(
+            *[select_curate_paper(fx, bank, 1000) for _ in range(4)]
+        )
+        claimed = sorted(k for k, _ in results if k)
+        assert claimed == ["a", "b"], f"got {claimed}"
+    finally:
+        _clear_state()
+
+
+@pytest.mark.asyncio
+async def test_an_oversize_or_failing_build_releases_its_claim(monkeypatch):
+    """The claim is now taken BEFORE the build, so every exit after it must
+    hand the key back or the paper is pinned for the life of the process."""
+    import agent.actions.curation_actions as CA
+
+    _clear_state()
+    fx = MockEffects(files=_bank_files([_rec("p")], {"p": "x" * 100}))
+    bank = await read_databank(fx)
+    try:
+        # oversize after build: doc "changed since caching"
+        monkeypatch.setattr(CA, "_effective_chars", lambda d: 10**9)
+        key, _ = await select_curate_paper(fx, bank, 1000)
+        assert key == "" and "p" not in _CURATE_CLAIMS
+        monkeypatch.undo()
+
+        # a build that raises
+        async def _boom(*_a, **_k):
+            raise RuntimeError("build failed")
+
+        monkeypatch.setattr(CA, "_build_doc_for", _boom)
+        with pytest.raises(RuntimeError):
+            await select_curate_paper(fx, bank, 1000)
+        assert "p" not in _CURATE_CLAIMS
+    finally:
+        _clear_state()
+
+
+# ── a booked paper is never re-selected off a stale snapshot ───────────
+
+
+@pytest.mark.asyncio
+async def test_a_paper_booked_this_process_is_not_reselected_from_a_stale_snapshot(
+    monkeypatch,
+):
+    """CAUGHT LIVE (2026-09-01), twice in one hour, AFTER the atomic-claim fix:
+    a lane read its databank snapshot, a sibling booked the paper and released
+    its claim 4-8 s later, and the first lane then selected the same paper --
+    unclaimed, and still pending on the snapshot it was holding. The claim set
+    guards work in flight; the on-disk status guards booked work; the gap
+    between them is the length of a 15k-row databank read."""
+    monkeypatch.setenv("OUROBOROS_CURATE_PAPERS", "1")
+    _clear_state()
+    fx = MockEffects(
+        files=_bank_files([_rec("a")], {"a": "Raman at 532 nm on quartz."}),
+        pool_health={"kvPoolTokens": 65536},
+        inference_responses=[
+            json.dumps(
+                {
+                    "verdict": "deny",
+                    "summary": "no data",
+                    "issues": [],
+                    "deny_category": "no_usable_data",
+                }
+            ),
+        ],
+    )
+    stale = await read_databank(fx)  # the sibling's view, taken BEFORE the round
+    try:
+        out = await action_curate_drain_batch(_si(fx))
+        assert {o["paper_key"] for o in out.result["outcomes"]} == {"a"}
+        assert not _CURATE_CLAIMS, "claim must be released after booking"
+        assert "a" in _CURATE_BOOKED, "terminal booking was not recorded"
+        # The sibling now selects off its STALE snapshot, where 'a' is pending.
+        key, _ = await select_curate_paper(fx, stale, 1000)
+        assert key == "", "a booked paper was handed out again off a stale snapshot"
+    finally:
+        _clear_state()
+
+
+def test_booked_terminal_mirrors_the_pending_predicate():
+    """Only outcomes the pipeline will never revisit may be recorded. A
+    booking that itself failed, or an accept with no pack verdict yet, leaves
+    the paper pending and must NOT be recorded -- or it would be pinned for
+    the life of the process."""
+    from agent.actions.curation_actions import _booked_terminal
+
+    class _Out:
+        def __init__(self, status):
+            self.result = {"status": status}
+
+    ok = _Out("denied")
+    assert _booked_terminal(ok, {"review": {"status": "denied"}})
+    assert _booked_terminal(ok, {"review": {"status": "review_failed"}})
+    assert _booked_terminal(
+        ok, {"review": {"status": "accepted"}, "pack": {"status": "packed"}}
+    )
+    assert _booked_terminal(
+        ok, {"review": {"status": "accepted"}, "pack": {"status": "pack_failed"}}
+    )
+    assert not _booked_terminal(ok, {"review": {"status": "accepted"}})
+    assert not _booked_terminal(
+        _Out("failed"), {"review": {"status": "denied"}}
+    ), "a failed booking wrote nothing durable"
+    # an absent booking result must not mask a terminal review verdict
+    assert _booked_terminal(None, {"review": {"status": "denied"}})
+
+
+# ── the oversize park measures against the LARGEST seat, not this lane's ──
+
+
+@pytest.mark.asyncio
+async def test_a_doc_over_the_local_seat_but_under_a_remote_seat_is_not_parked():
+    """CAUGHT LIVE (2026-09-02): 222 papers parked against the 65k local seat
+    while a declared 256k remote seat fit 210 of them. Whichever lane sized a
+    doc first parked it for every lane. A doc some lane can take is skipped
+    by the lanes that cannot, never parked."""
+    from agent.actions.curation_actions import (
+        _CURATE_SEAT_TOKENS,
+        _largest_seat_tokens,
+    )
+
+    _clear_state()
+    big_md = "z" * 400_000  # ~121k tokens at floor: over 65k, under 256k
+    fx = MockEffects(files=_bank_files([_rec("big")], {"big": big_md}))
+    fx._llmvp_domains = {"curate_remote": {"seat_tokens": 262_144}}
+    assert _largest_seat_tokens(fx) == 262_144
+    assert _largest_seat_tokens(MockEffects()) == _CURATE_SEAT_TOKENS
+    try:
+        bank = await read_databank(fx)
+        key, _ = await select_curate_paper(fx, bank, 1_000)  # a small budget
+        assert key == "", "an over-budget doc must not be selected"
+        after = await read_databank(fx)
+        assert after["big"].get("extraction_status") == "extracted", (
+            "parked despite a declared seat that fits: "
+            f"{after['big'].get('failure_reason')}"
+        )
+        # ...and with NO larger seat anywhere, the park still happens.
+        _clear_state()
+        fx2 = MockEffects(files=_bank_files([_rec("big")], {"big": big_md}))
+        bank2 = await read_databank(fx2)
+        key2, _ = await select_curate_paper(fx2, bank2, 1_000)
+        assert key2 == ""
+        after2 = await read_databank(fx2)
+        assert after2["big"].get("extraction_status") == "curate_oversize"
+        assert f"{_CURATE_SEAT_TOKENS:,}-token seat" in after2["big"]["failure_reason"]
+    finally:
+        _clear_state()
+
+
+def test_provenance_names_the_lane_domain_model_not_the_local_config():
+    """Every pack a remote lane produced was stamped with the LOCAL server's
+    active config. The stamp must name the model that actually ran."""
+    from agent.actions.curation_actions import _active_text_model, _provenance_model
+
+    remote = _LaneFx("curate_remote", {"curate_remote": {"model": "qwen3-next-80b-a3"}})
+    assert _provenance_model(remote) == "qwen3-next-80b-a3"
+    assert _provenance_model(_LaneFx()) == _active_text_model()
+    # a domain with no model declared falls back rather than stamping ""
+    assert _provenance_model(_LaneFx("curate_remote", {"curate_remote": {}})) == (
+        _active_text_model()
+    )
+
+
+# ── Windowed packing is THE pack path ────────────────────────────────
+
+
+def _three_section_doc() -> str:
+    return (
+        "# Paper\n\nIntro text with no numbers.\n\n"
+        "## Methods\n\nRaman spectra were collected at 532 nm on quartz with 10 accumulations.\n\n"
+        "## Results\n\nPeaks at 465 and 1091 cm-1 were observed for the quartz sample.\n\n"
+        "## Discussion\n\nThe 465 band is the A1 mode; the sample count was 3.\n\n"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_small_paper_is_one_window_and_the_prompt_is_unchanged(monkeypatch):
+    """The un-windowed strategy is gone (operator, 2026-09-03), so small papers
+    must come through the windowed path BYTE-IDENTICAL: one window, no
+    part-of-N preface, gates once against the whole doc."""
+    import agent.actions.curation_actions as CA
+
+    _clear_state()
+    monkeypatch.delenv("OUROBOROS_PACK_WINDOW_TOKENS", raising=False)
+    doc = _three_section_doc()
+    seen: list[str] = []
+    real_turn = CA._curate_turn
+
+    async def _capture(effects, prompt, max_tokens):
+        seen.append(prompt)
+        return await real_turn(effects, prompt, max_tokens)
+
+    monkeypatch.setattr(CA, "_curate_turn", _capture)
+    fx = MockEffects(
+        files=_bank_files([_rec("p1")], {"p1": doc}),
+        pool_health={"kvPoolTokens": 65536},
+        inference_responses=[
+            json.dumps({"verdict": "accept", "summary": "ok", "issues": []}),
+            json.dumps({"laser_nm": 532, "raman_peak_wavenumber_cm-1": [465, 1091]}),
+        ],
+    )
+    out = await action_curate_drain_batch(_si(fx))
+    assert out.result["attempted"] == 1
+    bank = await read_databank(fx)
+    assert bank["p1"]["pack_status"] == "packed"
+    q = bank["p1"]["pack_quality"]
+    assert q["windows"] == 1 and q["windows_passed"] == 1
+    pack_prompts = [
+        p for p in seen if "curator packing raw data" in p or "RAW DATA" in p
+    ]
+    assert len(pack_prompts) == 1, "one window -> exactly one pack turn"
+    assert not pack_prompts[0].startswith(
+        "[This is part "
+    ), "no preface on a single window"
+    assert (
+        "Keys ALREADY USED" not in pack_prompts[0]
+    ), "no prior-keys block on a single window"
+    assert doc.strip()[:40] in pack_prompts[0][:400], "the doc itself opens the prompt"
+    _clear_state()
+
+
+@pytest.mark.asyncio
+async def test_a_large_paper_packs_window_by_window_and_a_fabricating_window_costs_only_itself(
+    monkeypatch,
+):
+    import agent.actions.curation_actions as CA
+
+    _clear_state()
+    # Sections run ~12-30 tokens; target 20 / cap 60 -> every section is its
+    # own window (a 12-token lead plus a 27-token Methods would exceed 20).
+    monkeypatch.setenv("OUROBOROS_PACK_WINDOW_TOKENS", "20")
+    monkeypatch.setenv("OUROBOROS_PACK_WINDOW_CAP", "60")
+    doc = _three_section_doc()
+    seen: list[str] = []
+    real_turn = CA._curate_turn
+
+    async def _capture(effects, prompt, max_tokens):
+        seen.append(prompt)
+        return await real_turn(effects, prompt, max_tokens)
+
+    monkeypatch.setattr(CA, "_curate_turn", _capture)
+    fx = MockEffects(
+        files=_bank_files([_rec("p1")], {"p1": doc}),
+        pool_health={"kvPoolTokens": 65536},
+        inference_responses=[
+            json.dumps({"verdict": "accept", "summary": "ok", "issues": []}),
+            json.dumps(
+                {}
+            ),  # w0 (title/intro): nothing -> not a JSON object with content
+            json.dumps({}),  # w0 retry
+            json.dumps({"laser_nm": 532, "accumulations": 10}),  # w1 methods: grounded
+            json.dumps(
+                {"raman_peak_wavenumber_cm-1": [465, 1091], "laser_nm": 785}
+            ),  # w2: fabricated 785
+            json.dumps(
+                {"raman_peak_wavenumber_cm-1": [465, 1091], "laser_nm": 785}
+            ),  # w2 retry: still fabricating
+            json.dumps(
+                {"raman_peak_wavenumber_cm-1": [465], "sample_count": 3}
+            ),  # w3 discussion: grounded
+        ],
+    )
+    out = await action_curate_drain_batch(_si(fx))
+    assert out.result["attempted"] == 1
+    bank = await read_databank(fx)
+    rec = bank["p1"]
+    assert rec["pack_status"] == "packed", rec.get("failure_reason")
+    q = rec["pack_quality"]
+    assert q["windows"] == 4 and q["windows_passed"] == 2, q["window_outcomes"]
+    packed = json.loads(fx._files[rec["dataset_path"]])["data"]
+    assert packed["laser_nm"] == 532, "the fabricated 785 nm never reached the pack"
+    assert packed["raman_peak_wavenumber_cm-1"] == [
+        465
+    ], "only the grounded window's peaks merged"
+    assert packed["sample_count"] == 3 and packed["accumulations"] == 10
+    prefaced = [p for p in seen if p.startswith("[This is part ")]
+    assert (
+        len(prefaced) == 6
+    ), "every pack turn on a multi-window doc carries its part-of-N preface"
+    assert "part 2 of 4" in prefaced[2]
+    # The ORIGINAL wording, restored 2026-09-04: the four-arm A/B showed the
+    # softened wording cost grounded values (289 -> 66, 403 -> 263) while the
+    # prior_keys block below is what buys them back.
+    assert "Pack ONLY values stated in THIS part" in prefaced[0]
+    # Later windows see the paper's own vocabulary so far; the first does not.
+    assert "Keys ALREADY USED" not in prefaced[0]
+    assert (
+        "Keys ALREADY USED" in prefaced[5] and "laser_nm" in prefaced[5]
+    ), "the last window must be handed the keys earlier windows packed"
+    _clear_state()
+
+
+@pytest.mark.asyncio
+async def test_shape_repair_runs_inside_the_production_pack_path(monkeypatch):
+    """A grounded peak list returned as bare numbers where the registry holds
+    list[object] is re-wrapped before the gates -- 1,454 grounded values were
+    lost to exactly this in the staged-pack run."""
+    _clear_state()
+    monkeypatch.delenv("OUROBOROS_PACK_WINDOW_TOKENS", raising=False)
+    from agent.actions.curation_actions import KEY_REGISTRY_PATH
+
+    registry = {
+        "raman_peak_wavenumber_cm-1": {
+            "type": "list[object]",
+            "count": 5,
+            "exemplar": '[{"peak_cm-1": 1295, "assignment": "CH2"}]',
+        }
+    }
+    files = _bank_files([_rec("p1")], {"p1": _three_section_doc()})
+    files[KEY_REGISTRY_PATH] = json.dumps(registry)
+    fx = MockEffects(
+        files=files,
+        pool_health={"kvPoolTokens": 65536},
+        inference_responses=[
+            json.dumps({"verdict": "accept", "summary": "ok", "issues": []}),
+            json.dumps({"raman_peak_wavenumber_cm-1": [465, 1091]}),  # bare numbers
+        ],
+    )
+    out = await action_curate_drain_batch(_si(fx))
+    assert out.result["attempted"] == 1
+    rec = (await read_databank(fx))["p1"]
+    assert rec["pack_status"] == "packed", rec.get("failure_reason")
+    packed = json.loads(fx._files[rec["dataset_path"]])["data"]
+    assert packed["raman_peak_wavenumber_cm-1"] == [
+        {"peak_cm-1": 465},
+        {"peak_cm-1": 1091},
+    ]
+    assert (
+        rec["pack_quality"]["shape_repairs"][0]["key"] == "raman_peak_wavenumber_cm-1"
+    )
+    _clear_state()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_pack_still_books_its_window_diagnostics(monkeypatch):
+    """A pack that fails every window must leave windows/windows_passed and the
+    per-window feedback on the record, or the size-binned acceptance check
+    for windowed packing can only ever see the successes."""
+    _clear_state()
+    monkeypatch.delenv("OUROBOROS_PACK_WINDOW_TOKENS", raising=False)
+    fx = MockEffects(
+        files=_bank_files([_rec("p1")], {"p1": _three_section_doc()}),
+        pool_health={"kvPoolTokens": 65536},
+        inference_responses=[
+            json.dumps({"verdict": "accept", "summary": "ok", "issues": []}),
+            json.dumps({"laser_nm": 785}),  # not in the paper
+            json.dumps({"laser_nm": 785}),  # still not
+        ],
+    )
+    out = await action_curate_drain_batch(_si(fx))
+    assert out.result["attempted"] == 1
+    rec = (await read_databank(fx))["p1"]
+    assert rec["pack_status"] == "pack_failed"
+    assert rec["failure_reason"].startswith("pack: gates failed twice")
+    q = rec["pack_quality"]
+    assert q["windows"] == 1 and q["windows_passed"] == 0 and q["parse_attempts"] == 2
+    assert "UNGROUNDED" in q["window_outcomes"][0]["feedback"]
+    _clear_state()

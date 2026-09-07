@@ -67,16 +67,34 @@ async def test_a_v2_mission_starts_lanes_and_stops_them_cleanly():
     fx = _Fx("scraper_v2")
     async with worker_pool_for(fx, flows_dir="flows") as pool:
         assert pool is not None
-        # Translate lanes closed 2026-08-22 (translation moves post-
-        # acceptance; see lanes_for_scraper). The set assertion pins the
-        # LIVE lane roster so a lane can't vanish silently.
+        # The set assertion pins the LIVE lane roster so a lane can't
+        # vanish silently. Translate lanes reopened 2026-08-29 as the
+        # post-accept gated lanes the 2026-08-22 closure prescribed.
         assert {ln.name for ln in pool.lanes} == {
             "ocr",
             "figtext",
+            "figtext2",  # second vision lane, 2026-08-26 figtext campaign
+            "figtext3",  # third lane, P5 ramp (server at 3 streams)
+            "figtext4",  # fourth lane, P5 ramp step 2
+            "translate",  # post-accept translation, reopened 2026-08-29
+            # translate2 restored 2026-08-30: one lane was REFUSED (not
+            # empty) by five dynamic curate lanes claiming the whole free
+            # pool, cutting translation 84%. Seven text lanes against six
+            # seats is deliberate over-subscription so the split rebalances.
+            "translate2",
             "curate",
             "curate2",
             "curate3",
             "curate4",
+            "curate5",
+            # Dedicated REMOTE curate lanes (2026-09-01). Additive, and
+            # gated on their own resource with est_kv=0/seats=0 so they
+            # draw nothing from the local pool — routing alone was a no-op
+            # while the lanes still spent local cells.
+            "curate_r1",
+            "curate_r2",
+            "curate_r3",
+            "curate_r4",
             "recover",
             "biblio",
         }

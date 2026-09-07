@@ -10,7 +10,7 @@ Now uses the pluggable backend system for backend-agnostic inference.
 
 import logging
 from dataclasses import dataclass
-from typing import AsyncGenerator, List, Optional, Tuple
+from typing import Any, AsyncGenerator, List, Optional, Tuple
 
 # Local imports
 from core.config import ActiveConfigView, get_config
@@ -1252,6 +1252,228 @@ async def refresh_context(reason: str = "manual") -> dict:
 # ══════════════════════════════════════════════════════════════════════
 
 
+_VISION_BATCHED_SEM: Optional[Any] = None  # asyncio.Semaphore, lazy
+
+
+def _vision_batched_semaphore(mcfg) -> Any:
+    global _VISION_BATCHED_SEM
+    if _VISION_BATCHED_SEM is None:
+        import asyncio
+
+        _VISION_BATCHED_SEM = asyncio.Semaphore(
+            max(1, int(getattr(mcfg, "vision_batched_max_streams", 3) or 3))
+        )
+    return _VISION_BATCHED_SEM
+
+
+async def _run_vision_batched(
+    backend,
+    mcfg,
+    messages: list,
+    max_tokens: Optional[int],
+    temperature: Optional[float],
+    reasoning: Optional[str],
+    stops: list,
+    resolved_max: int,
+    resolved_temp: float,
+):
+    """The engine-resident vision path (model.vision_batched). Returns a
+    VisionOutcome, or None to fall back to the dedicated pool path (the
+    fallback is the CONTRACT: any install-side failure must cost this
+    request a slower answer, never an error the pool path would not have
+    produced). ImageIntakeError propagates — it is the shared 4xx shape.
+
+    v1 scope: the primary model only, one user message (text + images),
+    an optional system message. Anything else falls back."""
+    import time as _time
+
+    from fastapi.concurrency import run_in_threadpool
+
+    from inference.vision_batched import (
+        MtmdEncoderPool,
+        VisionInstallError,
+        install_multimodal_prefix,
+        render_vision_prompt,
+    )
+    from inference.vision_images import resolve_image_part
+    from inference.vision_text import clean as vision_clean
+
+    engine = getattr(backend, "_engine", None)
+    if engine is None:
+        return None
+    stats = getattr(backend, "_vision_batched_stats", None)
+    if stats is None:
+        stats = {
+            "served": 0,
+            "fallbacks": 0,
+            "install_ms_last": 0.0,
+            "active": 0,
+            # Lease-acquire wait: the direct read on whether
+            # vision_batched_encoders is set high enough — sustained
+            # tens-of-ms here at load means encode is queueing again.
+            "encoder_wait_ms_last": 0.0,
+        }
+        backend._vision_batched_stats = stats
+
+    # ── shape check + intake (raw BYTES — the encoder wants buffers, not
+    # data URIs). ImageIntakeError raises straight through.
+    roots = list(getattr(mcfg, "vision_image_roots", []) or [])
+    limit = int(getattr(mcfg, "vision_max_image_bytes", 33_554_432))
+    system_text = ""
+    user_text_parts: list = []
+    images: list = []
+    enc_pool = getattr(backend, "_vision_batched_encoder_pool", None)
+    if enc_pool is None:
+        enc_pool = MtmdEncoderPool(
+            mmproj_path=str(mcfg.mmproj_path),
+            size=int(getattr(mcfg, "vision_batched_encoders", 1) or 1),
+            projector_device=getattr(mcfg, "vision_projector_device", None),
+            use_gpu=bool(getattr(mcfg, "vision_projector_gpu", True)),
+        )
+        backend._vision_batched_encoder_pool = enc_pool
+    try:
+        await enc_pool.ensure(backend._primary_instance._model)
+    except Exception:  # noqa: BLE001 — encoder init failure => pool path
+        log.exception("batched vision: encoder init failed — pool fallback")
+        stats["fallbacks"] += 1
+        return None
+    marker = enc_pool.marker
+    # Family media wrappers (paddleocr: <|IMAGE_START|>…<|IMAGE_END|>) —
+    # the marker itself must stay bare for mtmd_tokenize to find; the
+    # wrappers are ordinary template text around it.
+    media_open = media_close = ""
+    try:
+        from formats.registry import load_schema
+
+        _tok = load_schema(mcfg.family).tokens
+        media_open = getattr(_tok, "media_open", "") or ""
+        media_close = getattr(_tok, "media_close", "") or ""
+    except Exception:  # noqa: BLE001 — no schema, no wrappers
+        pass
+
+    user_seen = False
+    for msg in messages:
+        role = msg.get("role")
+        content = msg.get("content")
+        if role == "system" and isinstance(content, str):
+            system_text = content
+            continue
+        if role != "user":
+            return None  # multi-turn / assistant history: pool path
+        if user_seen:
+            return None
+        user_seen = True
+        if isinstance(content, str):
+            user_text_parts.append(content)
+            continue
+        for part in content or []:
+            ptype = (part or {}).get("type")
+            if ptype in ("image_url", "image_path"):
+                images.append(resolve_image_part(part, roots, limit))
+                user_text_parts.append(media_open + marker + media_close)
+            elif ptype == "text":
+                user_text_parts.append(str(part.get("text") or ""))
+            else:
+                return None
+    if not images or not user_seen:
+        return None
+
+    sem = _vision_batched_semaphore(mcfg)
+    async with sem:
+        stats["active"] += 1
+        instance = None
+        t0 = _time.time()
+        try:
+            prompt_text = render_vision_prompt(
+                mcfg.family,
+                system_text,
+                " ".join(user_text_parts),
+                marker,
+                len(images),
+                reasoning=reasoning,
+            )
+            instance = await backend.acquire_instance(persona="vision")
+            # Visible to the seat reaper for the whole install window —
+            # without this the reaper reclaims the seat mid-install (19
+            # double-checkouts on 2026-08-27; see _seat_reaper_sweep).
+            backend._vision_installing.add(id(instance))
+            # THE LEASE COVERS tokenize+encode+install, then releases
+            # BEFORE generation: the encoder is only needed while media
+            # moves, and holding it through a 30-60 s muse figure
+            # description would serialize the whole pool behind decode.
+            t_lease = _time.time()
+            async with enc_pool.lease() as encoder:
+                stats["encoder_wait_ms_last"] = round(
+                    (_time.time() - t_lease) * 1000.0, 1
+                )
+                split = await run_in_threadpool(
+                    encoder.split_prompt,
+                    prompt_text,
+                    images,
+                    instance.n_tokens == 0,
+                )
+                try:
+                    n_embd_inp = backend._primary_instance._model.n_embd_inp()
+                    await install_multimodal_prefix(
+                        engine,
+                        encoder,
+                        instance,
+                        split,
+                        n_embd_inp,
+                        int(getattr(backend._primary_instance, "n_batch", 512)),
+                    )
+                    install_ms = (_time.time() - t0) * 1000.0
+                    stats["install_ms_last"] = round(install_ms, 1)
+                    prompt_tokens_total = instance.n_tokens + len(split.text2)
+                    text2 = list(split.text2)
+                finally:
+                    split.free()
+            answer = await backend.generate_async(
+                instance=instance,
+                prompt_tokens=text2,
+                max_tokens=resolved_max,
+                temperature=resolved_temp,
+                stop_texts=list(stops) if stops else None,
+                static_in_prompt=False,
+            )
+            text = vision_clean(answer or "", mcfg.family)
+            generated = len(getattr(instance, "_last_completion_tokens", None) or [])
+            stats["served"] += 1
+            return VisionOutcome(
+                text=text,
+                generated_tokens=generated,
+                prompt_tokens=int(prompt_tokens_total),
+                image_count=len(images),
+                vision_model=mcfg.name,
+                handler="batched-engine",
+                decode_ms=round((_time.time() - t0) * 1000.0, 1),
+            )
+        except VisionInstallError as exc:
+            log.warning("batched vision install failed (%s) — pool fallback", exc)
+            stats["fallbacks"] += 1
+            return None
+        except Exception:  # noqa: BLE001 — never worse than the pool path
+            log.exception("batched vision failed — pool fallback")
+            stats["fallbacks"] += 1
+            return None
+        finally:
+            stats["active"] -= 1
+            if instance is not None:
+                backend._vision_installing.discard(id(instance))
+                # A partial install leaves media KV on the seq; prepare_seat
+                # through the engine strips it back to the bare vision head
+                # before the seat returns to the pool.
+                try:
+                    import asyncio as _aio
+
+                    await _aio.wrap_future(
+                        engine.control(lambda: engine.prepare_seat(instance, "vision"))
+                    )
+                except Exception:  # noqa: BLE001
+                    log.exception("batched vision: seat scrub failed")
+                await backend.release_instance(instance)
+
+
 @dataclass
 class VisionOutcome:
     """Result of one vision completion. Deliberately narrower than
@@ -1425,6 +1647,26 @@ async def run_vision_completion(
     # has always done; it is not a cap and costs nothing when the model stops
     # correctly on its own.
     stops = vision_stop_strings(mcfg.family)
+
+    # ── BATCHED VISION (model.vision_batched) ───────────────────────────
+    # The engine-resident path: encode once, decode as an ordinary stream
+    # in the shared batched context. Primary model only (the engine is the
+    # primary's); every failure inside falls back to the pool path below,
+    # so a broken install costs latency, never a new error shape.
+    if bool(getattr(mcfg, "vision_batched", False)) and not model:
+        outcome = await _run_vision_batched(
+            backend,
+            mcfg,
+            messages,
+            max_tokens,
+            temperature,
+            reasoning,
+            stops,
+            resolved_max,
+            resolved_temp,
+        )
+        if outcome is not None:
+            return outcome
 
     # TWO DIFFERENT GUARDS, doing two different jobs — the comment here used
     # to say this "serializes with text generation", which is wrong and was

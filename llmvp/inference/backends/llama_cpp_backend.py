@@ -432,6 +432,10 @@ class LlamaCppBackend(BaseBackend):
         # (GC-finalized consumer) is ignored instead of double-requeueing.
         self._seat_reaper_task: Optional[asyncio.Task] = None
         self._reaper_reclaimed: set = set()
+        # Seats currently inside a batched-vision install window (acquire ->
+        # stream submit). Mutated only on the event loop (core/inference);
+        # read by the reaper sweep on the same loop.
+        self._vision_installing: set = set()
         self._refresh_interval = int(
             getattr(getattr(config, "model", None), "context_refresh_interval", 75)
             or 75
@@ -1290,6 +1294,15 @@ class LlamaCppBackend(BaseBackend):
         seq_map = self._batched_seq_map()
 
         heads: Dict[str, PersonaHead] = {}
+        if bool(getattr(self.config.model, "vision_batched", False)):
+            # BATCHED VISION: a synthetic persona with an EMPTY head.
+            # prepare_seat skips the memory_seq_cp entirely when a head
+            # holds zero tokens, so no band seq is consumed (seq=-1 is
+            # never dereferenced) and the seq map is untouched — a vision
+            # stream starts from a genuinely bare seq and its whole
+            # prompt (rendered by the FAMILY renderer, not SOUL.md) is
+            # installed by inference/vision_batched.py.
+            heads["vision"] = PersonaHead(name="vision", seq=-1, tokens=[])
         for persona, head_seq in seq_map.persona_seqs.items():
             tokens = list(get_static_tokens(persona, config=self.config))
             started = time.perf_counter()
@@ -1532,10 +1545,36 @@ class LlamaCppBackend(BaseBackend):
         else:
             engine._repetition_guard_factory = lambda: None
         engine._reasoning_heads = reasoning_heads
+        # Cells the engine cannot see: the snapshot band lives in the backend's
+        # registry, and under kv_unified those pins are free until their source
+        # seat is cleared — then they are not. Admission over-reported free
+        # cells by exactly this amount before 2026-08-25.
+        engine.extra_occupancy_fn = self._batched_band_occupancy
         for seat in self._engine_seats:
             seat._engine_ref = engine
         engine.start()
         self._engine = engine
+
+    def _batched_band_occupancy(self) -> int:
+        """Cells pinned on the snapshot band, for the engine's admission math.
+
+        CALLED ON THE DECODE THREAD from _free_cells, so it reads CACHED INTS
+        only — no ctypes, no _ctx dereference. Three server-killing SIGSEGVs
+        are documented at the n_ctx_seq read below for exactly that reason,
+        and test_n_ctx_seq_health_read.py enforces it.
+
+        Live pins (_batched_snap_seqs), not registry flags: a refresh demotes
+        pins while leaving registry entries behind, and counting the stale
+        ones would shrink the pool permanently.
+        """
+        total = 0
+        for key in list(self._batched_snap_seqs):
+            entry = self._snap_registry.get(key)
+            if not entry:
+                continue
+            total += int(entry.get("static_len") or 0)
+            total += len(entry.get("dyn_tokens") or ())
+        return total
 
     def _refresh_context_sync(self, inst: Any) -> None:
         """Tier-4 in-process context refresh: drop + rebuild the ``llama_context``
@@ -2005,14 +2044,29 @@ class LlamaCppBackend(BaseBackend):
             )
         except Exception:  # noqa: BLE001 — engine busy/parked, try next sweep
             return
+        # THIRD LIVE STATE (2026-08-27 01:00-02:30, 19 false reclaims): a
+        # batched-vision seat between acquire and stream submit — encode +
+        # multimodal install, seconds to a minute under the encode lock —
+        # has no StreamState and no _waiting entry. Same class as the
+        # 2026-08-19 parked-admission wedge above; same fix shape: union
+        # the installing registry (event-loop-mutated, race-free here).
+        live = live | set(getattr(self, "_vision_installing", ()) or ())
         now = time.monotonic()
         for seat in list(self._engine_seats):
             leased = getattr(seat, "_leased_at", None)
             if leased is None or seat.pinned or id(seat) in live:
                 strikes.pop(id(seat), None)
                 continue
-            strikes[id(seat)] = strikes.get(id(seat), 0) + 1
-            if strikes[id(seat)] < 2:
+            # STRIKES ARE PER LEASE, not per seat: tonight's captures show
+            # "leased 2s — reclaiming" because a fresh lease inherited the
+            # PREVIOUS lease's strike. Key the count to the lease timestamp
+            # and reset when it changes.
+            prev = strikes.get(id(seat))
+            if prev is None or prev[0] != leased:
+                strikes[id(seat)] = (leased, 1)
+                continue
+            strikes[id(seat)] = (leased, prev[1] + 1)
+            if strikes[id(seat)][1] < 2:
                 continue
             strikes.pop(id(seat), None)
             log.warning(
@@ -2916,6 +2970,16 @@ class LlamaCppBackend(BaseBackend):
             raise RuntimeError(
                 f"snapshot capacity ({len(smap.snap_seqs)}) reached — purge one first"
             )
+        if getattr(seat, "has_media", False):
+            # A multimodal install left image-embedding rows on this seq;
+            # input_ids holds NEGATIVE sentinels for them. A snapshot's
+            # dyn_tokens would capture those sentinels and a later restore
+            # would replay them as real token ids — silent garbage. Vision
+            # seats are stateless single turns by design; refuse loudly.
+            raise RuntimeError(
+                "refusing to snapshot a seat holding media rows "
+                f"(seq {seat.seq}); vision streams are not session-resumable"
+            )
         snap_seq = free[0]
         n_tokens = int(seat.n_tokens)
         static_len = int(getattr(seat, "static_len", 0) or 0)
@@ -3347,8 +3411,42 @@ class LlamaCppBackend(BaseBackend):
         self._session_can_shift = self._ask_can_shift()
         if self._resident_requested:
             can_shift = bool(self._session_can_shift)
-            self._resident_active = can_shift
-            if can_shift:
+            # M-RoPE EXCEPTION (2026-08-29). can_shift served as a proxy for
+            # "normal attention KV where seq ops work", and for every model
+            # before paddle the two were the same fact. M-RoPE models return
+            # can_shift=False for a DIFFERENT reason: shifting rotated
+            # multi-section positions is ill-defined (llama-kv-cache.cpp
+            # get_can_shift: n_pos_per_embd() > 1), while the cache itself is
+            # ordinary — memory_seq_rm and multi-seq decode verified clean on
+            # paddle hardware (probe_vision_kv_integrity.py, 2026-08-29:
+            # neighbour KV byte-identical, joint step legal). So an M-RoPE
+            # model may host the resident cache and the batched engine; the
+            # shift-DEPENDENT features stay off via _session_can_shift=False
+            # (session window slide refuses, media seats refuse in
+            # window_seat_sync). Recurrent models still land in the else.
+            mrope = False
+            if not can_shift:
+                try:
+                    import llama_cpp as _lc
+
+                    rt = int(
+                        _lc.llama_model_rope_type(self._primary_instance._model.model)
+                    )
+                    mrope = rt in (
+                        int(_lc.llama_rope_type.LLAMA_ROPE_TYPE_MROPE),
+                        int(_lc.llama_rope_type.LLAMA_ROPE_TYPE_IMROPE),
+                    )
+                except Exception:  # noqa: BLE001 — unknowable => keep old gate
+                    mrope = False
+            self._resident_active = can_shift or mrope
+            if mrope and not can_shift:
+                log.info(
+                    "🧩 Resident-seq cache ACTIVE via the M-RoPE exception "
+                    "(memory_can_shift=False because positions are "
+                    "multi-section, not because seq ops fail; KV shift "
+                    "features stay disabled)"
+                )
+            elif can_shift:
                 log.info("🧩 Resident-seq cache ACTIVE (memory_can_shift=True)")
             else:
                 log.warning(
@@ -3937,8 +4035,20 @@ class LlamaCppBackend(BaseBackend):
         vision_bytes = 0
         mmproj = getattr(self.config.model, "mmproj_path", None)
         if mmproj:
+            # TIMES THE ENCODER POOL. Each batched-vision encoder is its own
+            # mtmd context with its own projector upload
+            # (vision_batched_encoders; 1 for every config that predates the
+            # 2026-08-29 pool). Same lesson as the vision-context width
+            # under-count below: a preflight that prices one copy approves a
+            # pool it cannot afford.
+            enc_copies = 1
+            if bool(getattr(self.config.model, "vision_batched", False)):
+                enc_copies = max(
+                    1,
+                    int(getattr(self.config.model, "vision_batched_encoders", 1) or 1),
+                )
             try:
-                vision_bytes += os.path.getsize(str(mmproj))
+                vision_bytes += os.path.getsize(str(mmproj)) * enc_copies
             except OSError as exc:
                 log.warning("mmproj not readable for preflight (%s): %s", mmproj, exc)
             v_ctx = int(getattr(self.config.model, "vision_n_ctx", 8192) or 8192)
@@ -5361,6 +5471,11 @@ class LlamaCppBackend(BaseBackend):
             # so dashboards/soaks see the outage without new fields.
             engine_health = self._engine.health()
             info["batched_engine"] = engine_health
+        stats = getattr(self, "_vision_batched_stats", None)
+        if stats:
+            # health() is the free dict — NEVER capacity_fields() (a frozen
+            # snapshot; an unknown key silently kills every publish).
+            info["vision_batched"] = dict(stats)
             if engine_health.get("engine_fatal"):
                 info["status"] = "error"
 

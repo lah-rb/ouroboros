@@ -37,11 +37,19 @@ CAP_PAYLOAD = {
 
 
 class _FakeConn:
-    """A graphql-transport-ws server, scripted."""
+    """A graphql-transport-ws server, scripted.
 
-    def __init__(self, frames, *, ack=True):
+    Frames are served through recv() — matching the production loop, which
+    reads recv() under the staleness watchdog rather than iterating the
+    connection. Exhausting the script raises ConnectionClosedOK, the real
+    library's graceful-close signal. `hang_after_frames=True` instead
+    leaves the link OPEN and silent — the 2026-08-26 stall shape."""
+
+    def __init__(self, frames, *, ack=True, hang_after_frames=False):
         self._frames = list(frames)
         self._ack = ack
+        self._acked = False
+        self._hang = hang_after_frames
         self.sent: list[dict] = []
         self.closed = False
 
@@ -49,16 +57,20 @@ class _FakeConn:
         self.sent.append(json.loads(raw))
 
     async def recv(self):
-        return json.dumps(
-            {"type": "connection_ack"} if self._ack else {"type": "connection_error"}
-        )
+        from websockets.exceptions import ConnectionClosedOK
 
-    def __aiter__(self):
-        async def gen():
-            for f in self._frames:
-                yield json.dumps(f)
-
-        return gen()
+        if not self._acked:
+            self._acked = True
+            return json.dumps(
+                {"type": "connection_ack"}
+                if self._ack
+                else {"type": "connection_error"}
+            )
+        if self._frames:
+            return json.dumps(self._frames.pop(0))
+        if self._hang:
+            await asyncio.Event().wait()  # open link, nothing arriving
+        raise ConnectionClosedOK(None, None)
 
     async def close(self):
         self.closed = True
@@ -127,6 +139,24 @@ async def test_schema_error_raises_so_the_ladder_can_degrade():
     feed = _feed(conn)
     with pytest.raises(RuntimeError, match="subscription error"):
         await feed._subscribe_once()
+
+
+@pytest.mark.asyncio
+async def test_open_but_silent_link_forces_a_reconnect():
+    """The 2026-08-26 stall: the server keeps the socket open (WS pings
+    answered) but stops delivering frames. No exception means the ladder
+    never runs — the feed must treat bounded silence as a lost link."""
+    conn = _FakeConn(
+        [{"type": "next", "id": "cap", "payload": {"data": {"capacity": CAP_PAYLOAD}}}],
+        hang_after_frames=True,
+    )
+    feed = _feed(conn)
+    feed._absolute_stale_s = 0.05
+    with pytest.raises(RuntimeError, match="delivery stalled"):
+        await feed._subscribe_once()
+    assert conn.closed
+    # The last pushed frame was still published before the stall.
+    assert feed.snapshot() is not None
 
 
 # ── the ladder ────────────────────────────────────────────────────────

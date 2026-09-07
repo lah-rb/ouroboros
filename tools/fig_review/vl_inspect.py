@@ -55,6 +55,7 @@ from fig_review import (
     _LLMVP_URL,
     _VL_BACKENDS,
     _free_port,
+    _graphql_vision,
     _llmvp_ready,
     _wait_health,
 )
@@ -85,9 +86,8 @@ def build_payload(
 ) -> dict:
     """OpenAI-compatible chat payload with one image part (pure, testable).
 
-    Both backends take this same shape; `model` is omitted when falsy, which
-    is the llmvp case — that server fixed its model at boot and naming one
-    here could only disagree with it.
+    The SPAWNED mlx_vlm.server shape. The fleet is asked over GraphQL instead
+    (see ask()); `model` is omitted when falsy.
     """
     payload = {
         "max_tokens": max_tokens,
@@ -116,6 +116,18 @@ def ask(
     with open(image_path, "rb") as f:
         b64 = base64.b64encode(f.read()).decode()
     mime = _MIME.get(os.path.splitext(image_path)[1].lower(), "image/png")
+    if endpoint.endswith("/graphql"):
+        # The fleet: LLMVP's visionCompletion, model named only if given
+        # (unnamed = the primary, which is what this tool has always meant).
+        text, _served = _graphql_vision(
+            endpoint[: -len("/graphql")],
+            question,
+            f"data:{mime};base64,{b64}",
+            max_tokens,
+            0.2,
+            model=model,
+        )
+        return text
     req = urllib.request.Request(
         endpoint,
         data=json.dumps(build_payload(model, b64, mime, question, max_tokens)).encode(),
@@ -161,7 +173,7 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 3
-        endpoint, model = f"{url}/v1/vision", ""
+        endpoint, model = f"{url}/graphql", ""
     else:
         if not args.model:
             print(
@@ -180,7 +192,12 @@ def main() -> int:
         if not _wait_health(port):
             print("vl_inspect: mlx server failed to start", file=sys.stderr)
             return 3
-        endpoint, model = f"http://127.0.0.1:{port}/v1/chat/completions", args.model
+        # A SPAWNED mlx_vlm.server speaks its own OpenAI API — this is not the
+        # LLMVP shim, and the no-shim guard exempts lines carrying this marker.
+        endpoint, model = (
+            f"http://127.0.0.1:{port}/v1/chat/completions",  # private mlx_vlm.server, not the LLMVP shim
+            args.model,
+        )
 
     try:
         print(ask(endpoint, model, args.image, args.question, args.max_tokens))

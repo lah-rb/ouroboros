@@ -126,12 +126,37 @@ async def test_verdict_routes_lingual_vs_english(monkeypatch, tmp_path):
 
 
 def test_translation_pending_predicate():
+    """POST-ACCEPTANCE (2026-08-29): only papers the curator ACCEPTED spend
+    translate seats — the 2026-08-22 closure finding executed as selection
+    (5 of 27 verdicted translations had gone to papers then denied)."""
     assert _translation_pending(
+        {
+            "extraction_status": "extract_lingual",
+            "md_path": "x.md",
+            "review_status": "accepted",
+        }
+    )
+    # unreviewed lingual: waits for the curate lane, not a defect
+    assert not _translation_pending(
         {"extraction_status": "extract_lingual", "md_path": "x.md"}
     )
-    assert not _translation_pending({"extraction_status": "extract_lingual"})
+    # denied: never translated — the exact waste the closure measured
     assert not _translation_pending(
-        {"extraction_status": "extracted", "md_path": "x.md"}
+        {
+            "extraction_status": "extract_lingual",
+            "md_path": "x.md",
+            "review_status": "denied",
+        }
+    )
+    assert not _translation_pending(
+        {"extraction_status": "extract_lingual", "review_status": "accepted"}
+    )
+    assert not _translation_pending(
+        {
+            "extraction_status": "extracted",
+            "md_path": "x.md",
+            "review_status": "accepted",
+        }
     )
 
 
@@ -197,11 +222,15 @@ def test_gate_catches_degeneration_and_bloat():
 
 def test_translation_selection_claims_and_attempt_cap():
     bank = {
-        "a": {"extraction_status": "extract_lingual", "md_path": "a.md"},
+        "a": {
+            "extraction_status": "extract_lingual",
+            "md_path": "a.md",
+            "review_status": "accepted",
+        },
         "b": {
             "extraction_status": "extract_lingual",
             "md_path": "b.md",
-            "translate_attempts": 2,
+            "translate_attempts": 3,
         },
         "c": {"extraction_status": "extracted", "md_path": "c.md"},
     }
@@ -269,7 +298,6 @@ async def test_book_segment_round_progress_and_assembly(monkeypatch, tmp_path):
     """Two-segment book: round 1 records progress, round 2 assembles the
     parts, applies the verdict, and cleans up."""
     import json as _json
-    import os
 
     import agent.actions.extraction_actions as ea  # noqa: F401
     from agent.actions.extraction_actions import (
@@ -435,6 +463,7 @@ async def test_translate_drain_partial_progress_two_rounds(monkeypatch):
         "paper_key": "p1",
         "extraction_status": "extract_lingual",
         "md_path": "databank/markdown/p1.md",
+        "review_status": "accepted",
         "script_profile": {"cjk": 0.6},
     }
     fx = MockEffects(
@@ -476,7 +505,9 @@ async def test_translate_drain_partial_progress_two_rounds(monkeypatch):
 @pytest.mark.asyncio
 async def test_translate_drain_chunk_failure_banks_successes(monkeypatch):
     """A mid-round chunk failure persists what succeeded and declines —
-    no verdict, no attempt burn; the paper resumes where it left off."""
+    no verdict. The ATTEMPT counter ticks (an error-ended round is an
+    attempt since 2026-09-04) but the epoch does not, so the banked chunk
+    survives and the paper resumes where it left off."""
     import json
 
     from agent.actions.translation_actions import (
@@ -496,6 +527,7 @@ async def test_translate_drain_chunk_failure_banks_successes(monkeypatch):
         "paper_key": "p1",
         "extraction_status": "extract_lingual",
         "md_path": "databank/markdown/p1.md",
+        "review_status": "accepted",
     }
     fx = MockEffects(
         files={
@@ -517,6 +549,11 @@ async def test_translate_drain_chunk_failure_banks_successes(monkeypatch):
     banked = (await fx.read_file(_parts_path("p1"))).content.strip().splitlines()
     assert len(banked) == 1  # the success was persisted
     assert not _TRANSLATE_CLAIMS
+    side = json.loads(fx._files["databank/extraction.jsonl"].strip().splitlines()[-1])
+    assert side["translate_attempts"] == 1  # the round counted
+    assert side["translate_epoch"] == 0  # ...but the banked part stays valid
+    assert side["extraction_status"] == "extract_lingual"
+    assert "will retry warmer" in side["failure_reason"]
 
 
 @pytest.mark.asyncio
@@ -549,6 +586,7 @@ async def test_translate_chunk_img_mismatch_gets_one_retry(monkeypatch):
         "paper_key": "p1",
         "extraction_status": "extract_lingual",
         "md_path": "databank/markdown/p1.md",
+        "review_status": "accepted",
     }
     fx = MockEffects(
         files={
@@ -638,6 +676,7 @@ async def test_translate_chunk_numeric_miss_gets_one_retry(monkeypatch):
         "paper_key": "p1",
         "extraction_status": "extract_lingual",
         "md_path": "databank/markdown/p1.md",
+        "review_status": "accepted",
     }
     fx = MockEffects(
         files={
@@ -666,14 +705,20 @@ def test_translation_selection_prefers_strong_tags():
         "a_stray": {
             "extraction_status": "extract_lingual",
             "md_path": "a.md",
+            "review_status": "accepted",
             "tags": [{"relevance": "adjacent"}],
         },
         "z_close": {
             "extraction_status": "extract_lingual",
             "md_path": "z.md",
+            "review_status": "accepted",
             "tags": [{"relevance": "close"}],
         },
-        "m_untagged": {"extraction_status": "extract_lingual", "md_path": "m.md"},
+        "m_untagged": {
+            "extraction_status": "extract_lingual",
+            "md_path": "m.md",
+            "review_status": "accepted",
+        },
     }
     _TRANSLATE_CLAIMS.clear()
     try:
@@ -696,7 +741,6 @@ async def test_a_chunk_is_banked_as_it_lands_not_at_the_end_of_the_round(monkeyp
 
     from agent.actions.translation_actions import (
         _TRANSLATE_CLAIMS,
-        _parts_path,
         action_translate_drain_batch,
         chunk_markdown,
     )
@@ -714,6 +758,7 @@ async def test_a_chunk_is_banked_as_it_lands_not_at_the_end_of_the_round(monkeyp
         "paper_key": "p1",
         "extraction_status": "extract_lingual",
         "md_path": "databank/markdown/p1.md",
+        "review_status": "accepted",
     }
 
     banked_when = []
@@ -780,6 +825,7 @@ def _budget_fixture(monkeypatch, n_chunks=2):
         "paper_key": "p1",
         "extraction_status": "extract_lingual",
         "md_path": "databank/markdown/p1.md",
+        "review_status": "accepted",
         "script_profile": {"cjk": 0.6},
     }
     fx = MockEffects(
@@ -897,6 +943,7 @@ def test_a_chunk_failure_defers_the_paper_instead_of_wedging_the_lane():
         return {
             "extraction_status": "extract_lingual",
             "md_path": "databank/markdown/x.md",
+            "review_status": "accepted",
             "tags": [],
         }
 
@@ -948,6 +995,91 @@ async def test_the_drain_round_itself_defers_and_forgives(monkeypatch):
     out2 = await action_translate_drain_batch(_si())
     assert out2.result["status"] == "translated"
     assert "p1" not in _TRANSLATE_DEFERRED
+
+
+@pytest.mark.asyncio
+async def test_three_error_ended_attempts_mark_the_paper_failed(monkeypatch):
+    """Live 2026-09-03/04: a chunk the server refused on every try
+    (degenerate-generation guard) re-selected its paper for 16 hours
+    because only a gate verdict advanced the attempt counter. Now every
+    error-ended round is an attempt; the third marks translate_failed with
+    the reason. Banked chunks survive the intermediate attempts (the
+    epoch does not move on an error), so the retries redo only the chunk
+    that failed. A server refusal is not retried warmer within a round —
+    the ladder is for quality misses — so each attempt costs one call."""
+    import json
+
+    from agent.actions.translation_actions import (
+        TRANSLATE_MAX_ATTEMPTS,
+        _TRANSLATE_DEFERRED,
+        _parts_path,
+        action_translate_drain_batch,
+    )
+    from agent.models import FlowMeta, StepInput
+
+    assert TRANSLATE_MAX_ATTEMPTS == 3
+    fx, chunks = _budget_fixture(monkeypatch)
+
+    def _si():
+        return StepInput(
+            context={},
+            params={},
+            inputs={},
+            meta=FlowMeta(flow_name="translate_drain", step_id="drain"),
+            effects=fx,
+        )
+
+    def _side():
+        return json.loads(
+            fx._files["databank/extraction.jsonl"].strip().splitlines()[-1]
+        )
+
+    def _calls():
+        return sum(1 for c in fx.calls if c.method == "run_inference")
+
+    _TRANSLATE_DEFERRED.clear()
+    # Attempt 1: chunk 0 translates, chunk 1 comes back empty -> error.
+    fx._inference_responses = [chunks[0], ""]
+    fx._inference_index = 0
+    out = await action_translate_drain_batch(_si())
+    assert out.result["paper"] == ""  # declined, not a verdict
+    assert _side()["translate_attempts"] == 1
+    assert _side()["extraction_status"] == "extract_lingual"
+    assert (
+        len((await fx.read_file(_parts_path("p1"))).content.strip().splitlines()) == 1
+    )
+    n1 = _calls()
+
+    # Attempt 2: only the failed chunk is retried — the banked one is not
+    # re-translated (same epoch) — and it fails again.
+    fx._inference_responses = [""]
+    fx._inference_index = 0
+    out = await action_translate_drain_batch(_si())
+    assert out.result["paper"] == ""
+    assert _calls() - n1 == 1  # one chunk, one call: no warmer rung on an error
+    assert _side()["translate_attempts"] == 2
+    assert _side()["translate_epoch"] == 0
+    assert "attempt 2 of 3" in _side()["failure_reason"]
+    assert (
+        len((await fx.read_file(_parts_path("p1"))).content.strip().splitlines()) == 1
+    )
+
+    # Attempt 3: still refused -> translate_failed, parts retired, reason kept.
+    fx._inference_responses = [""]
+    fx._inference_index = 0
+    out = await action_translate_drain_batch(_si())
+    assert out.result["status"] == "failed"
+    side = _side()
+    assert side["extraction_status"] == "translate_failed"
+    assert side["translate_attempts"] == 3
+    assert "did not converge in 3 attempts" in side["failure_reason"]
+    assert "chunk failure" in side["failure_reason"]
+    assert not (await fx.read_file(_parts_path("p1"))).content.strip()
+    assert "p1" not in _TRANSLATE_DEFERRED
+
+    # And it is never selected again.
+    out = await action_translate_drain_batch(_si())
+    assert out.result["reason"] == "nothing unclaimed pending"
 
 
 # ── Latin-script language vote ────────────────────────────────────────
@@ -1045,3 +1177,110 @@ async def test_a_clean_spanish_batch_extraction_routes_to_lingual(tmp_path):
     bank = await read_databank(fx)
     assert bank["p1"]["extraction_status"] == "extract_lingual"
     assert bank["p1"].get("language") == "es"
+
+
+@pytest.mark.asyncio
+async def test_translation_success_sends_an_original_language_pack_back_for_repack():
+    """A paper PACKED from original-language text goes to needs_repack when
+    its English translation lands (operator ruling 2026-09-06: packs must be
+    English). Booked on the papers side, which the extraction-side append
+    cannot carry."""
+    import json
+
+    from agent.actions.scholarly_actions import read_databank
+    from agent.actions.translation_actions import _book_pack_state_after_translation
+    from agent.effects.mock import MockEffects
+
+    rec = {
+        "paper_key": "p",
+        "review_status": "accepted",
+        "pack_status": "packed",
+        "extraction_status": "extracted",
+        "translated": True,
+    }
+    fx = MockEffects(files={"databank/papers.jsonl": json.dumps(rec) + "\n"})
+    await _book_pack_state_after_translation(fx, rec, "translated", "")
+    after = (await read_databank(fx))["p"]
+    assert after["pack_status"] == "needs_repack"
+    assert after["review_status"] == "accepted"
+
+
+@pytest.mark.asyncio
+async def test_translation_failure_on_an_accepted_paper_books_pack_failed():
+    """No English text can exist, so the pack is terminal and honest -- and an
+    original-language pack already cut must not stay `packed`."""
+    import json
+
+    from agent.actions.scholarly_actions import read_databank
+    from agent.actions.translation_actions import _book_pack_state_after_translation
+    from agent.effects.mock import MockEffects
+
+    for prior in ("", "packed"):
+        rec = {
+            "paper_key": "p",
+            "review_status": "accepted",
+            "pack_status": prior,
+            "extraction_status": "translate_failed",
+        }
+        fx = MockEffects(files={"databank/papers.jsonl": json.dumps(rec) + "\n"})
+        await _book_pack_state_after_translation(
+            fx, rec, "failed", "translation: 3 attempts"
+        )
+        after = (await read_databank(fx))["p"]
+        assert after["pack_status"] == "pack_failed", prior
+        assert "translation" in after["failure_reason"]
+    # a DENIED paper's translation failure books nothing on the pack
+    rec = {"paper_key": "d", "review_status": "denied", "pack_status": ""}
+    fx = MockEffects(files={"databank/papers.jsonl": json.dumps(rec) + "\n"})
+    await _book_pack_state_after_translation(fx, rec, "failed", "x")
+    assert (await read_databank(fx))["d"].get("pack_status", "") == ""
+
+
+def test_gate_rejects_output_that_is_not_english():
+    """A model that echoes its source (or half-translates) must fail the gate.
+    Nine packs had been cut from .en.md files still in Russian, Japanese or
+    Spanish because the gate never looked at the language."""
+    from agent.actions.translation_actions import translation_gate
+
+    ru = "Спектры комбинационного рассеяния кварца были получены при 532 нм. " * 40
+    assert not translation_gate(ru, ru)["passed"]
+    assert any("not English" in p for p in translation_gate(ru, ru)["problems"])
+    es = (
+        "Los espectros Raman del cuarzo se obtuvieron a 532 nm con un láser verde. "
+        * 40
+    )
+    en = "The Raman spectra of quartz were obtained at 532 nm with a green laser. " * 40
+    assert any("not English" in p for p in translation_gate(es, es)["problems"])
+    assert not any("not English" in p for p in translation_gate(es, en)["problems"])
+    # a numeric table is not judged by function words
+    table = "| 465.2 | 1085.1 | 0.93 | 12.4 |\n" * 120
+    assert not any(
+        "not English" in p for p in translation_gate(table, table)["problems"]
+    )
+
+
+def test_translation_selects_smallest_first_within_a_tag_tier():
+    """Recovered packs per hour is the objective: among equally-tagged papers
+    the shortest translates first; a strong tag still outranks size."""
+    from agent.actions.translation_actions import (
+        _TRANSLATE_CLAIMS,
+        select_translation_paper,
+    )
+
+    base = {
+        "extraction_status": "extract_lingual",
+        "review_status": "accepted",
+        "md_path": "x.md",
+    }
+    bank = {
+        "big": {**base, "extraction_quality": {"pages": 300}},
+        "small": {**base, "extraction_quality": {"pages": 10}},
+        "mid": {**base, "extraction_quality": {"pages": 40}},
+    }
+    _TRANSLATE_CLAIMS.clear()
+    try:
+        assert select_translation_paper(bank) == "small"
+        bank["big"]["tags"] = [{"relevance": "exact"}]
+        assert select_translation_paper(bank) == "big", "tag strength outranks size"
+    finally:
+        _TRANSLATE_CLAIMS.clear()

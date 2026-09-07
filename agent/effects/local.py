@@ -101,6 +101,7 @@ class LocalEffects:
         trace_thinking: bool = False,
         trace_prompts: bool = False,
         http_transport=None,
+        llmvp_domains: dict | None = None,
     ) -> None:
         self._working_dir = os.path.realpath(working_directory)
         if not os.path.isdir(self._working_dir):
@@ -114,6 +115,19 @@ class LocalEffects:
         # Persistence manager — lazy-initialized only when persistence methods are called
         self._persistence = None
         self._llmvp_endpoint = llmvp_endpoint or "http://localhost:8008/graphql"
+        # Per-DOMAIN inference routing: {"curate": {"endpoint": ..., "model": ...}}.
+        #
+        # One mission is one PROCESS (drain_lane.ClaimSet is in-process only, so
+        # a second agent would double-claim the same papers). Routing a lane's
+        # inference to another host keeps that invariant — the claims, the
+        # booking and the gates all stay here — while moving only the tokens.
+        # Both endpoint and model are per-domain because a registry name is
+        # host-local: the same weights are "muse-glimmer-30b-cuda" here and
+        # "muse-glimmer-30b-swarm" on the mac.
+        self._llmvp_domains: dict = dict(llmvp_domains or {})
+        # One client per endpoint, not per domain: two domains pointed at the
+        # same host must share a client or they double the watchdog polling.
+        self._inference_by_endpoint: dict[str, InferenceEffect] = {}
         self._model_default_temperature = model_default_temperature
         # HTTP client — lazy; http_transport lets tests inject
         # httpx.MockTransport without monkeypatching.
@@ -822,6 +836,8 @@ class LocalEffects:
             return None
         if path.lower().endswith(".pdf") and not body.startswith(b"%PDF"):
             return None  # same magic rule as the primary path
+        if path.lower().endswith(".pdf") and b"%%EOF" not in body[-4096:]:
+            return None  # same truncation rule as the primary path
 
         os.makedirs(os.path.dirname(resolved) or ".", exist_ok=True)
         with open(resolved, "wb") as f:
@@ -899,10 +915,15 @@ class LocalEffects:
                 os.makedirs(os.path.dirname(resolved) or ".", exist_ok=True)
                 written = 0
                 head = b""
+                # Rolling tail for the %%EOF check below. A PDF's trailer is
+                # the last few hundred bytes; 4 KiB is generous and costs one
+                # small slice per chunk.
+                tail = b""
                 with open(resolved, "wb") as f:
                     async for chunk in response.aiter_bytes():
                         if len(head) < 8:
                             head += chunk[: 8 - len(head)]
+                        tail = (tail + chunk)[-4096:]
                         written += len(chunk)
                         if written > max_bytes:
                             f.close()
@@ -939,6 +960,29 @@ class LocalEffects:
                     content_type=content_type,
                     error=f"response is not a PDF (magic {head[:8]!r})",
                 )
+            if path.lower().endswith(".pdf") and b"%%EOF" not in tail:
+                # A SEVERED TAIL IS INVISIBLE WITHOUT THIS. httpx's
+                # aiter_bytes() ending early — a CDN or WAF closing the
+                # connection mid-stream — is indistinguishable from a
+                # complete body: the loop simply ends and every prior check
+                # passes, because they all look at the HEAD. 27 of 3,134
+                # PDFs were booked this way (22 at exactly 1 MiB, 3 at
+                # exactly 5 MiB), each one then permanently frozen because
+                # action_download_papers skips any record that already has a
+                # pdf_path. Truncation is server-side and cannot be
+                # prevented here — it can only be detected and re-fetched.
+                os.unlink(resolved)
+                self._log_entry(
+                    "http_download", url, f"truncated: no %%EOF in {written}b", start
+                )
+                return DownloadResult(
+                    success=False,
+                    url=url,
+                    path=path,
+                    status=200,
+                    content_type=content_type,
+                    error=f"PDF is truncated (no %%EOF trailer in {written} bytes)",
+                )
             self._log_entry("http_download", url, f"{written}b -> {path}", start)
             return DownloadResult(
                 success=True,
@@ -949,6 +993,15 @@ class LocalEffects:
                 content_type=content_type,
             )
         except Exception as e:
+            # Remove whatever landed before the failure. The over-max_bytes
+            # and bad-magic paths both unlink; this one did not, so a
+            # mid-stream ReadTimeout left a partial PDF on disk that later
+            # os.path.exists-style logic could silently adopt.
+            try:
+                if os.path.exists(resolved):
+                    os.unlink(resolved)
+            except OSError:
+                pass
             self._log_entry("http_download", url, f"error: {e}", start)
             return DownloadResult(success=False, url=url, path=path, error=str(e))
 
@@ -1290,14 +1343,35 @@ class LocalEffects:
 
     # ── Inference (via LLMVP GraphQL API) ─────────────────────────
 
-    def _get_inference(self) -> InferenceEffect:
-        """Lazy-initialize the inference client."""
-        if self._inference is None:
-            self._inference = InferenceEffect(
-                endpoint=self._llmvp_endpoint,
+    def _get_inference(self, domain: str = "") -> InferenceEffect:
+        """Lazy-initialize the inference client for a domain.
+
+        An unknown or absent domain resolves to the mission's default
+        endpoint, so a lane that never declares one is unaffected and a
+        typo'd domain degrades to local rather than failing the round.
+        """
+        route = self._llmvp_domains.get(domain) if domain else None
+        if not route:
+            if self._inference is None:
+                self._inference = InferenceEffect(
+                    endpoint=self._llmvp_endpoint,
+                    model_default_temperature=self._model_default_temperature,
+                )
+            return self._inference
+
+        endpoint = str(route.get("endpoint") or self._llmvp_endpoint)
+        model = str(route.get("model") or "") or None
+        key = f"{endpoint}|{model or ''}"
+        client = self._inference_by_endpoint.get(key)
+        if client is None:
+            client = InferenceEffect(
+                endpoint=endpoint,
                 model_default_temperature=self._model_default_temperature,
+                model=model,
             )
-        return self._inference
+            self._inference_by_endpoint[key] = client
+            logger.info("inference domain %r -> %s (model=%s)", domain, endpoint, model)
+        return client
 
     async def token_count(self, texts: list[str], model: str = "") -> list[int]:
         """Exact token counts from the serving model's own tokenizer.
@@ -1340,6 +1414,40 @@ class LocalEffects:
             logger.debug("capacity_snapshot failed: %s", e)
             return None
 
+    async def run_vision(
+        self,
+        prompt: str,
+        image_path: str,
+        model: str | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+    ):
+        """Vision completion over the LLMVP GraphQL API.
+
+        `image_path` must resolve under the server's model.vision_image_roots
+        or the server refuses to read it — that is deliberate, and it is why
+        callers render into the workspace rather than /tmp.
+        """
+        start = time.monotonic()
+        result = await self._get_inference().run_vision(
+            prompt,
+            image_path,
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        self._log_entry(
+            "run_vision",
+            f"{os.path.basename(image_path)} model={model or 'primary'}",
+            (
+                f"error: {result.error}"
+                if result.error
+                else f"{len(result.text or '')} chars"
+            ),
+            start,
+        )
+        return result
+
     def capacity_start(self) -> None:
         """Begin the subscription. Idempotent; safe without a server."""
         try:
@@ -1368,7 +1476,15 @@ class LocalEffects:
         start = time.monotonic()
         prompt_preview = prompt[:80] + "..." if len(prompt) > 80 else prompt
 
-        inference = self._get_inference()
+        # `domain` selects the server; it is consumed HERE and never sent.
+        # InferenceEffect reads config_overrides key-by-key, so an unknown key
+        # is already inert — popping it keeps that true if that ever changes.
+        domain = ""
+        if config_overrides and "domain" in config_overrides:
+            config_overrides = dict(config_overrides)
+            domain = str(config_overrides.pop("domain") or "")
+
+        inference = self._get_inference(domain)
         result = await inference.run_inference(
             prompt, config_overrides, static_prefix=static_prefix, flow_key=flow_key
         )

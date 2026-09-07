@@ -28015,7 +28015,7 @@
             },
             {
               "condition": "result.phase == 'gate'",
-              "transition": "dispatch_research_gate"
+              "transition": "gate_admission"
             },
             {
               "condition": "true",
@@ -28200,6 +28200,54 @@
               "$ref": "context.mission.config.working_directory"
             }
           }
+        }
+      },
+      "gate_admission": {
+        "action": "check_drain_backlog",
+        "description": "Admit the gate only once the drains have nothing pending",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.admitted == true",
+              "transition": "dispatch_research_gate"
+            },
+            {
+              "condition": "true",
+              "transition": "awaiting_drains"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "awaiting_drains": {
+        "action": "noop",
+        "description": "Lanes have pending work \u2014 stand down and let them run",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "research_control_v2",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            }
+          },
+          "delay": 60
         }
       },
       "dispatch_research_gate": {

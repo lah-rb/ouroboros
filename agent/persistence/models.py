@@ -57,6 +57,16 @@ class MissionConfig(BaseModel):
     escalation_budget_usd: float | None = None
     escalation_tokens_used: int = 0
     llmvp_endpoint: str = "http://localhost:8008/graphql"
+    # Per-domain inference routing, e.g.
+    #   {"curate_remote": {"endpoint": "http://10.0.0.9:8008/graphql",
+    #                      "model": "muse-glimmer-30b-swarm"},
+    #    "ocr":           {"endpoint": "http://10.0.0.9:8008/graphql",
+    #                      "model": "paddle-ocr-vl-mac"}}
+    # Empty = every lane uses llmvp_endpoint, which is the pre-existing
+    # behaviour. Model is per-domain because registry names are host-local.
+    # A lane is remote IFF its key exists: "ocr" present -> the ocr lane is
+    # built as a remote lane and the OCR tool is handed that url + model.
+    llmvp_domains: dict = Field(default_factory=dict)
     # Which flow set runs this mission (agent/flow_sets.py registry).
     # Selects the controller flow and phase derivation; additive default
     # keeps pre-flow-set mission.json files loading unchanged.
@@ -120,7 +130,7 @@ class MissionConfig(BaseModel):
     deep_research: bool = False
     # Whether the mission may consult the local vision tool (vl_inspect —
     # an isolated one-shot mlx_vlm process). NOTE: since 2026-08-12 LLMVP
-    # also serves vision itself over POST /v1/vision, so this flag gates the
+    # also serves vision itself (GraphQL visionCompletion), so this flag gates the
     # SUBPROCESS path specifically; a mission routed at the endpoint instead
     # would not be governed by it. Set CONFIG-TIME by the overseer/adapter —
     # deterministically for benchmarks (the GAIA adapter flips it on image

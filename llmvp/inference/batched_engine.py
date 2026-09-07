@@ -210,6 +210,21 @@ class SeqSlot:
     n_tokens: int = 0  # decoded position (== static head len when fresh)
     static_len: int = 0
     input_ids: List[int] = field(default_factory=list)
+    # True once a multimodal install has decoded image EMBEDDING rows into
+    # this seq. input_ids then holds negative sentinels for those rows —
+    # length-correct for every rollback/purge path, but NOT replayable:
+    # session snapshot capture must refuse such a seat (the sentinels
+    # would restore as real token ids and decode as garbage).
+    has_media: bool = False
+    # KV cells this seat's media rows occupy BEYOND its position count.
+    # M-RoPE (paddle): an image chunk consumes chunk-n_tokens CELLS but
+    # advances n_past by only max(t,h,w) POSITIONS — e.g. a full page is
+    # 1,240 cells that move n_past by 40. n_tokens/input_ids stay the
+    # POSITION authority (every rollback/shift path removes by position);
+    # this debt is what occupancy must add so admission stops undercounting
+    # the physical cache. Muse-family installs advance positions 1:1, so
+    # for them this is always 0 and nothing changes.
+    cell_debt: int = 0
     pinned: bool = False  # held by a session between turns
     dead: bool = False  # context rebuilt underneath this seat
     # Lease stamp (monotonic) set at acquire, cleared at release — read by
@@ -431,6 +446,33 @@ _END_LENGTH = "length"
 # not a guarantee.
 _POOL_SLACK = 256
 
+# ── PRESSURE LADDER PACING ──────────────────────────────────────────
+#
+# THE LIVELOCK THIS EXISTS TO PREVENT (2026-08-24/25, 3h38m outage).
+# _ensure_batch used to double _live_prefill_budget at the top of EVERY
+# _step, "one doubling per step, upstream-style". _relieve_pressure
+# halves it on a pressure event. The two cancelled: 1024 -> doubled to
+# 2048 -> build a 2048-row batch -> decode returns 1 -> halve to 1024 ->
+# next step doubles straight back. The ladder could therefore never
+# descend to _MIN_PREFILL_BUDGET, which made rung 2 (evict/force-window)
+# UNREACHABLE while any stream sat in PREFILL. 2,288,327 no-progress
+# decodes, GPU idle, a 396 MB log of one repeated line.
+#
+# The fix is a rule, not a number: THE BUDGET GROWS ON EVIDENCE OF
+# SUCCESS, NEVER ON THE PASSAGE OF A STEP. Any value >= 2 breaks the
+# livelock; 4 keeps time-to-first-token recovery brisk after a transient.
+_PREFILL_RECOVERY_STEPS = 4
+# Consecutive pressure steps before the decode thread yields. The ladder
+# terminates on its own (rung 2 retires exactly one stream per event), so
+# reaching this means something OUTSIDE the step loop holds the pool.
+_PRESSURE_BACKOFF_AFTER = 8
+_PRESSURE_BACKOFF_STEP_S = 0.02
+_PRESSURE_BACKOFF_MAX_S = 0.25
+# Absolute backstop. Pressure this many steps running, with the ladder at
+# its floor, means no admission on this pool is survivable. Clearing the
+# engine is recoverable — every caller retries — and spinning is not.
+_PRESSURE_GIVE_UP = 64
+
 
 class _AdmitVerdict(Enum):
     ADMIT = "admit"
@@ -460,6 +502,14 @@ class BatchedEngine:
         self._n_batch = n_batch
         self._prefill_chunk = min(prefill_chunk or n_batch, n_batch)
         self._live_prefill_budget = self._prefill_chunk
+        # Pressure-ladder pacing; see the constants above for the incident.
+        self._clean_steps_since_pressure = 0
+        self._consecutive_pressure = 0
+        # Seam: tests record instead of sleeping the decode thread.
+        self._sleep = time.sleep
+        # Injected by the backend: cells held on the snapshot band, which the
+        # engine cannot see. Cached ints only — this runs on the decode thread.
+        self.extra_occupancy_fn: Optional[Callable[[], int]] = None
         self._persona_heads: Dict[str, PersonaHead] = dict(persona_heads or {})
         self._reasoning_heads: Dict[str, PersonaHead] = {}  # level -> head
         # Stateless flow cache (batched): key -> FlowPin on the seq map's flow
@@ -481,6 +531,8 @@ class BatchedEngine:
         self._streams: Dict[str, StreamState] = {}
         self._waiting: List[StreamRequest] = []  # admitted when a seat frees
         self._batch: Any = None  # own LlamaBatch, lazily allocated
+        self._embd_batch: Any = None  # lazy; batched-vision installs only
+        self._embd_batch_width = 0
 
         self._join_inbox: List[StreamRequest] = []
         self._control_inbox: List[tuple] = []  # (fn, Future)
@@ -509,6 +561,24 @@ class BatchedEngine:
     # -- lifecycle -------------------------------------------------------
 
     def start(self) -> None:
+        # Publish the empty, fully-available pool BEFORE the decode thread
+        # exists. Engine state is quiescent here, which is the precondition
+        # capacity_fields() documents (it walks _streams/_seats that the
+        # decode thread mutates), so this is the one moment a publish from
+        # the caller's thread is race-free.
+        #
+        # WHY. Every other publish is an occupancy change (admit, retire,
+        # pause, resume), so a freshly booted engine that receives no request
+        # has published NOTHING: Subscription.capacity has no first frame to
+        # yield and health.capacity (the poll rung) reads the same empty
+        # BUS.latest(). Measured 2026-09-06 05:03: a mission started against
+        # such an engine settled its feed on `legacy` (cells unknown), its
+        # local lanes were admitted with free_cells=0, sized a budget nothing
+        # fit, and idled -- so no request was ever sent to seed the bus. One
+        # 4-token completion flipped it to ws with 125,104 free cells in 2 s.
+        # A scheduler must never depend on traffic to learn that the pool is
+        # empty; the engine says so the moment it can.
+        self._publish_capacity()
         self._thread = threading.Thread(
             target=self._run, name="llmvp-decode", daemon=True
         )
@@ -630,6 +700,16 @@ class BatchedEngine:
                     or self._waiting
                 ):
                     self._wake.wait()
+                # A pool with nothing live is the one moment the ladder is
+                # certainly stale: whatever caused the pressure is gone.
+                # Reset here so a transient does not tax the next request's
+                # time-to-first-token for the life of the process.
+                if not self._streams and (
+                    self._live_prefill_budget != self._prefill_chunk
+                ):
+                    self._live_prefill_budget = self._prefill_chunk
+                    self._clean_steps_since_pressure = 0
+                    self._consecutive_pressure = 0
                 if self._shutdown:
                     self._fail_all(RetriableEngineError("engine shut down"))
                     return
@@ -660,6 +740,11 @@ class BatchedEngine:
                     self._step()
                 except RuntimeError as exc:
                     self._on_fatal(exc)
+                else:
+                    # ret == 1 raises nothing, so a step that made no
+                    # progress is invisible above this loop. This is what
+                    # makes sustained pressure finite and observable.
+                    self._pressure_backoff()
 
     def _has_active_streams(self) -> bool:
         return any(s.phase is not StreamPhase.DONE for s in self._streams.values())
@@ -704,15 +789,70 @@ class BatchedEngine:
             held += int(s.gen_start_pos) + int(s.effective_max)
         return held
 
+    def _band_occupancy(self) -> int:
+        """Cells pinned OUTSIDE the seats: the flow band, plus whatever the
+        backend holds on the snapshot band.
+
+        Under kv_unified a `seq_cp` SHARES cells, so a band pin costs nothing
+        while its source seat is alive — and then costs everything the moment
+        that seat is cleared, invisibly. Counted nowhere before 2026-08-25,
+        which is how admission came to believe 33,904 cells were free while
+        the cache could not seat 2,048 rows.
+        """
+        held = 0
+        for pin in self._flow_pins.values():
+            held += int(getattr(pin, "n_tokens", 0) or 0)
+        fn = self.extra_occupancy_fn
+        if fn is not None:
+            try:
+                held += int(fn() or 0)
+            except Exception:  # noqa: BLE001 — never break the decode thread
+                pass
+        return held
+
+    def _occupancy(self, exclude: Optional[StreamRequest] = None) -> int:
+        """Per-seat max(pinned, live), SUMMED.
+
+        The previous `max(live_total, pinned_total)` avoided double-counting a
+        pinned seat mid-turn by under-counting everything else: four idle
+        pinned seats at 8k plus two live streams at 20k read as 40k rather
+        than 72k. Taking the max PER SEAT keeps the anti-double-count property
+        without discarding the other seats.
+        """
+        live_by_seq: Dict[int, int] = {}
+        for st in self._streams.values():
+            if st.phase is StreamPhase.DONE or (
+                exclude is not None and st.req is exclude
+            ):
+                continue
+            if st.slot is None:
+                continue
+            seq = int(st.slot.seq)
+            live_by_seq[seq] = (
+                live_by_seq.get(seq, 0) + int(st.gen_start_pos) + int(st.effective_max)
+            )
+        held, seen = 0, set()
+        for seat in self._seats:
+            seq = int(seat.seq)
+            seen.add(seq)
+            pinned = (
+                max(int(seat.n_tokens), int(seat.static_len))
+                if seat.pinned
+                else int(seat.static_len)
+            )
+            # Media cell debt is PHYSICAL cache the position count cannot
+            # see; it exists regardless of the pinned-vs-live view.
+            held += max(pinned, live_by_seq.get(seq, 0)) + int(seat.cell_debt)
+        # A live stream on a seq with no seat still holds real cells.
+        held += sum(v for seq, v in live_by_seq.items() if seq not in seen)
+        return held
+
     def _free_cells(self, n_ctx: int, exclude: Optional[StreamRequest] = None) -> int:
         """Cells available to a new stream right now."""
         if not n_ctx:
             return 0
-        # Pinned seats are already counted inside _live_occupancy when they have
-        # a live stream; take the larger of the two views rather than summing,
-        # which would double-count a pinned seat mid-turn.
-        occupied = max(self._live_occupancy(exclude), self._pinned_occupancy())
-        return max(0, n_ctx - occupied - _POOL_SLACK)
+        occupied = self._occupancy(exclude) + self._band_occupancy()
+        return max(0, n_ctx - occupied - self._pool_slack)
 
     def _size_against_pool(
         self, req: StreamRequest, n_ctx: int, total: int
@@ -724,24 +864,53 @@ class BatchedEngine:
         if not n_ctx:
             return per_stream, _AdmitVerdict.ADMIT
 
-        free = self._free_cells(n_ctx, exclude=req) - len(req.prompt_tokens)
-        if free >= per_stream:
-            return per_stream, _AdmitVerdict.ADMIT
-        if free >= _MIN_ADMIT_BUDGET:
-            # Shrink: a smaller generation that COMPLETES beats a larger one
-            # that gets evicted, because eviction discards everything.
+        prompt = len(req.prompt_tokens)
+        pool = self._free_cells(n_ctx, exclude=req)  # slack already removed
+        usable = pool - prompt  # may be negative
+
+        # THE PROMPT MUST FIT FIRST, AND WITH A GENERATION ABOVE IT.
+        # Sizing on `usable` alone reads as "how much may this stream
+        # generate" and hides the question that actually mattered on
+        # 2026-08-24/25: could a 31,244-token prompt be PREFILLED at all?
+        # It could not, and the engine spent 3h38m rediscovering that one
+        # 2,048-row batch at a time.
+        if usable < _MIN_ADMIT_BUDGET:
             logger.info(
-                "✂️ stream admitted at %d tokens (asked %d) — %d free cells",
-                free,
-                per_stream,
-                free,
+                "⏳ prompt %d tok does not fit: %d free cells (pool %d, "
+                "occupied %d, slack %d) leave %d for generation, floor %d",
+                prompt,
+                pool,
+                n_ctx,
+                n_ctx - pool - self._pool_slack,
+                self._pool_slack,
+                usable,
+                _MIN_ADMIT_BUDGET,
             )
-            return free, _AdmitVerdict.ADMIT
-        # Can it ever fit? Compare against the irreducible floor.
-        headroom = n_ctx - self._pinned_occupancy() - _POOL_SLACK
-        if headroom - len(req.prompt_tokens) < _MIN_ADMIT_BUDGET:
-            return 0, _AdmitVerdict.IMPOSSIBLE
-        return 0, _AdmitVerdict.QUEUE
+            # Can it EVER fit? Compare against the irreducible floor.
+            headroom = n_ctx - self._pinned_occupancy() - self._pool_slack
+            if headroom - prompt < _MIN_ADMIT_BUDGET:
+                return 0, _AdmitVerdict.IMPOSSIBLE
+            return 0, _AdmitVerdict.QUEUE
+
+        if usable >= per_stream:
+            return per_stream, _AdmitVerdict.ADMIT
+        # Shrink: a smaller generation that COMPLETES beats a larger one that
+        # gets evicted, because eviction discards everything.
+        #
+        # PROMPT, POOL AND RESIDUAL ARE THREE DIFFERENT NUMBERS. The previous
+        # format string printed `free` for both placeholders, so the log read
+        # "admitted at 2660 tokens ... 2660 free cells" — self-consistent,
+        # and it never showed the 31,244-token prompt that was the whole story.
+        logger.info(
+            "✂️ stream admitted at %d tokens (asked %d): prompt %d tok, "
+            "%d free cells, %d residual",
+            usable,
+            per_stream,
+            prompt,
+            pool,
+            usable,
+        )
+        return usable, _AdmitVerdict.ADMIT
 
     def _drain_waiting(self) -> None:
         """Retry queued admissions once capacity may have freed. FIFO, and it
@@ -925,6 +1094,7 @@ class BatchedEngine:
         self._h_steps += 1
         if ret == 1:
             self._h_kv_pressure_events += 1
+            self._consecutive_pressure += 1
             for s in active:
                 mark_past, mark_pos = s.mark
                 if s.n_past != mark_past:
@@ -938,6 +1108,10 @@ class BatchedEngine:
                 s.i_batch = -1
             self._relieve_pressure(active)
             return
+        # The decode landed. This is the only evidence that justifies giving
+        # the prefill budget a rung back — see _grow_prefill_budget.
+        self._consecutive_pressure = 0
+        self._grow_prefill_budget()
 
         # 4. Sample + per-stream hooks.
         for s in sorted((x for x in active if x.i_batch >= 0), key=lambda x: x.i_batch):
@@ -990,6 +1164,62 @@ class BatchedEngine:
                 )
                 self._retire(s, reason=reason)
 
+    def _grow_prefill_budget(self) -> None:
+        """Climb back toward the configured chunk — on EVIDENCE, not on time.
+
+        A rung costs _PREFILL_RECOVERY_STEPS successful decodes. That is the
+        whole fix for the 2026-08-24/25 wedge: growth that ran once per step
+        cancelled the pressure ladder's halving exactly, so the budget
+        oscillated between two values forever and the ladder's lower rungs
+        were unreachable. Requiring evidence of success means a pressure
+        event that recurs inside the recovery window can never be undone.
+        """
+        if self._live_prefill_budget >= self._prefill_chunk:
+            self._clean_steps_since_pressure = 0
+            return
+        self._clean_steps_since_pressure += 1
+        if self._clean_steps_since_pressure < _PREFILL_RECOVERY_STEPS:
+            return
+        self._clean_steps_since_pressure = 0
+        self._live_prefill_budget = min(
+            self._prefill_chunk, self._live_prefill_budget * 2
+        )
+
+    def _pressure_backoff(self) -> None:
+        """Yield the decode thread when pressure repeats, and give up if it
+        never clears.
+
+        A decode that returns 1 is not an exception, so nothing above the
+        step loop can see a step that made no progress — the only outward
+        signs are a hot thread and a log the size of a small database. This
+        is the layer that makes sustained pressure observable and finite.
+        """
+        n = self._consecutive_pressure
+        if n < _PRESSURE_BACKOFF_AFTER:
+            return
+        if n >= _PRESSURE_GIVE_UP:
+            logger.error(
+                "🧱 KV pressure %d steps running with the ladder at %d — "
+                "clearing the engine (live=%d pinned=%d)",
+                n,
+                self._live_prefill_budget,
+                self._live_occupancy(),
+                self._pinned_occupancy(),
+            )
+            self._fail_all(RuntimeError("KV pressure could not be relieved"))
+            self._consecutive_pressure = 0
+            return
+        # NEVER sleep on pending work: a control op is a seat release, which
+        # is exactly the thing that could relieve the pressure.
+        if self._control_inbox or self._join_inbox or self._paused:
+            return
+        self._sleep(
+            min(
+                _PRESSURE_BACKOFF_STEP_S * (n - _PRESSURE_BACKOFF_AFTER + 1),
+                _PRESSURE_BACKOFF_MAX_S,
+            )
+        )
+
     def _relieve_pressure(self, active: List[StreamState]) -> None:
         """KV-pressure ladder: shrink prefill first; if there is nothing
         left to shrink, evict the largest stateless stream."""
@@ -999,10 +1229,24 @@ class BatchedEngine:
             self._live_prefill_budget = max(
                 _MIN_PREFILL_BUDGET, self._live_prefill_budget // 2
             )
-            logger.warning(
-                "⚠️ KV pressure: prefill budget halved to %d",
-                self._live_prefill_budget,
-            )
+            # A halving in progress cancels any accumulated recovery credit;
+            # otherwise a pressure event inside the recovery window could be
+            # undone by growth on the very next clean step.
+            self._clean_steps_since_pressure = 0
+            # Full volume for the first rung of an EPISODE only. Seven
+            # warnings while a ladder descends is diagnosis; 2,288,327 of
+            # them is a 396 MB log that hides the diagnosis.
+            if self._consecutive_pressure <= 1:
+                logger.warning(
+                    "⚠️ KV pressure: prefill budget halved to %d",
+                    self._live_prefill_budget,
+                )
+            else:
+                logger.debug(
+                    "⚠️ KV pressure: prefill budget halved to %d (event %d)",
+                    self._live_prefill_budget,
+                    self._consecutive_pressure,
+                )
             return
         # FORCE-WINDOW, don't discard. This used to retire the victim with a
         # RetriableEngineError, which routes through `out.finish(error)` and
@@ -1229,6 +1473,8 @@ class BatchedEngine:
         slot.static_len = head.n_tokens
         slot.n_tokens = head.n_tokens
         slot.input_ids = list(head.tokens)
+        slot.has_media = False
+        slot.cell_debt = 0
         slot._needs_context_refresh = False
         slot._last_completion_tokens = None
 
@@ -1272,6 +1518,8 @@ class BatchedEngine:
         slot.n_tokens = 0
         slot.static_len = 0
         slot.input_ids = []
+        slot.has_media = False
+        slot.cell_debt = 0
         slot.pinned = False
 
     def window_seat_sync(self, slot: SeqSlot, n_keep: int) -> int:
@@ -1283,6 +1531,19 @@ class BatchedEngine:
         def _do() -> int:
             ctx = self._llama._ctx
             n_tokens = int(slot.n_tokens)
+            if slot.has_media:
+                # A media seat cannot slide: M-RoPE forbids KV shift
+                # outright (llama_kv_cache::get_can_shift is false when
+                # n_pos_per_embd > 1), and even for 1-pos media the
+                # sentinel region is not position-dense (cell_debt), so
+                # the seq_add arithmetic below would corrupt it. Refuse;
+                # the caller's pressure ladder falls through to refresh.
+                logger.warning(
+                    "🪟 window refused for media seat seq %d — media KV "
+                    "cannot shift; seat needs a refresh instead",
+                    slot.seq,
+                )
+                return n_tokens
             n_discard = (n_tokens - n_keep) // 2
             if n_discard <= 0:
                 return n_tokens
@@ -1363,6 +1624,103 @@ class BatchedEngine:
             slot.seq,
             pin.n_tokens,
         )
+
+    # -- multimodal install (batched vision) -----------------------------
+    #
+    # DECODE-THREAD ONLY: both helpers are control-op BODIES — callers wrap
+    # them in self.control(...) and never touch the context themselves.
+    # They install a multimodal prefix onto a seat BEFORE admission, so
+    # every row they add sits below any stream's rollback mark by
+    # construction (pressure rollback can never cross an image row).
+
+    #: input_ids placeholder for image-embedding rows. Negative on purpose:
+    #: it can never collide with a real vocab id, and anything that tries
+    #: to detokenize or replay it fails loudly instead of silently.
+    MEDIA_SENTINEL = -101
+
+    def eval_tokens_on_slot(self, slot: SeqSlot, tokens: List[int]) -> None:
+        """Decode plain text tokens onto a seat's seq (≤ n_batch per call).
+
+        Unlike the prefill interleave this bypasses stream machinery
+        entirely — it exists for the batched-vision install, where the
+        text segments AROUND an image must land on the seq before the
+        generation stream is admitted."""
+        batch = self._ensure_batch()
+        pos = slot.n_tokens
+        i = 0
+        while i < len(tokens):
+            take = tokens[i : i + self._n_batch]
+            batch.reset()
+            for tok in take:
+                batch.add_token(int(tok), pos, [slot.seq], False)
+                pos += 1
+            ret = self._llama._ctx.decode(batch)
+            if ret != 0:
+                raise RuntimeError(
+                    f"vision install: text decode ret={ret} at pos {pos} "
+                    f"on seq {slot.seq}"
+                )
+            slot.input_ids.extend(int(t) for t in take)
+            slot.n_tokens = pos
+            i += len(take)
+
+    def eval_embd_on_slot(
+        self, slot: SeqSlot, embd: Any, n_rows: int, n_embd: int
+    ) -> None:
+        """Decode pre-encoded image embeddings onto a seat's seq.
+
+        `embd` is a C-contiguous float32 numpy buffer of n_rows x n_embd
+        (copied OUT of mtmd scratch by the caller). Rows land in
+        ≤ n_batch sub-batches, sequential positions, logits=False. Legal
+        only for models needing neither non-causal attention nor M-RoPE
+        for image decode (the caller checks; others take the atomic mtmd
+        helper). The payload lands via one memmove per sub-batch —
+        add_embeddings' per-element Python loop costs seconds at this
+        size (2.6M floats per 512-row sub-batch)."""
+        import ctypes
+
+        if self._embd_batch is None or self._embd_batch_width != int(n_embd):
+            from llama_cpp import internals
+
+            if self._embd_batch is not None:
+                self._embd_batch.close()
+            self._embd_batch = internals.LlamaBatch(
+                n_tokens=self._n_batch,
+                embd=int(n_embd),
+                n_seq_max=self._seq_map.n_seq_max,
+            )
+            self._embd_batch_width = int(n_embd)
+        batch = self._embd_batch
+        base = embd.ctypes.data
+        fsize = 4  # float32
+        pos = slot.n_tokens
+        row = 0
+        while row < n_rows:
+            take = min(self._n_batch, n_rows - row)
+            batch.reset()
+            raw = batch.batch
+            ctypes.memmove(
+                raw.embd,
+                base + row * n_embd * fsize,
+                take * n_embd * fsize,
+            )
+            for j in range(take):
+                raw.pos[j] = pos + j
+                raw.n_seq_id[j] = 1
+                raw.seq_id[j][0] = slot.seq
+                raw.logits[j] = 0
+            raw.n_tokens = take
+            ret = self._llama._ctx.decode(batch)
+            if ret != 0:
+                raise RuntimeError(
+                    f"vision install: embd decode ret={ret} at pos {pos} "
+                    f"on seq {slot.seq}"
+                )
+            pos += take
+            row += take
+        slot.input_ids.extend([self.MEDIA_SENTINEL] * n_rows)
+        slot.n_tokens = pos
+        slot.has_media = True
 
     def install_head_sync(self, slot: SeqSlot, head: PersonaHead) -> None:
         """Whole-seq replace of a seat's content with a pinned head (persona
@@ -1448,12 +1806,11 @@ class BatchedEngine:
             self._batch = internals.LlamaBatch(
                 n_tokens=self._n_batch, embd=0, n_seq_max=self._seq_map.n_seq_max
             )
-        # Prefill budget decays back toward the configured chunk after
-        # pressure events (one doubling per step, upstream-style).
-        if self._live_prefill_budget < self._prefill_chunk:
-            self._live_prefill_budget = min(
-                self._prefill_chunk, self._live_prefill_budget * 2
-            )
+        # NO BUDGET GROWTH HERE. This is where the 2026-08-24/25 livelock
+        # lived: growing once per step cancelled _relieve_pressure's halving
+        # exactly, so the ladder never descended and rung 2 was unreachable.
+        # Growth now happens in _grow_prefill_budget, after a decode that
+        # actually SUCCEEDED.
         return self._batch
 
     def _family(self) -> str:
@@ -1486,6 +1843,27 @@ class BatchedEngine:
         """The shared cell size, from a CACHED int — never a live context
         dereference (see inference/capacity.py rule 2)."""
         return int(getattr(self._llama, "_n_ctx", 0) or 0)
+
+    @property
+    def _pool_slack(self) -> int:
+        """Cells held back when sizing admissions: ONE batch for the decode in
+        flight, ONE for the marginal admission's first prefill chunk.
+
+        _POOL_SLACK = 256 was a guess that predated n_batch = 2048. It let a
+        stream be admitted with less than an EIGHTH of a prefill batch of
+        headroom above its prompt, which is how a 31,244-token prompt entered
+        a pool that could not seat 2,048 rows (2026-08-24/25). The slack is by
+        definition a function of the batch size, so it is derived from it.
+
+        Capped at n_ctx // 8 so a small deployment or test context is not
+        consumed by its own safety margin — n_ctx 4096 with n_batch 2048 would
+        otherwise report zero free cells forever, an outage dressed as caution.
+        """
+        n_ctx = self._pool_n_ctx()
+        want = max(_POOL_SLACK, 2 * self._n_batch)
+        if not n_ctx:
+            return want
+        return min(want, max(_POOL_SLACK, n_ctx // 8))
 
     def capacity_fields(self) -> dict:
         """Every number a scheduler needs, as plain ints.
@@ -1521,7 +1899,7 @@ class BatchedEngine:
             "free_cells": self._free_cells(n_ctx),
             "live_occupancy": live,
             "pinned_occupancy": pinned,
-            "pool_slack": _POOL_SLACK,
+            "pool_slack": self._pool_slack,
             "min_admit_budget": _MIN_ADMIT_BUDGET,
             "static_prefix_tokens": max(
                 (int(seat.static_len) for seat in self._seats), default=0
@@ -1567,6 +1945,11 @@ class BatchedEngine:
             "engine_steps": self._h_steps,
             "prefill_budget": self._live_prefill_budget,
             "kv_pressure_events": self._h_kv_pressure_events,
+            # health() is a FREE dict. Never add this to capacity_fields():
+            # an unknown key there raises TypeError inside the bare except
+            # at _publish_capacity, silently no-oping every publish.
+            "consecutive_pressure": self._consecutive_pressure,
+            "prefill_recovery_credit": self._clean_steps_since_pressure,
             "kv_forced_windows": self._h_forced_windows,
             "kv_evictions": self._h_evictions,
             "decode_failures": self.h_decode_failures,

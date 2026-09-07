@@ -376,3 +376,75 @@ async def test_accepted_pair_still_promotes_with_reviews_enabled(monkeypatch):
     )
     out = await action_biblio_snowball(_si(fx))
     assert out.result["promoted"] == 1, out.result
+
+
+@pytest.mark.asyncio
+async def test_mining_appends_the_records_current_state_not_the_round_snapshot():
+    """CAUGHT LIVE (2026-09-02): 11 of 15 pack failure reasons booked that day
+    were erased minutes later by this lane. It read the databank once, awaited
+    a file read per paper, then appended the round-start copy of each record
+    -- last-row-replaces -- over whatever the curate lanes had booked since.
+    The lane must re-read before it appends and change only its own fields."""
+    from agent.actions.scholarly_actions import append_records
+
+    rec = {
+        "paper_key": "p1",
+        "title": "Paper",
+        "review_status": "accepted",
+        "md_path": "databank/markdown/p1.md",
+        "pack_status": "",
+        "failure_reason": "",
+    }
+    # The extraction sidecar carries failure_reason (it OWNS the field) and
+    # here carries it EMPTY -- the un-parked cohort's shape. A fresh MERGED
+    # read therefore hands back "" for it, and append_records passes
+    # failure_reason through to papers.jsonl as a shared field. That is what
+    # defeated the first version of this fix.
+    fx = MockEffects(
+        files={
+            "databank/papers.jsonl": json.dumps(rec) + "\n",
+            "databank/extraction.jsonl": json.dumps(
+                {
+                    "paper_key": "p1",
+                    "extraction_status": "extracted",
+                    "failure_reason": "",
+                }
+            )
+            + "\n",
+            "databank/markdown/p1.md": "text\n\n## References\n\n1. doi:10.1000/abc\n",
+        }
+    )
+
+    # A curate lane books a pack outcome WHILE the mining loop is inside its
+    # file read -- the exact yield point the live clobber went through.
+    real_read = fx.read_file
+    booked = {"done": False}
+
+    async def _read_then_book(path, *a, **k):
+        out = await real_read(path, *a, **k)
+        if path.endswith("p1.md") and not booked["done"]:
+            booked["done"] = True
+            fresh = dict((await read_databank(fx))["p1"])
+            fresh["pack_status"] = "pack_failed"
+            fresh["failure_reason"] = "pack: gates failed twice: UNGROUNDED VALUES x=1"
+            await append_records(fx, [fresh])
+        return out
+
+    fx.read_file = _read_then_book
+    out = await action_mine_bibliographies(_si(fx, {"budget": 5}))
+    assert out.result["mined"] == 1
+
+    # Assert on the PAPERS-SIDE record: that is the file this lane appends to,
+    # and the only place the pack booking's failure_reason exists. The merged
+    # view shows the sidecar's copy of that field either way (pre-existing
+    # overlay semantics), so asserting there cannot see this bug at all.
+    from agent.actions.scholarly_actions import DATABANK_PATH, _read_jsonl_records
+
+    after = (await _read_jsonl_records(fx, DATABANK_PATH))["p1"]
+    assert after["biblio_mined_at"], "the lane must still stamp its own field"
+    assert after["reference_dois"] == ["10.1000/abc"]
+    assert after["pack_status"] == "pack_failed", "the concurrent booking was clobbered"
+    assert after["failure_reason"].startswith(
+        "pack: gates failed twice"
+    ), "the pack gate's finding was erased by a stale/merged-read append"
+    assert after["title"] == "Paper", "an unrelated papers-side field was dropped"

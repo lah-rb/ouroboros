@@ -429,3 +429,60 @@ def test_clear_seat_refuses_an_occupied_seat():
     BatchedEngine.clear_seat(eng, seat)
     assert ctx.removed == [(2, 0, -1)]
     assert seat.n_tokens == 0 and seat.input_ids == [] and seat.static_len == 0
+
+
+def test_reaper_spares_a_vision_install_window():
+    """2026-08-27: 19 seats were reclaimed MID-INSTALL — a batched-vision
+    seat between acquire and stream submit has no StreamState and no
+    _waiting entry, the third live state the sweep must union."""
+    be = _backend()
+    engine = FakeEngine()
+
+    async def scenario():
+        (installing,) = _wire(be, engine, n_seats=1)
+        be._pool_queue.get_nowait()
+        be._checked_out = 1
+        installing._leased_at = 1.0
+        be._vision_installing.add(id(installing))
+
+        strikes = {}
+        await be._seat_reaper_sweep(strikes)
+        await be._seat_reaper_sweep(strikes)
+        await be._seat_reaper_sweep(strikes)
+        assert be._pool_queue.qsize() == 0  # never reclaimed
+        assert not strikes  # and never even struck
+
+        # install ends (registry cleared) with the seat leaked -> normal
+        # two-strike reclaim resumes.
+        be._vision_installing.discard(id(installing))
+        await be._seat_reaper_sweep(strikes)
+        await be._seat_reaper_sweep(strikes)
+        assert be._pool_queue.qsize() == 1
+
+    asyncio.run(scenario())
+
+
+def test_reaper_strikes_reset_on_a_fresh_lease():
+    """Tonight's 'leased 2s — reclaiming' captures: a NEW lease inherited
+    the previous lease's strike. Strikes key to the lease timestamp."""
+    be = _backend()
+    engine = FakeEngine()
+
+    async def scenario():
+        (seat,) = _wire(be, engine, n_seats=1)
+        be._pool_queue.get_nowait()
+        be._checked_out = 1
+        seat._leased_at = 1.0
+        strikes = {}
+        await be._seat_reaper_sweep(strikes)  # strike 1 on lease@1.0
+
+        # released + immediately re-leased (a fresh consumer)
+        seat._leased_at = 2.0
+        await be._seat_reaper_sweep(strikes)
+        # the fresh lease must be at strike 1, NOT reclaimed
+        assert be._pool_queue.qsize() == 0
+        await be._seat_reaper_sweep(strikes)
+        # two strikes on the SAME lease -> reclaimed now
+        assert be._pool_queue.qsize() == 1
+
+    asyncio.run(scenario())

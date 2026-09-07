@@ -28,6 +28,11 @@ def fx(tmp_path):
     return LocalEffects(working_directory=str(tmp_path))
 
 
+#: A COMPLETE little PDF. The old fixture was b"%PDF-1.4 x", which is
+#: exactly the shape of a truncated download and is now rejected.
+_WHOLE_PDF = b"%PDF-1.4 x\ntrailer\n%%EOF\n"
+
+
 def _run(
     fx,
     url,
@@ -36,7 +41,7 @@ def _run(
     *,
     status=200,
     ctype="application/pdf",
-    body=b"%PDF-1.4 x",
+    body=_WHOLE_PDF,
 ):
     """Drive _retry_download_stdlib with a stubbed urllib fetch."""
 
@@ -71,7 +76,7 @@ def _run(
 def test_recovers_a_real_pdf(fx, monkeypatch):
     out = _run(fx, "https://pub/x.pdf", "pdfs/a.pdf", monkeypatch)
     assert out is not None and out.success
-    assert out.bytes_written == len(b"%PDF-1.4 x")
+    assert out.bytes_written == len(_WHOLE_PDF)
     assert os.path.isfile(os.path.join(fx.working_directory, "pdfs/a.pdf"))
 
 
@@ -177,3 +182,17 @@ def test_non_pdf_destination_skips_the_magic_rule(fx, monkeypatch):
         body=b"<root/>",
     )
     assert out is not None and out.success
+
+
+def test_declines_a_truncated_pdf(fx, monkeypatch):
+    """The stdlib fallback must apply the same truncation rule as the
+    primary path, or a severed body simply routes around the fix."""
+    out = _run(
+        fx,
+        "https://pub/x.pdf",
+        "pdfs/a.pdf",
+        monkeypatch,
+        body=b"%PDF-1.4 head with no trailer",
+    )
+    assert out is None
+    assert not os.path.isfile(os.path.join(fx.working_directory, "pdfs/a.pdf"))

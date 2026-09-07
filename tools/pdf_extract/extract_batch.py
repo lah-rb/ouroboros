@@ -4,17 +4,22 @@
 One agent dispatch = one invocation of this script = one OS process
 (crash isolation: the bake-off showed long-lived vision servers
 accumulate state and die mid-batch; per-batch processes bound the blast
-radius). The script owns its own VLM server child for the batch —
-llama-server by default, mlx_vlm.server as a station-dependent opt-in
-(--vl-backend; MLX is ~1.15x faster and exists on one machine, llama.cpp
-is fidelity-identical and runs everywhere).
+radius). The VL model is reached one of three ways (--vl-backend):
+`llmvp` (default) talks to the RUNNING fleet server over its GraphQL API
+— paddle is a hot secondary there, named per request, exactly as every
+other lane addresses every other model; `llamacpp` / `mlx` spawn a private
+server child for the batch (a station with no fleet server). The llmvp
+path deliberately uses NO OpenAI-shim route: LLMVP's `/v1` shim is
+optional and absent on the remote fleet, and a tool that needed it would
+fail there silently-shaped.
 
 Pipeline per paper:
   1. pymupdf renders pages (160 dpi) and extracts the per-page text
      layer — the publisher's own text, used ONLY as the verification
      oracle, never as output (one output dialect: the engine's).
-  2. PaddleOCR-VL (layout pipeline native, VLM over an OpenAI-shaped
-     endpoint) produces per-page markdown; pages join into
+  2. PaddleOCR-VL (layout detection native in this venv; per-region VL
+     recognition via the fleet's GraphQL `visionCompletion`, or a spawned
+     server's OpenAI API) produces per-page markdown; pages join into
      databank/markdown/<paper_key>.md.
   3. Figure crops from the pipeline are deduped (dHash) and filtered
      (size/entropy) into databank/figures/<paper_key>/fig_NN.png; the
@@ -53,8 +58,9 @@ Usage:
   .venv/bin/python extract_batch.py --pdfs a.pdf b.pdf \
       --databank-dir /path/to/databank \
       [--keys key_a key_b] [--dpi 160] \
-      [--vl-backend llamacpp|mlx] [--model <gguf|mlx dir>] \
-      [--mmproj mmproj.gguf] [--vl-parallel 4]
+      [--vl-backend llmvp|llamacpp|mlx] [--llmvp-url http://host:8008] \
+      [--model <registry name | gguf | mlx dir>] [--mmproj mmproj.gguf] \
+      [--vl-parallel 4] [--text-mode region|auto|page]
 
 Weights default to the backend's entry under models/ (gitignored,
 operator-placed), overridable per station with OUROBOROS_PADDLE_GGUF /
@@ -64,6 +70,7 @@ OUROBOROS_PADDLE_MMPROJ / OUROBOROS_PADDLE_MLX.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import re
@@ -128,9 +135,26 @@ _FURNITURE = re.compile(
 )
 
 # Above this, a document is a book and gets a human decision instead of an OCR
-# pass — see extract_paper. Above every paper that has succeeded on this corpus
-# (max 177 pages), below the 560-page volume that cannot fit a dispatch budget.
-_MAX_EXTRACT_PAGES = int(os.environ.get("OUROBOROS_MAX_EXTRACT_PAGES", "200"))
+# pass — see extract_paper. The bound is CURATION, not OCR: extraction is
+# page-by-page and segment-resumable, so a long document costs time but never
+# fails, while the curator seat is 65,536 tokens (~56,689 after turn overhead)
+# and a doc that will not fit even at the compression ladder's deepest rung
+# parks as curate_oversize.
+#
+# 200 -> 300 (2026-08-29, measured). Floor tokens were measured for 199 real
+# extractions through the actual ladder (compress_rung "full" +
+# build_curator_doc + the script-aware char estimate). PAGE COUNT IS A WEAK
+# PROXY and runs the OPPOSITE way for big documents: dense articles floor at
+# 750+ tok/page while large reports and theses run 50-300 (a 390-page USGS
+# report floors at 21k tokens and FITS; a 148-page dense paper floors at 61k
+# and PARKS). Across documents >= 60 pages, 89% already fit the seat, and the
+# fit limit is ~220 pages at the sparse density typical of that class. 300
+# covers it with headroom while still refusing the true books (the queue's
+# tail runs 400-2,790 pages). Cost on the live queue: +34 papers, +8.1k pages,
+# ~+14 h of OCR. A paper that parks at curate is not lost — the markdown is in
+# the corpus and the park is a review queue, so a later, larger curate seat
+# re-admits it.
+_MAX_EXTRACT_PAGES = int(os.environ.get("OUROBOROS_MAX_EXTRACT_PAGES", "300"))
 
 # Degenerate-decode detection — see _max_repeat_words.
 _REPEAT_MAX_PERIOD = 24  # longest phrase treated as a loop unit
@@ -235,9 +259,42 @@ _LLAMA_SERVER = os.environ.get("OUROBOROS_LLAMA_SERVER", "llama-server")
 # The fleet server: paddle held hot as a Phase 2b secondary rather than
 # spawned per batch. No weights load, no teardown, and the OCR stage becomes
 # visible to LLMVP's model management instead of being a private subprocess.
-# The port is the SERVER's, so nothing here picks a free one.
+# The port is the SERVER's, so nothing here picks a free one. The URL is a
+# BASE (scheme://host:port); the tool appends /graphql itself. --llmvp-url
+# overrides the env, and the agent passes it explicitly when the ocr lane is
+# routed to another host (mission config llmvp_domains["ocr"]).
 _LLMVP_URL = os.environ.get("OUROBOROS_LLMVP_URL", "http://127.0.0.1:8008")
 _LLMVP_MODEL = os.environ.get("OUROBOROS_LLMVP_VL_MODEL", "paddle-ocr-vl")
+
+# paddlex insists on constructing ITS OWN OpenAI-shaped client for the VL
+# recognition step (GenAIConfig.backend is a closed set of server kinds, none
+# of them GraphQL). It never contacts that URL at construction when a model
+# name is supplied, so the llmvp backend hands it an address nothing listens
+# on and then REPLACES the recognizer object with the GraphQL one below. Port
+# 1 is reserved and unbound on every host; if the swap ever failed to take,
+# the first crop would refuse loudly here instead of quietly going to a shim.
+_PLACEHOLDER_VL_URL = "http://127.0.0.1:1/"
+
+# Verbatim copy of agent/effects/inference.py VISION_MUTATION — this venv
+# cannot import the agent package, and the two must not drift: the selected
+# fields are what LLMVP's VisionCompletionResponse offers. `visionModel` is
+# the STRICT check (which model actually answered), not a nicety.
+_VISION_MUTATION = """
+mutation VisionCompletion($request: VisionCompletionRequest!) {
+    visionCompletion(request: $request) {
+        text
+        generatedTokens
+        promptTokens
+        imageCount
+        visionModel
+        decodeMs
+    }
+}
+"""
+_MODELS_QUERY = "{ models { name state } }"
+_LOAD_MUTATION = (
+    "mutation($n:String!){ loadModel(name:$n){ ok state footprintGb detail } }"
+)
 
 # Weights live in models/ (gitignored — operator-placed, as the MLX model
 # always has been). Env overrides let a station point elsewhere without a
@@ -320,11 +377,12 @@ def _vl_pipe_kwargs(backend: str, model: str, port: int, concurrency: int = 0) -
     so the name IS the model) and left unset for a spawned llama.cpp server,
     whose model is fixed at spawn and discovered from /v1/models.
 
-    `llmvp` is the FLEET server: no subprocess, no spawn, paddle already hot
-    beside the primary as a Phase 2b secondary. The name MUST be sent there —
-    LLMVP serves several models from one port and its routing is strict, so
-    an unnamed request would be answered by the primary rather than by
-    paddle. That is also the reason its /v1/models lists the hot entries.
+    `llmvp` is the FLEET server, and paddlex's own client never reaches it:
+    the pipeline is constructed against _PLACEHOLDER_VL_URL (nothing listens
+    there) purely so paddlex will build its layout + assembly machinery, and
+    _build_pipe then swaps the VL recognizer for _GraphQLVisionRecognizer.
+    The api model name is still set: paddlex only calls the server at
+    construction when the name is MISSING (it would ask /models for one).
     """
     kwargs: dict = {
         "vl_rec_backend": "mlx-vlm-server" if backend == "mlx" else "llama-cpp-server",
@@ -333,31 +391,64 @@ def _vl_pipe_kwargs(backend: str, model: str, port: int, concurrency: int = 0) -
     if backend == "mlx":
         kwargs["vl_rec_api_model_name"] = model
     elif backend == "llmvp":
-        # THE /v1 IS LOAD-BEARING. paddlex builds an AsyncOpenAI client from
-        # this URL, and the OpenAI SDK appends "/chat/completions" to it —
-        # so a bare host posts to /chat/completions. llama-server answers
-        # there AND at /v1/chat/completions, which is why the spawned backend
-        # gets away with a root URL; LLMVP mounts its shim only under /v1 and
-        # 404s. Cost one live run to find.
-        kwargs["vl_rec_server_url"] = f"{_LLMVP_URL.rstrip('/')}/v1/"
+        kwargs["vl_rec_server_url"] = _PLACEHOLDER_VL_URL
         kwargs["vl_rec_api_model_name"] = model or _LLMVP_MODEL
     if concurrency:
         kwargs["vl_rec_max_concurrency"] = concurrency
     return kwargs
 
 
-def _llmvp_models(port: int, timeout: float = 3.0) -> Optional[set]:
-    """Model ids the fleet server will serve, or None if it is not answering."""
+def _graphql(base_url: str, query: str, variables: dict | None, timeout: float) -> dict:
+    """One GraphQL POST to the fleet server; returns the `data` object.
+
+    THE TOOL'S ONLY TRANSPORT to LLMVP. A GraphQL error is raised as a
+    RuntimeError carrying the server's message verbatim, because the message
+    IS the routing verdict ("model 'x' is a local config but is not hot",
+    "unknown model 'y'") and callers branch on it.
+    """
+    body = {"query": query}
+    if variables is not None:
+        body["variables"] = variables
+    req = urllib.request.Request(
+        f"{base_url.rstrip('/')}/graphql",
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        out = json.loads(resp.read())
+    errors = out.get("errors") if isinstance(out, dict) else None
+    if errors:
+        first = errors[0] if isinstance(errors, list) and errors else errors
+        msg = first.get("message") if isinstance(first, dict) else str(first)
+        raise RuntimeError(str(msg or "GraphQL error"))
+    return (out.get("data") or {}) if isinstance(out, dict) else {}
+
+
+def _llmvp_models(base_url: str, timeout: float = 3.0) -> Optional[dict]:
+    """{registry name: state} from the fleet server, or None if it is not
+    answering. State is "active" (the primary), "hot" (a resident secondary)
+    or "cold" (a config with no weights loaded).
+
+    TAKES THE BASE URL, NOT A PORT, and asks GraphQL, not /v1/models: the
+    preflight once rebuilt the address as 127.0.0.1:<port> and asked the
+    REST shim — so pointing OUROBOROS_LLMVP_URL at another host asked the
+    LOCAL server whether it could serve the OCR model and, on a miss, called
+    loadModel on it: the opposite of the intent (the reason to aim OCR at a
+    remote fleet is to keep paddle OFF this box's GPU). And the shim is
+    optional — the remote fleet does not mount it at all.
+    """
     try:
-        with urllib.request.urlopen(
-            f"http://127.0.0.1:{port}/v1/models", timeout=timeout
-        ) as r:
-            return {m.get("id") for m in json.load(r).get("data", [])}
+        data = _graphql(base_url, _MODELS_QUERY, None, timeout)
     except Exception:  # noqa: BLE001 — down, starting, or not listening
         return None
+    return {
+        str(m.get("name")): str(m.get("state") or "")
+        for m in (data.get("models") or [])
+        if isinstance(m, dict) and m.get("name")
+    }
 
 
-def _llmvp_load(port: int, model: str, timeout: float = 300.0) -> tuple[bool, str]:
+def _llmvp_load(base_url: str, model: str, timeout: float = 300.0) -> tuple[bool, str]:
     """Ask LLMVP to make ``model`` hot. Returns (ok, detail).
 
     THIS IS ORCHESTRATION, NOT A SIDE EFFECT OF INFERENCE, and the distinction
@@ -367,46 +458,38 @@ def _llmvp_load(port: int, model: str, timeout: float = 300.0) -> tuple[bool, st
     reports what it hears — including a governor refusal, which is a sizing
     decision the operator needs to read rather than a crash.
     """
-    q = {
-        "query": "mutation($n:String!){ loadModel(name:$n){ ok state "
-        "footprintGb detail } }",
-        "variables": {"n": model},
-    }
-    req = urllib.request.Request(
-        f"http://127.0.0.1:{port}/graphql",
-        data=json.dumps(q).encode(),
-        headers={"Content-Type": "application/json"},
-    )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            body = json.load(r)
+        data = _graphql(base_url, _LOAD_MUTATION, {"n": model}, timeout)
     except Exception as exc:  # noqa: BLE001 — report, the caller decides
         return False, f"{type(exc).__name__}: {exc}"
-    if body.get("errors"):
-        return False, json.dumps(body["errors"])[:300]
-    res = (body.get("data") or {}).get("loadModel") or {}
-    return bool(res.get("ok")), res.get("detail") or ""
+    res = data.get("loadModel") or {}
+    return bool(res.get("ok")), str(res.get("detail") or "")
 
 
-def _ensure_llmvp_model(port: int, model: str) -> tuple[bool, str]:
+def _ensure_llmvp_model(base_url: str, model: str) -> tuple[bool, str]:
     """Server up AND ``model`` servable, loading it if it is merely cold.
 
     Readiness and routability are one question here: LLMVP serves several
     models from one port with STRICT routing, so a server that is up but has
     not loaded the OCR model would refuse every crop. Resolving it before any
     page is rendered turns a per-crop failure into one clear startup answer.
+    A name the registry does not know fails fast without a loadModel — the
+    server would only KeyError, and the fix is a config, not a load.
     """
-    names = _llmvp_models(port)
-    if names is None:
+    states = _llmvp_models(base_url)
+    if states is None:
         return False, "not reachable"
-    if model in names:
+    if model not in states:
+        known = ", ".join(sorted(states)) or "(none)"
+        return False, f"unknown model {model!r}; registry has: {known}"
+    if states[model] in ("hot", "active"):
         return True, "already hot"
-    ok, detail = _llmvp_load(port, model)
+    ok, detail = _llmvp_load(base_url, model)
     if not ok:
         return False, f"loadModel refused: {detail}"
-    names = _llmvp_models(port)
-    if names is None or model not in names:
-        return False, "loadModel reported ok but the model is not listed"
+    states = _llmvp_models(base_url)
+    if states is None or states.get(model) not in ("hot", "active"):
+        return False, "loadModel reported ok but the model is not hot"
     return True, "loaded"
 
 
@@ -424,6 +507,238 @@ def _wait_health(port: int, timeout: float = 120.0) -> bool:
         except Exception:
             time.sleep(2)
     return False
+
+
+# ── VL recognition over GraphQL (the llmvp backend) ──────────────────
+#
+# paddlex's PaddleOCR-VL pipeline is two models: PP-DocLayoutV3 finds the
+# blocks (local, this venv) and a VL model reads each crop with a per-block
+# query ("OCR:", "Table Recognition:", "Formula Recognition:", ...). The
+# second is a plain object the pipeline holds at `vl_rec_model` and uses
+# three ways — .predict(items, **kw), .close(), and
+# .batch_sampler.batch_size — so it can be replaced with one that speaks
+# LLMVP's GraphQL. The prompts, the PNG encoding and the sampling are the
+# stock client's, so only the ENVELOPE changes; fidelity is unaffected.
+
+
+def _encode_png_data_uri(image) -> str:
+    """A region crop (numpy BGR array) or raw PNG bytes as a data URI.
+
+    Byte-for-byte what paddlex's stock client sends to a llama-cpp-server
+    backend: BGR -> RGB, PNG (not JPEG), base64 — and NO resize, because the
+    stock client only forwards min/max_pixels to vllm/fastdeploy.
+    """
+    if isinstance(image, (bytes, bytearray)):
+        png = bytes(image)
+    else:
+        import io
+
+        arr = image
+        if getattr(arr, "ndim", 0) == 3 and arr.shape[-1] >= 3:
+            arr = arr[:, :, :3][:, :, ::-1]  # BGR -> RGB (what cv2 BGR2RGB does)
+        img = Image.fromarray(arr)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        png = buf.getvalue()
+    return "data:image/png;base64," + base64.b64encode(png).decode("ascii")
+
+
+def _vision_completion(
+    base_url: str,
+    model: str,
+    data_uri: str,
+    prompt: str,
+    max_tokens: int,
+    temperature: float,
+    timeout: float = 600.0,
+    strict: bool = True,
+) -> tuple[str, str]:
+    """One `visionCompletion` for one image. Returns (text, served model).
+
+    Fields are exactly LLMVP's VisionCompletionRequest: prompt, images, model,
+    maxTokens, temperature. NO topP and NO requestId — GraphQL rejects the
+    WHOLE request for one undeclared field, and top_p was never transported
+    on the vision path anyway (the REST shim dropped it on the floor).
+
+    STRICT (default): the answer must come from the model that was asked
+    for. LLMVP's routing already refuses a cold name rather than answering
+    with the primary, and this is the client-side half of that contract — a
+    mismatch is an error, never an accepted transcription. The server reports
+    `visionModel` as the served config's `model.name`, so a SECONDARY's yaml
+    must keep model.name equal to its registry stem (paddle-ocr-vl and the
+    -mac variant do; configs/README.md states the rule).
+
+    `strict=False` is for a request addressed to the ACTIVE PRIMARY, whose
+    model.name legitimately differs from its stem (muse-glimmer-30b-cuda
+    inherits `muse-glimmer-30b`): asking the primary for its own vision
+    cannot be answered by the wrong model, and requiring the name to match
+    would refuse every page. Live: the first end-to-end run did exactly that.
+    """
+    variables = {
+        "request": {
+            "prompt": prompt,
+            "images": [{"url": data_uri}],
+            "model": model,
+            "maxTokens": int(max_tokens),
+            "temperature": float(temperature),
+        }
+    }
+    data = _graphql(base_url, _VISION_MUTATION, variables, timeout)
+    res = data.get("visionCompletion") or {}
+    served = str(res.get("visionModel") or "")
+    if strict and served and served != model:
+        raise RuntimeError(f"vision request for {model!r} was served by {served!r}")
+    return str(res.get("text") or ""), served
+
+
+class _GraphQLVisionRecognizer:
+    """Drop-in for paddlex's VL recognizer, speaking LLMVP GraphQL.
+
+    Duck-types the three members the PaddleOCR-VL pipeline touches. Results
+    come back IN INPUT ORDER as the pipeline's own DocVLMResult dicts
+    (`{**item, "result": text}` — the stock format_doc_vlm_result_dict shape),
+    because the assembly step indexes them positionally and then writes
+    `["image"]` into each.
+
+    Kwargs the pipeline passes and this ignores, with the reason each is safe:
+    `use_cache` (a local-engine flag), `min_pixels`/`max_pixels` (the stock
+    client forwards them only to vllm/fastdeploy — llama-cpp-server never saw
+    them), `skip_special_tokens` (a local-engine postprocess; the tool never
+    enables spotting, so it is always True and the server's own seal already
+    strips the template tokens), `top_p` (not in the GraphQL schema; never
+    transported on this path).
+    """
+
+    def __init__(
+        self, base_url: str, model: str, max_concurrency: int = 1, strict: bool = True
+    ):
+        import threading
+        import types
+
+        self.base_url = base_url.rstrip("/")
+        self.model = model
+        # False only when `model` is the fleet's ACTIVE PRIMARY (see
+        # _vision_completion); a secondary is always checked.
+        self.strict = bool(strict)
+        self.max_concurrency = max(1, int(max_concurrency or 1))
+        # The pipeline reads this to size how many blocks it batches into one
+        # predict() call; 8192 is paddlex's own value for a GenAI client.
+        self.batch_sampler = types.SimpleNamespace(batch_size=8192)
+        self.last_vision_model = ""
+        self._lock = threading.Lock()
+        self._warmed = False
+
+    def _one(self, item: dict, max_tokens: int, temperature: float) -> str:
+        data_uri = _encode_png_data_uri(item["image"])
+        prompt = str(item.get("query") or "OCR:")
+        try:
+            text, served = _vision_completion(
+                self.base_url,
+                self.model,
+                data_uri,
+                prompt,
+                max_tokens,
+                temperature,
+                strict=self.strict,
+            )
+        except RuntimeError as exc:
+            # A RESIDENT SECONDARY IS COLD AFTER EVERY SERVER BOUNCE. The
+            # preflight normally warms it, but a bounce mid-batch (or a
+            # sibling process unloading it) shows up here as "not hot".
+            # Load it ONCE per recognizer and retry that request once —
+            # preocr_triage's idiom; anything else propagates.
+            if "not hot" not in str(exc).lower():
+                raise
+            with self._lock:
+                if not self._warmed:
+                    self._warmed = True
+                    ok, why = _llmvp_load(self.base_url, self.model)
+                    if not ok:
+                        raise RuntimeError(f"loadModel refused: {why}") from exc
+            text, served = _vision_completion(
+                self.base_url,
+                self.model,
+                data_uri,
+                prompt,
+                max_tokens,
+                temperature,
+                strict=self.strict,
+            )
+        if served:
+            self.last_vision_model = served
+        return text
+
+    def predict(self, items, **kw):
+        from concurrent.futures import ThreadPoolExecutor
+
+        try:
+            from paddlex.inference.models.doc_vlm.result import DocVLMResult
+        except Exception:  # noqa: BLE001 — outside the tool venv (tests)
+            DocVLMResult = dict  # noqa: N806
+
+        items = list(items)
+        max_tokens = int(kw.get("max_new_tokens") or 4096)
+        temperature = kw.get("temperature")
+        temperature = 0.0 if temperature is None else float(temperature)
+        with ThreadPoolExecutor(max_workers=self.max_concurrency) as pool:
+            texts = list(
+                pool.map(lambda it: self._one(it, max_tokens, temperature), items)
+            )
+        for item, text in zip(items, texts):
+            out = {k: v for k, v in item.items()}
+            out["result"] = text
+            yield DocVLMResult(out)
+
+    def close(self) -> None:
+        return None
+
+
+def _build_pipe(backend: str, model: str, port: int, concurrency: int, llmvp_url: str):
+    """The PaddleOCRVL pipeline for `backend` — ONE factory, so this tool and
+    pdf_extract_one.py cannot drift apart.
+
+    For `llmvp` the stock VL recognizer is swapped for _GraphQLVisionRecognizer
+    on the INNER paddlex pipeline. The outer object paddlex returns is an
+    AutoParallel wrapper whose __getattr__ forwards READS to `_pipeline` but
+    does not intercept writes — assigning on the wrapper would set a dead
+    attribute and leave the stock OpenAI client in place. Asserted, so a
+    paddlex upgrade that moves the seam fails loudly rather than silently
+    reverting to the shim.
+    """
+    from paddleocr import PaddleOCRVL
+
+    pipe = PaddleOCRVL(
+        **_vl_pipe_kwargs(
+            backend, model, port, concurrency=concurrency if backend == "llmvp" else 0
+        )
+    )
+    if backend != "llmvp":
+        return pipe
+    outer = pipe.paddlex_pipeline
+    if getattr(outer, "multi_device_inference", False):
+        raise RuntimeError("llmvp backend: multi-device paddlex pipelines unsupported")
+    inner = getattr(outer, "_pipeline", None)
+    if inner is None or not hasattr(inner, "vl_rec_model"):
+        raise RuntimeError(
+            "llmvp backend: paddlex pipeline has no `_pipeline.vl_rec_model` seam "
+            "(paddlex upgrade?) — refusing rather than falling back to the shim"
+        )
+    try:
+        inner.vl_rec_model.close()
+    except Exception:  # noqa: BLE001 — the placeholder client owns nothing
+        pass
+    name = model or _LLMVP_MODEL
+    # The preflight already proved the name is servable; one more registry
+    # read tells us WHICH kind: a secondary is held to the strict served-model
+    # check, the active primary is exempt (its model.name may differ from its
+    # stem). An unreachable registry here defaults to strict.
+    states = _llmvp_models(llmvp_url) or {}
+    recognizer = _GraphQLVisionRecognizer(
+        llmvp_url, name, concurrency, strict=states.get(name) != "active"
+    )
+    inner.vl_rec_model = recognizer
+    pipe._ouro_recognizer = recognizer  # read back for the report
+    return pipe
 
 
 # ── Text normalization (shared by all verification checks) ───────────
@@ -622,6 +937,120 @@ def _script_profile(text: str) -> dict:
     out = {k: round(v / total, 3) for k, v in counts.items()}
     out["nonlatin"] = round(1.0 - counts["latin"] / total, 3)
     return out
+
+
+# ── Page-shape text mode (EXPERIMENT — challenged canonical and LOST) ─
+#
+# WHY IT EXISTS. The region pipeline sends ~25-30 tiny crops per page, and
+# every crop pays a stack of per-request constants (minimum-patch-grid
+# encode 57-73 ms, serving and engine per-request costs — three successive
+# throughput levers each died on one, dev/OCR_LANE_2026-08-29.md). ONE
+# page-level request amortizes them all, and a first 24-page dev-set A/B
+# scored numeric 0.8625 vs the region pipeline's 0.6744.
+#
+# WHY IT IS NOT THE DEFAULT. The pre-registered 15-paper/90-page fresh-
+# sample validation REVERSED that result: region 0.8929 / page-shape
+# 0.7410 numeric, 12 of 13 page-routed papers below their region
+# counterpart, one at 0.34 with the classic failure shape — the one-shot
+# output was HALF the region output's bytes and ended in a degenerate
+# "at 476°C" x403 orbit. On dense two-column pages the model skips content
+# and orbits on numeric tables; the dev-set win was a small-n artifact of
+# a weak-baseline sample. Wall improved only 1.33x. The region pipeline is
+# canonical; this mode stays for experiments (--text-mode auto|page).
+#
+# THE ROUTER (auto mode): CJK-heavy pages (measured 0.000 one-shot where
+# region booked 1.000) and no-text-layer pages go to the region pipeline;
+# any page-shape failure falls back to the region path for THAT page.
+# Figures on page-shape pages are harvested from pymupdf geometry
+# (_figure_regions) into the same tmp layout, so _collect_figures dedups
+# and filters them identically (measured: 96 kept vs region's 87 on the
+# validation sample — the harvest itself is sound).
+
+_PAGE_MODE_MAX_TOKENS = int(os.environ.get("OUROBOROS_PAGE_MODE_MAX_TOKENS", "3584"))
+# Fraction of classified letters in the pymupdf truth above which a page
+# routes to the region pipeline. The measured failure was CJK; the other
+# scripts listed are unproven one-shot and cheap to keep on the safe path.
+_PAGE_MODE_NONPAGE_SCRIPTS = ("cjk", "hangul", "arabic", "thai", "hebrew")
+_PAGE_MODE_SCRIPT_MAX = float(os.environ.get("OUROBOROS_PAGE_MODE_SCRIPT_MAX", "0.10"))
+
+_PAGE_PROMPT = (
+    "Transcribe ALL text on this page as plain markdown, in reading order. "
+    "Include headers, body text, captions, footnotes and table contents. "
+    "Do not describe the page; output only the transcription."
+)
+
+
+def _route_page(truth: str) -> str:
+    """'page' or 'region' for one page, from its pymupdf prose truth.
+
+    Pure function of the truth text so the routing policy is testable
+    without a PDF in hand."""
+    stripped = truth.strip()
+    if len(stripped) < 200:
+        return "region"  # scan / no text layer: unverifiable, paddlex terrain
+    prof = _script_profile(stripped)
+    if (
+        sum(prof.get(s, 0.0) for s in _PAGE_MODE_NONPAGE_SCRIPTS)
+        > _PAGE_MODE_SCRIPT_MAX
+    ):
+        return "region"
+    return "page"
+
+
+def _page_transcribe(
+    png_bytes: bytes,
+    temperature: float,
+    top_p: float,
+    timeout: float = 300.0,
+    *,
+    base_url: str = _LLMVP_URL,
+    model: str = _LLMVP_MODEL,
+    strict: bool = True,
+) -> str:
+    """One full-page transcription through the fleet's GraphQL vision path.
+
+    Names the model the same way _ensure_llmvp_model does, so the call routes
+    identically on the production fleet (paddle as a hot secondary) and on a
+    standalone campaign server (paddle as primary). `top_p` is accepted for
+    signature stability and NOT transported: the GraphQL request has no such
+    field, and the REST shim this replaced silently dropped it too."""
+    del top_p
+    text, _served = _vision_completion(
+        base_url,
+        model,
+        _encode_png_data_uri(png_bytes),
+        _PAGE_PROMPT,
+        _PAGE_MODE_MAX_TOKENS,
+        temperature,
+        timeout,
+        strict=strict,
+    )
+    return text
+
+
+def _harvest_page_figures(page, out_dir: str, dpi: int) -> int:
+    """Render this page's figure regions (pymupdf geometry) as crops into
+    ``out_dir`` for _collect_figures to filter/dedup — the page-shape
+    replacement for the region pipeline's markdown_images harvest. Returns
+    the number of crops written; never raises (figures must not sink the
+    page's text)."""
+    n = 0
+    try:
+        rects = _figure_regions(page)
+        os.makedirs(out_dir, exist_ok=True)
+        for j, r in enumerate(rects):
+            try:
+                r = r & page.rect  # clamp
+                if r.width < 40 or r.height < 40:  # points; rules/underlines
+                    continue
+                pix = page.get_pixmap(dpi=dpi, clip=r)
+                pix.save(os.path.join(out_dir, f"pfig_{j:02d}.png"))
+                n += 1
+            except Exception:  # noqa: BLE001 — one bad rect is not fatal
+                continue
+    except Exception:  # noqa: BLE001
+        return n
+    return n
 
 
 # Collapse threshold mirrors extraction_actions.MAX_REPEAT_WORDS (the
@@ -874,13 +1303,24 @@ def extract_paper(
     temperature: float = 0.8,
     top_p: float = 0.95,
     page_range: tuple | None = None,
+    text_mode: str = "region",
+    llmvp_url: str = _LLMVP_URL,
+    llmvp_model: str = _LLMVP_MODEL,
 ) -> dict:
     """``page_range=(a, b)`` extracts pages [a, b) only — the BOOK SEGMENT
     mode. An explicit range is operator intent, so the oversize referral is
     bypassed; the markdown lands in a part file (markdown/<key>.part_AAAA.md)
     for the drain to assemble once every segment is done, and figure
     numbering continues from what is already on disk so segments never
-    clobber earlier crops."""
+    clobber earlier crops.
+
+    ``text_mode``: "region" (the paddlex layout+crop pipeline, this
+    function's historical behaviour and the parameter default so library
+    callers and tests are untouched), "page" (one full-page VL request per
+    page), or "auto" — the CANONICAL mode: _route_page decides per page,
+    and a failed page-shape call falls back to the region path for that
+    page. The CLI defaults to auto (env OUROBOROS_OCR_TEXT_MODE overrides
+    without a code change)."""
     t0 = time.time()
     report = {
         "paper_key": key,
@@ -899,6 +1339,13 @@ def extract_paper(
         "largest_table_rows": 0,
         "figures_kept": 0,
         "figures_dropped": 0,
+        "pages_page_mode": 0,
+        "pages_region_mode": 0,
+        "page_mode_fallbacks": 0,
+        # Which model ANSWERED (LLMVP's visionModel), "" for spawned servers.
+        # Observable from the drain's own JSON, so a mis-routed batch is
+        # visible without reading server logs.
+        "vision_model": "",
         "seconds": 0.0,
         "error": "",
     }
@@ -938,30 +1385,75 @@ def extract_paper(
             for i in page_indices:
                 page = doc[i]
                 png = os.path.join(tmp, f"p{i}.png")
-                page.get_pixmap(dpi=dpi).save(png)
+                pix = page.get_pixmap(dpi=dpi)
+                pix.save(png)
                 truth = _prose_text(page)
-
-                parts = []
                 out_dir = os.path.join(tmp, f"out{i}")
-                # Explicit, every call: the client otherwise pins temperature
-                # to 0 (greedy) for llama-cpp-server backends, and greedy
-                # loops deterministically on some pages. See --vl-temperature.
-                for res in pipe.predict(png, temperature=temperature, top_p=top_p):
-                    md = getattr(res, "markdown", None)
-                    if isinstance(md, dict):
-                        parts.append(md.get("markdown_texts") or "")
-                        # Some pipeline versions stash crops via save;
-                        # harvest both shapes.
-                        imgs = md.get("markdown_images") or {}
-                        os.makedirs(out_dir, exist_ok=True)
-                        for rel, im in imgs.items():
-                            try:
-                                im.save(os.path.join(out_dir, os.path.basename(rel)))
-                            except Exception:
-                                pass
-                    elif md:
-                        parts.append(str(md))
-                page_md = "\n".join(p for p in parts if p)
+
+                # Per-page route. "auto" is the canonical policy; explicit
+                # modes pin every page for A/Bs and rollback.
+                if text_mode == "auto":
+                    route = _route_page(truth)
+                elif text_mode == "page":
+                    route = "page"
+                else:
+                    route = "region"
+
+                page_md = ""
+                if route == "page":
+                    try:
+                        page_md = _page_transcribe(
+                            pix.tobytes("png"),
+                            temperature,
+                            top_p,
+                            base_url=llmvp_url,
+                            model=llmvp_model,
+                            strict=getattr(
+                                getattr(pipe, "_ouro_recognizer", None), "strict", True
+                            ),
+                        ).strip()
+                        report["vision_model"] = llmvp_model
+                    except Exception as exc:  # noqa: BLE001 — fall back per page
+                        print(
+                            f"page-mode fallback p{i}: "
+                            f"{type(exc).__name__}: {str(exc)[:120]}",
+                            file=sys.stderr,
+                        )
+                        page_md = ""
+                    if page_md:
+                        report["pages_page_mode"] += 1
+                        _harvest_page_figures(page, out_dir, dpi)
+                    else:
+                        # Empty answer or transport failure: the region
+                        # pipeline is the fallback CONTRACT for this page.
+                        report["page_mode_fallbacks"] += 1
+                        route = "region"
+
+                if route == "region":
+                    report["pages_region_mode"] += 1
+                    parts = []
+                    # Explicit, every call: the client otherwise pins
+                    # temperature to 0 (greedy) for llama-cpp-server
+                    # backends, and greedy loops deterministically on some
+                    # pages. See --vl-temperature.
+                    for res in pipe.predict(png, temperature=temperature, top_p=top_p):
+                        md = getattr(res, "markdown", None)
+                        if isinstance(md, dict):
+                            parts.append(md.get("markdown_texts") or "")
+                            # Some pipeline versions stash crops via save;
+                            # harvest both shapes.
+                            imgs = md.get("markdown_images") or {}
+                            os.makedirs(out_dir, exist_ok=True)
+                            for rel, im in imgs.items():
+                                try:
+                                    im.save(
+                                        os.path.join(out_dir, os.path.basename(rel))
+                                    )
+                                except Exception:
+                                    pass
+                        elif md:
+                            parts.append(str(md))
+                    page_md = "\n".join(p for p in parts if p)
                 page_mds.append(page_md)
 
                 if len(truth.strip()) >= 200 and page_md.strip():
@@ -1028,6 +1520,11 @@ def extract_paper(
         # until there is enough of it to calibrate against.
         report["table_token_leak"] = len(_TABLE_TOKEN_LEAK.findall(joined))
         report["largest_table_rows"] = _largest_table_rows(joined)
+        served = getattr(
+            getattr(pipe, "_ouro_recognizer", None), "last_vision_model", ""
+        )
+        if served:
+            report["vision_model"] = str(served)
     except Exception as e:  # noqa: BLE001 - report, don't crash the batch
         report["error"] = f"{type(e).__name__}: {e}"
         if os.path.isdir(fig_dir) and not os.listdir(fig_dir):
@@ -1067,6 +1564,13 @@ def main() -> int:
         "(default: the entry under models/)",
     )
     ap.add_argument(
+        "--llmvp-url",
+        default=_LLMVP_URL,
+        help="fleet server BASE URL for --vl-backend llmvp (scheme://host:port; "
+        "the tool speaks its GraphQL at /graphql). The agent passes this "
+        f"explicitly when the ocr lane is routed remotely; default {_LLMVP_URL}",
+    )
+    ap.add_argument(
         "--vl-parallel",
         type=int,
         default=4,
@@ -1097,6 +1601,20 @@ def main() -> int:
         default=0.95,
         help="VL nucleus sampling threshold passed per predict()",
     )
+    ap.add_argument(
+        "--text-mode",
+        choices=("auto", "page", "region"),
+        default=os.environ.get("OUROBOROS_OCR_TEXT_MODE", "region"),
+        help="Text extraction shape. 'region' (CANONICAL — the paddlex "
+        "layout+crop pipeline) held numeric 0.893 vs 'auto' page-shape's "
+        "0.741 on the 15-paper/90-page pre-registered validation "
+        "(2026-08-29, dev/OCR_LANE doc): one-shot page transcription "
+        "skips content and orbits on dense pages, and its earlier +0.19 "
+        "dev-set win did not generalize. 'auto' (page-shape with script/"
+        "text-layer routing and per-page region fallback) and 'page' stay "
+        "as experiment modes; OUROBOROS_OCR_TEXT_MODE overrides the "
+        "default without a code change.",
+    )
     args = ap.parse_args()
 
     # Resolve weights together, so a half-specified pair cannot silently mix
@@ -1125,13 +1643,13 @@ def main() -> int:
     # alongside the hot one).
     server = None
     if args.vl_backend == "llmvp":
-        port = int(_LLMVP_URL.rsplit(":", 1)[-1])
-        ok, why = _ensure_llmvp_model(port, args.model)
+        port = 0  # nothing is spawned; the fleet server owns its port
+        ok, why = _ensure_llmvp_model(args.llmvp_url, args.model)
         if not ok:
             print(
                 json.dumps(
                     {
-                        "error": f"LLMVP at {_LLMVP_URL} cannot serve "
+                        "error": f"LLMVP at {args.llmvp_url} cannot serve "
                         f"{args.model!r}: {why}. Start the server, or use "
                         f"--vl-backend llamacpp to spawn a private one."
                     }
@@ -1151,18 +1669,11 @@ def main() -> int:
         if server is not None and not _wait_health(port):
             print(json.dumps({"error": f"{args.vl_backend} server failed to start"}))
             return 3
-        from paddleocr import PaddleOCRVL
-
-        pipe = PaddleOCRVL(
-            **_vl_pipe_kwargs(
-                args.vl_backend,
-                args.model,
-                port,
-                # The fleet server's parallelism is its OWN vision_pool_size,
-                # not a flag here — but the CLIENT still has to fan out to use
-                # it, so the crop concurrency is passed through.
-                concurrency=args.vl_parallel if args.vl_backend == "llmvp" else 0,
-            ),
+        # The fleet server's parallelism is its OWN vision_pool_size, not a
+        # flag here — but the CLIENT still has to fan out to use it, so the
+        # crop concurrency is passed through (extra requests queue there).
+        pipe = _build_pipe(
+            args.vl_backend, args.model, port, args.vl_parallel, args.llmvp_url
         )
         for pdf, key in zip(args.pdfs, keys):
             pr = None
@@ -1178,6 +1689,9 @@ def main() -> int:
                 temperature=args.vl_temperature,
                 top_p=args.vl_top_p,
                 page_range=pr,
+                text_mode=args.text_mode,
+                llmvp_url=args.llmvp_url,
+                llmvp_model=args.model,
             )
             print(json.dumps(report, ensure_ascii=False), flush=True)
     finally:

@@ -37,8 +37,8 @@ import asyncio
 import json
 import logging
 import time
-from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Optional
+from dataclasses import dataclass
+from typing import Any, Callable, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -201,6 +201,11 @@ class CapacityFeed:
         # Backstop for a connection that is open but delivering nothing.
         # Far above the measured 27.7 s median publish gap, because on a
         # push feed a long quiet period is normal and means "no change".
+        # Read in TWO places that must agree: snapshot() ages the feed out
+        # at this bound, and _subscribe_once bounds recv() by it so the
+        # transport reconnects at the same moment (the 2026-08-26 stall
+        # was the first half working without the second). 0 disables the
+        # recv bound (tests).
         self._absolute_stale_s = 900.0
 
         self._connected = False
@@ -375,7 +380,34 @@ class CapacityFeed:
             # changed" rather than "we have lost track".
             self._connected = True
             self._disconnected_at = None
-            async for raw in conn:
+            from websockets.exceptions import ConnectionClosedOK
+
+            while True:
+                # THE STALENESS WATCHDOG. `async for raw in conn` here is
+                # what turned the 2026-08-26 half-open stall into a
+                # permanent width-1 degradation: the server stopped
+                # delivering to THIS socket while keeping it open (WS-level
+                # pings still answered), so no exception ever fired and the
+                # reconnect ladder below never ran — snapshot() correctly
+                # aged the feed out via _absolute_stale_s and nothing acted
+                # on it. A fresh subscriber on the same server received
+                # frames immediately (seq 1196-1198), proving the fix is a
+                # reconnect. Bounding recv() by the SAME constant closes
+                # the loop: detection now reaches the transport, and the
+                # push-feed philosophy is preserved — 900 s is ~32x the
+                # measured median publish gap, so a healthy quiet link is
+                # never churned.
+                try:
+                    raw = await asyncio.wait_for(
+                        conn.recv(), timeout=self._absolute_stale_s or None
+                    )
+                except asyncio.TimeoutError:
+                    raise RuntimeError(
+                        f"no frame for {self._absolute_stale_s:.0f}s with the "
+                        "link open — server-side delivery stalled; reconnecting"
+                    ) from None
+                except ConnectionClosedOK:
+                    return  # server closed cleanly (the old async-for exit)
                 msg = json.loads(raw)
                 kind = msg.get("type")
                 if kind == "next":

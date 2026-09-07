@@ -255,3 +255,176 @@ class TestACutIsAlwaysAnnounced:
         got, verdict = eng._size_against_pool(req, n_ctx=POOL, total=100)
         assert verdict is _AdmitVerdict.ADMIT
         assert got < req.max_tokens
+
+
+# ── the 2026-08-24/25 wedge (3h38m, 2,288,327 no-progress decodes) ──
+#
+# Every request in the tests above uses a ONE-TOKEN prompt (`_req(..., [100])`),
+# so the case that actually took production down — a prompt large relative to
+# free cells — was untested by construction. These cover it.
+
+
+def _prompt(n):
+    """A prompt of n distinct tokens. The fixtures above use [100]; a
+    one-token prompt cannot exercise prompt-vs-pool arithmetic at all."""
+    return list(range(1000, 1000 + n))
+
+
+class TestAPromptMustFitBeforeAGenerationIsSized:
+    def test_the_incident_case_queues_instead_of_admitting(self):
+        """Verbatim: a live stream holding 31,376 cells, then a 31,244-token
+        prompt asking 8,192. Production admitted it at 2,660 and then could
+        not prefill a single 2,048-row batch, forever."""
+        eng = _engine_with(
+            FakeCtx(decode_script=[0]),
+            samplers={"a": FakeSampler([1, EOG]), "big": FakeSampler([1, EOG])},
+            n_batch=2048,
+        )
+        eng._llama._n_ctx = POOL
+        _live(eng, "a", 1, 23_184, 8_192)  # 31,376 cells entitled
+
+        req = _req("big", _prompt(31_244), max_tokens=8_192, slot=_seat(3))
+        got, verdict = eng._size_against_pool(req, POOL, 2)
+
+        assert verdict is _AdmitVerdict.QUEUE
+        assert got == 0
+
+    def test_a_prompt_that_leaves_room_still_admits(self):
+        eng = _engine_with(
+            FakeCtx(decode_script=[0]),
+            samplers={"a": FakeSampler([1, EOG]), "small": FakeSampler([1, EOG])},
+            n_batch=2048,
+        )
+        eng._llama._n_ctx = POOL
+        _live(eng, "a", 1, 10_000, 2_000)
+
+        req = _req("small", _prompt(4_000), max_tokens=2_048, slot=_seat(3))
+        got, verdict = eng._size_against_pool(req, POOL, 2)
+        assert verdict is _AdmitVerdict.ADMIT
+        assert got == 2_048
+
+
+class TestThePoolSlackIsAWholeBatchNotAGuess:
+    def test_slack_tracks_the_batch_size(self):
+        eng = _engine_with(FakeCtx(), samplers={}, n_batch=2048)
+        eng._llama._n_ctx = POOL
+        assert eng._pool_slack == 2 * 2048
+
+    def test_a_small_context_is_not_eaten_by_its_own_margin(self):
+        """n_ctx 4096 with n_batch 2048 would want 4096 of slack — the whole
+        pool. The cap turns that from an outage into a margin."""
+        eng = _engine_with(FakeCtx(), samplers={}, n_batch=2048)
+        eng._llama._n_ctx = 4096
+        assert eng._pool_slack <= 4096 // 8
+        assert eng._free_cells(4096) > 0
+
+    def test_the_default_fixture_is_unchanged(self):
+        """The 64/4096 fixture must keep the historical 256 so every
+        assertion written against it stays honest."""
+        eng = _engine_with(FakeCtx(), samplers={})
+        assert eng._pool_slack == 256
+
+
+class TestTheAdmissionLogNamesThePrompt:
+    def test_a_shrink_prints_prompt_pool_and_residual_separately(self, caplog):
+        """The old format string printed `free` for BOTH placeholders, so the
+        log was self-consistent and never showed the prompt that was the whole
+        story. Three distinct numbers, or the next wedge is invisible too."""
+        import logging
+
+        eng = _engine_with(
+            FakeCtx(decode_script=[0]),
+            samplers={"a": FakeSampler([1, EOG]), "small": FakeSampler([1, EOG])},
+            n_batch=2048,
+        )
+        eng._llama._n_ctx = POOL
+        _live(eng, "a", 1, 40_000, 8_000)
+
+        req = _req("small", _prompt(6_000), max_tokens=8_192, slot=_seat(3))
+        with caplog.at_level(logging.INFO):
+            got, verdict = eng._size_against_pool(req, POOL, 2)
+
+        assert verdict is _AdmitVerdict.ADMIT
+        text = " ".join(r.getMessage() for r in caplog.records)
+        assert "prompt 6000 tok" in text
+        assert "residual" in text
+
+
+class TestCellsHeldOutsideTheSeatsAreCounted:
+    """Bands hold real cells and were counted NOWHERE before 2026-08-25.
+    Under kv_unified a seq_cp shares cells, so a band pin is free while its
+    source seat lives and costs everything the moment that seat is cleared."""
+
+    def test_a_snapshot_band_counts_against_free_cells(self):
+        eng = _engine_with(FakeCtx(decode_script=[0]), samplers={})
+        eng._llama._n_ctx = POOL
+        before = eng._free_cells(POOL)
+        eng.extra_occupancy_fn = lambda: 30_000
+        assert eng._free_cells(POOL) == before - 30_000
+
+    def test_media_cell_debt_counts_against_free_cells(self):
+        """M-RoPE media cells beyond the position count are PHYSICAL cache
+        the position-based ledger cannot see — a paddle page is 1,240
+        cells that move n_past by 40, and before cell_debt the other
+        1,200 were invisible to admission (the same shape as the
+        2026-08-25 free-cell inflation, from the other direction)."""
+        eng = _engine_with(FakeCtx(decode_script=[0]), samplers={})
+        eng._llama._n_ctx = POOL
+        seat = _seat(1, n_tokens=40)  # a paddle page: 40 positions...
+        eng._seats.append(seat)
+        before = eng._free_cells(POOL)
+        seat.cell_debt = 1_200  # ...and 1,200 more physical cells
+        assert eng._free_cells(POOL) == before - 1_200
+
+    def test_a_flow_prefix_counts_against_free_cells(self):
+        from inference.batched_engine import FlowPin
+
+        eng = _engine_with(FakeCtx(decode_script=[0]), samplers={})
+        eng._llama._n_ctx = POOL
+        before = eng._free_cells(POOL)
+        eng._flow_pins["k"] = FlowPin(key="k", seq=9, n_tokens=6_000, tokens=[])
+        assert eng._free_cells(POOL) == before - 6_000
+
+    def test_a_band_that_raises_never_breaks_the_decode_thread(self):
+        def boom():
+            raise RuntimeError("registry busy")
+
+        eng = _engine_with(FakeCtx(decode_script=[0]), samplers={})
+        eng._llama._n_ctx = POOL
+        eng.extra_occupancy_fn = boom
+        assert eng._free_cells(POOL) > 0  # no exception escapes
+
+    def test_band_pressure_queues_and_never_fails_the_caller(self):
+        """A snapshot is PURGEABLE (sweep_stale_snapshots), so band pressure
+        must mean 'wait', never 'impossible'. Without this asymmetry, band
+        pressure turns legitimate large prompts into permanent failures."""
+        eng = _engine_with(
+            FakeCtx(decode_script=[0]),
+            samplers={"big": FakeSampler([1, EOG])},
+            n_batch=2048,
+        )
+        eng._llama._n_ctx = POOL
+        eng.extra_occupancy_fn = lambda: 60_000
+
+        req = _req("big", _prompt(4_000), max_tokens=2_048, slot=_seat(3))
+        _got, verdict = eng._size_against_pool(req, POOL, 2)
+        assert verdict is _AdmitVerdict.QUEUE
+        assert verdict is not _AdmitVerdict.IMPOSSIBLE
+
+
+class TestOccupancySumsPerSeatRatherThanTakingAGlobalMax:
+    def test_idle_pinned_seats_and_a_live_stream_all_count(self):
+        eng = _engine_with(
+            FakeCtx(decode_script=[0]), samplers={"a": FakeSampler([1, EOG])}
+        )
+        eng._llama._n_ctx = POOL
+        eng._seats = [
+            _seat(0, pinned=True, n_tokens=8_000),
+            _seat(1, pinned=True, n_tokens=8_000),
+        ]
+        _live(eng, "a", 5, 12_000, 8_000)  # 20,000 on a seq with no seat
+
+        total = eng._occupancy()
+        assert total == 8_000 + 8_000 + 20_000
+        # The old global-max view discarded whichever side was smaller.
+        assert total > max(eng._live_occupancy(), eng._pinned_occupancy())

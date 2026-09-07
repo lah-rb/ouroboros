@@ -352,6 +352,7 @@ def _install_load_stubs(monkeypatch, *, active="primary", fail_shutdown=False):
         types.SimpleNamespace(
             Config=lambda **kw: _cfg(kw.get("_name", "secondary")),
             resolve_config_path=lambda n: Path("/tmp/fake.yaml"),
+            load_named_config=lambda n, **kw: _cfg(n),
         ),
     )
     monkeypatch.setitem(
@@ -379,6 +380,7 @@ def test_load_then_get_then_unload(monkeypatch, tmp_path):
         types.SimpleNamespace(
             Config=lambda **kw: _cfg("secondary"),
             resolve_config_path=lambda n: cfg_file,
+            load_named_config=lambda n, **kw: _cfg(n),
         ),
     )
 
@@ -402,6 +404,7 @@ def test_double_load_is_idempotent(monkeypatch, tmp_path):
         types.SimpleNamespace(
             Config=lambda **kw: _cfg("secondary"),
             resolve_config_path=lambda n: cfg_file,
+            load_named_config=lambda n, **kw: _cfg(n),
         ),
     )
     a = asyncio.run(rm.load("secondary"))
@@ -422,6 +425,7 @@ def test_failed_unload_burns_the_name(monkeypatch, tmp_path):
         types.SimpleNamespace(
             Config=lambda **kw: _cfg("secondary"),
             resolve_config_path=lambda n: cfg_file,
+            load_named_config=lambda n, **kw: _cfg(n),
         ),
     )
     asyncio.run(rm.load("secondary"))
@@ -447,6 +451,7 @@ def test_get_resident_counts_requests(monkeypatch, tmp_path):
         types.SimpleNamespace(
             Config=lambda **kw: _cfg("secondary"),
             resolve_config_path=lambda n: cfg_file,
+            load_named_config=lambda n, **kw: _cfg(n),
         ),
     )
     asyncio.run(rm.load("secondary"))
@@ -465,6 +470,7 @@ def test_resident_bytes_sums_entries(monkeypatch, tmp_path):
         types.SimpleNamespace(
             Config=lambda **kw: _cfg("secondary"),
             resolve_config_path=lambda n: cfg_file,
+            load_named_config=lambda n, **kw: _cfg(n),
         ),
     )
     assert rm.resident_bytes() == 0

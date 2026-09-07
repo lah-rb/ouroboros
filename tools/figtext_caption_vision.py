@@ -32,7 +32,21 @@ import sys
 import time
 import urllib.request
 
-URL = "http://127.0.0.1:8008/v1/vision"
+# LLMVP's GraphQL, not the optional OpenAI shim: this tool runs on the fleet
+# host, so the crop is sent as a PATH (it resolves under a vision_image_root).
+LLMVP_URL = os.environ.get("OUROBOROS_LLMVP_URL", "http://127.0.0.1:8008").rstrip("/")
+_VISION_MUTATION = """
+mutation VisionCompletion($request: VisionCompletionRequest!) {
+    visionCompletion(request: $request) {
+        text
+        generatedTokens
+        promptTokens
+        imageCount
+        visionModel
+        decodeMs
+    }
+}
+"""
 CAPTION_RE = re.compile(
     r"^\s*(?:Figure|Fig\.?|Figura|Abbildung|Abb\.?|Рис(?:унок)?\.?|图|図)\s*\.?\s*\d+",
     re.IGNORECASE,
@@ -58,25 +72,27 @@ PROMPT = (
 def ask(img_path: str) -> str:
     payload = json.dumps(
         {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": PROMPT},
-                        {"type": "image_path", "path": img_path},
-                    ],
+            "query": _VISION_MUTATION,
+            "variables": {
+                "request": {
+                    "prompt": PROMPT,
+                    "images": [{"path": os.path.abspath(img_path)}],
+                    "maxTokens": 700,
+                    "temperature": 0.1,
                 }
-            ],
-            "max_tokens": 700,
-            "temperature": 0.1,
+            },
         }
     ).encode()
     req = urllib.request.Request(
-        URL, data=payload, headers={"Content-Type": "application/json"}
+        f"{LLMVP_URL}/graphql",
+        data=payload,
+        headers={"Content-Type": "application/json"},
     )
     with urllib.request.urlopen(req, timeout=300) as r:
         d = json.loads(r.read())
-    text = (d.get("choices") or [{}])[0].get("message", {}).get("content", "") or ""
+    if d.get("errors"):
+        raise RuntimeError(str(d["errors"][0].get("message") or d["errors"][0]))
+    text = ((d.get("data") or {}).get("visionCompletion") or {}).get("text") or ""
     text = re.sub(r"<\|[^|]{1,30}\|>", "", text)
     # SINGLE-TURN SEAL GUARD: the vision endpoint can continue past the
     # answer into a fabricated "USER:" turn (known defect) — the real

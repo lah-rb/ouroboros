@@ -1,0 +1,28 @@
+# PaddleOCR-VL-1.6 on the Apple Silicon fleet — the per-machine variant.
+#
+# ONLY THE DEVICE KEYS DIFFER. Everything else (family, the vision-only
+# entry, generation defaults, the 32k vision context) is inherited from
+# paddle-ocr-vl.yaml, whose device block describes the CUDA box (3090 + 3060:
+# main_gpu 1, projector on CUDA1, a pool of two contexts).
+#
+# `model.name` IS RESTATED ON PURPOSE. LLMVP's visionCompletion reports
+# `visionModel = mcfg.name`, and the OCR tool refuses an answer whose
+# visionModel differs from the model it asked for (STRICT routing, both
+# ends). A variant that omitted the name would route fine and then fail
+# every crop with "was served by 'paddle-ocr-vl'".
+#
+# vision_pool_size 1: multi-context simultaneous decode on Metal is a closed
+# dead end (memory: the batched single-context engine is what scales there).
+# Widen only by measurement on this host.
+#
+# Weights: inherited paths are the CUDA box's; on this host they resolve via
+# LLMVP_MODELS_ROOT=<models dir> in the server's environment (basename
+# redirect — the files must keep the basenames the base yaml states).
+extends: paddle-ocr-vl
+
+model:
+  name: paddle-ocr-vl-mac
+  main_gpu: 0
+  split_mode: none
+  vision_projector_device: null   # mtmd default device (Metal)
+  vision_pool_size: 1

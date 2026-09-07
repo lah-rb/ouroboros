@@ -64,3 +64,6 @@ llmvp/logs/
 # rebase — and with two machines pushing one branch, it conflicted three times
 # in an afternoon. The committed default lives in llmvp/configs/.
 llmvp/active_config.txt
+
+# rock_olmo project venv (torch stack; see dev/rock_olmo/README.md)
+dev/rock_olmo/.venv/

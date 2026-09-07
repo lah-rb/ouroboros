@@ -35,9 +35,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
-from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
+
+from agent.scheduler.capacity_claim import Claim, claim_scope
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +51,9 @@ class Lane:
 
     name: str
     flow: str  # the drain flow this lane runs
-    resource: str  # "text_seat" | "vision_ctx" | "paddle" | "network"
+    resource: (
+        str  # "text_seat" | "vision_ctx" | "paddle" | "remote_vision_seat" | "network"
+    )
     # Estimated KV a unit draws. Lanes whose work never touches the text
     # seats (paddle OCR, vision figure reads) declare 0 and are gated on
     # their own resource instead.
@@ -65,6 +70,20 @@ class Lane:
     # How long to wait before re-checking an empty queue. Idle lanes must
     # not spin: there is no work-arrival signal from the databank.
     idle_backoff_s: float = 20.0
+    #: Does this lane size its unit against whatever is free, rather than a
+    #: fixed estimate? A dynamic lane claims the pool it was admitted
+    #: against and hands back what its work did not need
+    #: (agent/scheduler/capacity_claim.py). For these lanes `est_kv` is the
+    #: MINIMUM VIABLE UNIT — the admission gate, not the expected draw.
+    dynamic_kv: bool = False
+    #: Inference domain (mission config `llmvp_domains`) this lane's work
+    #: runs on. "" = the mission's default server. A lane pointed at another
+    #: host must ALSO declare est_kv=0/seats=0 and its own `resource`, or it
+    #: will be admitted against local cells it never spends — which is
+    #: exactly the no-op that routing alone produced: the tokens moved, the
+    #: accounting did not, and the lane stayed throttled by a local pool it
+    #: had stopped using.
+    domain: str = ""
 
 
 # Measured N* per resource comes from the throughput sweep; until it runs
@@ -76,9 +95,28 @@ DEFAULT_LANE_MAX_INFLIGHT: Dict[str, int] = {
     # 5 leaves one seat for the acquire flow's catalog turns; the
     # engine's admission remains the correctness backstop.
     "text_seat": 7,  # tracks the 8-seat engine (one seat spare for catalog turns)
-    "vision_ctx": 1,
+    # 1 -> 2 (2026-08-26 figtext campaign): the server now holds a POOL of
+    # two vision contexts (vision_pool_size: 2, muse-glimmer-30b-cuda) —
+    # two concurrent figure streams pipeline image-encode on the 3060
+    # projector against decode on the split model. With one context this
+    # cap was correct: a second request only queued at the server.
+    "vision_ctx": 4,  # tracks vision_batched_max_streams
     "paddle": 1,
+    # The ocr lane when it is ROUTED to another fleet (llmvp_domains["ocr"]):
+    # one tool subprocess, which fans its region crops out itself; the real
+    # bound is the remote's vision_pool_size, and extra requests queue there.
+    "remote_vision_seat": 1,
     "network": 1,
+    # Remote curate seats. The mac holds 128, so this is not a seat limit.
+    # An earlier value of 3 rested on a bench reading that total docs/hour
+    # FELL with concurrency; re-analysis (2026-09-01) showed that arm had
+    # been handed 35% larger documents, and normalised to tokens the
+    # aggregate is FLAT (gpt-oss 621/621/581 tok/s, muse 176/177/184 at
+    # 1/2/4). Prefill saturates the device, so concurrency buys no aggregate
+    # throughput -- and costs none. It does cover the gaps where a lane is
+    # booking or running gates, so every remote lane may run; a lane that
+    # can never dispatch is dead weight.
+    "remote_text_seat": 4,
 }
 
 
@@ -392,7 +430,14 @@ class WorkerPool:
             return False
 
         token = None
-        if self.model is not None:
+        # A lane with a DOMAIN runs its tokens on another engine, so the local
+        # capacity model has no jurisdiction over it -- not for cells, not for
+        # seats, and not for the `waiting`/`serving` checks that admit() runs
+        # BEFORE it looks at cells. Measured 2026-09-01: with est_kv=0/seats=0
+        # alone, remote lanes were still refused whenever the LOCAL queue was
+        # non-empty, because those early checks read the local feed. Such a
+        # lane is bounded by max_inflight for its own resource, nothing else.
+        if self.model is not None and not lane.domain:
             verdict = self.model.admit(lane.name, lane.est_kv, lane.seats)
             if not verdict.admitted:
                 # Kept for the periodic report: "nothing is moving" and
@@ -401,15 +446,28 @@ class WorkerPool:
                 self._last_refusal = f"{lane.name}: {verdict.reason}"
                 logger.debug("lane %s not admitted: %s", lane.name, verdict.reason)
                 return False
-            token = self.model.reserve(lane.name, lane.est_kv, lane.seats)
+            claim_kv = lane.est_kv
+            if lane.dynamic_kv:
+                # Claim the pool we were just admitted against — the SAME
+                # reading admit() used, so the next lane's admit() sees it
+                # already spent rather than racing on a stale number. The
+                # unit trims this as soon as it knows its real cost.
+                claim_kv = max(lane.est_kv, int(verdict.free_cells or 0))
+            token = self.model.reserve(lane.name, claim_kv, lane.seats)
 
         st.inflight += 1
         st.last_dispatch_at = self._now()
         self._resource_inflight[lane.resource] = (
             self._resource_inflight.get(lane.resource, 0) + 1
         )
+        claim = None
+        if token is not None and self.model is not None:
+            claim = Claim(
+                tokens=int(claim_kv), lane=lane.name, _model=self.model, _token=token
+            )
         try:
-            result = await self._run_flow(lane)
+            with claim_scope(claim):
+                result = await self._run_flow(lane)
         finally:
             st.inflight -= 1
             self._resource_inflight[lane.resource] = max(
@@ -450,7 +508,11 @@ class WorkerPool:
         if flow_def is None:
             raise KeyError(f"lane {lane.name}: unknown flow {lane.flow!r}")
 
-        child_fx = ChildEffects(self.effects, branch=f"lane:{lane.name}")
+        child_fx = ChildEffects(
+            self.effects,
+            branch=f"lane:{lane.name}",
+            inference_domain=lane.domain,
+        )
         out = await execute_flow(
             flow_def=flow_def,
             inputs=dict(self.inputs),
@@ -507,16 +569,97 @@ def _did_work(result: dict, context: dict) -> bool:
     return False
 
 
-def lanes_for_scraper() -> List[Lane]:
+def _remote_curate_lanes() -> int:
+    """How many dedicated remote curate lanes to run (default 4, 0 disables).
+
+    Sized to the REMOTE engine's seats, which the pool cannot see: muse's
+    swarm config serves many streams, qwen3-next's 256k config serves ONE.
+    Four lanes against a single-seat engine would refuse three of every four
+    rounds and book them idle. OUROBOROS_REMOTE_CURATE_LANES=1 for that case.
+    """
+    import os
+
+    raw = os.environ.get("OUROBOROS_REMOTE_CURATE_LANES", "").strip()
+    if not raw:
+        return 4
+    try:
+        return max(0, min(8, int(raw)))
+    except ValueError:
+        return 4
+
+
+def _disabled_lanes() -> set:
+    """Lane names switched off for THIS run: OUROBOROS_DISABLE_LANES, a
+    comma-separated list (e.g. "ocr"). Empty means every lane runs.
+
+    WHY AN ENV SWITCH. The 3060 layer-split rung ([40,12] @ 131,072 cells,
+    measured stable 2026-08-22) needs paddle NOT resident on CUDA1, and
+    paddle is loaded on demand by the ocr lane's extract_batch subprocess.
+    The lane list was hardcoded, so the only way to hold paddle off was to
+    edit code -- which is what the experiment leg did, and why re-applying
+    the rung was never a config-only operation. This makes it one: the
+    operator names the lane, the pool never builds it, nothing ever asks
+    for paddle. Same shape as OUROBOROS_REMOTE_CURATE_LANES.
+    """
+    raw = os.environ.get("OUROBOROS_DISABLE_LANES", "")
+    return {s.strip() for s in raw.split(",") if s.strip()}
+
+
+def lanes_for_scraper(domains: Optional[dict] = None) -> List[Lane]:
+    """The scraper's lanes, minus any the operator disabled for this run.
+
+    `domains` is the mission's `llmvp_domains`; it decides whether the ocr
+    lane is built against the local paddle device or as a remote lane."""
+    off = _disabled_lanes()
+    lanes = _all_scraper_lanes(domains)
+    if off:
+        known = {ln.name for ln in lanes}
+        for name in sorted(off - known):
+            logger.warning(
+                "OUROBOROS_DISABLE_LANES names %r, which is not a lane (known: %s)",
+                name,
+                ", ".join(sorted(known)),
+            )
+        kept = [ln for ln in lanes if ln.name not in off]
+        logger.info(
+            "lanes disabled for this run: %s", ", ".join(sorted(off & known)) or "-"
+        )
+        return kept
+    return lanes
+
+
+def _ocr_lane(domains: Optional[dict]) -> Lane:
+    """The ocr lane: local paddle by default; a REMOTE lane iff the mission
+    config carries an `ocr` domain.
+
+    Same construction rule as the curate_r* lanes: a lane served by another
+    engine must be gated on THAT engine — est_kv=0 / seats=0 (already true
+    for paddle) and its OWN resource, or it is admitted against local cells
+    it never spends. The extraction action reads the same domain to hand the
+    tool `--llmvp-url`/`--model`; without the domain nothing here changes.
+    """
+    if isinstance(domains, dict) and "ocr" in domains:
+        return Lane(
+            name="ocr",
+            flow="ocr_drain",
+            resource="remote_vision_seat",
+            est_kv=0,
+            seats=0,
+            domain="ocr",
+        )
+    # Paddle OCR: its own device, no text seat. One at a time — the
+    # tool is a subprocess and the 3060 serves one page batch.
+    return Lane(name="ocr", flow="ocr_drain", resource="paddle", est_kv=0, seats=0)
+
+
+def _all_scraper_lanes(domains: Optional[dict] = None) -> List[Lane]:
     """The scraper's four drains as lanes.
 
     est_kv values are the measured p95 context per turn plus that lane's
     per-call budget; they size ADMISSION, not the request itself.
     """
     return [
-        # Paddle OCR: its own device, no text seat. One at a time — the
-        # tool is a subprocess and the 3060 serves one page batch.
-        Lane(name="ocr", flow="ocr_drain", resource="paddle", est_kv=0, seats=0),
+        _ocr_lane(domains),
         # Figure reads run on muse's vision contexts, which are separate
         # from the batched text cell (measured vision/text serialization
         # 0.068 — effectively free against text).
@@ -527,44 +670,90 @@ def lanes_for_scraper() -> List[Lane]:
             est_kv=0,
             seats=0,
         ),
-        # ── TRANSLATE LANES CLOSED (2026-08-22 overnight, operator) ──
-        # Two findings closed them: (1) the curator reviews originals
-        # fine — _build_doc_for falls back to the source md, and all 22
-        # untranslated non-en denials were substantive content verdicts,
-        # so translation adds NO review value; (2) 5 of 27 verdicted
-        # translations were spent on papers the curator then denied.
-        # Translation is training-form work and belongs AFTER acceptance
-        # (~halves the remaining translate load: 296 pending non-en x
-        # ~accept-rate instead of all of them). Re-open as a post-accept
-        # gated lane when the review drain closes. The .parts.jsonl
-        # banking keeps every in-flight chunk durable meanwhile.
-        # Lane(
-        #     name="translate",
-        #     flow="translate_drain",
-        #     resource="text_seat",
-        #     est_kv=12_000,
-        # ),
-        # Second translate lane on the SAME drain: the pool's recent
-        # occupancy (p50 0.37, seats free 94% of ticks, 2026-08-21) says
-        # the seats are under-used while 278 lingual papers queue — lane
-        # SERIALISM, not seat count, was the binding limit. Two lanes of
-        # one drain are safe by construction: _TRANSLATE_CLAIMS is shared
-        # in-process, so they claim different papers; the deferral set
-        # rotates both past wedged papers. This is also the seat-count
-        # experiment run on existing seats — if the doubled lanes push
-        # occupancy p50 back above ~0.9, a fifth engine seat earns its
-        # place at the next server restart.
-        # Lane(
-        #     name="translate2",
-        #     flow="translate_drain",
-        #     resource="text_seat",
-        #     est_kv=12_000,
-        # ),
+        # Second figtext lane (2026-08-26 campaign): same drain, and safe
+        # by the same construction as curate2 — _FIGTEXT_CLAIMS is shared
+        # in-process, so the lanes claim disjoint papers; each round's
+        # tool process feeds one of the two server-side vision contexts.
+        Lane(
+            name="figtext2",
+            flow="figtext_drain",
+            resource="vision_ctx",
+            est_kv=0,
+            seats=0,
+        ),
+        # Third lane (P5 ramp, 2026-08-26 22:05): with the server at
+        # vision_batched_max_streams 3, TWO lanes were the limiter — each
+        # sends one figure at a time, so effective concurrency was 2 and
+        # the third engine stream idled (427 vs 420 figs/h). Same shared-
+        # claims construction; the server semaphore is the ceiling.
+        Lane(
+            name="figtext3",
+            flow="figtext_drain",
+            resource="vision_ctx",
+            est_kv=0,
+            seats=0,
+        ),
+        # Fourth lane (P5 ramp step 2, 2026-08-27): feeds the 4th server
+        # stream. Encode duty measured 21-26% — decode bandwidth is the
+        # contended stage, so this step is expect-modest / revert-if-flat.
+        Lane(
+            name="figtext4",
+            flow="figtext_drain",
+            resource="vision_ctx",
+            est_kv=0,
+            seats=0,
+        ),
+        # ── TRANSLATE LANES REOPENED (2026-08-29, operator) — as the
+        # POST-ACCEPT gated lanes the 2026-08-22 closure prescribed. The
+        # closure's two findings now shape the selection instead of
+        # closing the lane: (1) the curator reviews originals fine, so
+        # extract_lingual joined _EXTRACTION_USABLE and lingual papers
+        # pay the acceptance tax untranslated; (2) translation was being
+        # spent on papers the curator then denied, so
+        # _translation_pending now requires review_status == "accepted".
+        # The lanes idle until the curate lanes accept lingual papers —
+        # that ordering IS the design, not a bug. The .parts.jsonl
+        # banking carried every in-flight chunk across the closure.
+        Lane(
+            name="translate",
+            flow="translate_drain",
+            resource="text_seat",
+            est_kv=12_000,
+        ),
+        # SECOND TRANSLATE LANE, restored 2026-08-30 after an overnight
+        # measurement. Cutting to one lane the previous evening did lift
+        # curate (accepted 7.5 -> 10.0/h) but it CUT TRANSLATION 84%
+        # (5.7 -> 0.9/h) and the accepted-lingual backlog grew 6 -> 25.
+        #
+        # The mechanism is admission, not seats. A dynamic_kv lane claims
+        # `max(est_kv, free_cells)` — the WHOLE free pool — so five dynamic
+        # curate lanes leave a fixed 12k translate lane no window, and
+        # _one_unit returns False on refusal, which _run_lane books as
+        # IDLE. That is why the single lane read 17 done / 81 idle while
+        # 25 selectable papers waited: it was refused, not empty.
+        #
+        # Two lanes give translation two admission attempts per cycle
+        # instead of one. Seven text lanes against six engine seats is
+        # DELIBERATE over-subscription (text_seat inflight is 7): whichever
+        # side has work wins the seat, so the split rebalances itself
+        # instead of being frozen by a static lane count — the failure both
+        # of the previous two configurations shared.
+        Lane(
+            name="translate2",
+            flow="translate_drain",
+            resource="text_seat",
+            est_kv=12_000,
+        ),
         Lane(
             name="curate",
             flow="curate_drain",
             resource="text_seat",
-            est_kv=20_000,
+            # MINIMUM VIABLE UNIT, not the expected draw: the smallest
+            # doc worth curating (4k tok) plus one turn's overhead
+            # (14k). Keep in step with _CURATE_MIN_DOC_TOKENS +
+            # _CURATE_TURN_OVERHEAD_TOKENS in curation_actions.py.
+            est_kv=18_000,
+            dynamic_kv=True,
             idle_backoff_s=30.0,
         ),
         # Second curate lane (overnight guidance, 2026-08-22): review is
@@ -577,7 +766,12 @@ def lanes_for_scraper() -> List[Lane]:
             name="curate2",
             flow="curate_drain",
             resource="text_seat",
-            est_kv=20_000,
+            # MINIMUM VIABLE UNIT, not the expected draw: the smallest
+            # doc worth curating (4k tok) plus one turn's overhead
+            # (14k). Keep in step with _CURATE_MIN_DOC_TOKENS +
+            # _CURATE_TURN_OVERHEAD_TOKENS in curation_actions.py.
+            est_kv=18_000,
+            dynamic_kv=True,
             idle_backoff_s=30.0,
         ),
         # Third curate lane (2026-08-22 03:xx): two lanes ran 59d/59d
@@ -587,16 +781,67 @@ def lanes_for_scraper() -> List[Lane]:
             name="curate3",
             flow="curate_drain",
             resource="text_seat",
-            est_kv=20_000,
+            # MINIMUM VIABLE UNIT, not the expected draw: the smallest
+            # doc worth curating (4k tok) plus one turn's overhead
+            # (14k). Keep in step with _CURATE_MIN_DOC_TOKENS +
+            # _CURATE_TURN_OVERHEAD_TOKENS in curation_actions.py.
+            est_kv=18_000,
+            dynamic_kv=True,
             idle_backoff_s=30.0,
         ),
         Lane(
             name="curate4",
             flow="curate_drain",
             resource="text_seat",
-            est_kv=20_000,
+            # MINIMUM VIABLE UNIT, not the expected draw: the smallest
+            # doc worth curating (4k tok) plus one turn's overhead
+            # (14k). Keep in step with _CURATE_MIN_DOC_TOKENS +
+            # _CURATE_TURN_OVERHEAD_TOKENS in curation_actions.py.
+            est_kv=18_000,
+            dynamic_kv=True,
             idle_backoff_s=30.0,
         ),
+        # Fifth curate lane, taking the seat translate2 gave back
+        # (2026-08-29 evening). Curate is the pipeline's true bottleneck
+        # now — it gates acceptance, which gates translation, and its own
+        # refusals were majority seat-bound. Safe by the same construction
+        # as curate2-4: _CURATE_CLAIMS is shared in-process, so the lanes
+        # claim different papers. Six text lanes against six engine seats.
+        Lane(
+            name="curate5",
+            flow="curate_drain",
+            resource="text_seat",
+            est_kv=18_000,
+            dynamic_kv=True,
+            idle_backoff_s=30.0,
+        ),
+        # ── Dedicated REMOTE curate lanes (2026-09-01) ──────────────────
+        #
+        # These run the same curate_drain against another host's engine.
+        # They are ADDITIVE: curate..curate5 keep the local seats, and
+        # _CURATE_CLAIMS is shared in-process, so local and remote lanes
+        # claim different papers by the same construction that makes
+        # curate2-5 safe. One mission is still one PROCESS — a second agent
+        # would need a flock'd claim file and would double-claim.
+        #
+        # est_kv=0 / seats=0 / their own `resource` is the load-bearing
+        # part, and the lesson from the first attempt: routing the tokens
+        # alone changed nothing, because the lanes were still admitted
+        # against local cells and still held local seats they no longer
+        # spent. A lane served by another engine must be gated on THAT
+        # engine, exactly as paddle and the vision lanes already are.
+        *[
+            Lane(
+                name=f"curate_r{i}",
+                flow="curate_drain",
+                resource="remote_text_seat",
+                est_kv=0,
+                seats=0,
+                domain="curate_remote",
+                idle_backoff_s=30.0,
+            )
+            for i in range(1, _remote_curate_lanes() + 1)
+        ],
         # OA recovery: pure network I/O (Wayback / CORE / meta-tag routes)
         # — no muse seat, no KV, paced by the shared per-host politeness
         # state. Long idle backoff: each record is walked ONCE (stamped),

@@ -352,6 +352,10 @@ _HOST_MIN_INTERVAL = {
     # Keyless CORE 429s within a handful of calls; a registered key lifts
     # that but the aggregator is doing us a favour, so stay unhurried.
     "api.core.ac.uk": 1.5,
+    # Crossref's polite pool (mailto) documents ~50 rps; 0.5 s is far under,
+    # and it is the free path now that OpenAlex meters by credit (measured
+    # 2026-09-03: $0.10/day, 10 credits a search, exhausted by discovery).
+    "api.crossref.org": 0.5,
 }
 
 
@@ -667,6 +671,7 @@ EXTRACTION_OWNED_FIELDS = frozenset(
         "translated",
         "translation_quality",
         "translate_attempts",
+        "translate_epoch",
         "book_progress",
         # Segment cursor for resumable extraction. WITHOUT THIS ENTRY the
         # field is silently filtered out on write, every resume starts at
@@ -680,6 +685,19 @@ EXTRACTION_OWNED_FIELDS = frozenset(
         # the one translation should trust. Only set when detected, so an
         # absent key never shadows a real catalog value on overlay.
         "language",
+        # Pre-OCR triage verdicts. The content-derived technique bin and the
+        # queue priority derived from it, both read off the paper's FIRST
+        # PAGE. Same argument as `language` above: extraction is the layer
+        # that actually read the document, so its verdict beats the search
+        # aspect that happened to find the paper — measured, that aspect
+        # binned a coffee-classification paper and a single-cell imaging
+        # paper into mineral spectroscopy.
+        #
+        # These MUST live here and not on the papers side: source_aspects is
+        # scraper-owned, both writers do whole-file read-modify-write, and a
+        # field absent from this set is dropped on write with no error.
+        "content_bin",
+        "content_priority",
     }
 )
 
@@ -1436,13 +1454,36 @@ async def action_mine_bibliographies(step_input: StepInput) -> StepOutput:
     reviews_mined = 0
     now = _now_iso()
     for rec in pend[:budget]:
-        rec = dict(rec)
+        key = str(rec.get("paper_key") or "")
         if rec.get("review_status") != "accepted":
             reviews_mined += 1
         path = rec.get("md_en_path") or rec.get("md_path")
         fc = await effects.read_file(str(path))
         text = fc.content if getattr(fc, "exists", False) else ""
         found = extract_reference_dois(text)
+        # APPEND THE RECORD AS IT IS NOW, AND FROM THE FILE BEING WRITTEN.
+        #
+        # Two separate bugs live here, and fixing only the first left the
+        # symptom in place.
+        #
+        # (1) STALENESS. The file read above is a yield point, and the curate
+        # lanes book verdicts and pack outcomes into the same records during
+        # this loop; appending the round-start snapshot wrote the stale copy
+        # over them (_read_jsonl_records does `records[key] = rec` -- last row
+        # REPLACES the whole record, so a stale row is not a partial update,
+        # it is a rollback).
+        #
+        # (2) THE WRONG FILE. `read_databank` returns papers.jsonl OVERLAID
+        # with the extraction sidecar, and failure_reason is sidecar-owned but
+        # `append_records` deliberately passes it through as a shared field.
+        # So a fresh MERGED read hands back the sidecar's failure_reason
+        # (usually "") and writes it to papers.jsonl over the pack gate's
+        # finding. Measured 2026-09-02: 11 of 15 pack failure reasons erased;
+        # measured again 2026-09-03 AFTER fixing (1) alone: still erased.
+        #
+        # A writer to papers.jsonl re-reads papers.jsonl.
+        fresh = (await _read_jsonl_records(effects, DATABANK_PATH)).get(key)
+        rec = dict(fresh) if fresh else dict(rec)
         merged = list(dict.fromkeys((rec.get("reference_dois") or []) + found))
         prior = len(rec.get("reference_dois") or [])
         rec["reference_dois"] = merged[:MAX_REFERENCE_DOIS]

@@ -455,3 +455,75 @@ def test_network_lane_work_verbs_count_as_work():
     assert _did_work({}, {"recover_summary": {"attempted": 6, "recovered": 2}})
     # A cap/decline round still reads as idle.
     assert not _did_work({"promoted": 0, "reason": "cap reached (2000/2000)"}, {})
+
+
+# ── dynamic lanes claim what they were admitted against (2026-08-25) ──
+
+
+def test_a_dynamic_lane_claims_the_pool_not_its_estimate():
+    """est_kv is the ADMISSION GATE for a dynamic lane, not the draw. If the
+    reservation stayed at est_kv while the doc budget authorised the whole
+    pool, sibling lanes would admit against cells already spent — which is
+    exactly the ~4x oversubscription behind the 2026-08-24/25 wedge."""
+    from agent.scheduler.worker_pool import Lane
+
+    lane = Lane(
+        name="curate",
+        flow="curate_drain",
+        resource="text_seat",
+        est_kv=18_000,
+        seats=1,
+        dynamic_kv=True,
+    )
+    assert lane.dynamic_kv is True
+    static = Lane(name="ocr", flow="ocr_drain", resource="paddle")
+    assert static.dynamic_kv is False
+
+
+def test_the_claim_is_visible_inside_the_unit_and_cleared_after():
+    from agent.scheduler.capacity_claim import Claim, claim_scope, current_claim
+
+    assert current_claim() is None
+    with claim_scope(Claim(tokens=55_000, lane="curate")):
+        c = current_claim()
+        assert c is not None and c.tokens == 55_000
+    assert current_claim() is None
+
+
+def test_the_claim_is_cleared_even_when_the_unit_raises():
+    from agent.scheduler.capacity_claim import Claim, claim_scope, current_claim
+
+    with pytest.raises(RuntimeError):
+        with claim_scope(Claim(tokens=1_000, lane="curate")):
+            raise RuntimeError("unit blew up")
+    assert current_claim() is None
+
+
+def test_a_claim_hands_back_only_downward():
+    from agent.scheduler.capacity_claim import Claim
+
+    class _M:
+        def __init__(self):
+            self.calls = []
+
+        def resize(self, token, kv):
+            self.calls.append((token, kv))
+
+    m = _M()
+    c = Claim(tokens=55_000, lane="curate", _model=m, _token="t1")
+    c.resize(34_000)
+    assert c.tokens == 34_000 and m.calls == [("t1", 34_000)]
+    c.resize(50_000)  # upward: refused, model untouched
+    assert c.tokens == 34_000 and m.calls == [("t1", 34_000)]
+
+
+def test_a_claim_never_breaks_a_lane_when_the_model_raises():
+    from agent.scheduler.capacity_claim import Claim
+
+    class _Boom:
+        def resize(self, token, kv):
+            raise RuntimeError("model gone")
+
+    c = Claim(tokens=55_000, lane="curate", _model=_Boom(), _token="t1")
+    c.resize(20_000)  # must not raise
+    assert c.tokens == 20_000

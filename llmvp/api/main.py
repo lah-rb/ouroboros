@@ -285,6 +285,7 @@ def run_server(host: str, port: int, log_level: str, skip_knowledge: bool = Fals
 
     log = logging.getLogger("llm-mvp")
     log.info(f"🚀 Starting LLMvp GraphQL API on {host}:{port}")
+    _warn_if_stale_cublas(log)
 
     # Set the flag BEFORE uvicorn spawns the app — the startup event
     # reads it from the lifecycle module since uvicorn doesn't provide
@@ -303,6 +304,41 @@ def run_server(host: str, port: int, log_level: str, skip_knowledge: bool = Fals
         host=host,
         port=port,
         log_level=log_level.lower(),
+    )
+
+
+def _warn_if_stale_cublas(log) -> None:
+    """Warn loudly when launched WITHOUT the pinned cuBLAS on the path.
+
+    Ubuntu's system cuBLAS is 12.0.2.224, dated January 2023, running under
+    a 2026 driver. On that build `cublasGemmEx` intermittently raises
+    "an unsupported value or parameter was passed to the function" on
+    device 1 and kills this process outright — three times in two days
+    before ~/cuda-libs (12.9.2.10) was pinned, then 48h+ clean, then again
+    on 2026-08-25 the moment a restart forgot the variable.
+
+    Warning, never refusal: a deployment that has the right libs installed
+    system-wide is legitimate, and an inference server that will not boot
+    is worse than one that boots noisily. The point is that the next person
+    to hand-roll `python api/main.py` sees it in the first ten lines of the
+    log instead of in a stack trace some hours later.
+    """
+    import os
+
+    want = os.path.expanduser("~/cuda-libs")
+    if want in (os.environ.get("LD_LIBRARY_PATH") or ""):
+        log.info("🔒 cuBLAS pinned via LD_LIBRARY_PATH (%s)", want)
+        return
+    if not os.path.isdir(want):
+        return  # not a machine that stages its own cuBLAS; nothing to say
+    log.warning(
+        "⚠️ LD_LIBRARY_PATH does not include %s — this process will link the "
+        "SYSTEM cuBLAS. On this host that build intermittently aborts the "
+        "server in cublasGemmEx on device 1. Launch via "
+        "tools/ouroboros-ops/wedge_recover.sh, or set "
+        "LD_LIBRARY_PATH=$HOME/cuda-libs/nvidia/cublas/lib:"
+        "$HOME/cuda-libs/nvidia/cuda_runtime/lib",
+        want,
     )
 
 
