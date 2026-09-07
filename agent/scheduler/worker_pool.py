@@ -51,7 +51,9 @@ class Lane:
 
     name: str
     flow: str  # the drain flow this lane runs
-    resource: str  # "text_seat" | "vision_ctx" | "paddle" | "network"
+    resource: (
+        str  # "text_seat" | "vision_ctx" | "paddle" | "remote_vision_seat" | "network"
+    )
     # Estimated KV a unit draws. Lanes whose work never touches the text
     # seats (paddle OCR, vision figure reads) declare 0 and are gated on
     # their own resource instead.
@@ -100,6 +102,10 @@ DEFAULT_LANE_MAX_INFLIGHT: Dict[str, int] = {
     # cap was correct: a second request only queued at the server.
     "vision_ctx": 4,  # tracks vision_batched_max_streams
     "paddle": 1,
+    # The ocr lane when it is ROUTED to another fleet (llmvp_domains["ocr"]):
+    # one tool subprocess, which fans its region crops out itself; the real
+    # bound is the remote's vision_pool_size, and extra requests queue there.
+    "remote_vision_seat": 1,
     "network": 1,
     # Remote curate seats. The mac holds 128, so this is not a seat limit.
     # An earlier value of 3 rested on a bench reading that total docs/hour
@@ -599,10 +605,13 @@ def _disabled_lanes() -> set:
     return {s.strip() for s in raw.split(",") if s.strip()}
 
 
-def lanes_for_scraper() -> List[Lane]:
-    """The scraper's lanes, minus any the operator disabled for this run."""
+def lanes_for_scraper(domains: Optional[dict] = None) -> List[Lane]:
+    """The scraper's lanes, minus any the operator disabled for this run.
+
+    `domains` is the mission's `llmvp_domains`; it decides whether the ocr
+    lane is built against the local paddle device or as a remote lane."""
     off = _disabled_lanes()
-    lanes = _all_scraper_lanes()
+    lanes = _all_scraper_lanes(domains)
     if off:
         known = {ln.name for ln in lanes}
         for name in sorted(off - known):
@@ -619,16 +628,38 @@ def lanes_for_scraper() -> List[Lane]:
     return lanes
 
 
-def _all_scraper_lanes() -> List[Lane]:
+def _ocr_lane(domains: Optional[dict]) -> Lane:
+    """The ocr lane: local paddle by default; a REMOTE lane iff the mission
+    config carries an `ocr` domain.
+
+    Same construction rule as the curate_r* lanes: a lane served by another
+    engine must be gated on THAT engine — est_kv=0 / seats=0 (already true
+    for paddle) and its OWN resource, or it is admitted against local cells
+    it never spends. The extraction action reads the same domain to hand the
+    tool `--llmvp-url`/`--model`; without the domain nothing here changes.
+    """
+    if isinstance(domains, dict) and "ocr" in domains:
+        return Lane(
+            name="ocr",
+            flow="ocr_drain",
+            resource="remote_vision_seat",
+            est_kv=0,
+            seats=0,
+            domain="ocr",
+        )
+    # Paddle OCR: its own device, no text seat. One at a time — the
+    # tool is a subprocess and the 3060 serves one page batch.
+    return Lane(name="ocr", flow="ocr_drain", resource="paddle", est_kv=0, seats=0)
+
+
+def _all_scraper_lanes(domains: Optional[dict] = None) -> List[Lane]:
     """The scraper's four drains as lanes.
 
     est_kv values are the measured p95 context per turn plus that lane's
     per-call budget; they size ADMISSION, not the request itself.
     """
     return [
-        # Paddle OCR: its own device, no text seat. One at a time — the
-        # tool is a subprocess and the 3060 serves one page batch.
-        Lane(name="ocr", flow="ocr_drain", resource="paddle", est_kv=0, seats=0),
+        _ocr_lane(domains),
         # Figure reads run on muse's vision contexts, which are separate
         # from the batched text cell (measured vision/text serialization
         # 0.068 — effectively free against text).

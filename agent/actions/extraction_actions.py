@@ -517,6 +517,40 @@ _TOOL_SCRIPT = "tools/pdf_extract/extract_batch.py"
 # opt-in. Records written earlier keep their own method string — they WERE
 # extracted that way, and the field is only ever written, never filtered on.
 _VL_BACKEND = os.environ.get("OUROBOROS_VL_BACKEND", "llmvp")
+
+
+def _ocr_route_argv(effects) -> list[str]:
+    """Extra tool argv when the ocr lane is routed to another fleet.
+
+    The lane's domain is stamped on its ChildEffects (`_inference_domain`)
+    and resolved against the mission's `llmvp_domains` — the same two reads
+    curation makes to name the model a remote pack was produced on. The
+    tool gets the BASE url (LLMVP's GraphQL lives at /graphql on it) and the
+    remote's registry name for paddle, passed EXPLICITLY rather than via
+    inherited env: a subprocess that reads OUROBOROS_LLMVP_URL from the
+    agent's environment cannot be routed per lane. No domain -> [] and the
+    argv is byte-identical to before.
+    """
+    domain = str(getattr(effects, "_inference_domain", "") or "")
+    routes = getattr(effects, "_llmvp_domains", None) or {}
+    # Only the ocr lane's OWN domain routes the OCR tool. worker_pool stamps
+    # "ocr" on the lane exactly when llmvp_domains carries that key; effects
+    # stamped with any other domain (or none) leave the tool on the default
+    # fleet, so a curate-routed caller can never redirect paddle by accident.
+    if domain != "ocr" or not isinstance(routes, dict):
+        return []
+    route = routes.get(domain) or {}
+    endpoint = str(route.get("endpoint") or "").strip()
+    model = str(route.get("model") or "").strip()
+    if not endpoint:
+        return []
+    base = endpoint.removesuffix("/graphql").rstrip("/")
+    out = ["--llmvp-url", base]
+    if model:
+        out += ["--model", model]
+    return out
+
+
 _EXTRACTION_METHODS = {
     # Same weights, same quant, three ways of reaching them — the suffix says
     # which, because that is the part a later audit cannot reconstruct.
@@ -931,6 +965,7 @@ async def _book_segment_round(
             os.path.join(working_dir, "databank"),
             "--vl-backend",
             _VL_BACKEND,
+            *_ocr_route_argv(effects),
             "--page-range",
             f"{start}:{start + seg}",
         ]
@@ -1520,6 +1555,7 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
             os.path.join(working_dir, "databank"),
             "--vl-backend",
             _VL_BACKEND,
+            *_ocr_route_argv(effects),
             "--page-range",
             f"{a}:{b}",
         ]
