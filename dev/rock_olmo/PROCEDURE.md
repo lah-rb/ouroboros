@@ -1269,3 +1269,25 @@ log rather than assumed.
 **Throughput, measured over 6.5 h:** 7.03M tok/h while training, 5.94M
 end-to-end including eval over eight sets every 100 steps and 17 GB
 checkpoint writes. Two epochs ≈ 40 h of training time.
+
+### The response worked: lr 2e-5 reversed the forgetting and learns faster
+
+Four hours after the resume, at the SAME epoch, the halved rate is better on
+**both** axes — so 4e-5 was overshooting, not buying speed:
+
+| | replay (bound 2.1815) | paper_markdown |
+|---|---|---|
+| lr 4e-5 @ e0.33 | 2.1900 (+3.4 %) | 1.3910 |
+| **lr 2e-5 @ e0.33** | **2.1770 (+2.8 %)** | **1.3760** |
+
+Replay reversed rather than merely slowing — 2.1860 → 2.1770 → 2.1750 →
+2.1730 → 2.1730 — and is back **inside** the +3 % bound, flat for the last
+two evaluations. Domain learning did not pay for it: paper_markdown
+1.3960 → 1.3610 (−16.3 % from the 1.626 base, against a ≥10 % acceptance
+bar), reference 0.6338 → 0.5737, binder 1.8000 → 1.7930 over the same span.
+
+So the pre-registered bound did its job twice over: it caught a real
+regression, and the prescribed response turned out to be a straight
+improvement rather than a trade. The remaining question is unchanged — loss
+is a proxy, and §18's representation instrument decides at the end whether
+the mineral-name pathway survived.
