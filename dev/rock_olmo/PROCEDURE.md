@@ -1148,21 +1148,64 @@ HOM (© Mineral Data Publishing 2001), webmineral (scraped) and mindat prose
 decision; every record and the manifest carry `license: restricted-<source>`
 so they can be excluded from any published artefact or a later run.
 
-### Measured (fill before stage 1; frozen after)
+### Measured before stage 1 (frozen 2026-09-07)
 
-- device map split: **4 layers + embeddings on the 3060**, measured 2026-09-07 by `device_map.py --probe` (fp32 params, fused AdamW, bf16 autocast, grad ckpt, 1×4096, 4 timed steps):
+**Device map.** `device_map.py --probe`, fp32 params + fused AdamW + bf16
+autocast + gradient checkpointing at 1x4096:
 
-| 3060 layers | ok | peak 3090 GiB | peak 3060 GiB | headroom | tok/h (probe) |
-|---|---|---|---|---|---|
-| 2 | False | 22.03 | 6.35 | 1.53 | 0.00M |
-| 3 | False | 22.4 | 8.11 | 1.16 | 9.72M |
-| 4 | True | 21.24 | 9.27 | 2.32 | 9.64M |
-| 5 | True | 20.09 | 10.43 | 1.2 | 9.14M |
+| 3060 layers | peak 3090 | peak 3060 | min headroom | tok/h |
+|---|---|---|---|---|
+| 2 | 22.4 | 7.1 | 1.2 | 9.29M |
+| 3 | 21.8 | 8.2 | 1.8 | 9.51M |
+| **4** | **21.2** | **9.3** | **2.3** | **9.64M** |
+| 5 | 20.1 | 10.4 | 1.2 | 9.14M |
 
-  Chosen for throughput with ≥1.5 GiB headroom on both cards: 4 layers → 9.64M tok/h in the probe (no eval/checkpoint overhead). Planning pace revised 3–5M → ~8–9M tok/h; two epochs of ~260M ≈ 29–33 h.
-- tokens/hour, stage 1: _measured by `train_full.py --smoke`_ (planning
-  figure 3–5M → 35–60 h for two epochs)
-- base-model numbers for predictions 1–6: _measured by step 12_
+Chosen: **embeddings + 4 decoder layers on the 3060**, the rest and `lm_head`
+on the 3090.
+
+**Trainer smoke** (`train_full.py --smoke`, 20 steps, 200 blocks, eval every
+10 steps over all 8 val sets — far heavier eval than the real cadence):
+peak 21.25 GiB / 8.18 GiB, **6.1M tok/h end-to-end, 1,850 tok/s (6.7M tok/h)
+while training**. Loss 1.831 -> 1.539 over 20 steps. Resume from
+`checkpoint-10` reproduced step 20's loss exactly, so the optimizer state
+round-trips. A resumable checkpoint is 17 GB (fp32 weights 5.9 + AdamW 11.9);
+`save_total_limit 2` + a 2.8 GB bf16 endpoint = ~37 GB of the 79 GB free.
+
+**Wall-clock, revised from measurement:** stage 1 is 34,261 blocks =
+2,141 optimizer steps per epoch; two epochs = 4,282 steps / 280.7M tokens
+≈ **42 h** at the measured rate. Stage 2 (3,521 blocks, 220 steps/epoch,
+two epochs) ≈ 4 h.
+
+**Base-model numbers** (the floor every prediction is measured against).
+Recall probe, greedy decoding, trained-frame vs probe-frame:
+
+*Seen species (n=200):*
+
+| task | trained frame | probe frame | gap |
+|---|---|---|---|
+| formula | 0.010 | 0.010 | +0.000 |
+| crystal_system | 0.086 | 0.000 | +0.086 |
+| bands | 0.000 | 0.000 | +0.000 |
+| inverse | 0.000 | 0.000 | +0.000 |
+
+*Low-exposure probe species (n=97):*
+
+| task | trained frame | probe frame | gap |
+|---|---|---|---|
+| formula | 0.000 | 0.000 | +0.000 |
+| crystal_system | 0.103 | 0.021 | +0.082 |
+| bands | 0.000 | 0.000 | +0.000 |
+| inverse | 0.000 | 0.000 | +0.000 |
+
+Polymorph probe: band prompts **0.799** mean pairwise similarity,
+4/7 identical; structure prompts **0.476**,
+0/7 identical. The structure figure is the homogenisation
+guard: run 2 pushed it to 0.784 and that must not recur.
+
+Per-source validation loss of the base model on the v4 stage-1 val sets
+(step 0 of the smoke): binder 1.852, reference 1.826, replay 2.013,
+paper_markdown 2.098, pack_prose 2.264, webmineral 2.274, hom 2.486,
+mindat_prose 2.728.
 
 ### Corpus v4 as packaged (2026-09-07, `package.py`, seq 4,096)
 
