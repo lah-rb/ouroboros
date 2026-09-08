@@ -1227,3 +1227,45 @@ Stage 1: **34,261 blocks = 140,333,056 tokens per epoch** (pad 6.85%, 666 hard c
 Licence shares (weighted tokens): unknown 29.8M, restricted-webmineral 21.2M, ODC-BY 19.8M, cc-by 19.1M, reference-mixed 12.2M, restricted-hom 10.5M, cc-by-nc-nd 6.9M, other-oa 3.7M, restricted-mindat 3.2M, cc-by-nc 2.5M, cc-by-nc-sa 0.9M, public-domain 0.4M, cc-by-sa 0.3M, cc-by-nd 0.1M.
 
 Stage 2: **3,521 blocks = 14,422,016 tokens per epoch**; shapes 71 % / carried prose 23 % / replay 7 %; 107,411 examples, 0 dropped as over-long; validation 23 blocks. Stage-2 kinds: raman_bands 26,130, pack_fact 19,591, formula 18,468, structure 18,276, ir_troughs 5,511, libs_temperature 5,484, libs_lines 5,445, inverse 3,862, corroboration 2,262, computed 1,344, cross_modal 513, contrastive 201, polymorph 186, ice_bandlist 138.
+
+### Stage 1, first result: prediction 2 FALSIFIED — the forgetting bound fired
+
+Launched 2026-09-07 18:54 at lr 4e-5. **Replay validation loss crossed the
+pre-registered +3 % bound at epoch 0.23 and reached +3.4 % by epoch 0.33**,
+so the run took the response the pre-registration names: stopped, resumed
+from `checkpoint-600` (epoch 0.28) at **lr 2e-5** (`--override-lr`).
+
+| epoch | replay | vs base | per-eval delta |
+|---|---|---|---|
+| 0.00 | 2.1180 | — | — |
+| 0.05 | 2.1310 | +0.6 % | +0.013 |
+| 0.09 | 2.1510 | +1.6 % | +0.020 |
+| 0.14 | 2.1650 | +2.2 % | +0.014 |
+| 0.19 | 2.1760 | +2.7 % | +0.011 |
+| 0.23 | 2.1810 | +3.0 % | +0.005 |
+| 0.28 | 2.1860 | +3.2 % | +0.005 |
+| 0.33 | 2.1900 | +3.4 % | +0.004 |
+
+**Read it honestly both ways.** The bound is crossed, which is what the
+prediction said would not happen — recorded as a falsification, not
+explained away. But the per-eval delta decays 0.020 → 0.004 across the same
+span, so the curve is flattening rather than running away, and the domain
+losses were moving hard in the right direction at the same time
+(paper_markdown 1.626 → 1.391, −14.4 %; HOM 2.485 → 1.199; webmineral
+2.357 → 0.525; reference 1.719 → 0.613). Halving the rate is the
+pre-registered response and it was taken on the number, not on the
+interpretation; whether the flattening or the crossing was the better guide
+is decided later by the §18 representation instrument, which is the
+measurement replay loss is only a proxy for.
+
+**A resume does not honour `--lr`.** Trainer builds the optimizer and
+scheduler, then `_load_optimizer_and_scheduler` restores both from the
+checkpoint, and `on_train_begin` fires BEFORE that load — so the new rate is
+silently discarded. `train_full.OverrideLR` patches the param groups and
+`base_lrs` on the first `on_step_begin`, the first hook after the load, and
+logs `[LR OVERRIDE] … base_lrs -> 2e-05` so the change is visible in the run
+log rather than assumed.
+
+**Throughput, measured over 6.5 h:** 7.03M tok/h while training, 5.94M
+end-to-end including eval over eight sets every 100 steps and 17 GB
+checkpoint writes. Two epochs ≈ 40 h of training time.

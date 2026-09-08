@@ -106,6 +106,42 @@ class ParamGroupTrainer(Trainer):
         return self.optimizer
 
 
+class OverrideLR(TrainerCallback):
+    """Apply a NEW learning rate to a RESUMED run.
+
+    `--lr` alone does not survive a resume: Trainer builds the optimizer and
+    scheduler, then `_load_optimizer_and_scheduler` overwrites both from the
+    checkpoint (trainer.py:1668), restoring the old rate -- and
+    `on_train_begin` fires BEFORE that load (:1524), so the obvious hook is
+    too early. The first hook after the load is `on_step_begin`, so this
+    patches once, there: the param groups AND `base_lrs`, because a LambdaLR
+    recomputes `lr = base_lr * lambda(step)` every step and would undo a
+    param-group-only change immediately.
+
+    Used when the pre-registered forgetting bound fires (PROCEDURE.md 19).
+    """
+
+    def __init__(self, lr: float):
+        self.lr = lr
+        self.done = False
+
+    def on_step_begin(
+        self, args, state, control, optimizer=None, lr_scheduler=None, **kw
+    ):
+        if self.done or optimizer is None:
+            return
+        self.done = True
+        for g in optimizer.param_groups:
+            g["lr"] = self.lr
+            g["initial_lr"] = self.lr
+        if lr_scheduler is not None and hasattr(lr_scheduler, "base_lrs"):
+            lr_scheduler.base_lrs = [self.lr] * len(lr_scheduler.base_lrs)
+        print(
+            f"[LR OVERRIDE] resumed at step {state.global_step}; base_lrs -> {self.lr}",
+            flush=True,
+        )
+
+
 class Telemetry(TrainerCallback):
     def __init__(self):
         self.t0 = time.monotonic()
@@ -213,6 +249,12 @@ def main() -> int:
     ap.add_argument("--save-total-limit", type=int, default=2)
     ap.add_argument("--resume", default=None)
     ap.add_argument(
+        "--override-lr",
+        action="store_true",
+        help="force --lr onto a RESUMED run (the checkpoint's optimizer and "
+        "scheduler would otherwise restore the old rate)",
+    )
+    ap.add_argument(
         "--smoke", action="store_true", help="20 steps on the first 200 blocks"
     )
     ap.add_argument(
@@ -305,13 +347,16 @@ def main() -> int:
         gradient_checkpointing=False,  # enabled on the model directly (non-reentrant, cross-device hooks)
         disable_tqdm=True,
     )
+    cbs = [tel]
+    if args.override_lr:
+        cbs.append(OverrideLR(args.lr))
     trainer = ParamGroupTrainer(
         model=model,
         args=targs,
         train_dataset=train_ds,
         eval_dataset=evals,
         data_collator=collate,
-        callbacks=[tel],
+        callbacks=cbs,
     )
     trainer.train(resume_from_checkpoint=args.resume)
     final_eval = trainer.evaluate()
