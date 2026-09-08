@@ -9,8 +9,9 @@ direction (bands -> species), which is the spectroscopist's actual task.
 Pack facts (one packed key/value per prompt) teach that a paper's numbers
 are askable. Targets are single-valued by construction (facts.py).
 
-The probe species are excluded from every fact (facts.build_facts). The
-probe FRAMES are never rendered here (templates.PROBE_FRAMES).
+Nothing is excluded (operator ruling: everything trains; the probe species
+are an evaluation list ranked by exposure). The probe FRAMES are never
+rendered here (templates.PROBE_FRAMES).
 
   ../../.venv/bin/python corpus_stage2.py           # -> v4/stage2/docs/shapes.jsonl
 """
@@ -25,7 +26,6 @@ import os
 import time
 
 import emit
-import probe_species
 from facts import build_facts, census
 from templates import FRAMES, pick_frames, render, render_kind
 
@@ -111,7 +111,7 @@ def main() -> int:
     ap.add_argument("--out", default=OUT)
     args = ap.parse_args()
     t0 = time.time()
-    exclude = set(json.load(open(probe_species.OUT))["species"])
+    exclude: set[str] = set()  # everything trains; the probe set is an eval list
     rows, fcensus = shapes(exclude)
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as fh:

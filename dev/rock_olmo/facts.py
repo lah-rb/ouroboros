@@ -460,11 +460,11 @@ def libs_facts(species: Iterable[str], ima: dict[str, str]) -> Iterator[Fact]:
                     "stage_label": g["stage_label"],
                     "lines": [
                         {
-                            "nm": round(l["wavelength_nm_air"], 2),
-                            "rel": round(l["relative_intensity"], 1),
-                            "ritz": l.get("wavelength_basis") == "ritz",
+                            "nm": round(ln["wavelength_nm_air"], 2),
+                            "rel": round(ln["relative_intensity"], 1),
+                            "ritz": ln.get("wavelength_basis") == "ritz",
                         }
-                        for l in g["lines"]
+                        for ln in g["lines"]
                     ],
                 }
                 for g in gs

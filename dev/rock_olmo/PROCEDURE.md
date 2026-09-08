@@ -1088,9 +1088,14 @@ not facts, and this session measured why:
   species + modality, measurement-keyed prompts otherwise), loss on
   completions only, 70 % shapes / 22 % carried stage-1 prose / 8 % replay,
   linear decay 4e-5 → 0, two epochs of ~12M tokens.
-- **No species holdout.** Everything trains. Generalisation probe =
-  ~100 REFERENCE-ONLY RRUFF species (in no paper, ≥2 spectra), excluded from
-  every view; recall is measured on SEEN species — the oracle's real job.
+- **No species holdout.** Everything trains. The "obscure systems" probe =
+  the ~100 REFERENCE-ONLY RRUFF species (in no paper, ≥2 spectra) with the
+  LOWEST exposure in the rendered stage-1 text. **They are not withheld** —
+  the first design excluded them from every view, but with webmineral and
+  HOM in the mix every IMA species is named somewhere (all 100 candidates
+  and all 1,014 reserves were), so the set is an exposure-ranked evaluation
+  list: recall at the low end of exposure versus recall on well-exposed
+  species.
 - **Parity cap lifted** (`reference_only_budget=None`).
 
 ### Token targets
@@ -1158,3 +1163,24 @@ so they can be excluded from any published artefact or a later run.
 - tokens/hour, stage 1: _measured by `train_full.py --smoke`_ (planning
   figure 3–5M → 35–60 h for two epochs)
 - base-model numbers for predictions 1–6: _measured by step 12_
+
+### Corpus v4 as packaged (2026-09-07, `package.py`, seq 4,096)
+
+Stage 1: **34,261 blocks = 140,333,056 tokens per epoch** (pad 6.85%, 666 hard cuts of over-long paragraphs), validation 249 blocks across 8 sources. Replay share 15.1 %. Two epochs ≈ 281M tokens.
+
+| source | docs | unique tokens | repeats | weighted | share |
+|---|---|---|---|---|---|
+| paper_markdown | 2,022 | 57,861,116 | 1 | 57,861,116 | 44.3 % |
+| webmineral | 4,651 | 7,077,946 | 3 | 21,233,838 | 16.2 % |
+| reference | 115,773 | 12,207,143 | 1 | 12,207,143 | 9.3 % |
+| replay/pes2o | 2,549 | 11,874,564 | 1 | 11,874,564 | 9.1 % |
+| hom | 3,831 | 3,511,680 | 3 | 10,535,040 | 8.1 % |
+| replay/wiki | 5,877 | 4,951,936 | 1 | 4,951,936 | 3.8 % |
+| binder_markdown | 22 | 1,198,235 | 4 | 4,792,940 | 3.7 % |
+| mindat_prose | 9,083 | 1,062,086 | 3 | 3,186,258 | 2.4 % |
+| replay/dclm | 2,681 | 2,974,673 | 1 | 2,974,673 | 2.3 % |
+| pack_prose | 2,050 | 1,102,902 | 1 | 1,102,902 | 0.8 % |
+
+Licence shares (weighted tokens): unknown 29.8M, restricted-webmineral 21.2M, ODC-BY 19.8M, cc-by 19.1M, reference-mixed 12.2M, restricted-hom 10.5M, cc-by-nc-nd 6.9M, other-oa 3.7M, restricted-mindat 3.2M, cc-by-nc 2.5M, cc-by-nc-sa 0.9M, public-domain 0.4M, cc-by-sa 0.3M, cc-by-nd 0.1M.
+
+Stage 2: **3,521 blocks = 14,422,016 tokens per epoch**; shapes 71 % / carried prose 23 % / replay 7 %; 107,411 examples, 0 dropped as over-long; validation 23 blocks. Stage-2 kinds: raman_bands 26,130, pack_fact 19,591, formula 18,468, structure 18,276, ir_troughs 5,511, libs_temperature 5,484, libs_lines 5,445, inverse 3,862, corroboration 2,262, computed 1,344, cross_modal 513, contrastive 201, polymorph 186, ice_bandlist 138.

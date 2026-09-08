@@ -12,10 +12,9 @@ package.py's job; this module only renders and labels.
 ORDER OF OPERATIONS, because the probe set depends on the text:
   1. prose sources that do not depend on the probe set (papers, binder,
      packs, HOM, webmineral, mindat prose) are rendered;
-  2. probe_species.verify scans them and SWAPS OUT any probe species a
-     document names (never drops a document);
-  3. facts are built EXCLUDING the final probe set and rendered as
-     reference prose — N_REFERENCE_FRAMES distinct statement frames per fact
+  2. probe_species.verify ranks the probe candidates by how many documents
+     name them and keeps the least-exposed hundred (nothing is withheld);
+  3. facts are built with NO exclusion and rendered as reference prose — N_REFERENCE_FRAMES distinct statement frames per fact
      (operator ruling 2026-09-07: reference data bears repetition, delivered
      as distinct framings, never copies).
 
@@ -396,8 +395,10 @@ def main() -> int:
     if args.phase in ("reference", "all"):
         import probe_species
 
-        exclude = set(json.load(open(probe_species.OUT))["species"])
-        ref, fcensus = render_reference(exclude)
+        # Everything trains (operator ruling): no species is excluded from the
+        # reference facts. The probe set is an EVALUATION list, ranked by
+        # exposure, not a holdout.
+        ref, fcensus = render_reference(set())
         write(ref, "reference")
         manifest["facts"] = fcensus
         print(
@@ -409,7 +410,8 @@ def main() -> int:
     for f in sorted(os.listdir(DOCS)):
         if f.endswith(".jsonl"):
             docs += [
-                json.loads(l) for l in open(os.path.join(DOCS, f), encoding="utf-8")
+                json.loads(line)
+                for line in open(os.path.join(DOCS, f), encoding="utf-8")
             ]
     manifest["sources"] = summarize(docs)
     manifest["license_shares"] = collections.Counter()

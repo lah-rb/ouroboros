@@ -213,11 +213,14 @@ def main() -> int:
     ap.add_argument("--out", default=os.path.expanduser("~/tmp/probe_recall.json"))
     args = ap.parse_args()
     probe = set(json.load(open(PROBE_JSON))["species"])
+    # Facts are built with NO exclusion (everything trains). `--probe-set`
+    # scores the low-exposure probe species; otherwise the sample avoids them
+    # so the two numbers are disjoint populations.
+    items = build_items(10**6, args.seed, exclude=set())
     if args.probe_set:
-        items = build_items(10**6, args.seed, exclude=set())
         items = [it for it in items if it["species"] in probe][: args.n]
     else:
-        items = build_items(args.n, args.seed, exclude=probe)
+        items = [it for it in items if it["species"] not in probe][: args.n]
     print(
         f"{len(items)} species x {len(items[0]['prompts']) if items else 0} tasks x 2 frames",
         flush=True,

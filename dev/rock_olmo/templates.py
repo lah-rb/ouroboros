@@ -98,8 +98,8 @@ def _libs_body(groups: list[dict]) -> str:
     out = []
     for g in groups:
         parts = [
-            f"{l['nm']:.2f} nm ({l['rel']:g})" + ("*" if l.get("ritz") else "")
-            for l in g["lines"]
+            f"{ln['nm']:.2f} nm ({ln['rel']:g})" + ("*" if ln.get("ritz") else "")
+            for ln in g["lines"]
         ]
         out.append(f"{g['stage_label']} at " + ", ".join(parts))
     return "; ".join(out)
@@ -217,7 +217,7 @@ def fields(fact) -> dict:
             body=_libs_body(p["groups"]),
             ritz_note=(
                 " Lines marked * have a calculated (Ritz) wavelength rather than an observed one."
-                if any(l.get("ritz") for g in p["groups"] for l in g["lines"])
+                if any(ln.get("ritz") for g in p["groups"] for ln in g["lines"])
                 else ""
             ),
         )
