@@ -1,0 +1,19 @@
+# Remote provider entry: the fast cloud writer for the synthetic-corpus
+# template bank (flows/synth; operator direction 2026-09-11: Haiku for
+# speed, merciful on the subscription). Addressed per-request via the
+# completion `model` field through the mission's llmvp_domains route
+# (`synth_cloud` -> {model: boss-haiku}); never a swap target.
+#
+# The claude CLI fixes sampling and has no token cap flag, so
+# temperature_default / max_tokens_default are advisory here: output shape
+# comes from the prompt. The synth action latches on limit text
+# (agent/actions/cloud_limits.py) and counts calls per day.
+#
+# HOST-SPECIFIC PATH. boss-sonnet/boss-claude carry the Mac path; this box
+# has the CLI at ~/.local/bin/claude (a symlink into the versions dir).
+provider: claude_cli
+model: claude-haiku-4-5
+claude_bin: /home/lah-rb/.local/bin/claude
+temperature_default: 0.7
+max_tokens_default: 2500
+timeout_s: 600

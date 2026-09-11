@@ -92,6 +92,11 @@ class MissionYAMLConfig(BaseModel):
     # A lane is remote iff its domain key exists in this mapping.
     llmvp_domains: dict = Field(default_factory=dict)
     flow_set: str = "code_core"
+    # Knobs for the `synth` flow set (flows/synth/synth_control.cue): round
+    # size, local/cloud concurrency, the cloud share and its daily cap, the
+    # round ceiling. Read by agent/actions/synth_actions._synth_cfg with
+    # defaults, so an empty block is a working configuration.
+    synth: dict = Field(default_factory=dict)
     # "batch" was named "parallel" until 2026-07-23 — renamed because true
     # parallelism now means the swarm/batched-engine paths; this mode is one
     # batched GENERATION, not concurrent workers. Legacy value accepted and

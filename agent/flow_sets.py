@@ -344,6 +344,13 @@ AUTO_PHASES: tuple[PhaseRule, ...] = (
     PhaseRule(kind="terminal", phase="complete", observation="Routing"),
 )
 
+# The synth controller never consults a phase ladder (it loops rounds until
+# the bank is complete), but evaluate_phases must still answer `mission
+# status` and the classify safety net: a lone terminal rule, like AUTO_PHASES.
+SYNTH_PHASES: tuple[PhaseRule, ...] = (
+    PhaseRule(kind="terminal", phase="complete", observation="Template bank"),
+)
+
 FLOW_SETS: dict[str, FlowSetSpec] = {
     "auto": FlowSetSpec(
         name="auto",
@@ -416,6 +423,19 @@ FLOW_SETS: dict[str, FlowSetSpec] = {
         name="curator",
         entry_flow="curate_control",
         phases=CURATOR_PHASES,
+    ),
+    # Synthetic-corpus template bank (2026-09-11). A standalone set beside
+    # the scraper by operator ruling: the work is different enough that it
+    # must not expand scraper_v2's lane roster; reuse happens through shared
+    # modules (drain_lane, llm_json, cloud_limits) and the shared controller
+    # templates. No phase ladder -- the controller loops rounds until the
+    # bank meets its per-cell targets, and evaluate_phases on an empty spec
+    # answers 'complete', which is the right `mission status` for a set with
+    # no goal ladder.
+    "synth": FlowSetSpec(
+        name="synth",
+        entry_flow="synth_control",
+        phases=SYNTH_PHASES,
     ),
 }
 

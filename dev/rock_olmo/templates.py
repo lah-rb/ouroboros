@@ -105,6 +105,75 @@ def _libs_body(groups: list[dict]) -> str:
     return "; ".join(out)
 
 
+# Slots the SYNTHETIC corpus adds on top of fields(): instrument variance
+# (filled by synth_variance at render time), fact-graph relations and sample
+# provenance (filled by synth_render). name -> (type, description, example).
+# fields() gives every one of them an empty default so v4 frames still render
+# unchanged; the spec exporter (synth_export.py) reads this table verbatim.
+SYNTH_SLOTS: dict[str, tuple[str, str, str]] = {
+    "peak_list": (
+        "number-list",
+        "measured peak list: position cm-1 (relative intensity), strongest listed = 1.00, position-sorted",
+        "128.0 (0.31), 206.3 (0.55), 464.8 (1.00)",
+    ),
+    "band_strongest": ("number", "position of the strongest band, cm-1", "464.8"),
+    "instrument_class": (
+        "text",
+        "instrument class: lab, portable or handheld (Raman); broadband or windowed (LIBS)",
+        "portable",
+    ),
+    "laser_nm": ("number", "excitation wavelength in nm, bare number", "785"),
+    "tol": ("phrase", "position tolerance phrase", "±3 cm-1"),
+    "calibration": (
+        "phrase",
+        "how the unit was calibrated",
+        "the 520.5 cm-1 silicon line",
+    ),
+    "window": ("phrase", "spectral window covered", "150–3200 cm-1"),
+    "libs_T": ("number", "LIBS plasma temperature in K, formatted", "10,000"),
+    "resolution": ("phrase", "LIBS spectral resolution", "0.1 nm"),
+    "libs_lines": (
+        "number-list",
+        "LIBS emission lines by ionisation stage: nm (relative intensity)",
+        "Fe I at 371.99 nm (100), 438.35 nm (62); Ca II at 393.37 nm (90)",
+    ),
+    "libs_top3": (
+        "number-list",
+        "the three strongest LIBS lines, nm",
+        "371.99, 393.37, 438.35 nm",
+    ),
+    "locality": ("text", "sample locality as catalogued", "Minas Gerais, Brazil"),
+    "also": (
+        "phrase",
+        "leading-space phrase naming other species consistent with the list, or empty",
+        " (also consistent with Coesite)",
+    ),
+    "group": ("text", "the mineral's anion/Strunz class", "silicate"),
+    "neighbours": (
+        "text",
+        "related species named from the fact graph",
+        "Coesite and Cristobalite",
+    ),
+    "polymorphs": (
+        "text",
+        "the other polymorphs of the same composition",
+        "Anatase and Brookite",
+    ),
+    "paper_title": (
+        "text",
+        "title of a corpus paper that measured this species",
+        "Raman spectroscopy of quartz inclusions in garnet",
+    ),
+}
+
+
+def _peak_list(bands: list, rel: list) -> str:
+    if rel and len(rel) == len(bands):
+        pairs = sorted(zip(bands, rel), key=lambda br: br[0])
+        return ", ".join(f"{float(b):.1f} ({float(r):.2f})" for b, r in pairs)
+    return ", ".join(f"{float(b):.1f}" for b in sorted(bands))
+
+
 def fields(fact) -> dict:
     """The formatted slots every frame of this kind may use."""
     p = fact.payload
@@ -130,6 +199,15 @@ def fields(fact) -> dict:
             laser=f" at {p['laser_nm']} nm excitation" if p.get("laser_nm") else "",
             archive=fact.provenance.get("source", "the reference"),
         )
+        rel = p.get("rel") or []
+        f["peak_list"] = _peak_list(bands, rel)
+        f["band_strongest"] = _num(
+            max(zip(bands, rel), key=lambda br: br[1])[0]
+            if rel and len(rel) == len(bands)
+            else bands[0]
+        )
+        f["laser_nm"] = str(p.get("laser_nm") or "")
+        f["locality"] = str(p.get("locality") or "")
     elif k == "ir_troughs":
         pos = p["troughs_um"]
         f.update(
@@ -258,6 +336,8 @@ def fields(fact) -> dict:
         )
     elif k == "pack_fact":
         f.update(title=p["title"], key=p["key"], value=p["value"])
+    for name in SYNTH_SLOTS:
+        f.setdefault(name, "")
     return f
 
 

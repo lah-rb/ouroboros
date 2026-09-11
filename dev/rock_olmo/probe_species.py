@@ -106,10 +106,18 @@ def select() -> dict:
     }
 
 
-def _mention_counts(doc_dirs: list[str], names: list[str]) -> collections.Counter:
+def _mention_counts(
+    doc_dirs: list[str], names: list[str], *, files=None
+) -> collections.Counter:
     """How many stage-1 documents name each species (word-boundary match).
     One alternation regex per pass: the per-name loop took 45 minutes over
-    the v4 docs (2026-09-07); this takes about a minute."""
+    the v4 docs (2026-09-07); this takes about a minute.
+
+    `files` restricts the scan to these basenames (synth_species.py counts
+    PROSE exposure only: reference.jsonl names every species >=4x by
+    construction and would flatten the strata). Synthetic docs never live
+    under a stage-1 docs dir, but a basename starting with "synthetic" is
+    skipped regardless so no future layout can count them as exposure."""
     rx = re.compile(
         r"(?<![a-z])("
         + "|".join(re.escape(n.lower()) for n in sorted(names, key=len, reverse=True))
@@ -117,7 +125,13 @@ def _mention_counts(doc_dirs: list[str], names: list[str]) -> collections.Counte
     )
     canon = {n.lower(): n for n in names}
     hits: collections.Counter = collections.Counter()
-    files = [f for d in doc_dirs for f in sorted(glob.glob(os.path.join(d, "*.jsonl")))]
+    files = [
+        f
+        for d in doc_dirs
+        for f in sorted(glob.glob(os.path.join(d, "*.jsonl")))
+        if not os.path.basename(f).startswith("synthetic")
+        and (files is None or os.path.basename(f) in set(files))
+    ]
     for f in files:
         with open(f, encoding="utf-8") as fh:
             for line in fh:
@@ -136,8 +150,12 @@ def _exposure_summary(chosen: list[str], hits: collections.Counter) -> dict:
     if not chosen:
         return {}
     counts = sorted(hits.get(n, 0) for n in chosen)
-    return {"min": counts[0], "median": counts[len(counts) // 2], "max": counts[-1],
-            "next_out": None}
+    return {
+        "min": counts[0],
+        "median": counts[len(counts) // 2],
+        "max": counts[-1],
+        "next_out": None,
+    }
 
 
 def verify(doc_dirs: list[str], probe: dict) -> dict:

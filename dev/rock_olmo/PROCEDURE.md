@@ -1864,3 +1864,72 @@ choosing and explaining among candidates it can SEE (copying a visible name is e
 from a numeric key is what failed). If the LM itself must carry spectra, finding 4 points at
 the input: bins as symbolic tokens make a spectrum a bag of ~12 words, the representation
 the MLP already exploits, and the one the generation readout could plausibly learn.
+
+## 21. Synthetic-corpus pilot (Raman vs LIBS) — pre-registration (2026-09-11)
+
+**Question.** Does massively diverse synthetic restatement of structured facts —
+≥ 20 structurally distinct framings per fact, both directions, 60–120 spaced
+exposures, a source tag on every document, mixed pretraining-style — raise a
+1.5B OLMo-2's recall of those facts, measured on framings it never saw? And
+does the effect differ between an instrument the paper corpus supports richly
+(Raman: 577 accepted papers, 32k mentions) and one it barely mentions (LIBS:
+307 papers, 22k mentions)?
+
+**Why now.** §19–§20b: v4 exposed each fact through ~10 framings, forward-heavy;
+recall on unseen framings sat at formula 0.38 / bands 0.51 / crystal 0.20 after
+stage 1 (0.615 / 0.625 / 0.467 after the anneal), bands→species 0.000, and the
+seeker-schema run FALSIFIED the format thesis while the head probe showed the
+species signal present in pooled states (0.33) but not at the decision token.
+Literature: Allen-Zhu & Li 3.1 (1 wording 9.7 % → 5 wordings + permutations
+96.6 %; augmentation must be in pretraining, Q/A mixed early), 3.3 (source
+token recovers junk-mixing losses), EntiGraph (entity-relation texts, log-linear;
+paraphrase-only saturates), Ovadia (~10 paraphrases saturate — where v4 sat),
+Chang et al. 2024 (paraphrase decays slower than duplication; smaller batches
+lower the learnability threshold), reverse training (mirrored frames).
+
+**Instrument.** The `synth` flow set (flows/synth; agent/actions/synth_*.py):
+muse (local) and Haiku (LLMVP `claude_cli` route, capped) write prompt/completion
+TEMPLATES whose every value is a `{slot}`; a deterministic gate rejects digits,
+literal minerals, unknown slots, wrong-direction layouts, duplicates and the v4
+/ probe frames; `dev/rock_olmo/synth_render.py` fills templates from the facts
+layer with sampled instrument variance (`synth_variance.py`) and fact-graph
+relations; `package_synth.py` packs; `probe_recall.py --target-species` scores.
+
+**Design, frozen before the final render.**
+
+| Item | Value |
+|---|---|
+| Species groups (`synth_species.json`, sha256 724a276ed9b5…) | eligible 1,705 (formula + canonical Raman + crystal system; all LIBS-eligible); T_RL 100, T_L 200, T_R 200, C 500; stratified by tertiles of prose mentions (medians 13 / 12.5 / 14 / 14); 100 probe species untouched |
+| Synthesised per group | all targets: formula, structure; T_R∪T_RL: raman_bands (+ contrastive/polymorph/ir where present); T_L∪T_RL: libs_lines; T_RL adds cross_instrument; C: nothing |
+| Families (14) → cells | definition, structure_card, measurement_report, identification (seeker schema), catalogue_entry, variance_note, contrast, qa, tabular, group_membership, polymorph_family, band_neighbourhood, cross_instrument, provenance; ~50 (kind, family, direction, form) cells; ≥ 20/15/12 accepted templates per cell by family (≈ 760 at target) |
+| Exposures | 12 templates per fact per direction per variant, stratified over families; 3 variants (re-picked templates, re-drawn instrument) → ~72 framings per fact; 5 relational docs per direction per variant |
+| Held-out framings | template_id hash % 10 == 0 never trained; rendered once per fact per direction → `val-synth_holdout` |
+| Instrument variance | Raman: class mix lab .50 / portable .35 / handheld .15; σ 1.2 / 3.0 / 3.5 cm-1 plus a 0.25-share constant offset U(4–9) on non-lab units (calibrated to RRUFF within-species |Δ| median 1.3, p75 3, p90 5–6, p95 8–9); excitation 532/785/633/488/830 at .45/.35/.10/.05/.05; low cut-offs and bandwidth-dependent weak-band loss; strongest-band flip p = 0.29 when top two within 0.15. LIBS: positions ±0.02–0.10 nm, T 8–12 kK, per-stage intensity scaling, self-absorption 35 %, windows 200–500 / 350–900 / 190–1040 nm |
+| Presentation | full peak lists with intensities (strongest listed = 1.00), never strongest-N alone |
+| Mix | 60 % synthetic / 20 % carried v4 prose (ALL reference docs of the 1,000 species — targets AND controls — then random stage-1 prose) / 20 % replay; `[source: …]` tag line on every document; `formula_norm` applied to carried prose at packing |
+| Training | FROM BASE `~/models/OLMo-2-0425-1B` (operator ruling: measure, then stage 1 in a follow-up); `train_full.py --stage 2` (linear→0, 20 warmup), lr 4e-5 (the only rate measured to move recall here), `--accum 8` = 32k tokens/step, one pass over the 3-variant stream (~17M tokens ≈ 530 steps), eval every 40 steps |
+| Val sets | synth_holdout, reference, paper_markdown, replay, shapes_v4 |
+| Probes | `probe_recall.py --target-species synth_species.json --group {T_R,T_L,T_RL,C}` on base and the endpoint: formula, crystal_system, bands, inverse, identification (perturbed seeker list), libs_lines (±0.2 nm), libs_inverse, cross_modal; trained-frame vs probe-frame |
+
+**Predictions (probe frames unless stated; scored against the base model on the
+same items).**
+
+| # | Prediction | Falsified if |
+|---|---|---|
+| P1 | Targets formula ≥ 0.50 and crystal system ≥ 0.40; targets − controls ≥ 25 points on both (controls saw the same carried reference docs and no synthetic) | either bar missed |
+| P2 | Seeker-schema identification on T_R canonical spectra top-1 ≥ 0.10 (v4: 0.000; chance ≈ 0.002) | < 0.05 — structural diversity + mirrored frames do not fix the readout at this scale |
+| P3 | T_R bands ≥ 0.40 and T_L libs_lines ≥ 0.40; T_R − T_L ≥ 10 points if natural-frequency support matters; T_L ≥ T_R means synthetic exposure substitutes for it | both below 0.40 |
+| P4 | T_RL cross_modal top-1 ≥ max(T_R identification, T_L libs_inverse) + 5 points; T_R species asked LIBS questions ≈ base (no unseen-instrument transfer) | cross-modal below the better single instrument |
+| P5 | Trained-frame − probe-frame gap ≤ 15 points on every task; synth_holdout loss falls monotonically | gap > 15 (template collapse) |
+| P6 | Forgetting: paper_markdown val ≤ base + 2 %, replay ≤ base + 3 % | either exceeded |
+| P7 | ≥ 90 % of correct formula answers use the plain-textbook spelling | < 90 % |
+
+Expected NOT to work: LIBS lines→species where the line set is dominated by
+shared major elements (Fe/Ca/Si); species with a single noisy spectrum; anything
+the 100 untouched probe species are asked (they get no synthetic docs and are
+reported as the third population, not scored against P1–P7).
+
+**Not tuned post hoc.** lr, exposures, mix and the gate thresholds are fixed
+here; a change means a new section, not an edit. To be filled at freeze: bank
+size and cell coverage from `docs_manifest.json`, packed shares from
+`manifest.json`, base-model baselines on every val set and probe.

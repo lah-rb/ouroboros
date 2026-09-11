@@ -1,0 +1,30 @@
+# Synthetic-corpus template bank (flow set `synth`; dev/rock_olmo/PROCEDURE.md
+# §21). Operator direction 2026-09-11: a standalone flow set beside the
+# scraper; muse local by default with a capped Haiku share for speed.
+#
+#   uv run ouroboros.py mission create --flow-set synth \
+#       --mission_config missions/synth_pilot.yaml --working-dir ~/corpora/ouroboros-synth
+#   setsid nohup uv run ouroboros.py start --working-dir ~/corpora/ouroboros-synth \
+#       > ~/tmp/synth_mission.log 2>&1 & disown
+#
+# Before `start`, write the spec into the workspace:
+#   cd dev/rock_olmo && ../../.venv/bin/python synth_export.py --out ~/corpora/ouroboros-synth/spec/spec.json
+#
+# The cloud route needs llmvp/configs/boss/boss-haiku.yaml on the LLMVP host;
+# `cloud_share: 0` runs muse only. The latch (limit text) and the daily cap
+# live in synth/state.json; delete the file to reset them deliberately.
+objective: "Bank placeholder templates for the synthetic-corpus pilot (Raman vs LIBS)"
+flow_set: synth
+working_dir: ~/corpora/ouroboros-synth
+llmvp_endpoint: http://localhost:8008/graphql
+llmvp_domains:
+  synth_cloud:
+    model: boss-haiku
+synth:
+  units_per_round: 6
+  local_concurrency: 4
+  cloud_concurrency: 2
+  cloud_share: 0.35
+  cloud_daily_cap: 150
+  max_rounds: 400
+  max_tokens: 2500

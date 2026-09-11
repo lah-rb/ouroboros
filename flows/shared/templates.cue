@@ -191,6 +191,26 @@ _templates: {
 		...
 	}
 
+	// The ACTIVE-loop counterpart of controller_idle: a controller that has
+	// just done a round of work re-enters itself after `_delay` seconds
+	// (default 1) instead of the idle template's 5-second wait. Split out so
+	// a round-driven controller (synth_control; ops could adopt it) does not
+	// re-declare the tail call, and so the two cadences stay named.
+	controller_next: {
+		_self:       string
+		_delay:      number | *1
+		action:      "noop"
+		description: "Next round"
+		tail_call: {
+			flow: _self
+			input_map: {
+				mission_id: {$ref: "input.mission_id"}
+			}
+			delay: _delay
+		}
+		...
+	}
+
 	mission_aborted: {
 		action:      "finalize_mission"
 		description: "Mission aborted"

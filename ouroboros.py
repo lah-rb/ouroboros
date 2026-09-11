@@ -194,6 +194,12 @@ def cmd_mission_create(args: argparse.Namespace) -> None:
         max_wall_clock_s=(yaml_config.max_wall_clock if yaml_config else None),
         corpus_target=(yaml_config.corpus_target if yaml_config else 0),
         polish_max_entries=(yaml_config.polish_max_entries if yaml_config else 1),
+        # Per-domain routing and the synth knobs come from YAML only. Until
+        # 2026-09-11 llmvp_domains was declared on both config models but
+        # never copied here, so a remote lane could only be configured by
+        # editing mission.json after the fact (dev/set_ocr_domain.py).
+        llmvp_domains=dict(yaml_config.llmvp_domains) if yaml_config else {},
+        synth=dict(yaml_config.synth) if yaml_config else {},
     )
 
     mission = MissionState(objective=objective, principles=principles, config=config)

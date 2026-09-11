@@ -43,6 +43,7 @@ from assemble import (
 )
 from interconnect import within_tolerance
 from libs_layer import DEFAULT_T, TEMPERATURE_PAIR, predict_species_lines
+from formula_norm import normalize_formula
 from reference_layer import (
     REF_ROOT,
     iter_ecostress,
@@ -92,6 +93,16 @@ def _positions(peaks: list[dict], key: str) -> list[float]:
     return [round(float(p[key]), 1) for p in peaks if key in p]
 
 
+def _intensities(peaks: list[dict], key: str) -> list[float]:
+    """Relative intensities aligned with _positions(peaks, key). pick_peaks
+    computes them and until 2026-09-11 every payload dropped them; the
+    synthetic corpus needs the full (position, intensity) list because the
+    strongest band flips identity in 29 % of same-species pairs."""
+    return [
+        round(float(p.get("relative_intensity", 0.0)), 3) for p in peaks if key in p
+    ]
+
+
 def _skip(species: str | Iterable[str], exclude: set[str]) -> bool:
     if isinstance(species, str):
         return species in exclude
@@ -139,9 +150,10 @@ def raman_facts(
             f"raman:RRUFF:{rec.get('rruff_id','')}",
             "raman_bands",
             sp,
-            ima.get(sp, rec.get("ideal_formula", "")),
+            ima.get(sp) or normalize_formula(rec.get("ideal_formula", "")),
             {
                 "bands_cm1": bands,
+                "rel": _intensities(peaks, "position_cm-1")[:12],
                 "tech": "Raman",
                 "sample_id": rec.get("rruff_id", ""),
                 "laser_nm": rec.get("laser_nm", ""),
@@ -172,9 +184,10 @@ def raman_facts(
             f"raman:ROD:{rec['rod_id']}",
             "raman_bands",
             sp,
-            ima.get(sp, rec.get("formula", "")),
+            ima.get(sp) or normalize_formula(rec.get("formula", "")),
             {
                 "bands_cm1": bands,
+                "rel": _intensities(peaks, "position_cm-1")[:12],
                 "tech": "Raman",
                 "sample_id": f"ROD {rec['rod_id']}",
                 "laser_nm": rec.get("laser_nm", ""),
@@ -624,7 +637,11 @@ def build_facts(
     exclude: set[str] | None = None, *, rruff_archive: str = "excellent_unoriented.zip"
 ) -> list[Fact]:
     exclude = set(exclude or ())
-    ima = load_ima()
+    # Plain-textbook spelling everywhere (formula_norm): mindat's HTML-stripped
+    # IMA strings still carry charges/vacancy boxes and 13 conventions live in
+    # the paper markdown; every fact's formula is the one spelling the model
+    # should learn and emit (PROCEDURE §20c: Fe3O4 = 4 tokens / 1.4 nats).
+    ima = {k: normalize_formula(v) or v for k, v in load_ima().items()}
     species_papers = json.load(
         open(
             os.path.join(

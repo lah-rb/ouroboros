@@ -1,0 +1,139 @@
+# Prompt template: synth/templates_round
+#
+# One round-unit of the synthetic-corpus template bank (flows/synth): ask
+# the text model for prompt/completion TEMPLATES for one fact kind, one
+# framing family, one direction and one form. Every value is a {slot}; the
+# deterministic filler (dev/rock_olmo/synth_render.py) fills them from the
+# facts layer, and agent/actions/synth_gate.py rejects anything else.
+#
+# Ordering follows PROMPTING_CONVENTIONS §10: the invariant head is cached
+# (sections 1–5), the per-cell tail follows. §15: no counts anywhere — the
+# round budget and max_tokens bound the output. §3: one fenced JSON object,
+# a ✅ and a ❌ example, "Return ONLY the fenced JSON."
+#
+# Context: kind, kind_describe, family, family_brief, direction,
+#          direction_rules, form_hint, slot_table, avoid_block (optional)
+#
+# NOTE ON BRACES. The renderer substitutes only {input.…}/{context.…}/
+# {meta.…} paths, so the literal {species}-style placeholders and the JSON
+# braces below reach the model verbatim.
+
+id: synth/templates_round
+description: "Write structurally diverse placeholder templates for one fact kind, family, direction and form"
+
+sections:
+
+  - id: system_role
+    content: |
+      You write TEMPLATES for a spectroscopy training corpus — the wording
+      around facts about minerals, never the facts themselves. Your output is
+      parsed by a program and every placeholder you write is filled later from
+      a reference database. Nothing you write is read by a person first.
+    cache: true
+
+  - id: task
+    content: |
+      Each template is a pair: a PROMPT and a COMPLETION that continues it.
+      Filled in, prompt + completion must read as one natural passage of
+      scientific English — a field note, a catalogue line, a report sentence,
+      an exam question and its answer, a table row, a caption, a dialogue turn.
+
+      The template itself carries NO numbers, NO mineral names and NO chemical
+      formulas. Those are exactly what the placeholders are for: the program
+      fills {species} with a mineral name, {formula} with its formula, band
+      lists with real measured values, laser wavelengths, tolerances and
+      instrument classes with sampled instrument facts. A number or a name
+      written into a template would be repeated into thousands of documents as
+      a false fact, so the gate rejects the whole template on sight. Where you
+      would write "three bands", prefer the {n} placeholder; where you would
+      write a wavelength or a calibration line, use the instrument
+      placeholders.
+    cache: true
+
+  - id: placeholder_rules
+    content: |
+      Placeholders are written {slot} (the spelling #{slot} is also accepted).
+      Use ONLY the placeholders listed for this kind below; an unknown
+      placeholder cannot be filled and the template is rejected. A placeholder
+      may appear in the prompt or the completion, and the same placeholder may
+      appear in both. Placeholders that expand to a leading space or a leading
+      comma are marked so in the table — write them flush against the previous
+      word.
+
+      Direction decides which half carries what:
+        FORWARD  — the prompt names the subject ({species} or {sp_f}) and stops
+                   right before the value; the completion carries the value
+                   placeholders.
+        BACKWARD — the prompt carries the value placeholders and never names
+                   the subject; the completion names it ({species} or {sp_f}).
+      A backward template that mentions {species} in its prompt is rejected,
+      because the corpus needs the model to RECOVER the name from the values.
+    cache: true
+
+  - id: diversity_rules
+    content: |
+      Diversity means STRUCTURE, not synonyms. Two templates that differ only
+      in a swapped word ("sample"/"specimen", "shows"/"exhibits") count as one
+      and the second is rejected as a near-duplicate. Vary instead:
+        - what comes first: the subject, the instrument, the measurement, the
+          value, the question
+        - voice and genre: field notebook, museum catalogue card, methods
+          paragraph, results sentence, referee comment, exam item, quiz
+          answer, database row, figure caption, teaching dialogue, checklist
+        - the join between prompt and completion: a colon, a sentence break,
+          a table cell, a question mark, a dash, "…the phase is"
+        - length and register: terse and telegraphic to full and discursive
+      Every template must be one a working spectroscopist could plausibly
+      have written. Stay in English.
+    cache: true
+
+  - id: output_format
+    content: |
+      Return one fenced JSON object with a "templates" list. Each entry has
+      "structure" (a short label for the framing you used), "prompt" and
+      "completion". The completion starts with the character that should
+      follow the prompt (usually a space).
+
+      ✅ Correct (illustrative placeholders; use this kind's table):
+      ```json
+      {"templates": [
+        {"structure": "field_note", "prompt": "Field notebook, {instrument_class} unit{laser}. Sample logged as {species}; picked peaks:", "completion": " {peak_list}. Positions {how}, quoted to {tol}."},
+        {"structure": "exam_question", "prompt": "Q: Which Raman bands identify {sp_f} in a reference spectrum?", "completion": " A: {bands}, {how}."}
+      ]}
+      ```
+
+      ❌ Wrong — prose around the JSON, a literal number, a literal mineral:
+      Here are some templates: {"templates": [{"prompt": "Quartz shows a band at 464 cm-1", ...}]}
+
+      Return ONLY the fenced JSON.
+    cache: true
+
+  - id: kind_spec
+    content: |
+      FACT KIND: {context.kind} — {context.kind_describe}
+
+      Placeholders available for this kind (name, type, meaning, one example
+      of what the program fills in — examples may contain numbers; templates
+      may not):
+      {context.slot_table}
+
+  - id: family_brief
+    content: |
+      FRAMING FAMILY: {context.family}
+      {context.family_brief}
+
+      DIRECTION: {context.direction}. {context.direction_rules}
+      FORM: {context.form_hint}
+
+  - id: avoid
+    when: context.avoid_block
+    content: |
+      Openings already in the bank for this family — do not start a template
+      the same way, and do not reproduce these framings with a synonym swap:
+      {context.avoid_block}
+
+  - id: request
+    content: |
+      Write as many structurally distinct templates as this family honestly
+      supports for the direction and form above. Stop when a further template
+      would only be a rewording of one you already wrote.

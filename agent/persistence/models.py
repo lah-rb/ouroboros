@@ -67,6 +67,8 @@ class MissionConfig(BaseModel):
     # A lane is remote IFF its key exists: "ocr" present -> the ocr lane is
     # built as a remote lane and the OCR tool is handed that url + model.
     llmvp_domains: dict = Field(default_factory=dict)
+    # `synth` flow-set knobs (see MissionYAMLConfig.synth); {} = defaults.
+    synth: dict = Field(default_factory=dict)
     # Which flow set runs this mission (agent/flow_sets.py registry).
     # Selects the controller flow and phase derivation; additive default
     # keeps pre-flow-set mission.json files loading unchanged.

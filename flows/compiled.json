@@ -28382,5 +28382,287 @@
       "strategy": "split",
       "fallback": "reorganize"
     }
+  },
+  "synth_control": {
+    "flow": "synth_control",
+    "version": 1,
+    "description": "Round-driven controller for the synthetic-corpus template bank.\nEach round asks the text model(s) for placeholder templates in the\ncells with the largest deficits, gates them deterministically, and\nappends the survivors to the bank; loops until the bank is complete.",
+    "context_tier": "project_goal",
+    "returns": {
+      "final_status": {
+        "type": "string",
+        "from": "context.mission.status",
+        "optional": true
+      },
+      "synth_summary": {
+        "type": "dict",
+        "from": "context.synth_summary",
+        "optional": true
+      }
+    },
+    "projections": {},
+    "input": {
+      "required": [
+        "mission_id"
+      ],
+      "optional": []
+    },
+    "defaults": {
+      "config": {
+        "temperature": "t*0.4"
+      }
+    },
+    "steps": {
+      "load_state": {
+        "action": "load_mission_state",
+        "description": "Load mission state and event queue",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.mission.status == 'active'",
+              "transition": "process_events"
+            },
+            {
+              "condition": "result.mission.status == 'paused'",
+              "transition": "idle"
+            },
+            {
+              "condition": "result.mission.status == 'completed'",
+              "transition": "completed"
+            },
+            {
+              "condition": "true",
+              "transition": "aborted"
+            }
+          ]
+        },
+        "publishes": [
+          "mission",
+          "events"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "process_events": {
+        "action": "handle_events",
+        "description": "Process user messages, abort/pause signals",
+        "context": {
+          "required": [
+            "mission",
+            "events"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.abort_requested == true",
+              "transition": "aborted"
+            },
+            {
+              "condition": "result.pause_requested == true",
+              "transition": "idle"
+            },
+            {
+              "condition": "true",
+              "transition": "plan_round"
+            }
+          ]
+        },
+        "publishes": [
+          "mission"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "plan_round": {
+        "action": "synth_plan_round",
+        "description": "Read spec + bank; pick the cells with the largest deficits",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.units_ready == true",
+              "transition": "generate_round"
+            },
+            {
+              "condition": "result.bank_complete == true",
+              "transition": "completed"
+            },
+            {
+              "condition": "true",
+              "transition": "idle"
+            }
+          ]
+        },
+        "publishes": [
+          "synth_units"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "generate_round": {
+        "action": "synth_generate_round",
+        "description": "Generate, gate and bank one round of templates",
+        "context": {
+          "required": [
+            "mission",
+            "synth_units"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "check_done"
+            }
+          ]
+        },
+        "publishes": [
+          "synth_summary"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "check_done": {
+        "action": "synth_check_done",
+        "description": "Bank complete or round ceiling reached \u2192 finish; else loop",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "synth_summary"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.done == true",
+              "transition": "completed"
+            },
+            {
+              "condition": "result.paused == true",
+              "transition": "idle"
+            },
+            {
+              "condition": "true",
+              "transition": "next_round"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "next_round": {
+        "action": "noop",
+        "description": "Next round",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "synth_control",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            }
+          },
+          "delay": 1
+        }
+      },
+      "completed": {
+        "action": "finalize_mission",
+        "description": "Mark mission complete",
+        "context": {
+          "required": [],
+          "optional": [
+            "mission"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": true,
+        "status": "completed"
+      },
+      "idle": {
+        "action": "enter_idle",
+        "description": "Wait for events",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "synth_control",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            }
+          },
+          "delay": 5
+        }
+      },
+      "aborted": {
+        "action": "finalize_mission",
+        "description": "Mission aborted",
+        "context": {
+          "required": [],
+          "optional": [
+            "mission"
+          ]
+        },
+        "params": {
+          "abort": true
+        },
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": true,
+        "status": "aborted"
+      }
+    },
+    "entry": "load_state",
+    "overflow": {
+      "strategy": "split",
+      "fallback": "reorganize"
+    }
   }
 }

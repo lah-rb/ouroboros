@@ -1,0 +1,18 @@
+# Bounded muse-only smoke of the synth flow set (plan §14 step 4): two rounds
+# of two units, no cloud share. Create in the SAME workspace as the real
+# pilot; the bank it writes is kept (the real mission continues from it).
+#   uv run ouroboros.py mission create --flow-set synth \
+#       --mission_config missions/synth_pilot_smoke.yaml --working-dir ~/corpora/ouroboros-synth
+#   uv run ouroboros.py start --working-dir ~/corpora/ouroboros-synth
+# Afterwards remove ~/corpora/ouroboros-synth/.agent and create the real
+# mission from missions/synth_pilot.yaml.
+objective: "Smoke the synthetic-corpus template bank: two muse-only rounds"
+flow_set: synth
+working_dir: ~/corpora/ouroboros-synth
+llmvp_endpoint: http://localhost:8008/graphql
+synth:
+  units_per_round: 2
+  local_concurrency: 2
+  cloud_share: 0
+  max_rounds: 2
+  max_tokens: 2500

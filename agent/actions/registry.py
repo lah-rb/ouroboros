@@ -489,6 +489,15 @@ def build_action_registry() -> ActionRegistry:
     from agent.actions.translation_actions import action_translate_drain_batch
 
     registry.register("translate_drain_batch", action_translate_drain_batch)
+    from agent.actions.synth_actions import (
+        action_synth_check_done,
+        action_synth_generate_round,
+        action_synth_plan_round,
+    )
+
+    registry.register("synth_plan_round", action_synth_plan_round)
+    registry.register("synth_generate_round", action_synth_generate_round)
+    registry.register("synth_check_done", action_synth_check_done)
     from agent.actions.curation_actions import action_curate_drain_batch
 
     registry.register("curate_drain_batch", action_curate_drain_batch)
