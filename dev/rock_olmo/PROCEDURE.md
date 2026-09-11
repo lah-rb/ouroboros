@@ -1291,3 +1291,576 @@ regression, and the prescribed response turned out to be a straight
 improvement rather than a trade. The remaining question is unchanged — loss
 is a proxy, and §18's representation instrument decides at the end whether
 the mineral-name pathway survived.
+
+### Stage 1 result (2026-09-09): the corpus was learned, the bound was not held, facts pending
+
+**Run.** 4,282 steps / 280.58M tokens at 7.02M tok/h while training; endpoint
+`~/models/olmo2-1b-spectra-full/stage1/final` (bf16) with fp32 weights in
+`checkpoint-4282`. Three interruptions, all recorded: the pre-registered halving
+at epoch 0.28 (above); a **second bound crossing at epoch 1.03 that was NOT
+acted on** — the rule changes the rate, not the epoch count, and I mistook it
+for a change to the operator's two-epoch commitment; and a **false hang
+diagnosis at 11:36** (stdout is block-buffered, so a 38-minute log silence and a
+"missing" eighth eval line meant nothing; GPU1 100 % / GPU0 3 % is the healthy
+pipeline pattern) that killed a stepping run and cost ~1.6 h on a resume from
+`checkpoint-4000`. Positive evidence — a checkpoint interval passing with no
+checkpoint, or a `py-spy dump` — is now required before any kill.
+
+**Validation, final vs the run's own step-0 evaluation.** (The smoke's step-0
+table above is NOT comparable: `--smoke` evaluates truncated val sets, which is
+why its papers/reference/replay/webmineral figures differ; the sets it did not
+truncate — binder, pack_prose, hom, mindat — agree to the third decimal.)
+
+| source | base | final | change | minimum |
+|---|---|---|---|---|
+| paper_markdown | 1.626 | 1.3181 | −18.9 % | final (still falling) |
+| reference | 1.719 | 0.4035 | −76.5 % | final |
+| webmineral | 2.357 | 0.4207 | −82.2 % | 0.4148 @ e1.73 |
+| pack_prose | 2.264 | 1.4379 | −36.5 % | 1.4363 @ e1.96 |
+| hom (×3 copies) | 2.485 | 1.1323 | −54.4 % | 1.0890 @ e0.98 |
+| mindat_prose (×3) | 2.728 | 1.8835 | −31.0 % | 1.7150 @ e0.98 |
+| binder_markdown (×4) | 1.852 | 2.5266 | **+36.4 %** | 1.7900 @ e0.65 |
+| replay | 2.118 | 2.2117 | **+4.4 %** | 2.1730 @ e0.42 |
+
+**Prediction 1 (papers ≥ 10 %): PASSED, with a decomposition that shrinks it.**
+`val_split_figtext.py` split the papers val set by paragraph class at
+checkpoint-3600: VLM figure readings are 27.7 % of the tokens and fell
+1.616 → 1.043 (−35.4 %); the papers' own text fell 1.584 → 1.407 (**−11.2 %**).
+55 % of the headline drop is the house style of the figure prose. Every one of
+the 11 held-out papers improved on its own text (−5.9 % to −15.6 %). A second,
+smaller artefact: 12 of 13 val papers have their pack summary in TRAIN (val was
+drawn per source; packs are per-paper derivatives) — 1.4 % of val tokens, so a
+couple of points at most. Next corpus: coordinate val across paper-derived
+sources.
+
+**Prediction 2 (replay ≤ +3 %): FALSIFIED, twice.** The halving reversed the
+first crossing; the curve re-crossed at epoch 1.03 and rose ~0.15 % per tenth
+of an epoch to +4.4 %. Whether that is damage is the §18 instrument's call
+(pending below), not the loss's.
+
+**Prediction 3 (structure-prompt similarity ≤ base 0.476): FAILED at both
+checkpoints; the Raman criterion passed.** `probe_polymorph.py`:
+
+| model | Raman prompts | identical | structure prompts |
+|---|---|---|---|
+| base | 0.799 | 4/7 | 0.476 |
+| epoch 0.93 | 0.579 | 0/7 | 0.671 |
+| final | 0.447 | 0/7 | 0.616 |
+
+Far below run 2's 0.784, so the frame library helped, but structure answers
+still come in one template (Andalusite vs Mullite 0.98).
+
+**Digit probe (stage-2 criterion, recorded for the trajectory).** Base: digit
+soup. Epoch 0.93: wrong ascending lists for Quartz and Calcite; inverse prompts
+collapse to one continuation. **Final: Quartz → 182.6, 205.4, 265.9, 356.7,
+465.1** — four of five within 2 cm⁻¹ of RRUFF's 206/265/355/464, in the
+measurement-frame order; Calcite wrong (180.6, 212.8, 1054.4 vs 1085/712/282);
+**inverse still collapsed** — 1085/712/282 and 464/206/128 both → "Tsumebite,
+whose composition is Pb2+2Cu2+(PO4)(S6+O4)" at p≈1.0, gypsum's bands →
+"Metatorbernite". Confident-and-wrong in the inverse direction is run 2's
+failure mode reappearing; the forward direction has started to carry facts.
+
+**The binder rise is memorisation of a small repeated set, not size and not
+era.** CPU probe, base → checkpoint-4200: the two held-out binder papers
+(Barkla 1911, Moseley 1913) 1.772 → 2.623 (**+48 %**); five TRAINING binder
+documents of every decade 1.993 → 0.837 (**−58 %**, near recitation); three
+modern held-out papers −15.5 %. Twenty-two documents × 4 copies × 2 epochs =
+8 exposures with nothing to dilute them; mindat prose (6 exposures) also rose;
+papers (2) did not. The reference layer, repeated as four DISTINCT frames,
+kept improving — [[structure-beats-the-llm-for-spectra]]'s rule ("copies are a
+template, not N facts") replicated inside one run. The binder val set is two
+documents / 20 k tokens; mindat's is 3 blocks. **Next corpus: ≤ 2 copies, more
+distinct foundational documents rather than more copies, and a validation
+floor (≥ 20 blocks) per source.** Stage 2's carried prose holds one binder
+document once (15 of 3,521 blocks), so no change there.
+
+**Recall probe (`probe_recall.py`, greedy, ±10 cm⁻¹ band tolerance): facts
+appeared in stage 1, before any shape training.** Scores are fractions; each
+question asked through the fact's first-ranked question frame ("trained" —
+a misnomer at stage 1, since question frames are only trained in stage 2) and
+through the never-trained PROBE frame.
+
+*Seen species (n=200):*
+
+| task | base | epoch 0.93 trained / probe | **final** trained / probe |
+|---|---|---|---|
+| formula | 0.010 / 0.010 | 0.170 / 0.260 | **0.210 / 0.380** |
+| bands (≥2 of 3 within ±10) | 0.000 / 0.000 | 0.225 / 0.465 | **0.340 / 0.505** |
+| crystal_system | 0.086 / 0.000 | 0.137 / 0.193 | 0.168 / 0.198 |
+| inverse (bands → species) | 0.000 | 0.000 | **0.000** |
+
+*Low-exposure probe species (n=97; in the reference layer, absent from papers):*
+
+| task | base | epoch 0.93 | **final** |
+|---|---|---|---|
+| formula | 0.000 / 0.000 | 0.103 / 0.186 | **0.144 / 0.361** |
+| bands | 0.000 / 0.000 | 0.186 / 0.381 | **0.278 / 0.443** |
+| crystal_system | 0.103 / 0.021 | 0.206 / 0.227 | 0.216 / 0.227 |
+| inverse | 0.000 | 0.000 | 0.000 |
+
+Four readings. (1) **The endpoint beats epoch 0.93 on every recall task**, on
+both species sets — the second epoch bought facts, not just loss, and this
+decides the stage-2 branch point in the endpoint's favour. (2) **Bands are at
+50.5 % under a frame the model never saw**, which is the stage-2 acceptance bar
+(≥ 50 %) reached in stage 1; formula (38 %) and crystal system (20 %) are far
+from their bars (80 % / 70 %), and **inverse is exactly zero** — the digit probe
+shows why: every band list is answered with a memorised favourite species and
+its formula at p≈1.0. (3) **Low-exposure species recall nearly as well as seen
+species** (bands 0.443 vs 0.505, formula 0.361 vs 0.380): the recall is coming
+from the four-frame reference prose, not from the papers. Prediction 5's
+"bands near floor" premise no longer applies because the probe set is
+low-exposure rather than withheld; its guard half holds — formula and crystal
+system ≥ base. (4) **Crystal system barely moved** and the polymorph probe shows
+the mechanism: structure prompts return a fluent template with wrong systems
+(Anatase "hexagonal", Pyrite "monoclinic", Marcasite "trigonal") — run 2's
+confident-and-wrong, now confined to structure while bands and formulas carry
+real content. The trained-minus-probe gap is **negative** (−17 points on formula)
+because at stage 1 neither wording was trained as Q→A; the collapse metric
+becomes meaningful only after stage 2.
+
+**Prediction 6 (§18 head instrument, name-mode paired delta ≥ 0): PASSED — the
+name pathway was repaired, not damaged.** Frozen backbone → cosine head on
+1,952 species / 9,655 spectra, probe-species holdout, 5 paired seeds, last-10-
+epoch means (the §18 convention); `val` = seen-species split, `holdout` = the
+97 probe species:
+
+| prompt | metric | base | epoch 0.93 | final | Δ final−base (paired t) | Δ e0.93−base |
+|---|---|---|---|---|---|---|
+| name | val | 0.4233 ± 0.033 | 0.4806 ± 0.018 | 0.4858 ± 0.029 | **+0.0625**, t=6.4 | +0.0573, t=5.1 |
+| name | holdout | 0.4074 ± 0.006 | 0.4496 ± 0.007 | 0.4452 ± 0.010 | **+0.0378**, t=8.8 | +0.0421, t=9.3 |
+| formula | val | 0.6005 ± 0.015 | 0.6202 ± 0.015 | 0.6222 ± 0.014 | **+0.0217**, t=3.8 | +0.0197, t=4.4 |
+| formula | holdout | 0.5901 ± 0.007 | 0.6104 ± 0.005 | 0.6163 ± 0.008 | **+0.0262**, t=7.7 | +0.0203, t=4.7 |
+| both | val | 0.5798 ± 0.024 | 0.6113 ± 0.031 | 0.6135 ± 0.023 | **+0.0337**, t=9.9 | +0.0314, t=6.5 |
+| both | holdout | 0.5860 ± 0.004 | 0.5860 ± 0.002 | 0.5897 ± 0.005 | **+0.0036**, t=1.0 | +0.0000, t=0.0 |
+
+Run 2 had moved name-mode from 0.4208 to 0.3880 (t = −5). Stage 1 moves it
+**+0.06 on val and +0.04 on holdout**, taking the mineral NAME from below the
+constant-prompt control (0.46) to slightly above it — the first time the name
+has carried spectrum-relevant information in this project. Formula gains
++0.02, both +0.03. The endpoint and epoch 0.93 are indistinguishable here
+(differences ≤ 0.006, inside seed noise), so the instrument does not separate
+the branch points; recall did. Replay's +4.4 % is therefore NOT the §18-style
+damage the bound was written to catch — the representation improved on every
+prompt mode while general-text loss rose.
+
+**Stage-1 scorecard against the §19 predictions:** 1 papers ≥ 10 % PASSED
+(−18.9 %; −11.2 % on the papers' own text); 2 replay ≤ +3 % FAILED (+4.4 %);
+3 structure similarity ≤ 0.476 FAILED (0.616), Raman ≤ 0.60 PASSED (0.447);
+4 recall bars are stage-2 bars — bands already 51 %, formula 38 %, crystal 20 %,
+inverse 0 %; 5 probe species: formula / crystal ≥ base PASSED, "bands near
+floor" premise void (low-exposure, not withheld; 44 %); 6 §18 name-mode ≥ 0
+PASSED (+0.06); 7 as expected.
+
+### Stage 2 launched (2026-09-09 15:40) — branch, rate, and what changed from the plan
+
+**Branch: the epoch-2.0 endpoint**, chosen by the probes (recall higher on every
+task and both species sets; Raman-prompt polymorph similarity 0.447 vs 0.579;
+Quartz bands recited) over the epoch-0.93 checkpoint that sat inside the replay
+bound. Init is `stage1/final_fp32` — checkpoint-4282's fp32 weights with the
+tokenizer copied beside them — so stage 2 does not start from the bf16-rounded
+`final/`. The §18 head instrument was still running at launch; it measures
+backbone representation for the regression task and could annotate this choice
+but not reverse it against direct recall evidence, so the launch did not wait.
+
+**Rate: 1e-5, linear to 0, 20-step warmup, fresh AdamW** — half the plan's
+"2e-5 if stage-1 shows forgetting", because forgetting continued at 2e-5.
+
+**Evaluation: five sets.** `package.py stage2` wrote only `val-shapes`; the
+pre-registered stage-2 criteria need papers (rise ≤ 2 %) and replay (≤ base
++3 %), so stage 1's `val-paper_markdown`, `val-replay`, `val-reference` and
+`val-binder_markdown` are symlinked into the stage-2 dir (the trainer globs
+`val-*.bin`). Eval every 40 steps (11 + start), saves at 200/400, `python -u`
+so the log is live.
+
+**Smoke (20 steps, same init and rate):** masked-loss path trains — shapes val
+0.6215 → 0.4796 during warmup alone, train loss 0.76 → 0.59, truncated papers /
+replay flat (1.832 → 1.849, 2.107 → 2.125), peak 21.25 / 8.18 GiB, 1,865–1,889
+tok/s. Step-0 binder loss 2.527 = the stage-1 final 2.5266, confirming the fp32
+init carries the endpoint's weights.
+
+**Expected:** 440 steps ≈ 4.2 h + ~20 min of evals → done ≈ 20:25. Stage-2
+acceptance (§5): shapes val falls; papers val rises ≤ 2 %; replay ≤ 2.1815
+(already failed at stage 1, so the honest bar is "no further rise"); recall
+formula ≥ 80 %, crystal system ≥ 70 %, bands ≥ 50 %, inverse top-1 ≥ 40 %,
+trained-minus-probe gap ≤ 15 points; polymorph structure ≤ 0.476 and crystal
+system right for ≥ 5/7 pairs; digits Quartz/Calcite first band top-1 with
+p ≥ 0.5; §18 name-mode delta ≥ 0.
+
+### Stage 2 result (2026-09-09 20:02): shapes learned in 40 steps, the second pass cost prose
+
+440 steps / 28.8M tokens in 4 h 22 min (6.58M tok/h end-to-end with five eval
+sets every 40 steps); endpoint `stage2/final` (bf16), fp32 in `checkpoint-440`;
+`stage2_epoch1` preserves the step-200 fp32 weights (epoch 0.91).
+
+| step | shapes | paper_markdown | replay | reference | binder |
+|---|---|---|---|---|---|
+| 0 (stage-1 endpoint) | 0.6493 | 1.3180 | 2.2120 | 0.4035 | 2.527 |
+| 40 | 0.4319 | 1.3260 | 2.2260 | 0.3871 | 2.426 |
+| 120 (shapes minimum) | **0.4267** | 1.3270 | 2.2330 | 0.3505 | 2.351 |
+| 200 (epoch 0.91) | 0.4359 | 1.3260 | 2.2340 | 0.3263 | 2.462 |
+| 239 (first eval of pass 2) | 0.4338 | **1.3400** | **2.2530** | 0.3190 | 2.583 |
+| 440 (final) | 0.4315 | 1.3420 | 2.2580 | 0.2977 | 2.639 |
+| final vs stage-1 endpoint | −33.5 % | **+1.82 %** | +2.08 % | −26.2 % | +4.4 % |
+
+**Loss criteria.** Shapes val fell: PASSED, but all of it in the first 40 steps
+(warmup, lr ≤ 1e-5) and flat from step 120 — 320 further steps bought nothing
+measurable on shapes. Papers ≤ +2 %: PASSED at +1.82 %, with the whole rise
+arriving at the epoch boundary (1.326 → 1.340 between steps 200 and 239) — the
+stage-1 second-pass pattern again, now on 108k Q→A examples. Replay rose a
+further +2.08 % (2.258 = +6.6 % over base; the +3 % bound was already gone).
+Reference prose kept improving to −26 %: training the question frames
+sharpened the statement frames too. Binder drifted +4.4 % (2 documents).
+
+**Reading.** One epoch at 1e-5 would have delivered the same shapes loss at a
+lower prose cost — `stage2_epoch1` (step 200: shapes 0.436, papers +0.6 %,
+replay +1.0 %) is the comparison point if the probes show the final's
+recall no better than the epoch-1 model's. Whether the second pass bought
+FACTS (inverse recall, crystal system) rather than loss is what the probes
+decide next; loss cannot see it.
+
+**Stage-2 polymorph probe: structure collapse got worse; Raman held.** Same
+run for all three models (greedy bf16 on the 3060; the base's structure figure
+reads 0.517 here vs 0.476 on the 3090 this morning — greedy flips on kernel
+differences, so compare within a run):
+
+| model | Raman prompts | structure prompts | crystal system right (of 13 minerals) | pairs both right (of 7) |
+|---|---|---|---|---|
+| base | 0.799, 4/7 identical | 0.517 | — | — |
+| stage-1 endpoint | 0.484 | 0.612 | 5 of 12 stated | — |
+| **stage-2 endpoint** | 0.488 | **0.723** | **6 of 13** | **1 of 7** |
+
+The stage-2 model answers every "X (Y) is" prompt in one frame — "<system>
+(space group Pnma) with unit cell a = …" — and fills the system slot at about
+the base rate of orthorhombic/monoclinic: Brookite "hexagonal", Pyrite
+"orthorhombic", Andalusite "monoclinic", Atacamite/Botallackite swapped. The
+criterion (≥ 5/7 pairs) FAILS at 1/7, and 0.723 is within reach of run 2's
+0.784. Bands were learned; structure was not — the mindat structural sentence
+(one frame per species) is exactly the "N copies of one phrasing" template the
+frame rule was written against, and the structure facts need the same
+treatment the Raman facts got: several distinct frames per fact plus
+measurement-keyed anchors (the AMCSD cell/space-group records) rather than a
+single mindat sentence.
+
+
+### Stage 2 probes (2026-09-09 21:25): the shapes unlocked formulas and crystal systems, the inverse is still dead
+
+**Recall (`probe_recall.py`, greedy, trained frame / probe frame):**
+
+| task | bar | base | stage-1 endpoint | **stage-2 endpoint** | probe species (97), stage 2 |
+|---|---|---|---|---|---|
+| formula | ≥ 0.80 | 0.01 | 0.21 / 0.38 | **0.615 / 0.565** | 0.598 / 0.474 |
+| bands (≥2 of 3 within ±10) | ≥ 0.50 | 0.00 | 0.34 / 0.505 | **0.625 / 0.570 PASS** | 0.474 / 0.567 |
+| crystal_system | ≥ 0.70 | 0.09 | 0.17 / 0.20 | **0.467 / 0.452** | 0.443 / 0.454 |
+| inverse (bands → species) | ≥ 0.40 | 0.00 | 0.00 | **0.000 FAIL** | 0.000 |
+| trained − probe gap | ≤ 0.15 | — | negative | **+0.05 / +0.055 / +0.015 PASS** | formula +0.12 |
+
+Formula +40 points and crystal system +30 points from a stage that did not add
+knowledge: the Q→A frames unlocked what stage-1 prose had deposited. Bands
+clear their bar under both wordings. Formula (61.5 %) and crystal system
+(46.7 %) miss theirs, and the shapes loss was flat from step 120, so more
+shape training will not close that gap — the missing part is knowledge the
+prose never carried in a recoverable form (crystal systems entered as one
+mindat sentence per species). **Inverse is exactly zero at every checkpoint**
+and the digit probe shows the collapse in its current form: all three band
+lists → "Pyrope, whose composition is Mg3Al2(SiO4)3." (stage 1: Tsumebite).
+3,862 inverse examples against 26,130 forward ones taught a single favourite
+answer; the inverse needs its own design (every measurement-keyed spectrum as
+an inverse example, contrastive negatives, candidate-list answers) before it
+can be scored.
+
+**Digits (stage-2 endpoint):** Calcite → 203.8, 279.6, 667.1, 1087.1 (1087 and
+280 within 2 cm⁻¹ of 1085 / 282; 667 and 204 wrong); Quartz → 165.3, 178.6,
+291.3, 403.1, 431.5 (none within 10 — stage 1 had four of five). Single-prompt
+greedy output is noisy; the 200-species recall is the measure. First-token
+probabilities are far below the p ≥ 0.5 bar (see log) — FAIL, as expected for a
+model that ranks rather than knows the first band.
+
+**Polymorph:** Raman 0.488 PASS (≤ 0.60); structure 0.723 FAIL (base 0.517 in
+the same run); crystal system right for 6 of 13 minerals, 1 of 7 pairs (bar
+5/7) FAIL — see the stage-2 polymorph section above.
+
+**§18 head instrument, stage-2 arm (5 paired seeds, last-10 means):**
+
+| prompt | metric | base | stage 1 | stage 2 | Δ s2−base (t) | Δ s2−s1 (t) |
+|---|---|---|---|---|---|---|
+| name | val | 0.4233 | 0.4858 | 0.4949 | +0.0716 (6.9) | +0.0091 (2.0) |
+| name | holdout | 0.4074 | 0.4452 | 0.4662 | +0.0588 (11.1) | +0.0210 (4.3) |
+| formula | val | 0.6005 | 0.6222 | 0.6281 | +0.0275 (6.7) | +0.0058 (1.5) |
+| formula | holdout | 0.5901 | 0.6163 | 0.6139 | +0.0238 (4.4) | -0.0024 (-0.6) |
+| both | val | 0.5798 | 0.6135 | 0.6159 | +0.0361 (6.9) | +0.0024 (0.8) |
+| both | holdout | 0.5860 | 0.5897 | 0.5894 | +0.0034 (1.7) | -0.0002 (-0.1) |
+
+No damage from stage 2; name-mode holdout improved a further +0.02 over stage 1
+(t ≈ 5). Prediction 6 holds at both stages.
+
+**Stage-2 scorecard:** loss — shapes fell PASS, papers +1.82 % PASS (≤ 2 %),
+replay +6.6 % over base FAIL (bound gone since stage 1); polymorph — Raman
+PASS, structure FAIL, systems FAIL; digits FAIL; recall — bands PASS, gap PASS,
+formula / crystal / inverse FAIL; probe species — formula/crystal ≥ base PASS;
+§18 PASS. **Seven of fifteen criteria pass.** The failures are one mechanism
+(single-template structure facts) plus one missing design (the inverse), not a
+training defect: everything that was given several frames was learned.
+
+**Was the second shape epoch worth its prose cost? Roughly a wash.** Recall on
+`stage2_epoch1` (step 200, papers +0.6 %, replay +1.0 %) against the final
+(step 440, papers +1.82 %, replay +2.1 %), trained / probe frame:
+
+| task | epoch 1 | final | difference |
+|---|---|---|---|
+| formula, seen | 0.610 / 0.555 | 0.615 / 0.565 | none |
+| bands, seen | 0.550 / 0.560 | 0.625 / 0.570 | **+7.5 / +1** |
+| crystal_system, seen | 0.457 / 0.492 | 0.467 / 0.452 | +1 / **−4** |
+| bands, probe species | 0.495 / 0.433 | 0.474 / 0.567 | −2 / **+13** |
+| crystal_system, probe species | 0.443 / 0.495 | 0.443 / 0.454 | 0 / −4 |
+| inverse, both sets | 0.000 | 0.000 | none |
+
+The second pass bought bands (the oracle's primary target) and cost a little
+crystal-system generalisation and 1.2 points of papers loss; formula and the
+inverse did not move. **Decision: the final stays the stage-2 endpoint**, both
+artefacts are kept (`stage2_epoch1` fp32; `stage2/final` bf16 + `checkpoint-440`
+fp32), and "one shape epoch" enters the next-corpus levers as a near-free
+saving rather than a correction.
+
+### Why the inverse direction is zero: the key is ill-posed before the model ever sees it (2026-09-10)
+
+`templates.fields()` builds the inverse prompt from `top4 = bands[:4]`, and `bands` is the
+position-sorted peak-pick — so "top4" is the **four LOWEST-wavenumber peaks**, the lattice-mode
+region every mineral shares, never the diagnostic bands (Abellaite's key is 118.6, 128, 138.5,
+201.7; its 1058 carbonate band is absent). Measured over the 1,914 RRUFF species with ≥ 4 picked
+peaks, using the field's own ±10 cm⁻¹ tolerance:
+
+| key | median band | share < 250 cm⁻¹ | another species matches all 4 (±5 / ±10 / ±15) | ≥3 of 4 within ±10 |
+|---|---|---|---|---|
+| **4 lowest (as trained)** | 238 cm⁻¹ | 55 % | 21 % / **56 %** / 76 % | **93 %** |
+| 4 strongest (by relative intensity, available from `pick_peaks`) | 503 cm⁻¹ | 19 % | 4 % / **11 %** / 19 % | 64 % |
+
+A perfect lookup table over the trained keys would be ambiguous for 56 % of species. The model
+cannot learn a mapping the data does not contain, so it learned the only regularity available —
+the answer FORMAT ("{species}, whose composition is {formula}") — and fills it with a prior
+("Tsumebite" after stage 1, "Pyrope" after stage 2). Everything downstream compounds it:
+- **Exposure:** 2 stage-1 statements + 2 stage-2 Q/A per species (~6 exposures over both stages)
+  against ~25+ forward exposures; only the canonical fact renders an inverse — the 5,787
+  measurement-keyed spectra render forward only, so the inverse gets none of the natural variation
+  that made the forward direction learnable.
+- **Reversal curse:** forward exposure ("Quartz shows bands at …") does not transfer to the
+  backward mapping in autoregressive LMs (Berglund et al. 2023); the operator's stage-2 hypothesis
+  that pairing directions would lift the inverse ran into this — only direct backward exposure
+  counts, and there was almost none.
+- **Numeric keys** tokenize into digit pieces ('108','5'); a 1B model has to hash 8–12 such
+  tokens into a name, whereas the forward key is a name with pretrained associations.
+- **No negatives:** 201 contrastive + 186 polymorph examples; nothing says what a band set is NOT.
+
+**Levers for v5, in order of expected effect:** (1) fix the key — strongest-N by relative
+intensity, present strongest-first, and state the diagnostic band explicitly; (2) render an
+inverse example from EVERY measurement-keyed spectrum (≈ 3× exposure with real variation), plus
+candidate-list answers ("… is most consistent with X; also Y, Z") for the confusable 11 %;
+(3) contrastive negatives from nearest-neighbour keys; (4) keep the direction ratio near 1:1 in
+the shape stage. Probe: recompute the inverse recall on the same 200 species after (1) alone.
+
+## 20. Inverse-identification experiment — pre-registration (2026-09-10)
+
+**Question.** Does the inverse direction (peak list → species) learn at all once the
+prompt is the seeker's own output over real spectra, with the variation coming from
+data rather than wording? v4 scored 0.000 with a key that was ambiguous for 56 % of
+species (§19 root cause).
+
+**Design** (`corpus_inverse.py`, `package_inverse.py`, `probe_inverse.py`):
+- Prompt = `identify_prompt(peaks, laser)`: the project's `pick_peaks` output, 12
+  strongest peaks, position-sorted, relative intensities attached, one fixed schema.
+  Completion = `species (formula)`, plus a deterministic "also consistent with" tail
+  for the 196 species whose four strongest bands collide with another's at ±10 cm⁻¹.
+- Data: every RRUFF spectrum in eight archives (excellent/fair/poor/unrated,
+  oriented and unoriented, LR-Raman) = 15,600 train spectra over 2,481 species;
+  4 seeker re-runs per spectrum over perturbed copies (calibration shift, gain
+  envelope, fluorescence baseline, noise, window truncation, smoothing, threshold
+  jitter); the same peak lists rendered in BOTH directions (identify / predict), 1:1.
+- Held out: one excellent_unoriented spectrum per species with ≥ 2 (n = 1,388,
+  in-distribution instrument) and ALL of ROD (n = 1,043, unseen instrument family).
+- Training: from `stage1/final_fp32` (fact-trained, not shape-trained, so the
+  comparison with v4's stage 2 is clean), lr 1e-5 linear→0, **one epoch** (v4's
+  second shape pass bought loss only and cost prose), eval every 20 steps on
+  identify_heldout, identify_rod, paper_markdown, replay, reference, shapes_v4.
+- Control: nearest-neighbour peak matching over the train library (`probe_inverse.py
+  --models ""`), same items, same tolerance.
+
+**Predictions, falsifiable.**
+1. Held-out top-1 ≥ 0.30 and top-3 ≥ 0.50 (v4: 0.000). Below 0.10 = the format
+   thesis is wrong and the blocker is elsewhere.
+2. Distinct first answers over the 1,388 held-out items ≥ 200 (v4: one answer for
+   everything). This is the collapse test and it is pass/fail before accuracy matters.
+3. The model stays BELOW the kNN control on held-out library spectra (a lookup over
+   the same library should win there); the interesting gap is on ROD, where I expect
+   the model within 10 points of kNN or above it if the augmentation taught invariance.
+4. ROD top-1 ≥ 0.10 for species seen in training (unseen instrument transfer).
+5. Papers val rises ≤ 2 %; shapes_v4 val WILL rise (old format untrained) and that
+   is not a failure; the forward `predict` direction is not scored this run.
+6. Expected not to work: species with a single training spectrum and no ROD entry.
+
+**As built and launched (2026-09-10 12:33).** Archives yielded 15,600 train spectra
+(excellent_unoriented 4,399 after the 1,388 hold-out; oriented 1,798 + 13; fair 1,481;
+poor 808; unrated 190; LR-Raman 3,352), 155,620 examples (77,810 per direction), 190 of
+62,400 perturbed re-picks discarded for < 3 peaks. **24.8M tokens/epoch** — numbers
+tokenise at ~156 tokens per example, 1.8× the character estimate — 6,059 blocks, pad
+1.97 %, 378 steps, eval every 40. One render fix before packaging: the picker's
+`relative_intensity` is relative to the whole spectrum's range (baseline included), so
+the strongest listed peak read 0.68 while the schema promised 1.00; `pick()` now
+renormalises the listed peaks. kNN control library = 15,600 train peak lists; 816 of
+the 1,043 ROD spectra name a species present in training. Log
+`~/tmp/train_inverse_exp.log`, out `inverse_exp/`, init `stage1/final_fp32`, lr 1e-5
+linear→0, warmup 20. Expected ≈ 3.6 h + ~25 min of evaluations.
+
+**kNN control, measured before any result (12:34):** held-out RRUFF top-1 **0.488** /
+top-3 0.654 (n = 1,388); ROD top-1 **0.576** / top-3 0.638 (n = 1,043, of which 816
+name a species present in training — so 0.78 is the ceiling for any method on ROD).
+These are the bars the model's identify scores are read against; prediction 3 says the
+model lands below 0.488 on held-out RRUFF, and the ROD comparison is the one that
+matters.
+
+**Early signal (steps 40 / 80 of 378, 13:24).** identify_heldout loss 1.397 → 0.536 →
+0.451 (−68 %): the schema and at least some of the mapping are being learned fast.
+identify_rod 2.999 → 3.082 → 3.355 (+12 %) is **an artefact of the completion, not the
+identification**: 350 of 400 ROD completions carry CIF-style spaced formulas ("Fe3 O4",
+"F4 Li Y") and some ROD "species" are formula-like names, while RRUFF formulas are
+unspaced with RRUFF markup ("Sn^2+^21O6(OH)14Cl16", "[box]Ca2(…)"); as the model commits
+to the RRUFF style its loss on the CIF spelling rises. `probe_inverse.py` scores the
+species NAME (first phase, and anywhere in the text) and is immune to this — read ROD
+from the probe, never from this loss curve. **Owed for the next render:** a formula
+normaliser (strip CIF spaces, RRUFF `^…^` and `[box]`) so both sources spell formulas
+one way. Prose cost is running higher than v4's stage 2: papers +2.6 % at step 80 (bar
+2 %, lr still near peak), reference frames +88 %, shapes_v4 +46 % — the expected price of
+a pure-schema stage with no carried prose; the recipe run must carry prose, this
+experiment deliberately does not.
+
+**Run complete (16:27, 234 min, 378 steps, 24.8M tokens, 6.34M tok/h end-to-end).**
+Endpoint `inverse_exp/final` (bf16), fp32 in `checkpoint-378`. Final losses vs the
+stage-1 endpoint: identify_heldout 1.397 → **0.359** (−74 %, still falling at the last
+eval); identify_rod 3.00 → 4.05 (the CIF-formula artefact, not read); paper_markdown
+1.318 → 1.371 (**+4.0 %, FAILS the ≤ 2 % bar**); replay +1.4 %; reference frames 0.40 →
+0.90 (+124 %); shapes_v4 0.65 → 1.22 (+89 %). The prose/fact cost of a pure-schema
+stage with no carried prose is now measured, and it is large. Probes launched 16:28:
+`probe_inverse.py` (s1 vs inv, kNN bars 0.488 / 0.576) on the 3090 and `probe_recall.py`
+(seen species, s1 vs inv) on the 3060 to quantify what the reference-loss rise cost in
+formula / band recall.
+
+### §20 result: the format thesis is FALSIFIED — the peak list is not read at all (2026-09-10 17:20)
+
+**Probe (`probe_inverse.py`, greedy, species-name scoring), kNN control beside it:**
+
+| model | split | top-1 | top-3 | distinct first answers | most common answer |
+|---|---|---|---|---|---|
+| kNN over the train library | heldout | **0.488** | 0.654 | — | — |
+| kNN | ROD | **0.576** | 0.638 | — | — |
+| stage-1 endpoint (untrained format) | heldout | 0.000 | 0.000 | 3 | "$\alpha$-Fe$_2$O$_3$" (paper prose) |
+| **inverse endpoint** | heldout | **0.001** | 0.001 | **9** | Beryl 897/1,388 |
+| inverse endpoint | ROD | 0.006 | 0.006 | 8 | Beryl 571/1,043 |
+
+Predictions 1 (top-1 ≥ 0.30) and 2 (≥ 200 distinct answers) are falsified outright;
+3 holds trivially; 4 fails. The −74 % identify loss was the completion's format and
+formula tokens — predictable once a species is chosen — not the decision tokens.
+
+**Two diagnostics say the model never used the peak list.** `rank_inverse.py`: scoring
+the true species by likelihood against the 63 most frequent training species on 200
+held-out items puts the true species in the BOTTOM eighth of 64 for 92.5 % of items
+(top half 4 %) — likelihood tracks species frequency, nothing else. Prompt sensitivity:
+log P(true | own peaks) − log P(true | another spectrum's peaks) = **+0.08 nats, own
+higher for 52 % of items** (chance 50 %; stage-1 endpoint 46 %). The mapping is not
+buried under a prior; it is absent. The collapse targets (Beryl, Fluorapatite, Epidote,
+Diopside) are hub species — 3rd–5th most frequent in training; median species has 15
+identify examples, 543 species ≤ 5.
+
+**Cost to the forward facts** (`probe_recall.py`, seen species, probe frame): formula
+0.405 → 0.185, bands 0.490 → 0.410, crystal system 0.198 → 0.320; papers +4.0 %,
+reference frames +124 %. A pure-schema stage with no carried prose halves formula recall.
+
+**Reading.** At 1.5B, one epoch, ~30 seeker-schema exposures per species, a decimal peak
+list (~60 digit tokens) does not become a key the model can look up: reading a dozen
+numbers and matching them against memory is a retrieval operation, and the generation
+readout learned P(species) plus the format. The forward direction worked because the
+NAME is the key (one or two pretrained tokens) and the numbers are the output. Fixing
+the key (§19) was necessary — the v4 key was ill-posed — but it was not the blocker
+this experiment isolated.
+
+**Where this points, in order of cost:**
+1. **Retrieval in the loop** (the spectroscopist's workflow): seeker output → kNN
+   candidates from the library (already 0.49 / 0.58 top-1) → the LM chooses and explains
+   among K candidates whose reference peak lists are IN the prompt. A comparison task
+   over 5 options, not a hash over 2,481; trainable from the same data; the LM's value
+   is the reasoning (shifts, missing bands, mixtures) plus its prose knowledge. This is
+   the product path.
+2. **Cheap diagnostic before anything else:** a linear/MLP head over the FROZEN
+   endpoint's representation of the identify prompt → species (the §18 instrument
+   reversed). If a head on frozen features scores > 0.2 top-1, the information is in the
+   representation and generation is the wrong readout; if ~0, the encoding itself is
+   opaque to this model.
+3. **Symbolic spectral tokens** (10 cm⁻¹ bins with intensity levels as single tokens)
+   so a species becomes a bag of ~12 "words" like a name — the research direction if the
+   LM itself must internalise spectra.
+4. More epochs or the 7B on the Mac are gambles against a zero-sensitivity result and
+   should follow (2), not precede it.
+
+Artefacts: `inverse_exp/final` (+ fp32 `checkpoint-378`, `checkpoint-200`);
+probes `~/tmp/analysis/inverse_exp/`; kNN control `inverse_knn_control.json`.
+The formula normaliser (`formula_norm.py`, 8 tests) is unaffected and stands for v5.
+
+### §20b. Frozen-representation head over the identify prompt — pre-registration (17:30)
+
+**Question.** Is species information present in the model's representation of the peak
+list at all, with generation ruled out as the readout? `head_inverse.py`: encode every
+training identify prompt (77,810, all augmentations) with a FROZEN model, pool the final
+layer (last token; mean) and a middle layer (mean), train a linear softmax head and a
+2048→1024→2481 MLP head over species, evaluate top-1/3/10 on the 1,388 held-out RRUFF
+spectra and on ROD (816 items whose species exist in training). Models: inverse
+endpoint, stage-1 endpoint, base. Controls: kNN (0.488 / 0.576) and the same heads over a
+10 cm⁻¹ intensity-binned peak vector (130 dims) — what a representation-free classifier
+extracts from the identical inputs.
+
+**Predictions.** (1) Binned-vector heads land near kNN (0.35–0.55 held-out top-1). (2)
+Base-model features score low (< 0.05): pretraining does not encode digit lists as
+spectra. (3) The decision: if the inverse endpoint's features reach > 0.20 top-1 the
+information is in the representation and generation was the wrong readout; if they sit
+below the binned vector by a wide margin the encoding is opaque to this model and the
+retrieval-in-the-loop path is the only one left at 1.5B. (4) Expected: inverse endpoint >
+stage-1 endpoint > base, all below the binned vector.
+
+**§20b result (18:16, 31 min).** Head top-1 on the 1,388 held-out RRUFF spectra / the 816
+ROD items whose species exist in training; chance 0.0004; kNN 0.488 / 0.576.
+
+| features | linear, held-out / ROD | MLP, held-out / ROD |
+|---|---|---|
+| **binned peak vector, 130 dims (control)** | 0.486 / 0.605 | **0.624 / 0.725** |
+| inverse endpoint, last token ("Phase:") | 0.090 / 0.320 | 0.101 / 0.392 |
+| inverse endpoint, final-layer mean | 0.326 / 0.665 | 0.329 / 0.668 |
+| inverse endpoint, layer-8 mean | 0.324 / 0.659 | 0.318 / 0.685 |
+| stage-1 endpoint, last token | 0.258 / 0.656 | 0.256 / 0.657 |
+| stage-1 endpoint, final-layer mean | 0.313 / 0.673 | 0.349 / 0.694 |
+| stage-1 endpoint, layer-8 mean | 0.318 / 0.681 | **0.361 / 0.702** |
+| base, last token | 0.192 / 0.586 | 0.183 / 0.632 |
+| base, layer-8 mean | 0.294 / 0.670 | 0.336 / 0.686 |
+
+Four findings, each pre-registered as a possibility:
+1. **The information is in the representation** (prediction 3, upper branch): a linear
+   probe on the mean-pooled hidden state reads the species at 0.31–0.36 top-1, far above
+   the 0.20 line, while generation from the same model scored 0.001 with zero prompt
+   sensitivity. Generation was the wrong readout.
+2. **Training did not add it.** Base ≈ stage-1 ≈ inverse endpoint on pooled features
+   (0.34 / 0.36 / 0.32). Whatever a probe can read is what pretraining already encodes
+   about digit strings; 24.8M tokens of peak lists moved nothing readable. Prediction 4
+   (inverse > stage-1 > base) is falsified.
+3. **The generation objective destroyed the decision position.** At the last token,
+   where generation reads, the stage-1 endpoint carries 0.26 and the inverse endpoint
+   0.09 — one epoch of identify training collapsed that state toward the frequent-species
+   answer. The "Beryl" behaviour is now mechanistic, not descriptive.
+4. **Pooling beats the last token everywhere, and a 130-dim bin histogram beats every
+   LM feature** (0.62 vs ≤ 0.36 held-out). The species signal is spread across the number
+   tokens and never integrated at the decision point; the LM's encoding of decimals keeps
+   about half of what a trivial binning keeps. On ROD the gap nearly closes (0.70 vs
+   0.725): LM features generalise across instruments about as well as bins do.
+
+**Reading for direction.** For identification itself the LM adds nothing over a 130-dim
+histogram and a small MLP (0.62 / 0.72, above kNN). The LM's value is downstream —
+reasoning about shifts, missing bands and mixtures, and the prose knowledge — which
+argues for the classifier or kNN proposing candidates from the seeker output and the LM
+choosing and explaining among candidates it can SEE (copying a visible name is easy; recall
+from a numeric key is what failed). If the LM itself must carry spectra, finding 4 points at
+the input: bins as symbolic tokens make a spectrum a bag of ~12 words, the representation
+the MLP already exploits, and the one the generation readout could plausibly learn.
