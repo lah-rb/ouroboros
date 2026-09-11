@@ -305,3 +305,45 @@ def test_variants_change_wording_or_instrument():
     v0 = {d["text"] for d in rep if d["provenance"]["variant"] == 0}
     v1 = {d["text"] for d in rep if d["provenance"]["variant"] == 1}
     assert v0 and v1 and v0 != v1
+
+
+def test_measured_families_use_the_instrument_list_not_the_archive():
+    rows = _bank() + [
+        bank_row(
+            {
+                "prompt": "Which phase shows {n} bands at {bands}{laser}?",
+                "completion": " {species}.",
+                "direction": "backward",
+                "form": "question",
+                "structure": "q",
+            },
+            "raman_bands",
+            "identification",
+            {"model": "test"},
+        )
+    ]
+    idx = sr.index_bank(rows, 0)
+    out = []
+    st = sr.render(
+        idx,
+        _spec(),
+        _graph(),
+        {"T_RL": [], "T_L": [], "T_R": ["Quartz"], "C": []},
+        exposures=6,
+        relational=2,
+        variants=1,
+        sink=out.append,
+    )
+    ident = [
+        d
+        for d in out
+        if d["provenance"]["family"] == "identification" and "bands at" in d["text"]
+    ]
+    cat = [d for d in out if d["provenance"]["family"] == "catalogue_entry"]
+    assert ident and cat
+    archive = "128, 206.3, 264.1, 355.7, 401.2, 464.8 cm-1"
+    # the catalogue keeps the archive positions verbatim; the identification
+    # question carries the instrument's (perturbed) list
+    assert all(archive in d["text"] for d in cat)
+    assert not any(archive in d["text"] for d in ident)
+    assert st.numbers_failed == 0

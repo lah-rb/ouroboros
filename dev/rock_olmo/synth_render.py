@@ -326,6 +326,7 @@ def instrument_fill(
             slots["laser"] = f" at {p['laser_nm']} nm excitation"
             slots["laser_nm"] = str(p["laser_nm"])
         slots["peak_list"] = sv.fmt_peaks(pairs)
+        slots["_pairs"] = pairs
         if pairs:
             slots["band_strongest"] = f"{max(pairs, key=lambda x: x[1])[0]:g}"
         for b, _r in pairs:
@@ -383,6 +384,29 @@ def relational_fill(fact, graph: Graph) -> dict:
     }
     if fact.kind == "raman_bands":
         out["locality"] = str(fact.payload.get("locality") or "")
+    return out
+
+
+MEASURED_FAMILIES = ("identification", "measurement_report")
+
+
+def measured_view(fill: dict, pairs: list[tuple[float, float]]) -> dict:
+    """The fill as an INSTRUMENT would report it: for families that narrate a
+    measurement, {bands}/{top3}/{top4}/{first}/{n} derive from the perturbed
+    list, not the archive's canonical positions. {peak_list} already does;
+    two thirds of the banked identification templates say {bands}, and a
+    seeker-schema doc built on archive positions would teach the wrong
+    invariance. catalogue_entry and variance_note keep the canonical list
+    (variance_note contrasts the two)."""
+    if not pairs:
+        return fill
+    pos = [b for b, _ in pairs]
+    out = dict(fill)
+    out["bands"] = ", ".join(f"{b:g}" for b in pos) + " cm-1"
+    out["top4"] = ", ".join(f"{b:g}" for b in pos[:4]) + " cm-1"
+    out["top3"] = ", ".join(f"{b:g}" for b in pos[:3]) + " cm-1"
+    out["first"] = f"{pos[0]:g}"
+    out["n"] = str(len(pos))
     return out
 
 
@@ -559,10 +583,14 @@ def render(
                         fact, graph, rng, want_libs=(group == "T_RL")
                     )
                     st.deltas.extend(deltas)
+                    pairs = inst_slots.pop("_pairs", [])
                     fill = dict(base)
                     fill.update(rel_fill)
                     fill.update(
                         {k: v for k, v in inst_slots.items() if v not in (None, "")}
+                    )
+                    measured = (
+                        measured_view(fill, pairs) if kind == "raman_bands" else fill
                     )
                     for name in SYNTH_SLOTS:
                         fill.setdefault(name, "")
@@ -591,12 +619,15 @@ def render(
                                 "rel",
                             )
                         for row in picks:
-                            text = render_one(row, fill)
+                            f_row = (
+                                measured if row["family"] in MEASURED_FAMILIES else fill
+                            )
+                            text = render_one(row, f_row)
                             if text is None:
                                 st.skipped[f"{kind}/{row['family']}: slot empty"] += 1
                                 continue
                             if not numbers_survive(
-                                text, {k: fill[k] for k in row.get("slots") or []}
+                                text, {k: f_row[k] for k in row.get("slots") or []}
                             ):
                                 st.numbers_failed += 1
                                 continue
@@ -621,7 +652,7 @@ def render(
                                     "species": sp,
                                     "instrument": inst_rec,
                                     "fill_sha": hashlib.sha256(
-                                        json.dumps(fill, sort_keys=True).encode()
+                                        json.dumps(f_row, sort_keys=True).encode()
                                     ).hexdigest()[:12],
                                 },
                                 False,
@@ -649,9 +680,14 @@ def render(
                             for row in pick_templates(
                                 hold_fams, 1, fid, salt, "holdout", direction
                             ):
-                                text = render_one(row, fill)
+                                f_row = (
+                                    measured
+                                    if row["family"] in MEASURED_FAMILIES
+                                    else fill
+                                )
+                                text = render_one(row, f_row)
                                 if text is None or not numbers_survive(
-                                    text, {k: fill[k] for k in row.get("slots") or []}
+                                    text, {k: f_row[k] for k in row.get("slots") or []}
                                 ):
                                     continue
                                 d = doc(
