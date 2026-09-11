@@ -249,3 +249,22 @@ def test_slot_names_with_digits_or_case_are_not_digits_or_malformed():
         "top3",
         "libs_top3",
     ]
+
+
+def test_unit_spellings_are_not_digits():
+    spec = dict(SPEC)
+    spec["slots"] = {**SPEC["slots"], "density": {}, "hardness": {}}
+    spec["answer_slots"] = {
+        "forward": ["bands", "peak_list", "density"],
+        "backward": ["species", "sp_f"],
+    }
+    spec["sample_fills"] = [
+        {**SPEC["sample_fills"][0], "density": "2.66", "hardness": "7"}
+    ]
+    ok = _fwd(
+        prompt="Density of {species}:",
+        completion=" {density} g/cm³; bands at {bands} lie below the cm-1 cut-off.",
+    )
+    assert validate_template(ok, spec) == []
+    bad = _fwd(prompt="Density of {species}:", completion=" {density} g/cm³ at 25 °C.")
+    assert "digit in template" in validate_template(bad, spec)

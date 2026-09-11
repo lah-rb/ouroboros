@@ -48,6 +48,9 @@ SLOT_RE = re.compile(r"#?\{([A-Za-z_][A-Za-z0-9_]*)\}")
 # Any brace group that is NOT a well-formed slot: "{ }", "{0}", "{a b}".
 BAD_BRACE_RE = re.compile(r"#?\{(?![A-Za-z_][A-Za-z0-9_]*\})[^{}]*\}")
 DIGIT_RE = re.compile(r"[0-9⁰-⁹₀-₉²³¹]")
+# Unit spellings whose digits are not values: a template may say "g/cm³" or
+# "cm-1" around a slot. Removed before the digit check (round-5 rejects).
+UNIT_RE = re.compile(r"g/cm(?:3|³|\^3)|cm(?:-1|⁻¹|\^-1|\^\{-1\})|µm|μm|nm\b|Å")
 _TOKEN_RE = re.compile(r"<[a-z][a-z0-9_]*>|[a-z]+")
 _NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
 _NON_LATIN_RE = re.compile(r"[Ѐ-ӿ぀-ヿ一-鿿가-힯؀-ۿ]")
@@ -217,7 +220,7 @@ def validate_template(
     # digits are judged on the WORDING only: a slot NAME may carry one
     # ({top3}, {libs_top3}); the 2026-09-11 round-1 gate rejected every
     # template that used those slots
-    if DIGIT_RE.search(SLOT_RE.sub(" ", both)):
+    if DIGIT_RE.search(UNIT_RE.sub(" ", SLOT_RE.sub(" ", both))):
         problems.append("digit in template")
     if BAD_BRACE_RE.search(both):
         problems.append("malformed placeholder")

@@ -363,6 +363,7 @@ FORWARD_ANSWERS = {
         "density",
         "hardness",
         "sg",
+        "geometry",
     ],
     "raman_bands": ["bands", "peak_list", "top3", "top4", "first", "band_strongest"],
     "libs_lines": ["body", "libs_lines", "libs_top3"],
