@@ -103,8 +103,17 @@ def test_unknown_and_malformed_slots():
         p.startswith("unknown slot laser_nm")
         for p in validate_template(_fwd(prompt="{species}{laser_nm}:"), SPEC)
     )
+    # a capitalised typo is an UNKNOWN slot (the spec decides names); only a
+    # brace group that cannot be a name is malformed
+    assert any(
+        p.startswith("unknown slot Species")
+        for p in validate_template(_fwd(prompt="{Species} shows"), SPEC)
+    )
     assert "malformed placeholder" in validate_template(
-        _fwd(prompt="{Species} shows"), SPEC
+        _fwd(prompt="{ } shows {species}"), SPEC
+    )
+    assert "malformed placeholder" in validate_template(
+        _fwd(prompt="{0} shows {species}"), SPEC
     )
 
 
@@ -204,3 +213,39 @@ def test_provider_limit_regex():
     assert is_provider_limit("HTTP 429 Too Many Requests")
     assert not is_provider_limit("limited-range prompt")
     assert not is_provider_limit(None)
+
+
+def test_slot_names_with_digits_or_case_are_not_digits_or_malformed():
+    spec = dict(SPEC)
+    spec["slots"] = {
+        **SPEC["slots"],
+        "top3": {},
+        "libs_top3": {},
+        "libs_T": {},
+        "T": {},
+    }
+    spec["answer_slots"] = {
+        "forward": ["bands", "peak_list", "top3", "libs_top3"],
+        "backward": ["species", "sp_f"],
+    }
+    spec["sample_fills"] = [
+        {
+            **SPEC["sample_fills"][0],
+            "top3": "128, 206.3, 464.8 cm-1",
+            "libs_top3": "288.16, 251.61, 777.19 nm",
+            "libs_T": "10,000",
+            "T": "10,000",
+        }
+    ]
+    t = _fwd(
+        prompt="At {libs_T} K ({T}), {species} shows its three strongest bands at",
+        completion=" {top3}; lines {libs_top3}.",
+    )
+    assert validate_template(t, spec) == []
+    assert slots_in(t["prompt"] + t["completion"]) == [
+        "libs_T",
+        "T",
+        "species",
+        "top3",
+        "libs_top3",
+    ]

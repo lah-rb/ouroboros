@@ -42,9 +42,11 @@ import hashlib
 import re
 from typing import Any, Iterable, Optional
 
-SLOT_RE = re.compile(r"#?\{([a-z][a-z0-9_]*)\}")
-# Any brace group that is NOT a well-formed slot: "{Species}", "{ }", "{0}".
-BAD_BRACE_RE = re.compile(r"#?\{(?![a-z][a-z0-9_]*\})[^{}]*\}")
+# Slot names are Python identifiers (fields() has `T`, `libs_T`, `top3`):
+# case and digits are allowed INSIDE a name; the spec decides which names exist.
+SLOT_RE = re.compile(r"#?\{([A-Za-z_][A-Za-z0-9_]*)\}")
+# Any brace group that is NOT a well-formed slot: "{ }", "{0}", "{a b}".
+BAD_BRACE_RE = re.compile(r"#?\{(?![A-Za-z_][A-Za-z0-9_]*\})[^{}]*\}")
 DIGIT_RE = re.compile(r"[0-9⁰-⁹₀-₉²³¹]")
 _TOKEN_RE = re.compile(r"<[a-z][a-z0-9_]*>|[a-z]+")
 _NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
@@ -212,7 +214,10 @@ def validate_template(
         return problems
 
     both = prompt + " " + completion
-    if DIGIT_RE.search(both):
+    # digits are judged on the WORDING only: a slot NAME may carry one
+    # ({top3}, {libs_top3}); the 2026-09-11 round-1 gate rejected every
+    # template that used those slots
+    if DIGIT_RE.search(SLOT_RE.sub(" ", both)):
         problems.append("digit in template")
     if BAD_BRACE_RE.search(both):
         problems.append("malformed placeholder")
