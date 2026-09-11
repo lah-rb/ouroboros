@@ -84,6 +84,11 @@ SLOT_DESCRIBE: dict[str, tuple[str, str]] = {
     "techs": ("text", "the technique names joined"),
     "names": ("text", "the member species joined with 'and'"),
     "names_comma": ("text", "the member species, comma-separated"),
+    "lists_anon": (
+        "number-list",
+        "the members' band lists labelled list A, list B, … WITHOUT names (backward-safe)",
+    ),
+    "assignments": ("text", "which letter is which species: 'A = Anatase; B = Rutile'"),
     "lines": (
         "number-list",
         "per-member band lists (contrastive) or structure+bands sentences (polymorph)",
@@ -244,7 +249,7 @@ FAMILIES: dict[str, dict] = {
         "directions": ["forward", "backward"],
         "forms": ["statement", "question"],
         "target": 12,
-        "brief": "Two or more species of one composition told apart: what separates them in the spectrum or the structure. Discrimination table, exam question, identification note; backward templates give the lists and ask which is which.",
+        "brief": "Two or more species of one composition told apart: what separates them in the spectrum or the structure. Forward: name the members ({names}) and give their lists ({lines}). Backward: give the shared formula and the ANONYMISED lists ({lists_anon}) — never {lines}, which names them — and ask which is which; the completion answers with {assignments} (or {names} when order does not matter).",
         "slots": None,
     },
     "qa": {
@@ -287,7 +292,7 @@ FAMILIES: dict[str, dict] = {
         "directions": ["forward", "backward"],
         "forms": ["statement"],
         "target": 12,
-        "brief": "Relational: one composition, several structures — name the family ({names}), give each member's structure and bands ({lines}), or recover the members from the description.",
+        "brief": "Relational: one composition, several structures — name the family ({names}), give each member's structure and bands ({lines}); backward templates give the anonymised lists ({lists_anon}) and recover the members ({assignments} or {names}).",
         "slots": None,
     },
     "band_neighbourhood": {
@@ -348,9 +353,16 @@ FAMILIES: dict[str, dict] = {
 
 SUBJECT_SLOTS = {
     "default": ["species", "sp_f"],
-    "contrastive": ["names", "names_comma", "species", "sp_f", "formula"],
-    "polymorph": ["names", "names_comma", "species", "sp_f", "formula"],
+    # the shared formula does NOT reveal which member: legitimate backward context
+    "contrastive": ["names", "names_comma", "species", "sp_f"],
+    "polymorph": ["names", "names_comma", "species", "sp_f"],
 }
+# slots whose expansion names the subject (contrastive/polymorph {lines} =
+# "Anatase: 144, 397 …"): allowed forward, rejected in a backward prompt;
+# {lists_anon} ("list A: …; list B: …") is the backward-safe form and
+# {assignments} ("A = Anatase; B = Rutile") its answer
+LEAKY_SLOTS = {"contrastive": ["lines"], "polymorph": ["lines"]}
+BACKWARD_EXTRA_ANSWERS = {"contrastive": ["assignments"], "polymorph": ["assignments"]}
 FORWARD_ANSWERS = {
     "formula": ["formula"],
     "structure": [
@@ -368,8 +380,8 @@ FORWARD_ANSWERS = {
     "raman_bands": ["bands", "peak_list", "top3", "top4", "first", "band_strongest"],
     "libs_lines": ["body", "libs_lines", "libs_top3"],
     "ir_troughs": ["bands", "top4", "first"],
-    "contrastive": ["lines"],
-    "polymorph": ["lines"],
+    "contrastive": ["lines", "lists_anon"],
+    "polymorph": ["lines", "lists_anon"],
     "cross_modal": ["parts"],
 }
 # element-metal IMA names that are ordinary chemistry words: not entities here
@@ -544,8 +556,10 @@ def build_spec(facts: list, ima: dict[str, str], targets: set | None = None) -> 
             "subject_slots": SUBJECT_SLOTS.get(kind, SUBJECT_SLOTS["default"]),
             "answer_slots": {
                 "forward": FORWARD_ANSWERS.get(kind, []),
-                "backward": SUBJECT_SLOTS.get(kind, SUBJECT_SLOTS["default"]),
+                "backward": SUBJECT_SLOTS.get(kind, SUBJECT_SLOTS["default"])
+                + BACKWARD_EXTRA_ANSWERS.get(kind, []),
             },
+            "leaky_slots": LEAKY_SLOTS.get(kind, []),
             "sample_fills": fills,
             "families": families_for(kind, set(slots)),
         }

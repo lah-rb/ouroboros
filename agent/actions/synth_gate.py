@@ -253,6 +253,11 @@ def validate_template(
             problems.append("no species slot in completion (backward)")
         if p_slots & subject:
             problems.append("species slot in prompt (backward)")
+        # a slot whose EXPANSION names the subject (contrastive {lines} =
+        # "Anatase: 144, 397 …") leaks the answer into a backward prompt
+        leaky = set(kind_spec.get("leaky_slots") or ())
+        if p_slots & leaky:
+            problems.append("subject-revealing slot in prompt (backward)")
 
     ents = literal_entities(both, known_entities)
     if ents:

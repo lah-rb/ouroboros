@@ -268,3 +268,55 @@ def test_unit_spellings_are_not_digits():
     assert validate_template(ok, spec) == []
     bad = _fwd(prompt="Density of {species}:", completion=" {density} g/cm³ at 25 °C.")
     assert "digit in template" in validate_template(bad, spec)
+
+
+def test_leaky_slots_are_rejected_in_backward_prompts_only():
+    spec = {
+        "slots": {
+            "names": {},
+            "species": {},
+            "formula": {},
+            "lines": {},
+            "lists_anon": {},
+            "assignments": {},
+        },
+        "subject_slots": ["names", "species"],
+        "answer_slots": {
+            "forward": ["lines", "lists_anon"],
+            "backward": ["names", "species", "assignments"],
+        },
+        "leaky_slots": ["lines"],
+        "sample_fills": [
+            {
+                "names": "Anatase and Rutile",
+                "species": "Anatase and Rutile",
+                "formula": "TiO2",
+                "lines": "Anatase: 144 cm-1; Rutile: 143 cm-1",
+                "lists_anon": "list A: 144 cm-1; list B: 143 cm-1",
+                "assignments": "A = Anatase; B = Rutile",
+            }
+        ],
+    }
+    leaky = {
+        "prompt": "Composition {formula}, band groups {lines}. Which is which?",
+        "completion": " {assignments}.",
+        "direction": "backward",
+        "form": "question",
+    }
+    assert "subject-revealing slot in prompt (backward)" in validate_template(
+        leaky, spec
+    )
+    good = {
+        "prompt": "Composition {formula}, band lists {lists_anon}. Which is which?",
+        "completion": " {assignments}.",
+        "direction": "backward",
+        "form": "question",
+    }
+    assert validate_template(good, spec) == []
+    fwd = {
+        "prompt": "Discrimination table for {formula} ({names}):",
+        "completion": " {lines}.",
+        "direction": "forward",
+        "form": "statement",
+    }
+    assert validate_template(fwd, spec) == []

@@ -237,6 +237,14 @@ def fields(fact) -> dict:
             names_comma=", ".join(m["species"] for m in mem),
             n=len(mem),
         )
+        letters = "ABCDEFGH"
+        f["lists_anon"] = "; ".join(
+            f"list {letters[i]}: {_join(m['bands_cm1'], 'cm-1')}"
+            for i, m in enumerate(mem[: len(letters)])
+        )
+        f["assignments"] = "; ".join(
+            f"{letters[i]} = {m['species']}" for i, m in enumerate(mem[: len(letters)])
+        )
         if k == "contrastive":
             f["lines"] = "; ".join(
                 f"{m['species']}: {_join(m['bands_cm1'], 'cm-1')}" for m in mem
