@@ -1933,3 +1933,34 @@ reported as the third population, not scored against P1–P7).
 here; a change means a new section, not an edit. To be filled at freeze: bank
 size and cell coverage from `docs_manifest.json`, packed shares from
 `manifest.json`, base-model baselines on every val set and probe.
+
+**Freeze (2026-09-11 19:13 local).** Bank `bank/templates.jsonl` frozen at
+882 rows (sha256 ba113a9a7522ec00…): muse 545, Haiku
+337; 16 rounds; 50/50 cells populated, 12 cells short by 1–3 (all
+≥ 9); 31 pre-fix backward contrast rows carry the member names in `{lines}`
+and are excluded by the filler's re-gate, leaving 851 usable templates
+(150 unused because no fact of the group could fill them), 83 held out.
+Gate fixes during the bank (all bug fixes, none a threshold change): slot names
+may carry case/digits; unit spellings are not digits; `geometry` is a structure
+answer; backward contrast templates use anonymised lists. Render
+(`docs_manifest.json`): 121,449 synthetic docs (identity
+62,294, raman 23,545, libs 18,871, relational
+16,739); groups T_RL 31,327 / T_L 40,408 / T_R 49,714;
+exposures per fact min 33 / median 71 / max 240 over 1,639 facts;
+2,959 held-out-framing docs; 0 documents lost a number; realised Raman |Δ|
+quantiles {'0.5': 1.2, '0.75': 2.3, '0.9': 4.7, '0.95': 6.6}. The base-model probe baseline
+runs AFTER training on the same items (base and endpoint in one call): the
+base model cannot be influenced by training, and 16,000 single-prompt
+generations would have idled both GPUs for two hours before the run.
+
+**Pack (`manifest.json`, seed 20260911).** 17,166,813 tokens in 4,370 blocks
+(pad 4.1%): synthetic 60.0% (10,300,100), carried reference
+19.9% (3,410,299; 60% of the 1,000 species' 41,133
+reference docs, subsampled by a seeded shuffle uniformly over species so targets
+and controls keep the same natural exposure), carried prose 0.1%, replay
+20.0% (3,433,352). DEVIATION from the design table, recorded before training:
+"ALL reference docs of the 1,000 species" would have been 33 % of the stream
+because the character estimate undercounts numeric text by almost half; the
+60/20/20 mix and the target/control symmetry were kept and the reference set
+subsampled instead. Val: synth_holdout (2,959 docs, 63 blocks), reference,
+paper_markdown, replay, shapes_v4. One pass = 546 steps at 32k tokens/step.
