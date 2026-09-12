@@ -111,6 +111,44 @@ def pick_to_budget(docs: list[dict], budget: int, rng: random.Random) -> list[di
     return out
 
 
+def pick_to_token_budget(
+    docs: list[dict],
+    budget: int,
+    rng: random.Random,
+    tok,
+    *,
+    normalise: bool,
+    chunk: int = 400,
+) -> tuple[list[dict], int]:
+    """Whole documents, shuffled, until the budget is filled in REALISED tokens
+    (tokenised in chunks as they are picked). chars/3.5 undercounts numeric
+    text by almost half -- the first pack of this corpus landed 59/32/9
+    against a 60/20/20 target on estimates alone."""
+    from package import tokenize_docs
+
+    docs = list(docs)
+    rng.shuffle(docs)
+    out, used = [], 0
+    for i in range(0, len(docs), chunk):
+        batch = docs[i : i + chunk]
+        per = tokenize_docs(
+            tok,
+            [
+                {"doc_id": d["doc_id"], "text": tagged(d, normalise=normalise)}
+                for d in batch
+            ],
+        )
+        for d, paras in zip(batch, per):
+            n = sum(len(x) for x in paras) + 1
+            if used + n > budget:
+                continue
+            out.append(d)
+            used += n
+        if used >= budget * 0.99:
+            break
+    return out, used
+
+
 def parse_mix(text: str) -> tuple[int, int, int]:
     parts = [int(x) for x in text.split(",")]
     if len(parts) != 3 or sum(parts) != 100:
@@ -161,55 +199,62 @@ def main() -> int:
         )
         if not d.get("val")
     ]
-    holdout = (
-        read_jsonl([os.path.join(docs_dir, "synth_holdout.jsonl")])
-        if os.path.exists(os.path.join(docs_dir, "synth_holdout.jsonl"))
-        else []
-    )
+    hold_path = os.path.join(docs_dir, "synth_holdout.jsonl")
+    holdout = read_jsonl([hold_path]) if os.path.exists(hold_path) else []
     carry_map = json.load(open(os.path.join(args.corpus, "carry_facts.json")))
     wanted_fact_ids = {fid for v in carry_map["fact_ids"].values() for fid in v}
-    synth_tokens = sum(est_tokens(d) for d in synth)
+    synth_paras = tokenize_docs(
+        tok,
+        [{"doc_id": d["doc_id"], "text": tagged(d, normalise=False)} for d in synth],
+    )
+    synth_tokens = sum(sum(len(p) for p in paras) + 1 for paras in synth_paras)
     budgets = plan_budgets(synth_tokens, mix)
     print(
-        f"[{time.time()-t0:.0f}s] synthetic {len(synth):,} docs ~{synth_tokens:,} tokens; budgets {budgets}",
+        f"[{time.time()-t0:.0f}s] synthetic {len(synth):,} docs, {synth_tokens:,} realised tokens "
+        f"(est. {sum(est_tokens(d) for d in synth):,}); budgets {budgets}",
         flush=True,
     )
 
-    # carried v4 prose: every reference doc of the 1,000 species, then random prose
+    # carried v4 prose: the reference docs of the 1,000 species -- SUBSAMPLED
+    # uniformly (seeded shuffle, so targets and controls keep the same natural
+    # exposure) when they alone exceed the carry budget -- then random prose
     ref_docs = [
         d
         for d in read_jsonl([os.path.join(args.stage1, "docs", "reference.jsonl")])
         if not d.get("val")
     ]
-    carried_ref = [
+    ref_pool = [
         d
         for d in ref_docs
         if (d.get("provenance") or {}).get("fact_id") in wanted_fact_ids
     ]
-    ref_tokens = sum(est_tokens(d) for d in carried_ref)
-    prose = [
-        d
-        for d in read_jsonl(
-            [
-                os.path.join(args.stage1, "docs", f)
-                for f in PROSE_FILES
-                if os.path.exists(os.path.join(args.stage1, "docs", f))
-            ]
-        )
-        if not d.get("val")
+    carried_ref, ref_tokens = pick_to_token_budget(
+        ref_pool, budgets["carry"], rng, tok, normalise=True
+    )
+    prose_paths = [
+        os.path.join(args.stage1, "docs", f)
+        for f in PROSE_FILES
+        if os.path.exists(os.path.join(args.stage1, "docs", f))
     ]
-    carried_prose = pick_to_budget(prose, max(0, budgets["carry"] - ref_tokens), rng)
-    replay_docs = (
-        pick_to_budget(
-            [d for d in read_jsonl([args.replay]) if not d.get("val")],
-            budgets["replay"],
-            rng,
-        )
+    prose = [d for d in read_jsonl(prose_paths) if not d.get("val")]
+    left = budgets["carry"] - ref_tokens
+    carried_prose, prose_tokens = (
+        pick_to_token_budget(prose, left, rng, tok, normalise=True)
+        if left > 2000
+        else ([], 0)
+    )
+    replay_pool = (
+        [d for d in read_jsonl([args.replay]) if not d.get("val")]
         if os.path.exists(args.replay)
         else []
     )
+    replay_docs, replay_tokens = pick_to_token_budget(
+        replay_pool, budgets["replay"], rng, tok, normalise=False
+    )
     print(
-        f"[{time.time()-t0:.0f}s] carried reference {len(carried_ref):,} docs ~{ref_tokens:,} tokens; prose {len(carried_prose):,}; replay {len(replay_docs):,}",
+        f"[{time.time()-t0:.0f}s] carried reference {len(carried_ref):,}/{len(ref_pool):,} docs "
+        f"({ref_tokens:,} tokens); prose {len(carried_prose):,} ({prose_tokens:,}); "
+        f"replay {len(replay_docs):,} ({replay_tokens:,})",
         flush=True,
     )
 
@@ -309,6 +354,10 @@ def main() -> int:
             "max": ex[-1] if ex else 0,
         },
         "carry_species": len(carry_map["fact_ids"]),
+        "carry_reference_pool_docs": len(ref_pool),
+        "carry_reference_kept_fraction": round(
+            len(carried_ref) / max(1, len(ref_pool)), 4
+        ),
         "train": train_stats,
         "val": val_stats,
         "borrowed_val": ["paper_markdown", "replay", "reference", "shapes_v4"],
