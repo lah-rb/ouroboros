@@ -2048,3 +2048,20 @@ recipe and drop the backward families in favour of a retrieval-in-the-loop
 design (candidates proposed from the seeker output, the LM choosing and
 explaining among names it can SEE) — copying a visible name is what this
 model does well.
+
+### 21c. Follow-up from the stage-1 endpoint — pre-registration (2026-09-12)
+
+Operator ruling: same corpus (`v5/synth_pilot`, manifest sha as §21b), same
+recipe (`--stage 2 --epochs 1 --lr 4e-5 --accum 8 --eval-steps 40`), init
+`stage1/final_fp32` instead of base; no mid-run checkpoints (disk), endpoint
+`synth_pilot_s1/final`. Probes: stage-1 init, the base-init endpoint and this
+endpoint on identical items (all groups + the untouched probe species).
+
+Predictions, falsifiable:
+1. Controls start higher (stage 1 already carries v4 exposure: formula 0.38,
+   bands 0.51, crystal 0.20 on probe frames) and the synthetic INCREMENT on
+   targets persists: formula targets ≥ 0.85 and targets − controls ≥ 25 points.
+2. Paper-markdown forgetting shrinks: Δ vs the stage-1 init ≤ +2 % (stage 1
+   was trained on the papers; the base-init run lost 5 %).
+3. Backward tasks stay at zero (the readout, not the exposure, is the limit).
+4. Held-out framing loss reaches a lower floor than the base-init run (1.05).
