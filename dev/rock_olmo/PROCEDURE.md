@@ -1964,3 +1964,87 @@ because the character estimate undercounts numeric text by almost half; the
 60/20/20 mix and the target/control symmetry were kept and the reference set
 subsampled instead. Val: synth_holdout (2,959 docs, 63 blocks), reference,
 paper_markdown, replay, shapes_v4. One pass = 546 steps at 32k tokens/step.
+
+### 21b. Results — from-base pilot (run 2026-09-12 08:50–11:54)
+
+`train_full.py --stage 2 --init OLMo-2-0425-1B --epochs 1 --lr 4e-5 --accum 8
+--eval-steps 40`: 546 steps, 17.89M tokens, 5.83M tok/h, peak 21.2 / 8.2 GB;
+endpoint `~/models/olmo2-1b-spectra-full/synth_pilot/final` (checkpoints 400,
+546 kept for a resume). Eval on start = the base model on the same val sets.
+
+| val set | base | endpoint | Δ | min over run | P6 bound |
+|---|---|---|---|---|---|
+| synth_holdout (unseen framings) | 2.062 | 1.114 | −46.0 % | 1.048 (step 40) | — |
+| reference (v4 frames) | 1.719 | 0.998 | −41.9 % | 0.937 | — |
+| shapes_v4 (stage-2 shapes) | 1.036 | 0.719 | −30.6 % | 0.619 | — |
+| replay | 2.118 | 2.165 | +2.2 % | 2.118 | ≤ +3 % ✓ |
+| paper_markdown | 1.626 | 1.707 | +5.0 % | 1.626 | ≤ +2 % ✗ |
+
+Reading: the held-out FRAMING loss falls to its floor within 40 steps (1.05)
+and then drifts up slightly as the wording is saturated — the framings are
+learned almost at once; whether the FACTS transferred is the probes' question
+(below). P6 splits: replay holds within bound, paper markdown does not (+5 %),
+so the pilot's stream is prose-poor for the papers' register (carried prose
+was 0.1 % because the reference docs consumed the carry budget). A follow-up
+should carry paper prose explicitly inside the 20 % share.
+
+**Probes** (`probe_recall.py --target-species synth_species.json --group all
+--models base,pilot`, batched greedy, 60 new tokens; 1,000 species × 8 tasks ×
+2 frames; the untouched 100 probe species in a second call). PROBE-frame
+accuracy, base → endpoint; C = controls (same carried reference docs, no
+synthetic); U = the 97 untouched probe species (no synthetic, no carried docs).
+
+| task | T_R | T_L | T_RL | C | U |
+|---|---|---|---|---|---|
+| formula (exact, normalised) | 0.000→**0.875** | 0.005→**0.870** | 0.010→**0.890** | 0.002→0.208 | 0→0.000 |
+| crystal_system | 0.015→0.530 | 0.005→0.595 | 0.000→0.510 | 0.008→0.290 | 0.01→0.351 |
+| bands (≥2/3 within ±10) | 0.000→0.550 | 0.000→0.335 | 0.000→**0.700** | 0.000→0.388 | 0→0.351 |
+| libs_lines (≥2/3 within ±0.2 nm) | 0→0.905 | 0→0.910 | 0→0.950 | 0→0.916 | 0→0.856 |
+| inverse (4 bands → species) | 0→0.010 | 0→0.000 | 0→0.000 | 0→0.000 | 0→0 |
+| identification (seeker list → species) | 0→0.000 | 0→0.000 | 0→0.000 | 0→0.000 | 0→0 |
+| libs_inverse / cross_modal | 0→0.005 / 0.000 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+
+Trained-frame (v4 question frames, seen only through the carried reference
+docs) vs probe-frame for targets: formula 0.62–0.65 vs 0.87–0.89, bands
+0.28–0.47 vs 0.34–0.70 — the NEVER-trained probe frame scores higher than the
+v4 frame; gaps are negative (−0.06 to −0.28), so no template collapse
+(P5 ✓ in spirit; the pre-registered bound was written for the other sign).
+
+**Chance floors the untouched species expose (post hoc, reported, not used
+to move a bar).** crystal_system has a ~0.3 floor (a frequent-system answer);
+bands has a ~0.35 floor (a long plausible list hits 2 of 3 within ±10 by
+chance); libs_lines is element→line knowledge because the frame shows the
+formula (0.86 on species the run never saw). formula (exact string) has no
+floor and is the clean readout.
+
+**Verdicts.**
+- P1 ✓ formula: targets 0.87–0.89, controls 0.21 (Δ +67 points; bar ≥ 0.50 and
+  Δ ≥ 25 both met). crystal system: targets 0.51–0.60 ≥ 0.40 ✓; Δ vs controls
+  +22 / +31 / +22 — met for T_L only; against the ~0.3 floor the controls sit at
+  chance, the targets do not.
+- P2 ✗ FALSIFIED: identification 0.000 on every group (chance 0.002; bound
+  < 0.05). The endpoint answers the same handful of frequent names (Cebaite-(Ce),
+  Tantalite-(Fe), Eulytine, Cervantite, Sphalerite) whatever the list — the §20
+  "Beryl" collapse reproduced after ~24 backward framings per fact, both
+  seeker-schema and short-question forms. Structural diversity + mirrored frames
+  do NOT fix the numeric-key readout at 1.5B.
+- P3 ◐ T_R bands 0.55 ≥ 0.40 ✓; T_L's LIBS bar is met (0.91) but the task
+  measures element knowledge, so the Raman-vs-LIBS natural-frequency contrast is
+  INCONCLUSIVE from this probe. On identity facts the two instrument arms are
+  indistinguishable (formula 0.875 vs 0.870; crystal 0.53 vs 0.60).
+- P4 ✗ cross_modal 0.000 (backward). Forward: T_RL bands 0.70 vs T_R 0.55 —
+  the cross-instrument documents lifted forward Raman recall by 15 points.
+- P5 ✓ (no collapse; probe frame ≥ trained frame). P6 ◐ replay +2.2 % ✓,
+  paper markdown +5.0 % ✗. P7 ✓ by construction (exact normalised match).
+
+**Reading for direction.** The forward, identity-style facts respond exactly
+as the literature predicts: ~24 framings × 3 variants took formula recall
+from 0.21 (reference frames only) to 0.88 on unseen framings, with the 100
+untouched species confirming it is species memory, not format. The backward
+numeric-key direction did not move at all, in agreement with §20b's head
+probe: the information is present but the generation readout collapses to
+frequent names. The stage-1-initialised follow-up should keep the forward
+recipe and drop the backward families in favour of a retrieval-in-the-loop
+design (candidates proposed from the seeker output, the LM choosing and
+explaining among names it can SEE) — copying a visible name is what this
+model does well.

@@ -200,50 +200,78 @@ def build_items(
 
 @torch.no_grad()
 def run_model(
-    name: str, path: str, items: list[dict], max_new: int, device: str
+    name: str,
+    path: str,
+    items: list[dict],
+    max_new: int,
+    device: str,
+    batch_size: int = 32,
 ) -> dict:
+    """Greedy generations for every (item, task, frame) prompt, BATCHED with
+    left padding (the scoring is per generation and unchanged; single-prompt
+    generation over 16,000 prompts per model took hours on the 3090)."""
     tok = AutoTokenizer.from_pretrained(path)
+    tok.padding_side = "left"
+    if tok.pad_token_id is None:
+        tok.pad_token = tok.eos_token
     model = (
         AutoModelForCausalLM.from_pretrained(path, dtype=torch.bfloat16)
         .to(device)
         .eval()
     )
+    jobs = [
+        (it, task, kind, prompt)
+        for it in items
+        for task, pr in it["prompts"].items()
+        for kind, prompt in pr.items()
+    ]
+    # sort by length so a batch pads little; results are keyed, not ordered
+    order = sorted(range(len(jobs)), key=lambda i: len(jobs[i][3]))
+    gens: dict[int, str] = {}
+    t0 = time.time()
+    for b in range(0, len(order), batch_size):
+        idx = order[b : b + batch_size]
+        prompts = [jobs[i][3] for i in idx]
+        enc = tok(prompts, return_tensors="pt", padding=True).to(device)
+        out = model.generate(
+            **enc,
+            max_new_tokens=max_new,
+            do_sample=False,
+            pad_token_id=tok.pad_token_id,
+        )
+        cut = enc["input_ids"].shape[1]
+        for i, row in zip(idx, out):
+            gens[i] = tok.decode(row[cut:], skip_special_tokens=True)
+        if (b // batch_size) % 50 == 0:
+            print(
+                f"    {name}: {min(b + batch_size, len(order)):,}/{len(order):,} generations [{time.time()-t0:.0f}s]",
+                flush=True,
+            )
     tally = {}
     by_group: dict = {}
     samples = []
-    t0 = time.time()
-    for it in items:
+    for i, (it, task, kind, prompt) in enumerate(jobs):
+        gen = gens[i]
+        ok = score(task, it, gen)
+        t = tally.setdefault(task, {"trained": [0, 0], "probe": [0, 0]})
+        t[kind][0] += ok
+        t[kind][1] += 1
         gtally = by_group.setdefault(it.get("group") or "all", {})
-        for task, pr in it["prompts"].items():
-            for kind, prompt in pr.items():
-                enc = tok(prompt, return_tensors="pt").to(device)
-                out = model.generate(
-                    **enc,
-                    max_new_tokens=max_new,
-                    do_sample=False,
-                    pad_token_id=tok.pad_token_id,
-                )
-                gen = tok.decode(
-                    out[0, enc["input_ids"].shape[1] :], skip_special_tokens=True
-                )
-                ok = score(task, it, gen)
-                t = tally.setdefault(task, {"trained": [0, 0], "probe": [0, 0]})
-                t[kind][0] += ok
-                t[kind][1] += 1
-                gt = gtally.setdefault(task, {"trained": [0, 0], "probe": [0, 0]})
-                gt[kind][0] += ok
-                gt[kind][1] += 1
-                if len(samples) < 24:
-                    samples.append(
-                        {
-                            "species": it["species"],
-                            "task": task,
-                            "frame": kind,
-                            "prompt": prompt[-120:],
-                            "gen": gen[:160],
-                            "ok": ok,
-                        }
-                    )
+        gt = gtally.setdefault(task, {"trained": [0, 0], "probe": [0, 0]})
+        gt[kind][0] += ok
+        gt[kind][1] += 1
+        if len(samples) < 40 and (i % 97 == 0):
+            samples.append(
+                {
+                    "species": it["species"],
+                    "group": it.get("group", ""),
+                    "task": task,
+                    "frame": kind,
+                    "prompt": prompt[-120:],
+                    "gen": gen[:160],
+                    "ok": ok,
+                }
+            )
     del model
     torch.cuda.empty_cache()
 
@@ -283,6 +311,7 @@ def main() -> int:
     )
     ap.add_argument("--seed", type=int, default=20260824)
     ap.add_argument("--max-new", type=int, default=60)
+    ap.add_argument("--batch-size", type=int, default=32)
     ap.add_argument(
         "--target-species",
         default="",
@@ -339,7 +368,9 @@ def main() -> int:
     }
     for spec in args.models.split(","):
         name, path = spec.split("=", 1)
-        r = run_model(name, os.path.expanduser(path), items, args.max_new, device)
+        r = run_model(
+            name, os.path.expanduser(path), items, args.max_new, device, args.batch_size
+        )
         report["models"].append(r)
         print(f"\n{name}:")
         if groups:
