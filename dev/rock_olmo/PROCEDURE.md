@@ -2065,3 +2065,63 @@ Predictions, falsifiable:
    was trained on the papers; the base-init run lost 5 %).
 3. Backward tasks stay at zero (the readout, not the exposure, is the limit).
 4. Held-out framing loss reaches a lower floor than the base-init run (1.05).
+
+### 21c. Results — stage-1-initialised follow-up (run 2026-09-12 12:50–16:35)
+
+546 steps, 17.89M tokens, 5.84M tok/h, endpoint `synth_pilot_s1/final`.
+
+| val set | stage-1 init | endpoint | Δ | min |
+|---|---|---|---|---|
+| synth_holdout | 2.060 | 1.056 | −48.7 % | 1.020 |
+| reference (v4 frames) | 0.404 | 0.615 | +52.5 % | 0.404 |
+| shapes_v4 | 0.649 | 0.764 | +17.7 % | 0.649 |
+| replay | 2.212 | 2.264 | +2.4 % | 2.212 |
+| paper_markdown | 1.318 | 1.401 | +6.3 % | 1.318 |
+
+Probe-frame accuracy, stage-1 init → endpoint [base-init endpoint from §21b]:
+
+| task | T_R | T_L | T_RL | C | U (97 untouched) |
+|---|---|---|---|---|---|
+| formula | 0.240→**1.000** [0.875] | 0.235→**1.000** [0.870] | 0.220→**1.000** [0.890] | 0.236→0.418 [0.208] | 0.206→0.134 |
+| crystal_system | 0.165→0.885 [0.530] | 0.155→0.890 [0.595] | 0.150→0.890 [0.510] | 0.146→0.618 [0.290] | 0.227→0.505 |
+| bands | 0.490→**0.900** [0.550] | 0.505→0.520 [0.335] | 0.550→**0.920** [0.700] | 0.484→0.522 [0.388] | 0.464→0.402 |
+| inverse | 0→0.055 | 0→0 | 0→0.030 | 0→0 | 0→0 |
+| identification | 0→0.030 | 0→0 | 0→0.010 | 0→0 | 0→0 |
+| libs_lines (element knowledge) | 1.0→1.0 | 1.0→1.0 | 0.98→1.0 | 0.99→0.99 | 0.99→0.98 |
+| libs_inverse / cross_modal | ≤ 0.010 | ≤ 0.005 | 0 | 0 | 0 |
+
+Trained-frame (v4 question frames) for targets: formula 0.80–0.87, crystal
+0.83–0.87, bands 0.66–0.71 — again below the never-trained probe frame (gaps
+−0.02 to −0.26): no template collapse.
+
+**Verdicts (§21c predictions).**
+1. ✓ Controls start higher (formula 0.24 vs 0.00 from base) and the increment
+   persists and grows: targets formula 1.000, controls 0.418 (Δ +58 points).
+   Crystal system 0.89 vs 0.62 (Δ +27). Raman bands 0.90–0.92 for the Raman
+   arms vs 0.52 for controls AND for T_L (no Raman synthetic docs) — the
+   contrast is instrument-specific, as designed.
+2. ✗ Paper-markdown forgetting did not shrink (+6.3 % vs +5.0 % from base):
+   a property of the stream (no paper prose in the carry share), not of the
+   initialisation.
+3. ✓ (as bounded) Backward stays near zero: identification 0.030 and inverse
+   0.055 on T_R (chance 0.002) — the first non-zero backward signal, still far
+   below §21's 0.10 bar; the generations remain frequent-name guesses.
+4. ✓ marginally: held-out framing floor 1.020 vs 1.048.
+
+**Comparison with the base-init run.** Same corpus, same recipe: initialising
+from stage 1 adds +11 to +13 points on formula (to saturation), +30 to +38 on
+crystal system, +22 to +35 on Raman bands for the Raman arms. Stage 1's prior
+exposure to these species and the synthetic framings compound. Controls also
+gain (+21 formula, +33 crystal) from the shared framings and the carried
+reference docs, and the untouched species lose a little formula recall
+(0.21→0.13) while gaining the crystal-system format — the celebrity/format
+effects the pre-registration warned about, visible and bounded.
+
+**Standing conclusions after two runs.** (i) Forward identity and Raman facts
+are learnable at 1.5B with ~24 framings × 3 variants per fact, to ceiling when
+stacked on stage 1. (ii) The numeric-key backward readout does not respond to
+framing diversity, mirrored frames or initialisation (≤ 0.055 everywhere).
+(iii) The LIBS-line probe measures element knowledge; a species-specific LIBS
+test needs a frame without the formula. (iv) Carry paper prose explicitly in
+the next stream. Next direction per §20b and §21b: retrieval-in-the-loop for
+identification (candidates the model can SEE), forward recipe unchanged.
