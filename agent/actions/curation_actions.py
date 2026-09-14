@@ -1287,7 +1287,20 @@ _CURATE_OVERSIZE_PARK_MARGIN = 1.1
 # doc refuses the same way — so it must never take the decline-and-reselect
 # path built for transients (which is otherwise correct: every one-time
 # transport faulter from the 2026-08-25 run was later accepted).
-_CURATE_OVERSIZE_FAULT_MARKER = "exceeds the model's per-stream context limit"
+_CURATE_OVERSIZE_FAULT_MARKERS = (
+    "exceeds the model's per-stream context limit",
+    # the engine's newer refusal: the prompt fits the seat but leaves no room
+    # to generate ("prompt occupies 130933 of 131072 tokens, leaving 75 after
+    # slack — below the 128-token floor"). Same determinism, same loop: one
+    # German thesis took 1,094 identical faults on 2026-09-12/13 because
+    # this spelling fell through to the transient path.
+    "No room to generate",
+)
+_CURATE_OVERSIZE_FAULT_MARKER = _CURATE_OVERSIZE_FAULT_MARKERS[0]  # tests/legacy name
+
+
+def _is_oversize_fault(text: str) -> bool:
+    return any(m in str(text) for m in _CURATE_OVERSIZE_FAULT_MARKERS)
 
 
 def _estimate_doc_tokens(text: str) -> int:
@@ -2247,7 +2260,7 @@ async def action_curate_drain_batch(step_input):
                     else await _curate_stateless(effects, key, doc, rec=rec)
                 )
             except _CurateTransportFault as e:
-                if _CURATE_OVERSIZE_FAULT_MARKER in str(e):
+                if _is_oversize_fault(str(e)):
                     # The engine's own verdict that this doc can never fit a
                     # seat — deterministic, so re-selection is a loop, not a
                     # retry. Backstop for docs the estimator under-counts.
