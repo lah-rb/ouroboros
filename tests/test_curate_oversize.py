@@ -161,6 +161,37 @@ class _OverSeatEffects(MockEffects):
         return _R()
 
 
+class _NoRoomEffects(MockEffects):
+    """The engine's newer refusal: the prompt fits the seat but leaves no room
+    to generate. One German thesis took 1,094 identical faults on
+    2026-09-12/13 because only the older spelling parked."""
+
+    async def run_inference(self, *a, **k):  # noqa: D102
+        class _R:
+            error = (
+                "GraphQL errors: No room to generate: prompt occupies 130933 of "
+                "131072 tokens, leaving 75 after slack — below the 128-token floor."
+            )
+            text = ""
+
+        return _R()
+
+
+@pytest.mark.asyncio
+async def test_drain_books_no_room_to_generate_refusal_as_over_seat():
+    _clear_state()
+    fx = _NoRoomEffects(
+        files=_bank_files([_rec("p1")], {"p1": LATIN_SMALL}),
+        pool_health={"kvPoolTokens": 131072},
+    )
+    out = await action_curate_drain_batch(_si(fx))
+    assert out.result["attempted"] == 0
+    bank = await read_databank(fx)
+    assert bank["p1"]["extraction_status"] == "curate_oversize"
+    assert "No room to generate" in bank["p1"]["failure_reason"]
+    assert not _CURATE_CLAIMS
+
+
 @pytest.mark.asyncio
 async def test_drain_books_engine_over_seat_refusal():
     _clear_state()
