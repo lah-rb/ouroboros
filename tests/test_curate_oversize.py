@@ -367,3 +367,18 @@ async def test_pack_only_work_is_selected_before_ordinary_reviews():
     key, _ = await select_curate_paper(fx, bank, 10_000)
     assert key == "small"
     _CURATE_CLAIMS.clear()
+
+
+def test_oversize_fault_markers_cover_every_engine_refusal_spelling():
+    from agent.actions.curation_actions import _is_oversize_fault
+
+    for text in (
+        "Combined prompt length (70868) exceeds the model's per-stream context limit",
+        "No room to generate: prompt occupies 130933 of 131072 tokens",
+        "Request cannot fit the KV pool: prompt 126461 tokens + a minimum 512-token generation",
+    ):
+        assert _is_oversize_fault("GraphQL errors: " + text), text
+    assert not _is_oversize_fault(
+        "long-cycle: long-cycle repetition: 23/8161 distinct 32B n-grams"
+    )
+    assert not _is_oversize_fault("connection reset by peer")

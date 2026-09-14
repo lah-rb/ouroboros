@@ -1295,6 +1295,10 @@ _CURATE_OVERSIZE_FAULT_MARKERS = (
     # German thesis took 1,094 identical faults on 2026-09-12/13 because
     # this spelling fell through to the transient path.
     "No room to generate",
+    # and the pool-level refusal for a prompt that fits a seat but not the
+    # pool with its minimum generation ("Request cannot fit the KV pool:
+    # prompt 126461 tokens + a minimum 512-token generation …", 2026-09-13)
+    "Request cannot fit the KV pool",
 )
 _CURATE_OVERSIZE_FAULT_MARKER = _CURATE_OVERSIZE_FAULT_MARKERS[0]  # tests/legacy name
 
