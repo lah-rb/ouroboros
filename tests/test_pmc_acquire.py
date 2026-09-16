@@ -113,3 +113,43 @@ def test_pick_article_pdf_never_picks_a_supplement():
     # supplement only, or nothing: refuse rather than book the wrong document
     assert pick_article_pdf(["PMC1.1/mmc1.pdf"]) == ""
     assert pick_article_pdf(["PMC1.1/PMC1.1.xml"]) == ""
+
+
+def test_pick_supplements_keeps_data_and_drops_article_renditions_and_figures():
+    from tools.pmc_acquire import pick_supplements
+
+    keys = [
+        "PMC1.2/PMC1.2.pdf",
+        "PMC1.2/PMC1.2.xml",
+        "PMC1.2/PMC1.2.txt",
+        "PMC1.2/PMC1.2.json",
+        "PMC1.2/fig-1.jpg",
+        "PMC1.2/graphic.webp",
+        "PMC1.2/mmc1.pdf",
+        "PMC1.2/data-s2.xlsx",
+        "PMC1.2/structure.cif",
+        "PMC1.2/movie-s1.mp4",
+        # an older version's supplements are superseded
+        "PMC1.1/old-s1.pdf",
+    ]
+    got = pick_supplements(keys)
+    assert got == ["PMC1.2/data-s2.xlsx", "PMC1.2/mmc1.pdf", "PMC1.2/structure.cif"]
+    assert "PMC1.2/movie-s1.mp4" in pick_supplements(keys, skip_video=False)
+    assert pick_supplements([]) == []
+    assert pick_supplements(["PMC1.1/PMC1.1.pdf", "PMC1.1/f1.jpg"]) == []
+
+
+def test_supplements_mode_selects_accepted_papers_too(tmp_path):
+    ids = {"10.1/acc": "PMC1", "10.1/den": "PMC2", "10.1/new": "PMC3"}
+    bank = {
+        "acc": _rec(doi="10.1/acc", review_status="accepted"),
+        "den": _rec(doi="10.1/den", review_status="denied"),
+        "new": _rec(doi="10.1/new"),
+    }
+    # article mode skips accepted (it has its PDF) and denied
+    assert [c["key"] for c in candidates(bank, ids, str(tmp_path))] == ["new"]
+    # supplements mode wants accepted papers, still never denied ones
+    got = sorted(
+        c["key"] for c in candidates(bank, ids, str(tmp_path), supplements=True)
+    )
+    assert got == ["acc", "new"]
