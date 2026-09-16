@@ -79,11 +79,15 @@ def candidates(bank: dict, ids: dict[str, str], base: str) -> list[dict]:
         if rec.get("extraction_status") in SKIP_EXTRACTION:
             continue
         path = rec.get("pdf_path") or ""
-        if path and os.path.exists(
+        held = bool(path) and os.path.exists(
             path if os.path.isabs(path) else os.path.join(base, path)
-        ):
+        )
+        # A PDF on disk whose record does not say oa_pdf is a LOST BOOKING —
+        # the recover lane can overwrite one from a stale copy of the record.
+        # Re-book it (no download) instead of skipping it forever.
+        if held and rec.get("access_status") == "oa_pdf":
             continue
-        out.append({"key": key, "rec": rec, "pmc": pmc})
+        out.append({"key": key, "rec": rec, "pmc": pmc, "held": held})
     out.sort(key=lambda c: c["key"])
     return out
 
@@ -116,9 +120,25 @@ async def pdf_key_for(effects, pmc: str) -> tuple[str, str]:
 
 
 async def fetch_one(
-    effects, cand: dict, base: str, apply: bool, sem: asyncio.Semaphore
+    effects,
+    cand: dict,
+    base: str,
+    apply: bool,
+    sem: asyncio.Semaphore,
+    max_bytes: int = 50_000_000,
 ) -> dict:
     key, pmc = cand["key"], cand["pmc"]
+    if cand.get("held"):
+        # already on disk: re-book only
+        return {
+            "key": key,
+            "pmc": pmc,
+            "ok": True,
+            "url": cand["rec"].get("oa_pdf_url") or f"{BUCKET}/{pmc}",
+            "path": cand["rec"]["pdf_path"],
+            "bytes": 0,
+            "rebooked": True,
+        }
     async with sem:
         obj, err = await pdf_key_for(effects, pmc)
         if err:
@@ -128,7 +148,7 @@ async def fetch_one(
             return {"key": key, "pmc": pmc, "ok": True, "url": url, "planned": True}
         dest = f"pdfs/{key}.pdf"
         dl = await effects.http_download(
-            url, dest, headers={"User-Agent": UA}, timeout=180.0
+            url, dest, headers={"User-Agent": UA}, timeout=300.0, max_bytes=max_bytes
         )
         if not dl.success:
             return {
@@ -170,6 +190,12 @@ async def main() -> int:
     ap.add_argument(
         "--apply", action="store_true", help="download and book (default: plan only)"
     )
+    ap.add_argument(
+        "--max-bytes",
+        type=int,
+        default=50_000_000,
+        help="download cap; raise it for image-heavy papers (one XRF paper exceeds 50 MB)",
+    )
     ap.add_argument("--out", default="")
     args = ap.parse_args()
 
@@ -192,7 +218,7 @@ async def main() -> int:
     t0 = time.time()
     sem = asyncio.Semaphore(max(1, args.concurrency))
     results = await asyncio.gather(
-        *(fetch_one(effects, c, base, args.apply, sem) for c in cands)
+        *(fetch_one(effects, c, base, args.apply, sem, args.max_bytes) for c in cands)
     )
     ok = [r for r in results if r["ok"]]
     print(

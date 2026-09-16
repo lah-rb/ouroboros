@@ -45,7 +45,8 @@ def test_candidates_selects_only_papers_that_want_a_pdf(tmp_path):
     ids = {f"10.1/{n}": "PMC1" for n in ("want", "have", "acc", "den", "done", "noid")}
     bank = {
         "want": _rec(doi="10.1/want"),
-        "have": _rec(doi="10.1/have", pdf_path="pdfs/have.pdf"),
+        # properly booked: PDF on disk AND the record says so
+        "have": _rec(doi="10.1/have", pdf_path="pdfs/have.pdf", access_status="oa_pdf"),
         "acc": _rec(doi="10.1/acc", review_status="accepted"),
         "den": _rec(doi="10.1/den", review_status="denied"),
         "done": _rec(doi="10.1/done", extraction_status="extracted"),
@@ -65,3 +66,23 @@ def test_candidates_include_closed_papers_and_a_stale_pdf_path(tmp_path):
     }
     ids = {"10.1/closed": "PMC1", "10.1/stale": "PMC2"}
     assert sorted(c["key"] for c in candidates(bank, ids, base)) == ["closed", "stale"]
+
+
+def test_a_pdf_on_disk_with_a_lost_booking_is_reselected_for_rebooking(tmp_path):
+    base = str(tmp_path)
+    os.makedirs(os.path.join(base, "pdfs"), exist_ok=True)
+    open(os.path.join(base, "pdfs", "lost.pdf"), "wb").write(b"%PDF-1.7 ...")
+    open(os.path.join(base, "pdfs", "booked.pdf"), "wb").write(b"%PDF-1.7 ...")
+    bank = {
+        # the recover lane overwrote our booking from a stale record
+        "lost": _rec(
+            doi="10.1/lost", pdf_path="pdfs/lost.pdf", access_status="oa_unresolved"
+        ),
+        "booked": _rec(
+            doi="10.1/booked", pdf_path="pdfs/booked.pdf", access_status="oa_pdf"
+        ),
+    }
+    ids = {"10.1/lost": "PMC1", "10.1/booked": "PMC2"}
+    got = candidates(bank, ids, base)
+    assert [c["key"] for c in got] == ["lost"]
+    assert got[0]["held"] is True  # re-book, no download
