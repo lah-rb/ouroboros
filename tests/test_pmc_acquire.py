@@ -86,3 +86,30 @@ def test_a_pdf_on_disk_with_a_lost_booking_is_reselected_for_rebooking(tmp_path)
     got = candidates(bank, ids, base)
     assert [c["key"] for c in got] == ["lost"]
     assert got[0]["held"] is True  # re-book, no download
+
+
+def test_pick_article_pdf_never_picks_a_supplement():
+    from tools.pmc_acquire import pick_article_pdf
+
+    # the real case: a supplement sorts BEFORE the article alphabetically
+    keys = [
+        "PMC12188159.1/CHEM-31-e202501203-g001.jpg",
+        "PMC12188159.1/CHEM-31-e202501203-s001.pdf",
+        "PMC12188159.1/PMC12188159.1.pdf",
+        "PMC12188159.1/PMC12188159.1.xml",
+    ]
+    assert pick_article_pdf(keys) == "PMC12188159.1/PMC12188159.1.pdf"
+    # the other supplement spellings seen in the first run
+    for supp in ("mmc1.pdf", "11664_2022_9813_MOESM1_ESM.pdf", "Data_Sheet_1.PDF"):
+        assert (
+            pick_article_pdf([f"PMC1.1/{supp}", "PMC1.1/PMC1.1.pdf"])
+            == "PMC1.1/PMC1.1.pdf"
+        )
+    # newest version wins
+    assert (
+        pick_article_pdf(["PMC7.1/PMC7.1.pdf", "PMC7.2/PMC7.2.pdf"])
+        == "PMC7.2/PMC7.2.pdf"
+    )
+    # supplement only, or nothing: refuse rather than book the wrong document
+    assert pick_article_pdf(["PMC1.1/mmc1.pdf"]) == ""
+    assert pick_article_pdf(["PMC1.1/PMC1.1.xml"]) == ""

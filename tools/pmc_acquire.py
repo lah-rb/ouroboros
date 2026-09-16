@@ -92,6 +92,29 @@ def candidates(bank: dict, ids: dict[str, str], base: str) -> list[dict]:
     return out
 
 
+def pick_article_pdf(keys: list[str]) -> str:
+    """The ARTICLE pdf among an article folder's objects, "" when there is none.
+
+    A folder can hold supplementary pdfs beside the article
+    ("CHEM-31-e202501203-s001.pdf" at 372 kB next to PMC12188159.1.pdf at
+    2.9 MB; also mmc1.pdf, *_MOESM1_ESM.pdf, Data_Sheet_1.PDF). Alphabetical
+    order picks the supplement, which books the WRONG DOCUMENT — 9 of the
+    first 320 fetches did exactly that. The article is always named
+    PMC<id>.<version>.pdf; prefer it, newest version first.
+    """
+    pdfs = [k for k in keys if k.lower().endswith(".pdf")]
+    if not pdfs:
+        return ""
+
+    def rank(k: str) -> tuple[int, int]:
+        name = k.rsplit("/", 1)[-1]
+        m = re.fullmatch(r"PMC(\d+)\.(\d+)\.pdf", name, re.IGNORECASE)
+        return (1 if m else 0, int(m.group(2)) if m else 0)
+
+    best = max(pdfs, key=rank)
+    return best if rank(best)[0] else ""
+
+
 async def pdf_key_for(effects, pmc: str) -> tuple[str, str]:
     """(object key, error) for the newest version's PDF of one article."""
     res = await effects.http_request(
@@ -108,15 +131,14 @@ async def pdf_key_for(effects, pmc: str) -> tuple[str, str]:
         return "", f"list parse: {exc}"
     ns = {"s3": "http://s3.amazonaws.com/doc/2006-03-01/"}
     keys = [k.text or "" for k in root.findall(".//s3:Contents/s3:Key", ns)]
-    pdfs = [k for k in keys if k.lower().endswith(".pdf")]
-    if not pdfs:
-        return "", "no pdf object" if keys else "article not in the open-access bucket"
-
-    def version(k: str) -> int:
-        m = re.search(r"\.(\d+)/", k)
-        return int(m.group(1)) if m else 0
-
-    return max(pdfs, key=version), ""
+    best = pick_article_pdf(keys)
+    if not best:
+        return "", (
+            "no article pdf object (supplementary only)"
+            if any(k.lower().endswith(".pdf") for k in keys)
+            else "no pdf object" if keys else "article not in the open-access bucket"
+        )
+    return best, ""
 
 
 async def fetch_one(
