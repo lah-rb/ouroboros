@@ -385,8 +385,12 @@ async def main_async(a) -> int:
         )
         merged["deny_category"] = r["deny_category"] or "corpus_fit"
         merged["review_doc_form"] = "frontmatter"
-        merged["review_model"] = r["model"]
-        merged["reviewed_at"] = now
+        # Model provenance goes in curation_method, the field the live curate
+        # path writes ("<reviewer>+<figtext model>"). The old review_model /
+        # reviewed_at stamps were written ONLY here, so a reader comparing
+        # models across the databank saw 35 papers attributed and 4,200 not —
+        # pure confusion (cleaned up 2026-09-16).
+        merged["curation_method"] = f"{r['model']}+frontmatter_triage"
         deny_rows.append(merged)
     if deny_rows:
         await append_records(fx, deny_rows)
