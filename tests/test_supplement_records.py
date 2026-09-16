@@ -19,7 +19,9 @@ from tools.supplement_records import (  # noqa: E402
     expand_zip,
     extraction_row,
     latin_ratio,
+    legacy_pdf_entry,
     mark_entries,
+    needs_reconvert,
     next_child_index,
     purge_entries,
     rewrite_images,
@@ -132,16 +134,63 @@ def test_child_record_inherits_acceptance_and_marks_itself():
 def test_rewrite_images_uses_the_extractor_convention_and_marks_the_rest():
     md = (
         'Text <img src="/tmp/m/media/image1.png" style="width:6in" /> more\n'
+        'vector <img src="/tmp/m/media/image3.emf" />\n'
         '![alt](/tmp/m/media/image2.jpeg "t")\n'
         'again <img src="/tmp/m/media/image1.png"/>\n'
-        'vector <img src="/tmp/m/media/image3.emf" />\n'
+        'odd <img src="/tmp/m/media/image4.svg" />\n'
     )
     out, order = rewrite_images(md, "k__supp01")
-    assert order == ["/tmp/m/media/image1.png", "/tmp/m/media/image2.jpeg"]
+    # Rasters first in appearance order, vectors after them: the numbering a
+    # first pass (rasters only) produced is preserved on re-conversion.
+    assert order == [
+        "/tmp/m/media/image1.png",
+        "/tmp/m/media/image2.jpeg",
+        "/tmp/m/media/image3.emf",
+    ]
     assert out.count('<img src="../figures/k__supp01/fig_01.png">') == 2
     assert '<img src="../figures/k__supp01/fig_02.png">' in out
-    assert "<!-- unconverted figure: image3.emf -->" in out
+    assert '<img src="../figures/k__supp01/fig_03.png">' in out
+    assert "<!-- unconverted figure: image4.svg -->" in out
     assert "style=" not in out and "![" not in out
+
+
+def test_legacy_pdf_entry_points_back_at_its_source(tmp_path):
+    pdf = tmp_path / "supplements" / "doi_p" / "bundle" / "notes.pdf"
+    pdf.parent.mkdir(parents=True)
+    pdf.write_bytes(b"%PDF-1.4 rendered")
+    e = legacy_pdf_entry({"name": "bundle/notes.doc"}, pdf, "doi_p", str(tmp_path))
+    assert e == {
+        "name": "bundle/notes.pdf",
+        "bytes": 17,
+        "from_convert": "bundle/notes.doc",
+        "form": "si_pdf",
+        "route": "document",
+    }
+
+
+def test_needs_reconvert_targets_dropped_figures_only():
+    child = {
+        "record_kind": "supplement",
+        "supplement_form": "si_docx",
+        "figtext_status": "",
+    }
+    dropped = {
+        "extraction_method": "pandoc",
+        "extraction_quality": {"figures_dropped": 3},
+    }
+    clean = {
+        "extraction_method": "pandoc",
+        "extraction_quality": {"figures_dropped": 0},
+    }
+    assert needs_reconvert(child, dropped, False) is True
+    assert needs_reconvert(child, clean, False) is False
+    assert (
+        needs_reconvert(dict(child, supplement_form="si_pdf"), dropped, False) is False
+    )
+    done = dict(child, figtext_status="figtext_done")
+    assert needs_reconvert(done, dropped, False) is False
+    assert needs_reconvert(done, dropped, True) is True
+    assert needs_reconvert({}, dropped, True) is False
 
 
 def test_extraction_row_is_native_text_and_flags_non_latin():

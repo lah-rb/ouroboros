@@ -1174,6 +1174,14 @@ async def _triage_claimed(step_input, effects, databank: dict, keys: list[str]) 
     records: list[dict] = []
     for key in keys:
         rec = databank.get(key) or {}
+        # A SUPPLEMENT CHILD inherits its parent's acceptance (record_kind ==
+        # "supplement", tools/supplement_records.py). Its first page is a
+        # title sheet, a table or a figure panel, so "is this geological?" is
+        # the wrong question — 2 of the first 15 children OCR'd were binned
+        # off-topic that way (2026-09-16). Never triage one.
+        if rec.get("record_kind") == "supplement":
+            keep.append(key)
+            continue
         # Already judged in an earlier round — do not pay for it twice.
         if rec.get("content_priority") not in (None, ""):
             keep.append(key)

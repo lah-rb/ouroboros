@@ -47,6 +47,14 @@ row (last-row-replaces semantics).
     .venv/bin/python tools/supplement_records.py mark  --apply   # forms, routes, misfiles, zip expansion
     .venv/bin/python tools/supplement_records.py purge --apply   # delete article duplicates
     .venv/bin/python tools/supplement_records.py spawn --apply   # child records (+ pandoc for Word)
+    .venv/bin/python tools/supplement_records.py convert-legacy --apply  # DOC/PPT → PDF (LibreOffice), then spawn
+    .venv/bin/python tools/supplement_records.py reconvert --apply       # Word children whose EMF/WMF figures were dropped
+
+LibreOffice is used two ways, both headless with a fresh profile per call:
+legacy DOC/PPT are RENDERED TO PDF so they take the proven OCR + figtext route
+(one dialect, and the engine that drew the embedded vector figures renders
+them); EMF/WMF images inside Word files are rendered to PNG so the pandoc route
+keeps every figure. Numbering is stable across re-conversion (rewrite_images).
 """
 
 from __future__ import annotations
@@ -58,10 +66,12 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 
@@ -129,7 +139,7 @@ FORM_BY_EXT = {
 ROUTE_BY_FORM = {
     "si_pdf": "document",
     "si_docx": "document",
-    "si_legacy_doc": "deferred",  # needs LibreOffice, not installed
+    "si_legacy_doc": "deferred",  # until `convert-legacy` renders it to PDF
     "si_table": "data",
     "si_text": "data",
     "si_cif": "structure",
@@ -148,6 +158,21 @@ DOCUMENT_FORMS = ("si_pdf", "si_docx")
 IMG_TAG_RE = re.compile(r"<img\b[^>]*?\bsrc=\"([^\"]+)\"[^>]*?/?>", re.IGNORECASE)
 IMG_MD_RE = re.compile(r"!\[[^\]]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
 RASTER_EXT = (".png", ".jpg", ".jpeg", ".gif", ".tif", ".tiff", ".bmp")
+# Windows metafiles — Word's native vector figures (247 of 1,154 images in the
+# first 129 Word supplements). Pillow cannot read them; LibreOffice Draw
+# renders them (the flatpak converts one in ~1 s, measured 2026-09-16).
+VECTOR_EXT = (".emf", ".wmf")
+# Headless LibreOffice. This machine's install is the flatpak; override with
+# OUROBOROS_SOFFICE (e.g. "soffice") where a native binary exists. Every call
+# gets a FRESH user profile under the corpus root — a stale profile lock is
+# what made LibreOffice fussy here in the past.
+SOFFICE_CMD = shlex.split(
+    os.environ.get(
+        "OUROBOROS_SOFFICE",
+        "flatpak run --filesystem=/tmp org.libreoffice.LibreOffice",
+    )
+)
+LEGACY_FORMS = ("si_legacy_doc",)
 
 
 # ── classification ─────────────────────────────────────────────────────
@@ -344,21 +369,27 @@ def child_record(parent: dict, entry: dict, child_key: str) -> dict:
 def rewrite_images(md: str, child_key: str) -> tuple[str, list[str]]:
     """Replace every image reference with the extractor's convention.
 
-    Returns (markdown, [source paths in first-appearance order]); the i-th
-    source becomes fig_{i+1:02d}.png. Sources whose extension cannot be
-    rasterised here are left as an HTML comment so nothing dangles."""
+    Returns (markdown, [source paths]); the i-th source becomes
+    fig_{i+1:02d}.png. NUMBERING IS STABLE ACROSS RE-CONVERSION: raster
+    sources come first in appearance order (exactly the numbering the first
+    conversion pass used), vector sources (EMF/WMF, rendered by LibreOffice)
+    are appended after them — so a child re-converted to pick up its vector
+    figures keeps every fig_NN name its figtext sidecar already describes.
+    Sources of any other kind are left as an HTML comment so nothing dangles."""
+    seq = [m.group(1) for m in IMG_TAG_RE.finditer(md)] + [
+        m.group(1) for m in IMG_MD_RE.finditer(md)
+    ]
     order: list[str] = []
-
-    def fig_for(src: str) -> str:
-        if src not in order:
-            order.append(src)
-        return f"fig_{order.index(src) + 1:02d}.png"
+    for exts in (RASTER_EXT, VECTOR_EXT):
+        for s in seq:
+            if s.lower().endswith(exts) and s not in order:
+                order.append(s)
 
     def repl(m: re.Match) -> str:
         src = m.group(1)
-        if not src.lower().endswith(RASTER_EXT):
+        if src not in order:
             return f"<!-- unconverted figure: {Path(src).name} -->"
-        return f'<img src="../figures/{child_key}/{fig_for(src)}">'
+        return f'<img src="../figures/{child_key}/fig_{order.index(src) + 1:02d}.png">'
 
     md = IMG_TAG_RE.sub(repl, md)
     md = IMG_MD_RE.sub(repl, md)
@@ -370,6 +401,44 @@ def latin_ratio(text: str) -> float:
     if not letters:
         return 1.0
     return sum(1 for c in letters if ord(c) < 0x250) / len(letters)
+
+
+def soffice_convert(
+    files: list[Path], fmt: str, outdir: Path, root: str, timeout: int = 900
+) -> dict[Path, Path]:
+    """Convert files with headless LibreOffice; {source: output} for those produced.
+
+    One process per call (LibreOffice starts in ~1 s, so batch the files), a
+    fresh user profile per call, removed afterwards. A missing output is not
+    an exception — the caller records what did not convert."""
+    files = [f for f in files if f.exists()]
+    if not files:
+        return {}
+    outdir.mkdir(parents=True, exist_ok=True)
+    profile = Path(root) / ".soffice" / f"profile-{os.getpid()}-{time.time_ns()}"
+    profile.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        *SOFFICE_CMD,
+        f"-env:UserInstallation=file://{profile}",
+        "--headless",
+        "--convert-to",
+        fmt,
+        "--outdir",
+        str(outdir),
+        *map(str, files),
+    ]
+    try:
+        subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        pass
+    finally:
+        shutil.rmtree(profile, ignore_errors=True)
+    out: dict[Path, Path] = {}
+    for f in files:
+        cand = outdir / f"{f.stem}.{fmt}"
+        if cand.exists() and cand.stat().st_size > 0:
+            out[f] = cand
+    return out
 
 
 def rasterise(src: Path, dst: Path) -> bool:
@@ -394,7 +463,12 @@ def convert_docx(src: Path, child_key: str, root: str) -> dict:
     rep = {"ok": False, "chars": 0, "tables": 0, "figures": 0, "skipped": 0}
     md_dir = Path(root) / "databank" / "markdown"
     fig_dir = Path(root) / "databank" / "figures" / child_key
-    with tempfile.TemporaryDirectory() as tmp:
+    work = Path(root) / ".soffice"
+    work.mkdir(parents=True, exist_ok=True)
+    # Scratch under the corpus root, not /tmp: the LibreOffice sandbox sees
+    # the host filesystem, and a re-conversion must not leave stale figures.
+    shutil.rmtree(fig_dir, ignore_errors=True)
+    with tempfile.TemporaryDirectory(dir=str(work)) as tmp:
         out_md = Path(tmp) / "doc.md"
         cmd = [
             "pandoc",
@@ -412,9 +486,15 @@ def convert_docx(src: Path, child_key: str, root: str) -> dict:
             return rep
         md = out_md.read_text(encoding="utf-8", errors="replace")
         md, sources = rewrite_images(md, child_key)
+        paths = [Path(s) if os.path.isabs(s) else Path(tmp) / s for s in sources]
+        vectors = [p for p in paths if p.suffix.lower() in VECTOR_EXT]
+        rendered = (
+            soffice_convert(vectors, "png", Path(tmp) / "vec", root) if vectors else {}
+        )
+        rep["vector_rendered"] = len(rendered)
         kept = 0
-        for i, s in enumerate(sources, 1):
-            sp = Path(s) if os.path.isabs(s) else Path(tmp) / s
+        for i, (s, sp) in enumerate(zip(sources, paths), 1):
+            sp = rendered.get(sp, sp)
             target = fig_dir / f"fig_{i:02d}.png"
             if rasterise(sp, target):
                 kept += 1
@@ -672,11 +752,158 @@ def cmd_spawn(root: str, apply: bool, forms: tuple[str, ...], limit: int) -> Non
         print("dry run — pass --apply to convert and write.")
 
 
+def legacy_pdf_entry(entry: dict, pdf: Path, parent_key: str, root: str) -> dict:
+    """The supplements[] entry for a PDF LibreOffice rendered from a legacy file."""
+    return {
+        "name": str(pdf.relative_to(Path(root) / SUPP_DIR / parent_key)),
+        "bytes": pdf.stat().st_size,
+        "from_convert": str(entry.get("name") or ""),
+        "form": "si_pdf",
+        "route": "document",
+    }
+
+
+def cmd_convert_legacy(root: str, apply: bool) -> None:
+    """Render deferred DOC/PPT supplements of accepted parents to PDF.
+
+    The PDF becomes a new document-form entry (spawn then gives it a child on
+    the proven OCR + figtext route — one dialect, and embedded vector figures
+    are rendered by the same engine that drew them); the original entry is
+    routed `converted` and points at it."""
+    papers = last_rows(Path(root) / "databank" / "papers.jsonl")
+    rows: list[dict] = []
+    planned = made = 0
+    for key, rec in sorted(papers.items()):
+        if rec.get("review_status") != "accepted" or not rec.get("supplements"):
+            continue
+        rec = dict(rec)
+        rec["supplements"] = [
+            dict(e) if isinstance(e, dict) else e for e in rec["supplements"]
+        ]
+        targets = [
+            e
+            for e in rec["supplements"]
+            if isinstance(e, dict)
+            and e.get("route") == "deferred"
+            and e.get("form") in LEGACY_FORMS
+        ]
+        if not targets:
+            continue
+        by_dir: dict[Path, list[tuple[dict, Path]]] = collections.defaultdict(list)
+        for e in targets:
+            src = entry_path(root, key, e)
+            if not src.exists():
+                e["note"] = "file missing on disk"
+                continue
+            planned += 1
+            print(f"  {key[:60]:62s} {e['name']}")
+            by_dir[src.parent].append((e, src))
+        if not apply:
+            continue
+        new_entries: list[dict] = []
+        for outdir, pairs in by_dir.items():
+            got = soffice_convert([s for _, s in pairs], "pdf", outdir, root)
+            for e, s in pairs:
+                pdf = got.get(s)
+                if not pdf:
+                    e["note"] = "libreoffice produced no PDF"
+                    continue
+                ne = legacy_pdf_entry(e, pdf, key, root)
+                new_entries.append(ne)
+                e["route"] = "converted"
+                e["converted_to"] = ne["name"]
+                made += 1
+        rec["supplements"].extend(new_entries)
+        rows.append(rec)
+    print(f"legacy files to render: {planned}; rendered: {made}")
+    if apply and rows:
+        asyncio.run(write_rows(root, rows, []))
+        print(
+            f"written {len(rows)} parent rows — run `spawn --apply` for the children."
+        )
+    elif not apply:
+        print("dry run — pass --apply to render and write.")
+
+
+def needs_reconvert(child: dict, ext_row: dict, include_done: bool) -> bool:
+    """A Word child whose first conversion dropped figures LibreOffice can render."""
+    if child.get("record_kind") != "supplement":
+        return False
+    if child.get("supplement_form") != "si_docx":
+        return False
+    if ext_row.get("extraction_method") != "pandoc":
+        return False
+    if int((ext_row.get("extraction_quality") or {}).get("figures_dropped") or 0) <= 0:
+        return False
+    return include_done or child.get("figtext_status") != "figtext_done"
+
+
+def cmd_reconvert(root: str, apply: bool, include_done: bool) -> None:
+    """Re-run the Word conversion where figures were dropped, now with EMF/WMF.
+
+    Stable numbering (rewrite_images) keeps every existing fig_NN name, so a
+    figtext sidecar banked so far stays valid; new figures take new numbers.
+    A child already figtext_done gets its status cleared (--include-done) so
+    the resumable fig_review pass describes only the new figures."""
+    papers = last_rows(Path(root) / "databank" / "papers.jsonl")
+    ext = last_rows(Path(root) / "databank" / "extraction.jsonl")
+    ext_rows: list[dict] = []
+    paper_rows: list[dict] = []
+    planned = 0
+    stats: collections.Counter = collections.Counter()
+    for ck, child in sorted(papers.items()):
+        row = ext.get(ck) or {}
+        if not needs_reconvert(child, row, include_done):
+            continue
+        parent = papers.get(child.get("supplement_of") or "") or {}
+        entry = next(
+            (
+                e
+                for e in parent.get("supplements") or []
+                if isinstance(e, dict) and e.get("child_key") == ck
+            ),
+            None,
+        )
+        if not entry:
+            continue
+        src = entry_path(root, parent["paper_key"], entry)
+        if not src.exists():
+            continue
+        planned += 1
+        if not apply:
+            continue
+        rep = convert_docx(src, ck, root)
+        if not rep.get("ok"):
+            stats["failed"] += 1
+            continue
+        ext_rows.append({**row, **extraction_row(ck, rep)})
+        stats["reconverted"] += 1
+        stats["figures_now"] += rep["figures"]
+        stats["vector_rendered"] += rep.get("vector_rendered", 0)
+        if child.get("figtext_status") == "figtext_done":
+            paper_rows.append({**child, "figtext_status": "", "figtext_path": ""})
+    print(f"children to re-convert: {planned}")
+    if apply:
+        asyncio.run(write_rows(root, paper_rows, ext_rows))
+        print(
+            f"{dict(stats)}; written {len(ext_rows)} extraction rows, {len(paper_rows)} figtext resets."
+        )
+    else:
+        print("dry run — pass --apply to re-convert.")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ap.add_argument("command", choices=("mark", "purge", "spawn"))
+    ap.add_argument(
+        "command", choices=("mark", "purge", "spawn", "convert-legacy", "reconvert")
+    )
+    ap.add_argument(
+        "--include-done",
+        action="store_true",
+        help="reconvert: also children whose figtext is already done (status reset)",
+    )
     ap.add_argument("--root", default=CORPUS)
     ap.add_argument("--apply", action="store_true")
     ap.add_argument(
@@ -696,6 +923,10 @@ def main() -> int:
         cmd_mark(a.root, a.apply, a.refresh)
     elif a.command == "purge":
         cmd_purge(a.root, a.apply)
+    elif a.command == "convert-legacy":
+        cmd_convert_legacy(a.root, a.apply)
+    elif a.command == "reconvert":
+        cmd_reconvert(a.root, a.apply, a.include_done)
     else:
         cmd_spawn(a.root, a.apply, tuple(a.forms), a.limit)
     return 0
