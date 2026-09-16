@@ -67,6 +67,7 @@ def source_tag(d: dict) -> str:
     return {
         "paper_markdown": "paper",
         "binder_markdown": "paper",
+        "supplement_markdown": "paper_supplement",
         "pack_prose": "pack",
     }.get(src, src or "unknown")
 

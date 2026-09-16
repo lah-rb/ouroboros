@@ -69,6 +69,16 @@ SUPP_LINK_RE = re.compile(
     r'supplement|mmc\d|_MOESM|/s1)[^"\']*)["\']',
     re.IGNORECASE,
 )
+# The article's OWN PDF. The `/s1` alternative above (MDPI's supplement page)
+# also matches Springer and BMC DOI slugs — link.springer.com/content/pdf/
+# 10.1007/s11214-021-00812-z.pdf — and 47 of the first 313 fetched
+# "supplements" were the parent paper itself (measured 2026-09-16). An
+# article PDF is never a supplement, whatever link text it hides behind.
+ARTICLE_PDF_RE = re.compile(
+    r"/content/pdf/|/counter/pdf/|/track/pdf/"
+    r"|/articles/10\.\d{4,9}/[^/?#]+\.pdf(?:$|[?#])",
+    re.IGNORECASE,
+)
 PII_RE = re.compile(r"/pii/(S[0-9X]+)", re.IGNORECASE)
 DOC_EXT = (".pdf", ".docx", ".doc", ".xlsx", ".xls", ".csv", ".txt", ".zip", ".cif")
 # Media carries nothing this corpus reads, and a figure image is not a
@@ -96,14 +106,24 @@ def publisher_of(doi: str) -> str:
     return REGISTRANTS.get(str(doi or "").split("/")[0], "")
 
 
+def is_article_pdf(url: str) -> bool:
+    """Is this the article's own PDF path rather than a supplement?"""
+    return bool(ARTICLE_PDF_RE.search(url or ""))
+
+
 def supplement_links(html: str, page_url: str) -> list[str]:
-    """Absolute supplement URLs found in a landing page, in page order."""
+    """Absolute supplement URLs found in a landing page, in page order.
+
+    Article-PDF paths are dropped here, at the source, so no later filter
+    has to know the publishers' slug shapes."""
     out: list[str] = []
     for m in SUPP_LINK_RE.finditer(html or ""):
         href = m.group(1)
         if href.startswith("//"):
             href = "https:" + href
         url = href if href.startswith("http") else urljoin(page_url, href)
+        if is_article_pdf(url):
+            continue
         if url not in out:
             out.append(url)
     return out

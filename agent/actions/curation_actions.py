@@ -790,7 +790,15 @@ def _curation_pending(record: dict) -> bool:
 
     Terminal review states: denied, review_failed. An accepted paper
     stays pending until its pack reaches packed | pack_failed.
+
+    A SUPPLEMENT CHILD RECORD (record_kind == "supplement", spawned by
+    tools/supplement_records.py) is never curated or packed on its own: it
+    inherits its parent's acceptance and enters training as a marked
+    document beside the parent. It still takes OCR, figtext and translation
+    — those predicates are unchanged — but this stage owes it nothing.
     """
+    if record.get("record_kind") == "supplement":
+        return False
     if record.get("extraction_status") not in _EXTRACTION_USABLE:
         return False
     if not _figtext_ready(record):

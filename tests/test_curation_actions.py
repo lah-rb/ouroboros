@@ -461,3 +461,29 @@ def test_unverified_status_survives_curation():
     # Terminal once packed — but still flagged as never machine-verified.
     assert _curation_pending(accepted) is False
     assert accepted["extraction_status"] == "extract_unverified"
+
+
+def test_supplement_child_is_never_curation_pending():
+    """A supplement child inherits its parent's acceptance and is never
+    reviewed or packed alone — whatever its extraction/figtext/pack state.
+    OCR and figtext still owe it work (their predicates are untouched)."""
+    from agent.actions.curation_actions import _curation_pending, _fig_pending
+
+    child = {
+        "record_kind": "supplement",
+        "supplement_of": "doi_10.1000_parent",
+        "extraction_status": "extracted",
+        "figure_count": 0,
+        "review_status": "accepted",
+        "pack_status": "pack_skipped_supplement",
+    }
+    assert _curation_pending(child) is False
+    # Without a review verdict the ordinary record would be pending; the
+    # child is not (it must never reach the review lane).
+    assert _curation_pending(dict(child, review_status="")) is False
+    # figtext still runs on its figures.
+    assert _fig_pending(dict(child, figure_count=3)) is True
+    # The same record without the mark is an ordinary pending paper.
+    plain = dict(child)
+    del plain["record_kind"]
+    assert _curation_pending(plain) is True

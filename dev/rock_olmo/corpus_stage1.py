@@ -29,6 +29,14 @@ translation (`md_en_path`) is preferred when it exists, matching the
 curator's own view of the paper. Pipeline per paper: emit._drop_degenerate
 -> figtext_inline -> emit.normalize_decimals (after inlining, so the comma
 evidence bar sees the whole document).
+
+SUPPLEMENTS. A supplement child record (papers.jsonl `record_kind ==
+"supplement"`, `supplement_of` = the parent key; spawned by
+tools/supplement_records.py) takes the same pipeline but is LABELLED
+`supplement_markdown`, carries the parent in its provenance, and takes its
+val split from the PARENT key so a paper and its supplementary material
+never straddle train and val. Repeat 1: the supplement is more of the
+paper, not a reference sheet.
 """
 
 from __future__ import annotations
@@ -53,6 +61,7 @@ N_INVERSE_FRAMES = 2
 CHARS_PER_TOKEN = 3.5
 REPEATS = {
     "paper_markdown": 1,
+    "supplement_markdown": 1,
     "binder_markdown": 4,
     "pack_prose": 1,
     "reference": 1,
@@ -77,15 +86,24 @@ def is_val(doc_id: str) -> bool:
 
 
 def record(
-    doc_id: str, source: str, text: str, license_: str, provenance: dict
+    doc_id: str,
+    source: str,
+    text: str,
+    license_: str,
+    provenance: dict,
+    *,
+    val_key: str | None = None,
 ) -> dict:
+    """One rendered document. `val_key` (default: the doc_id) is the string
+    the val split is drawn from — a supplement passes its PARENT's doc_id so
+    both land on the same side of the split."""
     return {
         "doc_id": doc_id,
         "source": source,
         "text": text,
         "license": license_,
         "provenance": provenance,
-        "val": is_val(doc_id),
+        "val": is_val(val_key or doc_id),
         "max_repeats": REPEATS.get(source, 1),
         "tokens_est": int(len(text) / CHARS_PER_TOKEN),
     }
@@ -121,6 +139,7 @@ def render_papers(
     binder = emit.binder_keys()
     stats = {
         "papers": 0,
+        "supplements": 0,
         "en_md": 0,
         "missing_md": 0,
         "figtext": InlineStats().__dict__.copy(),
@@ -159,21 +178,36 @@ def render_papers(
             if v:
                 stats["normalization"][f"docs_{k}"] += 1
                 stats["normalization"][f"subs_{k}"] += v
-        source = "binder_markdown" if key in binder else "paper_markdown"
+        provenance = {
+            "paper_key": key,
+            "identifier": rec.get("doi") or rec.get("identifier") or "",
+            "english_translation": fp.endswith(".en.md"),
+            "figs_inlined": st.inlined,
+            "figs_junk": st.junk,
+            "figs_echo": st.echo_stripped,
+        }
+        val_key = None
+        if rec.get("record_kind") == "supplement":
+            parent = str(rec.get("supplement_of") or "")
+            prec = db.get(parent) or {}
+            source = "supplement_markdown"
+            provenance["supplement_of"] = parent
+            provenance["supplement_form"] = rec.get("supplement_form") or ""
+            provenance["identifier"] = (
+                prec.get("doi") or rec.get("parent_doi") or provenance["identifier"]
+            )
+            val_key = f"paper:{parent}"
+            stats["supplements"] += 1
+        else:
+            source = "binder_markdown" if key in binder else "paper_markdown"
         out.append(
             record(
                 f"paper:{key}",
                 source,
                 text,
                 rec.get("license") or "unknown",
-                {
-                    "paper_key": key,
-                    "identifier": rec.get("doi") or rec.get("identifier") or "",
-                    "english_translation": fp.endswith(".en.md"),
-                    "figs_inlined": st.inlined,
-                    "figs_junk": st.junk,
-                    "figs_echo": st.echo_stripped,
-                },
+                provenance,
+                val_key=val_key,
             )
         )
         stats["papers"] += 1

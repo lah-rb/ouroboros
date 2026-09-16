@@ -30,6 +30,8 @@ def test_source_tags_and_normalised_carry():
         source_tag({"source": "paper_markdown"}) == "paper"
         and source_tag({"source": "binder_markdown"}) == "paper"
     )
+    # Supplementary material is more of the paper, but says so.
+    assert source_tag({"source": "supplement_markdown"}) == "paper_supplement"
     assert (
         source_tag({"source": "replay/pes2o"}) == "replay/pes2o"
         and source_tag({"source": "hom"}) == "hom"

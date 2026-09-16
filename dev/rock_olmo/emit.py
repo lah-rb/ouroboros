@@ -72,6 +72,9 @@ SOURCE_WEIGHT = {
     "nist_libs": 4,
     "paper_text": 1,
     "paper_markdown": 1,
+    # Supplementary material of an accepted paper (papers.jsonl child rows,
+    # record_kind == "supplement"): more of the paper, presented once.
+    "supplement_markdown": 1,
     # THE BINDER SET. Operator-directed (2026-09-06): the foundational
     # works of each technique -- Raman 1928, Moseley 1913, Laue 1912,
     # Coblentz 1905, Castaing 1951, the Stark-width and X-ray-wavelength
@@ -594,24 +597,31 @@ def markdown_records(holdout: set[str]) -> list[dict]:
             if v_:
                 NORMALIZATION_STATS[f"docs_{k_}"] += 1
                 NORMALIZATION_STATS[f"subs_{k_}"] += v_
+        is_supp = rec.get("record_kind") == "supplement"
         for i, chunk in enumerate(_chunk(text)):
+            prov = {
+                "source": "corpus_markdown",
+                "paper_key": key,
+                "identifier": rec.get("identifier")
+                or rec.get("doi", "")
+                or rec.get("parent_doi", ""),
+                "license": rec.get("license", ""),
+                "chunk": i,
+            }
+            if is_supp:
+                prov["supplement_of"] = rec.get("supplement_of", "")
+                prov["supplement_form"] = rec.get("supplement_form", "")
             out.append(
                 {
                     "view": "paper_full",
                     "domain": "literature",
                     "species": None,
                     "text": chunk,
-                    "provenance": {
-                        "source": "corpus_markdown",
-                        "paper_key": key,
-                        "identifier": rec.get("identifier") or rec.get("doi", ""),
-                        "license": rec.get("license", ""),
-                        "chunk": i,
-                    },
+                    "provenance": prov,
                     "split": "holdout" if leaked else "train",
                     "holdout_species": leaked,
                     "origin": "paper_backed",
-                    "source": "paper_markdown",
+                    "source": "supplement_markdown" if is_supp else "paper_markdown",
                 }
             )
     return out

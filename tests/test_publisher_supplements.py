@@ -45,6 +45,31 @@ def test_supplement_links_finds_the_real_shapes_and_absolutises():
     assert not any("related" in u or u.endswith("/articles/abcd") for u in got)
 
 
+def test_article_pdf_links_are_not_supplements():
+    """The `/s1` alternative matches Springer/BMC DOI slugs, and 47 fetched
+    "supplements" were the parent article. The picker drops those paths."""
+    from tools.publisher_supplements import is_article_pdf
+
+    page = "https://link.springer.com/article/10.1007/s11214-021-00812-z"
+    html = """
+      <a href="/content/pdf/10.1007/s11214-021-00812-z.pdf">Download PDF</a>
+      <a href="https://bmcresnotes.biomedcentral.com/track/pdf/10.1186/s13104-020-1.pdf">PDF</a>
+      <a href="https://link.springer.com/counter/pdf/10.1186/s11671-017-2365-5.pdf">PDF</a>
+      <a href="https://www.nature.com/articles/10.1038/s41598-025-1.pdf?proof=t">PDF</a>
+      <a href="https://static-content.springer.com/esm/art%3A10.1007%2Fs11214-021-00812-z/MediaObjects/11214_2021_812_MOESM1_ESM.pdf">ESM</a>
+    """
+    got = supplement_links(html, page)
+    assert got == [
+        "https://static-content.springer.com/esm/art%3A10.1007%2Fs11214-021-00812-z/"
+        "MediaObjects/11214_2021_812_MOESM1_ESM.pdf"
+    ]
+    assert is_article_pdf("https://link.springer.com/content/pdf/10.1007/s1.pdf")
+    assert not is_article_pdf(
+        "https://static-content.springer.com/esm/art%3A10.1038%2Fs1/MediaObjects/x.pdf"
+    )
+    assert not is_article_pdf("https://www.mdpi.com/article/10.3390/s26031076/s1")
+
+
 def test_elsevier_urls_from_the_linkinghub_pii():
     u = "https://linkinghub.elsevier.com/retrieve/pii/S0584854714002158"
     got = elsevier_urls(u, "")
