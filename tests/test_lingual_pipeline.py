@@ -504,10 +504,11 @@ async def test_translate_drain_partial_progress_two_rounds(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_translate_drain_chunk_failure_banks_successes(monkeypatch):
-    """A mid-round chunk failure persists what succeeded and declines —
-    no verdict. The ATTEMPT counter ticks (an error-ended round is an
-    attempt since 2026-09-04) but the epoch does not, so the banked chunk
-    survives and the paper resumes where it left off."""
+    """A mid-round chunk failure persists what succeeded AND records the
+    failure — the round is progress, no verdict. Under the bank-and-repair
+    policy (2026-09-17) a round that banked something costs no attempt (only
+    a round that banks nothing does), the epoch does not move, so the banked
+    chunk survives and the paper resumes behind the untried chunks."""
     import json
 
     from agent.actions.translation_actions import (
@@ -545,15 +546,17 @@ async def test_translate_drain_chunk_failure_banks_successes(monkeypatch):
     )
     _TRANSLATE_CLAIMS.clear()
     out = await action_translate_drain_batch(si)
-    assert out.result["paper"] == ""  # declined, no verdict
+    assert out.result["paper"] == "p1" and out.result["status"] == "progress"
+    assert out.result["banked"] == 1 and out.result["failing"] == 1
     banked = (await fx.read_file(_parts_path("p1"))).content.strip().splitlines()
-    assert len(banked) == 1  # the success was persisted
+    assert len(banked) == 2  # the success AND the failure were persisted
+    assert sum(1 for ln in banked if '"failed": true' in ln) == 1
     assert not _TRANSLATE_CLAIMS
     side = json.loads(fx._files["databank/extraction.jsonl"].strip().splitlines()[-1])
-    assert side["translate_attempts"] == 1  # the round counted
-    assert side["translate_epoch"] == 0  # ...but the banked part stays valid
+    assert int(side.get("translate_attempts") or 0) == 0  # progress: no attempt spent
+    assert int(side.get("translate_epoch") or 0) == 0  # the banked part stays valid
     assert side["extraction_status"] == "extract_lingual"
-    assert "will retry warmer" in side["failure_reason"]
+    assert "banked" in side["failure_reason"]
 
 
 @pytest.mark.asyncio
@@ -984,7 +987,8 @@ async def test_the_drain_round_itself_defers_and_forgives(monkeypatch):
 
     _TRANSLATE_DEFERRED.clear()
     out = await action_translate_drain_batch(_si())
-    assert "chunk failure" in out.result["reason"]
+    # Both chunks failed: a progress round with two recorded failures.
+    assert out.result["status"] == "progress" and out.result["failing"] == 2
     assert "p1" in _TRANSLATE_DEFERRED
 
     # The retry ladder consumed 2 responses per failing chunk; reload with
@@ -998,15 +1002,19 @@ async def test_the_drain_round_itself_defers_and_forgives(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_three_error_ended_attempts_mark_the_paper_failed(monkeypatch):
+async def test_a_chunk_refused_three_times_becomes_a_gap_and_the_paper_completes(
+    monkeypatch,
+):
     """Live 2026-09-03/04: a chunk the server refused on every try
-    (degenerate-generation guard) re-selected its paper for 16 hours
-    because only a gate verdict advanced the attempt counter. Now every
-    error-ended round is an attempt; the third marks translate_failed with
-    the reason. Banked chunks survive the intermediate attempts (the
-    epoch does not move on an error), so the retries redo only the chunk
-    that failed. A server refusal is not retried warmer within a round —
-    the ladder is for quality misses — so each attempt costs one call."""
+    (degenerate-generation guard) re-selected its paper for 16 hours. The
+    2026-09-04 fix retired the whole paper on its third error round — and by
+    2026-09-17 that had retired 144 papers, 64 of them for ONE chunk. Under
+    the bank-and-repair policy the failing chunk is recorded, retried behind
+    the untried chunks, given one salvage pass in pieces, and then kept in
+    the source language as a marked GAP; the paper completes. Banked chunks
+    survive throughout (the epoch does not move on an error), a round that
+    banks nothing spends an attempt, and a server refusal is not retried
+    warmer within a round — the ladder is for quality misses."""
     import json
 
     from agent.actions.translation_actions import (
@@ -1038,46 +1046,48 @@ async def test_three_error_ended_attempts_mark_the_paper_failed(monkeypatch):
         return sum(1 for c in fx.calls if c.method == "run_inference")
 
     _TRANSLATE_DEFERRED.clear()
-    # Attempt 1: chunk 0 translates, chunk 1 comes back empty -> error.
+    # Round 1: chunk 0 translates, chunk 1 comes back empty -> recorded failure.
     fx._inference_responses = [chunks[0], ""]
     fx._inference_index = 0
     out = await action_translate_drain_batch(_si())
-    assert out.result["paper"] == ""  # declined, not a verdict
-    assert _side()["translate_attempts"] == 1
+    assert out.result["status"] == "progress"  # progress, not a verdict
+    assert int(_side().get("translate_attempts") or 0) == 0  # progress costs none
     assert _side()["extraction_status"] == "extract_lingual"
-    assert (
-        len((await fx.read_file(_parts_path("p1"))).content.strip().splitlines()) == 1
-    )
+    bank = (await fx.read_file(_parts_path("p1"))).content.strip().splitlines()
+    assert len(bank) == 2  # the banked chunk AND the recorded failure
     n1 = _calls()
 
-    # Attempt 2: only the failed chunk is retried — the banked one is not
-    # re-translated (same epoch) — and it fails again.
+    # Round 2: only the failed chunk is retried — the banked one is not
+    # re-translated (same epoch) — and it fails again. A round that banks
+    # nothing spends an attempt.
     fx._inference_responses = [""]
     fx._inference_index = 0
     out = await action_translate_drain_batch(_si())
-    assert out.result["paper"] == ""
+    assert out.result["status"] == "progress"
     assert _calls() - n1 == 1  # one chunk, one call: no warmer rung on an error
-    assert _side()["translate_attempts"] == 2
+    assert _side()["translate_attempts"] == 1
     assert _side()["translate_epoch"] == 0
-    assert "attempt 2 of 3" in _side()["failure_reason"]
-    assert (
-        len((await fx.read_file(_parts_path("p1"))).content.strip().splitlines()) == 1
-    )
+    assert "banked" in _side()["failure_reason"]
+    n2 = _calls()
 
-    # Attempt 3: still refused -> translate_failed, parts retired, reason kept.
-    fx._inference_responses = [""]
+    # Round 3: refused a third time -> a gap candidate. The salvage pass tries
+    # it once more in pieces (one block, one call) and the paper COMPLETES
+    # with that chunk kept in the source language behind gap markers.
+    fx._inference_responses = ["", "", ""]
     fx._inference_index = 0
     out = await action_translate_drain_batch(_si())
-    assert out.result["status"] == "failed"
+    assert out.result["status"] == "translated"
+    assert _calls() - n2 == 2  # the retry, then the salvage attempt
     side = _side()
-    assert side["extraction_status"] == "translate_failed"
-    assert side["translate_attempts"] == 3
-    assert "did not converge in 3 attempts" in side["failure_reason"]
-    assert "chunk failure" in side["failure_reason"]
-    assert not (await fx.read_file(_parts_path("p1"))).content.strip()
+    assert side["extraction_status"] == "extracted" and side["translated"] is True
+    assert side["translate_attempts"] == 3  # 2 empty rounds + the assembly
+    assert side["translation_quality"]["gap_chunks"] == 1
+    assert side["translation_quality"]["gaps"][0]["idx"] == 1
+    en = (await fx.read_file(side["md_en_path"])).content
+    assert "translation gap: chunk 2 of 2" in en and chunks[1] in en
+    # The bank is KEPT for the repair pass; the paper leaves the pending pool.
+    assert (await fx.read_file(_parts_path("p1"))).content.strip()
     assert "p1" not in _TRANSLATE_DEFERRED
-
-    # And it is never selected again.
     out = await action_translate_drain_batch(_si())
     assert out.result["reason"] == "nothing unclaimed pending"
 

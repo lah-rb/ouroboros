@@ -20,15 +20,27 @@ the corpus:
 
 Pass → extraction_status "extracted" + md_en_path (+ translated flag): the
 paper enters the curator like any other, and build_curator_doc prefers the
-English markdown. Fail → warmer retries on later rounds, then
-translate_failed once the paper has spent TRANSLATE_MAX_ATTEMPTS attempts
-without converging. An ATTEMPT is any round that ends without a
-translation: a gate verdict, OR a chunk the server refused on both
-temperatures (its degenerate-generation guard, an empty answer). Only gate
-verdicts counted before 2026-09-04, so two unfixable chunks re-selected
-their papers for 16 hours -- 297 aborted streams, 23% of the local
-server's decode time -- with the counter sitting at zero. Mission-clean
-throughout: markdown + databank writes only.
+English markdown.
+
+BANK AND REPAIR (operator ruling 2026-09-17: follow the OCR drain's policy,
+which works). The drain is bounded, resumable work that never retires a
+document for one bad segment:
+  * every chunk that translates is BANKED as it lands (databank/translations/
+    <key>.parts.jsonl); every chunk that fails is RECORDED there too, with its
+    reason, and retried on later rounds BEHIND the chunks never tried;
+  * a chunk past _CHUNK_MAX_FAILURES waits for the SALVAGE pass, which
+    re-translates it in _SALVAGE_PIECES smaller pieces; what still fails is
+    kept in the source language behind gap markers, and the gaps are listed
+    in translation_quality.gaps for a repair pass;
+  * the paper's attempt counter advances only on a round that banks NOTHING
+    (or on a failed assembly gate → warmer epoch); a paper is retired
+    (translate_failed) only when nothing of it ever translated, or when more
+    than _GAP_MAX_FRACTION of its chunks would be gaps. The bank is kept in
+    both cases — that is what "banked for repair" means.
+Before this policy an attempt was any round that hit a chunk error, so a
+33-chunk paper died on its third round with 15 chunks never tried; of 144
+retired papers, 64 had one failing chunk and 28 were over 90 % banked.
+Mission-clean throughout: markdown + databank writes only.
 """
 
 from __future__ import annotations
@@ -88,6 +100,21 @@ _TRANSLATE_OUT_MARGIN = 1.5
 # Length-ratio sanity band for translated/source text (whitespace-free).
 _RATIO_MIN, _RATIO_MAX = 0.4, 2.5
 _MAX_REPEAT_WORDS = 200
+
+# ── Bank-and-repair knobs (see the module docstring) ──────────────────
+#: Recorded failures a chunk may collect (across rounds, within one epoch)
+#: before it stops being retried whole and waits for the salvage pass.
+_CHUNK_MAX_FAILURES = 3
+#: The salvage pass re-cuts a failing chunk into this many smaller pieces.
+_SALVAGE_PIECES = 3
+#: A paper whose gaps would exceed this share of its chunks is retired
+#: instead of booked — the pack must be (mostly) English.
+_GAP_MAX_FRACTION = 0.5
+_GAP_OPEN = (
+    "<!-- translation gap: chunk {idx} of {n} kept in the source language "
+    "({reason}) -->"
+)
+_GAP_CLOSE = "<!-- end translation gap -->"
 
 _TRANSLATE_CLAIMS: set[str] = set()
 # Papers whose last round ended in CHUNK failure(s). Selection is
@@ -354,6 +381,74 @@ async def _append_parts(
         await effects.append_file(_parts_path(key), lines)
 
 
+async def _load_failures(
+    effects, key: str, n_chunks: int, src_len: int, attempt: int
+) -> dict[int, list[str]]:
+    """Recorded chunk failures for THIS chunking and epoch: idx -> reasons.
+
+    Failure lines share the parts file (`failed: true`, no text), so
+    _load_parts ignores them and a pre-policy parts file reads unchanged."""
+    import json
+
+    fc = await effects.read_file(_parts_path(key))
+    if not getattr(fc, "exists", False) or not fc.content.strip():
+        return {}
+    out: dict[int, list[str]] = {}
+    for line in fc.content.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            d = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not d.get("failed"):
+            continue
+        try:
+            if (
+                int(d.get("n", -1)) != n_chunks
+                or int(d.get("src_len", -1)) != src_len
+                or int(d.get("attempt", -1)) != attempt
+            ):
+                continue
+            idx = int(d["idx"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        out.setdefault(idx, []).append(str(d.get("reason") or ""))
+    return out
+
+
+async def _append_failure(
+    effects,
+    key: str,
+    idx: int,
+    reason: str,
+    n_chunks: int,
+    src_len: int,
+    attempt: int,
+    *,
+    salvage: bool = False,
+) -> None:
+    import json
+
+    line = (
+        json.dumps(
+            {
+                "idx": idx,
+                "n": n_chunks,
+                "src_len": src_len,
+                "attempt": attempt,
+                "failed": True,
+                "salvage": salvage,
+                "reason": str(reason)[:200],
+            },
+            ensure_ascii=False,
+        )
+        + "\n"
+    )
+    await effects.append_file(_parts_path(key), line)
+
+
 def _tag_priority(record: dict) -> int:
     """0 = tagged exact/close (corpus-bound), 1 = adjacent-only/untagged.
 
@@ -382,7 +477,7 @@ def _doc_size_hint(record: dict) -> int:
 
 
 def select_translation_paper(databank: dict) -> str | None:
-    """One unclaimed ACCEPTED extract_lingual paper with retry budget left.
+    """One unclaimed ACCEPTED extract_lingual paper.
 
     Post-acceptance by design (see _translation_pending): curation reads
     originals, so only papers the curator accepted spend translate seats.
@@ -392,15 +487,19 @@ def select_translation_paper(databank: dict) -> str | None:
     Smallest-first is the throughput policy (2026-09-06): translation time
     scales with length, and one 300-450k-token thesis would hold a lane for
     hours while dozens of 12k-token papers waited behind it; recovered packs
-    per hour is the objective."""
+    per hour is the objective.
+
+    The attempt counter no longer gates selection (2026-09-17): termination
+    is the drain's decision — per-chunk failure caps, the salvage pass and
+    the gap booking bound every paper, and a retired paper carries the
+    terminal `translate_failed` status that _translation_pending excludes.
+    Deferral (a round that hit failures) still sorts a paper LAST."""
     from agent.actions.extraction_actions import _translation_pending
 
     eligible = [
         key
         for key, r in databank.items()
-        if _translation_pending(r)
-        and key not in _TRANSLATE_CLAIMS
-        and int(r.get("translate_attempts") or 0) < TRANSLATE_MAX_ATTEMPTS
+        if _translation_pending(r) and key not in _TRANSLATE_CLAIMS
     ]
     if not eligible:
         return None
@@ -498,11 +597,37 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
         temperature = 0.3 if attempts == 0 else 0.7
         sem = asyncio.Semaphore(_TRANSLATE_SEATS)
 
-        # ROUND SLICE. Papers over the round budget make PROGRESS instead
-        # of blocking: translate up to `budget` missing chunks, persist
-        # them, and assemble+gate only when every chunk has a valid part.
-        done = await _load_parts(effects, key, len(chunks), len(src), epoch)
-        todo = [i for i in range(len(chunks)) if i not in done][:budget]
+        # ROUND SLICE (the OCR drain's book-segment pattern). Papers over the
+        # round budget make PROGRESS instead of blocking: translate up to
+        # `budget` missing chunks, bank each as it lands, and assemble only
+        # when every chunk is translated or a recorded gap. Chunks never
+        # tried go first; chunks that failed before go after them, fewest
+        # failures first; a chunk past _CHUNK_MAX_FAILURES waits for the
+        # salvage pass. A round that banks NOTHING is the only kind that
+        # spends one of the paper's attempts.
+        n = len(chunks)
+        done = await _load_parts(effects, key, n, len(src), epoch)
+        failed = await _load_failures(effects, key, n, len(src), epoch)
+
+        def _missing() -> tuple[list[int], list[int]]:
+            """(tryable, gapped) among the chunks not yet translated."""
+            miss = [i for i in range(n) if i not in done]
+            untried = [i for i in miss if i not in failed]
+            retry = sorted(
+                (
+                    i
+                    for i in miss
+                    if i in failed and len(failed[i]) < _CHUNK_MAX_FAILURES
+                ),
+                key=lambda i: (len(failed[i]), i),
+            )
+            gapped = [
+                i for i in miss if i in failed and len(failed[i]) >= _CHUNK_MAX_FAILURES
+            ]
+            return untried + retry, gapped
+
+        tryable, _gapped = _missing()
+        todo = tryable[:budget]
 
         # EXACT-TOKEN OUTPUT BUDGETS, one batched call for the round's
         # slice. The char heuristic it replaces (len/2) was a moving
@@ -524,42 +649,57 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
             if counts and len(counts) == len(todo):
                 tok_counts = {i: int(c) for i, c in zip(todo, counts)}
 
+        async def translate_text(text_src: str, out_tokens: int) -> str:
+            """One source span → English: the two-temperature per-span loop.
+
+            Span-level defect checks with ONE warmer retry: a dropped <img>
+            tag or a truncated/abridged passage in ONE chunk would fail the
+            whole-paper gate (live: 7/9 tags; numeric misses down to 0.78 on
+            real papers). Both censuses are per-span checkable, so retry at
+            the granularity where the defect happens; the assembly gate
+            stays the authority on whatever this banks. Reference-list
+            chunks strip to zero body tokens and score 1.0, so citation
+            reformatting never churns retries. Raises RuntimeError with the
+            engine's or the check's reason — the caller banks that."""
+            want_imgs = len(_IMG_RE.findall(text_src))
+            text = ""
+            for temp in (temperature, 0.7):
+                result = await effects.run_inference(
+                    _render_translate_prompt(text_src, hint),
+                    {"temperature": temp, "max_tokens": out_tokens},
+                )
+                if getattr(result, "error", None):
+                    raise RuntimeError(str(result.error))
+                text = str(getattr(result, "text", "") or "")
+                if not text.strip():
+                    raise RuntimeError("empty translation text")
+                if (
+                    len(_IMG_RE.findall(text)) == want_imgs
+                    and _numeric_preservation(text_src, text) >= _CHUNK_MIN_NUMERIC
+                ):
+                    break
+            return text
+
+        def _out_budget(idx: int, text_src: str) -> int:
+            return (
+                max(1024, int(tok_counts[idx] * _TRANSLATE_OUT_MARGIN))
+                if idx in tok_counts
+                else max(1024, int(len(text_src) / 2))
+            )
+
         async def one(idx: int):
             async with sem:
-                # Chunk-level defect checks with ONE warmer retry: a dropped
-                # <img> tag or a truncated/abridged passage in ONE chunk
-                # fails the whole-paper gate and burns a paper attempt (live:
-                # 7/9 tags; numeric misses down to 0.78 on real papers). Both
-                # censuses are per-chunk checkable, so retry at the
-                # granularity where the defect happens; the assembly gate
-                # stays the authority on whatever this banks. Reference-list
-                # chunks strip to zero body tokens and score 1.0, so citation
-                # reformatting never churns retries.
-                want_imgs = len(_IMG_RE.findall(chunks[idx]))
-                text = ""
-                for temp in (temperature, 0.7):
-                    result = await effects.run_inference(
-                        _render_translate_prompt(chunks[idx], hint),
-                        {
-                            "temperature": temp,
-                            "max_tokens": (
-                                max(1024, int(tok_counts[idx] * _TRANSLATE_OUT_MARGIN))
-                                if idx in tok_counts
-                                else max(1024, int(len(chunks[idx]) / 2))
-                            ),
-                        },
+                try:
+                    text = await translate_text(
+                        chunks[idx], _out_budget(idx, chunks[idx])
                     )
-                    if getattr(result, "error", None):
-                        raise RuntimeError(str(result.error))
-                    text = str(getattr(result, "text", "") or "")
-                    if not text.strip():
-                        raise RuntimeError("empty translation text")
-                    if (
-                        len(_IMG_RE.findall(text)) == want_imgs
-                        and _numeric_preservation(chunks[idx], text)
-                        >= _CHUNK_MIN_NUMERIC
-                    ):
-                        break
+                except Exception as exc:  # noqa: BLE001 — a chunk failure is data
+                    # BANK THE FAILURE: the reason and the chunk, so the next
+                    # round tries the untried chunks first and a repair pass
+                    # knows exactly what to redo.
+                    reason = str(exc)[:200]
+                    await _append_failure(effects, key, idx, reason, n, len(src), epoch)
+                    return idx, None, reason
                 # BANK THIS CHUNK NOW, not after the round's gather.
                 # A chunk is minutes of decode; under continuous
                 # scheduling a round of eight can run 20 minutes against a
@@ -567,52 +707,54 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
                 # anywhere in that window throws away everything. Writes
                 # are serialized per path by append_file's lock, so
                 # concurrent chunks appending is safe.
-                await _append_parts(
-                    effects, key, {idx: text}, len(chunks), len(src), epoch
-                )
-                return idx, text
+                await _append_parts(effects, key, {idx: text}, n, len(src), epoch)
+                return idx, text, None
 
-        results = await asyncio.gather(*(one(i) for i in todo), return_exceptions=True)
-        fresh = {
-            i: t for r in results if not isinstance(r, BaseException) for i, t in [r]
-        }
-        errors = [r for r in results if isinstance(r, BaseException)]
+        results = await asyncio.gather(*(one(i) for i in todo))
+        fresh = {i: t for i, t, err in results if err is None}
+        errs = {i: err for i, t, err in results if err is not None}
         # Already banked by `one()` as each chunk landed — nothing to
         # write here.
         done.update(fresh)
+        for i, err in errs.items():
+            failed.setdefault(i, []).append(err)
+        tryable, gapped = _missing()
 
-        if errors:
-            # Persisted what succeeded; the round ends without a translation,
-            # and that COUNTS as an attempt. Before 2026-09-04 only a gate
-            # verdict advanced the counter, so a chunk the server refused
-            # every time (its degenerate-generation guard: a Cyrillic chunk
-            # on a record tagged `en`, an OCR-damaged Spanish one echoing
-            # its own repetition) re-selected its paper for 16 hours. The
-            # EPOCH does not advance: banked chunks stay valid, so a
-            # transient fault costs a counter tick, not the banked work.
-            # DEFER the paper so the next round tries someone else first —
-            # without this, finish-first re-offers it immediately.
+        what = (
+            f"{len(errs)} chunk failure(s) ({str(next(iter(errs.values())))[:100]}), "
+            f"{len(done)}/{n} banked"
+            if errs
+            else f"{len(done)}/{n} banked"
+        )
+        if errs and not fresh:
+            # NO PROGRESS this round: that spends an attempt — the counter is
+            # the record of rounds that produced nothing. Progress beside a
+            # failure costs nothing: the failure is banked and retried behind
+            # the untried chunks. The EPOCH never advances here: banked
+            # chunks stay valid, so a fault costs a counter tick, not work.
             attempts += 1
             rec["translate_attempts"] = attempts
             rec["translate_epoch"] = epoch
-            what = (
-                f"{len(errors)} chunk failure(s) ({str(errors[0])[:100]}), "
-                f"{len(done)}/{len(chunks)} banked"
-            )
-            if attempts >= TRANSLATE_MAX_ATTEMPTS:
+            if not done and attempts >= TRANSLATE_MAX_ATTEMPTS:
+                # Nothing of this paper has ever translated: retire it. The
+                # failures stay banked (parts file kept) for a repair pass.
                 _TRANSLATE_DEFERRED.discard(key)
                 rec["extraction_status"] = "translate_failed"
                 rec["failure_reason"] = (
-                    f"translation: {what}; did not converge in {attempts} attempts"
+                    f"translation: {what}; nothing banked after {attempts} attempts"
                 )
-                await effects.write_file(_parts_path(key), "")
+                rec["translation_quality"] = {
+                    "chunks": n,
+                    "banked": 0,
+                    "failed_chunks": sorted(failed),
+                }
                 await append_extraction_records(effects, [rec])
                 await _book_pack_state_after_translation(
                     effects, rec, "failed", rec["failure_reason"]
                 )
                 summary = {
                     "paper": key,
-                    "chunks": len(chunks),
+                    "chunks": n,
                     "status": "failed",
                     "reason": what,
                 }
@@ -621,41 +763,114 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
                     observations=f"translate failed {key}: {what}",
                     context_updates={"translate_summary": summary},
                 )
-            _TRANSLATE_DEFERRED.add(key)
-            rec["failure_reason"] = (
-                f"translation (will retry warmer): {what}; "
-                f"attempt {attempts} of {TRANSLATE_MAX_ATTEMPTS}"
-            )
+
+        if tryable:
+            # More to do next round. DEFER after a failure so the lane tries
+            # someone else first — finish-first would re-offer this paper.
+            if errs:
+                _TRANSLATE_DEFERRED.add(key)
+                rec["failure_reason"] = (
+                    f"translation (chunk failures banked, retrying): {what}"
+                )
+            else:
+                _TRANSLATE_DEFERRED.discard(key)  # a clean round earns the front
+                rec["failure_reason"] = ""
             await append_extraction_records(effects, [rec])
-            return _decline(f"{key}: {what}")
-        _TRANSLATE_DEFERRED.discard(key)  # a clean round earns the front again
-        if len(done) < len(chunks):
             summary = {
                 "paper": key,
-                "chunks": len(chunks),
+                "chunks": n,
                 "status": "progress",
                 "banked": len(done),
+                "failing": len(failed),
             }
             return StepOutput(
                 result=summary,
                 observations=(
-                    f"translate drain: {key} — {len(done)}/{len(chunks)} "
-                    f"chunk(s) banked, continues next round"
+                    f"translate drain: {key} — {len(done)}/{n} chunk(s) banked, "
+                    f"{len(failed)} with recorded failures, continues next round"
                 ),
                 context_updates={"translate_summary": summary},
             )
 
-        out_md = "\n\n".join(done[i] for i in range(len(chunks)))
-        gate = translation_gate(src, out_md)
+        # This paper reaches a verdict this round: it leaves the deferral set.
+        _TRANSLATE_DEFERRED.discard(key)
 
-        # Any verdict ends this attempt's parts: passed/failed-final leave
-        # the pending pool; a warmer retry re-translates everything (the
-        # attempt key already invalidates old parts — this just reclaims
-        # the space).
-        await effects.write_file(_parts_path(key), "")
-        rec["translate_attempts"] = attempts + 1
+        # SALVAGE. Every chunk not translated has exhausted its retries. Each
+        # gets one pass in smaller pieces — a loop or an empty answer on a
+        # 12k-char chunk is often one table or reference block that
+        # translates fine a third at a time. What still fails is kept in the
+        # source language behind gap markers and recorded for repair.
+        gaps: list[dict] = []
+        for idx in gapped:
+            pieces = chunk_markdown(
+                chunks[idx], max(1000, _CHUNK_CHARS // _SALVAGE_PIECES)
+            )
+            out_pieces: list[str] = []
+            salvage_err = ""
+            for piece in pieces:
+                try:
+                    out_pieces.append(
+                        await translate_text(piece, max(1024, int(len(piece) / 2)))
+                    )
+                except Exception as exc:  # noqa: BLE001 — recorded, not raised
+                    salvage_err = str(exc)[:120]
+                    break
+            if not salvage_err:
+                text = "\n\n".join(out_pieces)
+                done[idx] = text
+                await _append_parts(effects, key, {idx: text}, n, len(src), epoch)
+                continue
+            await _append_failure(
+                effects,
+                key,
+                idx,
+                f"salvage: {salvage_err}",
+                n,
+                len(src),
+                epoch,
+                salvage=True,
+            )
+            gaps.append(
+                {
+                    "idx": idx,
+                    "reason": (failed.get(idx) or [salvage_err])[0][:120],
+                    "salvage": salvage_err,
+                }
+            )
+        gap_set = {g["idx"] for g in gaps}
+        translated_idx = [i for i in range(n) if i not in gap_set]
+
+        # ASSEMBLY. Gap chunks ride through in the source language, marked.
+        # The gate judges the TRANSLATED text alone: gap chunks are source by
+        # construction and would only echo the source-language check.
+        out_md = "\n\n".join(
+            (
+                done[i]
+                if i not in gap_set
+                else "\n".join(
+                    (
+                        _GAP_OPEN.format(
+                            idx=i + 1,
+                            n=n,
+                            reason=next(g["reason"] for g in gaps if g["idx"] == i),
+                        ),
+                        chunks[i],
+                        _GAP_CLOSE,
+                    )
+                )
+            )
+            for i in range(n)
+        )
+        gate = translation_gate(
+            "\n\n".join(chunks[i] for i in translated_idx),
+            "\n\n".join(done[i] for i in translated_idx),
+        )
+        too_gappy = len(gaps) / n > _GAP_MAX_FRACTION
+        gap_quality = {"chunks": n, "gap_chunks": len(gaps), "gaps": gaps[:20]}
+
+        rec["translate_attempts"] = attempts + 1  # an assembly is an attempt
         rec["translate_epoch"] = epoch
-        if gate["passed"]:
+        if gate["passed"] and not too_gappy:
             en_rel = (
                 md_rel[:-3] + ".en.md" if md_rel.endswith(".md") else md_rel + ".en"
             )
@@ -664,14 +879,35 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
             rec["md_en_path"] = en_rel
             rec["translated"] = True
             rec["translation_quality"] = {
-                k: gate[k] for k in ("numeric_preservation", "img_tags", "length_ratio")
+                **{
+                    k: gate[k]
+                    for k in ("numeric_preservation", "img_tags", "length_ratio")
+                },
+                **gap_quality,
             }
             rec["failure_reason"] = ""
             status = "translated"
+            if not gaps:
+                # Nothing left to repair: reclaim the bank.
+                await effects.write_file(_parts_path(key), "")
             await _book_pack_state_after_translation(effects, rec, "translated", "")
+        elif gate["passed"]:
+            # Translated text is fine but too little of the paper is English.
+            # Retired, with the bank and the gap list kept for repair.
+            rec["extraction_status"] = "translate_failed"
+            rec["failure_reason"] = (
+                f"translation: {len(gaps)} of {n} chunks would be gaps "
+                f"(limit {_GAP_MAX_FRACTION:.0%}); bank kept for repair"
+            )
+            rec["translation_quality"] = gap_quality
+            status = "failed"
+            await _book_pack_state_after_translation(
+                effects, rec, "failed", rec["failure_reason"]
+            )
         elif rec["translate_attempts"] >= TRANSLATE_MAX_ATTEMPTS:
             rec["extraction_status"] = "translate_failed"
             rec["failure_reason"] = "translation: " + "; ".join(gate["problems"])
+            rec["translation_quality"] = {**gap_quality, "problems": gate["problems"]}
             status = "failed"
             await _book_pack_state_after_translation(
                 effects, rec, "failed", rec["failure_reason"]
@@ -679,7 +915,8 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
         else:
             # Stays extract_lingual; the bumped attempt count selects the
             # warmer retry next round, and the bumped EPOCH retires this
-            # pass's parts so the retry re-translates everything.
+            # pass's parts so the retry re-translates everything (the old
+            # epoch's lines stay in the bank as the record of what happened).
             rec["translate_epoch"] = epoch + 1
             rec["failure_reason"] = "translation (will retry warmer): " + "; ".join(
                 gate["problems"]
@@ -729,7 +966,13 @@ async def _book_pack_state_after_translation(
     from agent.actions.scholarly_actions import append_records
 
     try:
-        if outcome == "translated" and rec.get("pack_status") == "packed":
+        # A prior pack_failed booked by a translation that later completed
+        # (the bank-and-repair policy re-arms such papers) re-enters the pack
+        # queue the same way a stale original-language pack does.
+        if outcome == "translated" and rec.get("pack_status") in (
+            "packed",
+            "pack_failed",
+        ):
             await append_records(
                 effects,
                 [{**rec, "pack_status": "needs_repack", "failure_reason": ""}],

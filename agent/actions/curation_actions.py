@@ -1606,10 +1606,16 @@ async def select_curate_paper(
         * _CURATE_OVERSIZE_PARK_MARGIN
         * _CURATE_CHARS_PER_TOKEN
     )
+    lane_seat = _lane_seat_tokens(effects)
     for key, rec in databank.items():
         if key in _CURATE_CLAIMS or _recently_booked(key):
             continue
         if not _curation_pending(rec):
+            continue
+        # A paper the engine already refused on a smaller seat carries the
+        # seat it needs (_book_curate_min_seat); lanes below it pass.
+        min_seat = int(rec.get("curate_min_seat_tokens") or 0)
+        if min_seat and min_seat > lane_seat:
             continue
         raw_chars, floor_chars = await _cached_doc_sizes(effects, key, rec)
         # A floor over EVERY seat can never run at any budget: park it in a
@@ -1690,7 +1696,14 @@ async def select_curate_paper(
         # Tier 0 = beyond the local seat; local lanes are always tier 1, so
         # their ordering is untouched, and a remote lane with no remote-only
         # work left falls through to the same smallest-first as everyone else.
-        remote_first = 0 if (remote_lane and floor_chars > local_usable_chars) else 1
+        remote_first = (
+            0
+            if (
+                remote_lane
+                and (floor_chars > local_usable_chars or min_seat > _CURATE_SEAT_TOKENS)
+            )
+            else 1
+        )
         sized.append((remote_first, _aspect_priority(rec), aged, chars, key))
     if not sized:
         return "", ""
@@ -1788,6 +1801,81 @@ async def _book_curate_oversize(effects, paper_key: str, reason: str) -> None:
         logger.warning("curate oversize: parked %s — %s", paper_key, reason[:160])
     except Exception:  # noqa: BLE001 — a park must not break the lane
         logger.exception("failed to book curate_oversize for %s", paper_key)
+    _CURATE_DOC_CACHE.pop(paper_key, None)
+    _CURATE_STARVED.pop(paper_key, None)
+
+
+_REFUSAL_TOKENS_RE = re.compile(
+    r"prompt (\d+) tokens|Combined prompt length \((\d+)\)|prompt occupies (\d+) of"
+)
+#: The engine's minimum generation reserve, quoted in its own refusals.
+_CURATE_MIN_GEN_TOKENS = 512
+
+
+def _refusal_prompt_tokens(text: str) -> int:
+    """The prompt size the engine measured, read off its refusal; 0 if absent."""
+    m = _REFUSAL_TOKENS_RE.search(text or "")
+    if not m:
+        return 0
+    return int(next(g for g in m.groups() if g))
+
+
+def _lane_seat_tokens(effects) -> int:
+    """The per-stream seat THIS lane runs on: its remote route's, else local."""
+    domain = str(getattr(effects, "_inference_domain", "") or "")
+    routes = getattr(effects, "_llmvp_domains", None) or {}
+    route = routes.get(domain) if (domain and isinstance(routes, dict)) else None
+    return int((route or {}).get("seat_tokens") or 0) or _CURATE_SEAT_TOKENS
+
+
+def _larger_seat_for(effects, prompt_tokens: int) -> int:
+    """A seat some OTHER lane offers that holds this refused prompt, else 0.
+
+    The estimator under-counts some documents by 2x (table-heavy Latin text
+    measured 1.6 chars/token against the 3.3 model), so a local lane can be
+    handed a doc the 65k pool refuses while the 262k remote seat would take
+    it. Parking such a paper lost it: measured 2026-09-17, three papers
+    (52k–126k prompts) sat in curate_oversize for that reason."""
+    if prompt_tokens <= 0:
+        return 0
+    largest = _largest_seat_tokens(effects)
+    if largest <= _lane_seat_tokens(effects):
+        return 0
+    return largest if prompt_tokens + _CURATE_MIN_GEN_TOKENS <= largest else 0
+
+
+async def _book_curate_min_seat(
+    effects, paper_key: str, min_seat: int, reason: str
+) -> None:
+    """Leave a paper the local engine refused for the lane whose seat holds it.
+
+    Papers-side mark `curate_min_seat_tokens`: select_curate_paper skips the
+    paper on any lane whose seat is smaller and puts it in the remote-first
+    tier for the lane that fits. Full row, never a stub."""
+    from agent.actions.scholarly_actions import (
+        DATABANK_PATH,
+        _read_jsonl_records,
+        append_records,
+    )
+
+    try:
+        try:
+            current = (await _read_jsonl_records(effects, DATABANK_PATH)).get(
+                paper_key
+            ) or {}
+        except Exception:  # noqa: BLE001 -- enrichment only; the mark must still land
+            current = {}
+        row = dict(current)
+        row.update(paper_key=paper_key, curate_min_seat_tokens=int(min_seat))
+        await append_records(effects, [row])
+        logger.info(
+            "curate: %s needs a %d-token seat (%s) — left for the larger lane",
+            paper_key,
+            min_seat,
+            reason[:120],
+        )
+    except Exception:  # noqa: BLE001 — a routing mark must not break the lane
+        logger.exception("failed to book curate_min_seat_tokens for %s", paper_key)
     _CURATE_DOC_CACHE.pop(paper_key, None)
     _CURATE_STARVED.pop(paper_key, None)
 
@@ -2329,9 +2417,27 @@ async def action_curate_drain_batch(step_input):
                 )
             except _CurateTransportFault as e:
                 if _is_oversize_fault(str(e)):
-                    # The engine's own verdict that this doc can never fit a
-                    # seat — deterministic, so re-selection is a loop, not a
-                    # retry. Backstop for docs the estimator under-counts.
+                    # The engine's own verdict that this doc cannot fit THIS
+                    # seat — deterministic, so re-selection here is a loop,
+                    # not a retry. If another lane's seat holds the prompt the
+                    # engine measured, leave the paper for that lane; park
+                    # only when no seat anywhere does.
+                    need = _refusal_prompt_tokens(str(e))
+                    if _larger_seat_for(effects, need):
+                        # "Needs more than THIS lane's seat": the pool is
+                        # shared, so a prompt under the seat's nominal size
+                        # can still be refused against it — the mark must
+                        # clear the refusing lane, not just the prompt.
+                        await _book_curate_min_seat(
+                            effects,
+                            key,
+                            max(
+                                need + _CURATE_MIN_GEN_TOKENS,
+                                _lane_seat_tokens(effects) + 1,
+                            ),
+                            str(e),
+                        )
+                        continue
                     await _book_curate_oversize(
                         effects,
                         key,
