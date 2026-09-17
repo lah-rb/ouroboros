@@ -1199,7 +1199,14 @@ _CURATE_CLAIMS: set[str] = set()
 #: large budget never learns it could compress under a small one. Keying the
 #: cache by budget instead would rebuild ~500-1,100 compressed docs per round
 #: in an executor, on the same box as the GPU.
-_CURATE_DOC_CACHE: dict[str, tuple[int, int]] = {}
+#: Value = (fingerprint, raw_chars, floor_chars). The fingerprint is the
+#: record's DOCUMENT STATE (markdown paths, extraction status, translation,
+#: figtext) — a measurement is reused only while the document it measured is
+#: the document on disk. An EMPTY measurement is never stored: a record whose
+#: markdown was missing when first seen (a zombie re-armed and OCR'd, a row
+#: repointed at its file) stayed (0, 0) for a whole run and no lane could ever
+#: select it (2026-09-16: three reviewable papers, six lanes, 4,120 idle rounds).
+_CURATE_DOC_CACHE: dict[str, tuple[tuple, int, int]] = {}
 #: paper_key -> selection rounds this paper was pending but over budget.
 #: In-process on purpose: it rides the same lifetime as _CURATE_CLAIMS and
 #: _CURATE_DOC_CACHE, and a mission run sees hundreds of rounds (400+ idle
@@ -1288,6 +1295,12 @@ _CURATE_SEAT_TOKENS = int(os.environ.get("OUROBOROS_CURATE_SEAT_TOKENS", "") or 
 # unsure band starves (recoverable any time budgets or geometry grow) and
 # only the sure band parks. Same authority principle as pre-OCR triage:
 # never a terminal verdict on an unsure judgement.
+#
+# 2026-09-16: the PARK test no longer uses this margin (see select_curate_paper
+# — parked == unselectable by every lane, same arithmetic as the budget). It
+# now shapes only the remote-first tier boundary (`local_usable_chars`): a doc
+# within 10 % of the local seat is treated as remote-only work, which errs
+# toward handing it to the seat that surely fits.
 _CURATE_OVERSIZE_PARK_MARGIN = 1.1
 
 # The engine's admission refusal for a prompt larger than one seat. This
@@ -1522,6 +1535,42 @@ async def _curate_doc_sizes(effects, paper_key: str) -> tuple[int, int]:
     return raw, min(raw, floor)
 
 
+def _doc_fingerprint(rec: dict) -> tuple:
+    """What the curator doc is built from; a change here means re-measure."""
+    return (
+        str(rec.get("md_en_path") or ""),
+        str(rec.get("md_path") or ""),
+        str(rec.get("extraction_status") or ""),
+        bool(rec.get("translated")),
+        str(rec.get("figtext_status") or ""),
+        int(rec.get("figure_count") or 0),
+    )
+
+
+async def _cached_doc_sizes(effects, paper_key: str, rec: dict) -> tuple[int, int]:
+    """(raw_chars, floor_chars) via _CURATE_DOC_CACHE, refreshed on doc change.
+
+    Empty measurements are not cached (see the cache's own note)."""
+    fp = _doc_fingerprint(rec or {})
+    hit = _CURATE_DOC_CACHE.get(paper_key)
+    if hit is not None and hit[0] == fp:
+        return hit[1], hit[2]
+    raw, floor = await _curate_doc_sizes(effects, paper_key)
+    if floor > 0:
+        _CURATE_DOC_CACHE[paper_key] = (fp, raw, floor)
+    else:
+        _CURATE_DOC_CACHE.pop(paper_key, None)
+    return raw, floor
+
+
+def _largest_seat_budget_chars(seat_tokens: int) -> int:
+    """The doc budget a lane on `seat_tokens` is offered — rung 2b of
+    _curate_doc_budget_chars, in characters. The oversize park compares the
+    deepest-compression floor against THIS, so "parked" and "unselectable by
+    every lane" are the same statement."""
+    return int((seat_tokens - _CURATE_TURN_OVERHEAD_TOKENS) * _CURATE_CHARS_PER_TOKEN)
+
+
 def _largest_seat_tokens(effects) -> int:
     """The biggest per-stream seat any curate lane can run on: the local seat
     or the largest `seat_tokens` a declared inference domain advertises. The
@@ -1562,11 +1611,7 @@ async def select_curate_paper(
             continue
         if not _curation_pending(rec):
             continue
-        sizes = _CURATE_DOC_CACHE.get(key)
-        if sizes is None:
-            sizes = await _curate_doc_sizes(effects, key)
-            _CURATE_DOC_CACHE[key] = sizes
-        raw_chars, floor_chars = sizes
+        raw_chars, floor_chars = await _cached_doc_sizes(effects, key, rec)
         # A floor over EVERY seat can never run at any budget: park it in a
         # visible review queue instead of letting it starve (or worse,
         # select-fault-reselect — the 2026-08-26 poison-pill loop).
@@ -1580,8 +1625,18 @@ async def select_curate_paper(
         # other over-budget paper) and left for the lane that fits.
         floor_tokens = int(floor_chars / _CURATE_CHARS_PER_TOKEN)
         largest_seat = _largest_seat_tokens(effects)
-        over_every_seat = floor_chars > 0 and floor_tokens > int(
-            (largest_seat - _CURATE_TURN_OVERHEAD_TOKENS) * _CURATE_OVERSIZE_PARK_MARGIN
+        # SAME ARITHMETIC AS THE BUDGET. A lane on the largest seat is offered
+        # _largest_seat_budget_chars(seat) characters; a floor above that is
+        # unselectable by every lane. A 1.1 margin used to sit here so an
+        # estimator-noise band would starve rather than park — but nothing
+        # recovers a starved doc while the seat geometry stands, and three
+        # theses sat in exactly that band for a whole run (2026-09-16),
+        # scanned by six lanes every round and taken by none. A doc that
+        # measures under the budget yet over the seat is still caught by the
+        # engine's own refusal (_is_oversize_fault → park), so the estimator's
+        # error in the other direction costs nothing.
+        over_every_seat = floor_chars > 0 and floor_chars > _largest_seat_budget_chars(
+            largest_seat
         )
         if over_every_seat and rec.get("review_status") == "accepted":
             # PACK-ONLY OVER RAW TEXT. The review needs the whole document
@@ -1674,7 +1729,8 @@ async def select_curate_paper(
         raise
     if _effective_chars(doc) > budget_chars:  # doc changed since caching
         _CURATE_CLAIMS.release([key])
-        _CURATE_DOC_CACHE[key] = await _curate_doc_sizes(effects, key)
+        _CURATE_DOC_CACHE.pop(key, None)
+        await _cached_doc_sizes(effects, key, databank.get(key) or {})
         return "", ""
     _CURATE_STARVED.pop(key, None)
     return key, doc
