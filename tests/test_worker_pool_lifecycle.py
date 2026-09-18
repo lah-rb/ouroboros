@@ -82,6 +82,10 @@ async def test_a_v2_mission_starts_lanes_and_stops_them_cleanly():
             # pool, cutting translation 84%. Seven text lanes against six
             # seats is deliberate over-subscription so the split rebalances.
             "translate2",
+            # translate3/4 added 2026-09-18 for the post-OCR translation
+            # stretch (operator approval); text_seat inflight 7 -> 9.
+            "translate3",
+            "translate4",
             "curate",
             "curate2",
             "curate3",

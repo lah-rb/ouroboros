@@ -51,7 +51,16 @@ model:
   # 2026-09-15: back to 65,536 shared cells so paddle can hold CUDA1 for
   # local OCR (the state before 7ccd74d; that commit's split was safe only
   # while the ocr lane was disabled).
-  n_ctx: 65536
+  # 2026-09-18 (operator approval): OCR and figtext queues are EMPTY, so
+  # paddle is not loaded and the 3060 is free again — back to the
+  # [40, 12]@131072 rung for the translation + review stretch. The mission
+  # runs with OUROBOROS_DISABLE_LANES=ocr,figtext,figtext2,figtext3,figtext4
+  # and OUROBOROS_SCRAPER_OVERLAP_PDFS=0, so nothing can request paddle onto
+  # CUDA1 beside these layers, and the vision projector (CUDA1) stays idle —
+  # the CUDA1 graph-realloc crash of 2026-09-09/10 needed live vision load.
+  # Bring paddle back = the 2026-09-15 state above (65536, no split), when
+  # new PDFs need OCR.
+  n_ctx: 131072
   probe_verified_weights_bytes: 19653957984
   probe_verified_n_ctx: 91136
   # ── 3060 LAYER-SPLIT RE-APPLIED 20260906 by dev/expand_local_seat_on_figtext_drain.py:
@@ -59,8 +68,8 @@ model:
   # 5.5 h / zero faults on 2026-08-22 (LAYER_SPLIT_EXPERIMENT.md). ocr lane is
   # disabled in the mission (OUROBOROS_DISABLE_LANES=ocr) so paddle is never
   # loaded onto CUDA1 beside these layers. Revert = the .bak beside this run's log.
-  # REVERTED 2026-09-15 (paddle local): split_mode: layer
-  # REVERTED 2026-09-15 (paddle local): tensor_split: [40, 12]
+  split_mode: layer
+  tensor_split: [40, 12]
   # The base declares vision_n_ctx 131072 — an M1 sizing (7 GB of lazy KV
   # against 123 GB) that on this card is a landmine: never built, costing
   # nothing, until one stray vision request tries to allocate 6.5 GiB into

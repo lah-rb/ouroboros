@@ -94,7 +94,12 @@ DEFAULT_LANE_MAX_INFLIGHT: Dict[str, int] = {
     # sat blocked all night — the cap, not the pool, was the ceiling.
     # 5 leaves one seat for the acquire flow's catalog turns; the
     # engine's admission remains the correctness backstop.
-    "text_seat": 7,  # tracks the 8-seat engine (one seat spare for catalog turns)
+    # 7 -> 9 (2026-09-18, operator approval): two more translate lanes. The
+    # cap is a lane-admission ceiling, not a seat count — the engine's own
+    # admission stays the correctness backstop, and the deliberate
+    # over-subscription (nine text lanes, six seats) is what lets whichever
+    # side has work win a seat instead of a static split freezing it.
+    "text_seat": 9,
     # 1 -> 2 (2026-08-26 figtext campaign): the server now holds a POOL of
     # two vision contexts (vision_pool_size: 2, muse-glimmer-30b-cuda) —
     # two concurrent figure streams pipeline image-encode on the 3060
@@ -740,6 +745,26 @@ def _all_scraper_lanes(domains: Optional[dict] = None) -> List[Lane]:
         # of the previous two configurations shared.
         Lane(
             name="translate2",
+            flow="translate_drain",
+            resource="text_seat",
+            est_kv=12_000,
+        ),
+        # THIRD AND FOURTH TRANSLATE LANES (2026-09-18, operator approval).
+        # OCR and figtext have drained; translation is the one substantive
+        # queue left (142 accepted papers, ~2,900 chunks) and two lanes moved
+        # ~50 chunks/h against a pool that now runs at 131k cells with paddle
+        # unloaded. Same fixed 12k claim as the first two: four admission
+        # attempts per cycle, and the shared _TRANSLATE_CLAIMS keeps the
+        # lanes on different papers. text_seat inflight rises 7 -> 9 with
+        # them (DEFAULT_LANE_MAX_INFLIGHT).
+        Lane(
+            name="translate3",
+            flow="translate_drain",
+            resource="text_seat",
+            est_kv=12_000,
+        ),
+        Lane(
+            name="translate4",
             flow="translate_drain",
             resource="text_seat",
             est_kv=12_000,
