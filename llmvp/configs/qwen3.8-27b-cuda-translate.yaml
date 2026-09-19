@@ -1,0 +1,62 @@
+# ── Qwen 3.8 27B on the 3090 — TRANSLATION-REGIME TEST (2026-09-18) ────
+# WHY THIS FILE. The v48 translation stretch on muse measured 22 banked
+# chunks/h across four lanes, with roughly 45 % of attempts lost to
+# prompt-echo loops and all-reasoning empties and ~46 % of every decoded
+# token classed as analysis and stripped. Operator hypothesis: one dense,
+# well-known translator stream may beat six parallel muse streams on USEFUL
+# output. This is the CUDA-machine view of qwen3.8-27b.yaml, the same
+# pattern as muse-glimmer-30b-cuda.yaml: per-machine facts live here; the
+# model notes, probe results and tier record stay in the base.
+#
+# WEIGHTS. unsloth/Qwen3.8-27B-GGUF Qwen3.8-27B-UD-IQ4_XS.gguf (14.25 GB, the
+# i-quant-4 the operator asked for) + mmproj-F16.gguf, fetched 2026-09-18 to
+# ~/models/unsloth/… mirroring the repo layout the base path uses on the M1.
+# The base's probe ledger (262144 / 22,884,408,288 bytes) was measured against
+# Q6_K on the M1; the weights-bytes binding no longer matches, so the KV
+# preflight falls back to arithmetic — which passes at this n_ctx: 14.25 GB
+# weights + 65,536 tok × 64 KiB (kv_bytes_per_token_measured is architecture
+# geometry, inherited) ≈ 4.3 GB KV, on a 24 GB card with muse NOT resident.
+# Raise n_ctx only after `api/main.py --probe-context` on this machine.
+#
+# SINGLE SEAT BY DESIGN. The GDN hybrid cannot host the batched engine (base
+# notes), and the test is exactly "sacrifice parallelism": pool mode, one
+# context. A translate lane's second chunk queues on it; nothing else changes
+# on the mission side. Compare against muse on banked chunks/h and the banked
+# failure rate over the same clock hour, not on raw tok/s.
+extends: qwen3.8-27b
+
+app:
+  # Pool mode queues a request behind the busy seat for at most this long
+  # (acquire_instance → wait_for(queue.get(), backend_timeout)), then refuses
+  # with "All inference instances are busy". The base's 180 s is shorter than a
+  # long translation chunk (measured 13–190 s, 2026-09-18), so a translate
+  # lane's second chunk — or a second lane — would be refused and retried
+  # instead of simply waiting. 900 s lets two lanes × two chunks queue on the
+  # one seat without churn; the mission's own transient-retry stays the backstop.
+  backend_timeout: 900
+
+model:
+  path: /home/lah-rb/models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-IQ4_XS.gguf
+  mmproj_path: /home/lah-rb/models/unsloth/Qwen3.8-27B-GGUF/mmproj-F16.gguf
+  n_ctx: 65536
+  n_gpu_layers: -1
+  # Whole model on the 3090 (CUDA0). The 3060 stays out of it: no layer split,
+  # and vision stays lazy (figtext lanes are disabled in the stretch env, so no
+  # request ever allocates the projector).
+  split_mode: none
+  main_gpu: 0
+  # Translation does not need thinking at all, and on this family thinking is
+  # where the damage happens: the first smoke chunk (2026-09-18 20:15Z, dial
+  # `low`) spent its whole 4,749-token budget INSIDE an unclosed <think> block
+  # orbiting on a corrupted-OCR passage, so the server could not strip it and
+  # the reasoning leaked into the "translation" (numeric 0.11). `low` is
+  # shallow, not off (formats/qwen38.yaml header). `off` is the official
+  # binary enable_thinking=false prefill (`<think>\n\n</think>\n\n`, byte-parity
+  # pinned by test_qwen38_rendering_matches_official_template), so the model
+  # goes straight to the translation and every generated token is output.
+  thinking: "off"
+
+resources:
+  decode_mode: pool
+  max_concurrent_requests: 1
+  cpu_threads: 15
