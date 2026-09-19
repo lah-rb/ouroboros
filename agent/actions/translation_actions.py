@@ -293,6 +293,79 @@ TRANSLATE_MIN_EN_RATIO = (
 _LATIN_WORD_RE = re.compile(r"[a-zA-Z]+")
 
 
+_IMG_TAG_RE = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
+_FIG_NUM_RE = re.compile(r"(?:Fig(?:ure)?\.?|図|Table|Tab\.|表)\s*(\d+)", re.IGNORECASE)
+
+
+def _strip_img_tags(text: str) -> str:
+    """Image tags carry the paper KEY in their path; a Cyrillic or kanji key
+    counted as letters made clean chunks read 6–10 % 'not English'
+    (2026-09-19, the NdF3 Raman paper). Language is judged on prose."""
+    return _IMG_TAG_RE.sub(" ", text)
+
+
+def reinsert_missing_imgs(src: str, out: str) -> tuple[str, int]:
+    """Put back the ``<img>`` blocks a translator dropped. Returns (text, n).
+
+    Measured 2026-09-19 over the retired papers: every one of 20 dropped tags
+    sat in the same structure — a centred ``<div>`` holding only the image,
+    followed by a centred ``<div>`` holding "Fig. N …" — and the caption was
+    translated while the image-only div vanished, on muse and on the 27B
+    alike. The census only counts tags, so the fix is mechanical: each
+    missing tag goes back as its own centred block, placed before the
+    translated caption that carries the same figure/table number when one
+    is found within 400 characters after the tag in the source, else at the
+    end of the chunk. Never removes anything; idempotent when nothing is
+    missing. Best-of-bank reassembly rescued 7 of 11 retired papers with
+    this alone (6 of them purely on tags)."""
+    src_tags = _IMG_TAG_RE.findall(src)
+    out_tags = _IMG_TAG_RE.findall(out)
+    if not src_tags or len(out_tags) >= len(src_tags):
+        return out, 0
+    have: dict[str, int] = {}
+    for t in out_tags:
+        have[t] = have.get(t, 0) + 1
+    added = 0
+    for tag in src_tags:
+        if have.get(tag, 0) > 0:
+            have[tag] -= 1
+            continue
+        pos = src.find(tag)
+        after = src[pos + len(tag) : pos + len(tag) + 400]
+        block = f'<div style="text-align: center;">{tag}</div>'
+        placed = False
+        m = _FIG_NUM_RE.search(after)
+        if m:
+            num = re.escape(m.group(1))
+            cap = re.search(
+                r"(?:Fig(?:ure)?\.?|図|Table|Tab\.|表)\s*%s(?!\d)" % num,
+                out,
+                re.IGNORECASE,
+            )
+            if cap:
+                ls = out.rfind("\n", 0, cap.start()) + 1
+                out = out[:ls] + block + "\n\n" + out[ls:]
+                placed = True
+        if not placed:
+            out = out.rstrip() + "\n\n" + block + "\n"
+        added += 1
+    return out, added
+
+
+def _span_problem(text_src: str, text: str) -> str:
+    """The per-span verdict the two-temperature loop retries on: image
+    census, numeric recall, and — since 2026-09-19 — the source script. An
+    echoed chunk (the Russian NdF3 paper came back 70 % Cyrillic on two of
+    six chunks) preserves every number and every tag, so the old checks let
+    it bank and the paper only failed at assembly, where the warmer retry
+    re-translates everything. Judged on prose (tag paths stripped)."""
+    if len(_IMG_RE.findall(text)) != len(_IMG_RE.findall(text_src)):
+        return "img tags"
+    if _numeric_preservation(text_src, text) < _CHUNK_MIN_NUMERIC:
+        return "numeric"
+    return _output_language_problem(_strip_img_tags(text))
+
+
 def _output_language_problem(out: str) -> str:
     """'' when the translation reads as English; otherwise why not."""
     letters = sum(1 for ch in out if ch.isalpha()) or 1
@@ -332,7 +405,7 @@ def translation_gate(src: str, out: str) -> dict:
     # must not dominate the output, and Latin output must carry English
     # function words. Numeric-dense outputs (tables) legitimately have few
     # function words, so the ratio test is skipped when digits dominate.
-    lang = _output_language_problem(out)
+    lang = _output_language_problem(_strip_img_tags(out))
     if lang:
         problems.append(lang)
     if numeric < TRANSLATE_MIN_NUMERIC:
@@ -420,6 +493,39 @@ async def _load_parts(
             continue
         if n_ok and src_ok and att_ok and str(d.get("text") or "").strip():
             parts[int(d["idx"])] = str(d["text"])
+    return parts
+
+
+async def _load_all_parts(
+    effects, key: str, n_chunks: int, src_len: int
+) -> dict[int, list[str]]:
+    """Every banked translation of every chunk, ACROSS epochs, for this
+    source (same n, same src_len) — the best-of-bank pass chooses among them
+    per chunk. Epoch discipline still governs the normal assembly; this is
+    the last look before a retirement."""
+    import json
+
+    fc = await effects.read_file(_parts_path(key))
+    if not getattr(fc, "exists", False) or not fc.content.strip():
+        return {}
+    parts: dict[int, list[str]] = {}
+    for line in fc.content.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            d = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        try:
+            if int(d.get("n", -1)) != n_chunks or int(d.get("src_len", -1)) != src_len:
+                continue
+        except (TypeError, ValueError):
+            continue
+        text = str(d.get("text") or "")
+        if d.get("failed") or not text.strip():
+            continue
+        parts.setdefault(int(d["idx"]), []).append(text)
     return parts
 
 
@@ -748,10 +854,11 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
                 text = str(getattr(result, "text", "") or "")
                 if not text.strip():
                     raise RuntimeError("empty translation text")
-                if (
-                    len(_IMG_RE.findall(text)) == want_imgs
-                    and _numeric_preservation(text_src, text) >= _CHUNK_MIN_NUMERIC
-                ):
+                # Dropped image blocks are put back mechanically before the
+                # span is judged (see reinsert_missing_imgs); the retry is
+                # for what cannot be repaired — numbers and an echoed script.
+                text, _ = reinsert_missing_imgs(text_src, text)
+                if not _span_problem(text_src, text):
                     break
             return text
 
@@ -915,35 +1022,82 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
         gap_set = {g["idx"] for g in gaps}
         translated_idx = [i for i in range(n) if i not in gap_set]
 
-        # ASSEMBLY. Gap chunks ride through in the source language, marked.
-        # The gate judges the TRANSLATED text alone: gap chunks are source by
-        # construction and would only echo the source-language check.
-        out_md = "\n\n".join(
-            (
-                done[i]
-                if i not in gap_set
-                else "\n".join(
-                    (
-                        _GAP_OPEN.format(
-                            idx=i + 1,
-                            n=n,
-                            reason=next(g["reason"] for g in gaps if g["idx"] == i),
-                        ),
-                        chunks[i],
-                        _GAP_CLOSE,
+        # Parts banked before 2026-09-19 never had their dropped image blocks
+        # put back; do it here too, so an old bank passes on its own merits.
+        img_reinserted = 0
+        for i in translated_idx:
+            done[i], _added = reinsert_missing_imgs(chunks[i], done[i])
+            img_reinserted += _added
+
+        def _assemble(parts_map: dict[int, str]) -> tuple[str, dict]:
+            # ASSEMBLY. Gap chunks ride through in the source language,
+            # marked. The gate judges the TRANSLATED text alone: gap chunks
+            # are source by construction and would only echo the
+            # source-language check.
+            md = "\n\n".join(
+                (
+                    parts_map[i]
+                    if i not in gap_set
+                    else "\n".join(
+                        (
+                            _GAP_OPEN.format(
+                                idx=i + 1,
+                                n=n,
+                                reason=next(g["reason"] for g in gaps if g["idx"] == i),
+                            ),
+                            chunks[i],
+                            _GAP_CLOSE,
+                        )
                     )
                 )
+                for i in range(n)
             )
-            for i in range(n)
-        )
-        gate = translation_gate(
-            "\n\n".join(chunks[i] for i in translated_idx),
-            "\n\n".join(done[i] for i in translated_idx),
-        )
+            verdict = translation_gate(
+                "\n\n".join(chunks[i] for i in translated_idx),
+                "\n\n".join(parts_map[i] for i in translated_idx),
+            )
+            return md, verdict
+
+        out_md, gate = _assemble(done)
+        assembled_from = ""
+        if not gate["passed"] and attempts + 1 >= TRANSLATE_MAX_ATTEMPTS:
+            # BEST OF BANK before retiring. Every epoch's parts are still on
+            # disk, and a chunk that failed this pass often passed an earlier
+            # one (numbers, tags) or the reverse (language). Choose per chunk
+            # on (English, tags, numbers) and gate the result: measured
+            # 2026-09-19 on the 11 retired papers, this plus the image
+            # reinsertion passed 7 with no model call. Provenance is kept.
+            bank = await _load_all_parts(effects, key, n, len(src))
+            best: dict[int, str] = dict(done)
+            for i in translated_idx:
+                scored = []
+                for t in bank.get(i, []) + [done[i]]:
+                    t2, _ = reinsert_missing_imgs(chunks[i], t)
+                    scored.append(
+                        (
+                            not _output_language_problem(_strip_img_tags(t2)),
+                            len(_IMG_RE.findall(t2)) == len(_IMG_RE.findall(chunks[i])),
+                            _numeric_preservation(chunks[i], t2),
+                            t2,
+                        )
+                    )
+                scored.sort(key=lambda s: s[:3], reverse=True)
+                best[i] = scored[0][3]
+            alt_md, alt_gate = _assemble(best)
+            if alt_gate["passed"]:
+                done, out_md, gate = best, alt_md, alt_gate
+                assembled_from = "best_of_bank"
+                logger.info(
+                    "translate drain: %s assembled from the best banked parts", key
+                )
         too_gappy = len(gaps) / n > _GAP_MAX_FRACTION
         gap_quality = {"chunks": n, "gap_chunks": len(gaps), "gaps": gaps[:20]}
         if source_collapsed["words"] or source_collapsed["chars"]:
             gap_quality["source_collapsed"] = dict(source_collapsed)
+        if img_reinserted:
+            gap_quality["img_reinserted"] = img_reinserted
+        if assembled_from:
+            gap_quality["assembled_from"] = assembled_from
 
         rec["translate_attempts"] = attempts + 1  # an assembly is an attempt
         rec["translate_epoch"] = epoch

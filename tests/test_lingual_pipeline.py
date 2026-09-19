@@ -560,8 +560,10 @@ async def test_translate_drain_chunk_failure_banks_successes(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_translate_chunk_img_mismatch_gets_one_retry(monkeypatch):
-    """A chunk that drops its <img> tag is retried once at chunk level —
+async def test_translate_chunk_img_mismatch_is_repaired_without_a_retry(monkeypatch):
+    """A chunk that drops its <img> tag has the tag put back MECHANICALLY
+    before the span is judged (2026-09-19: every dropped tag measured sat in
+    an image-only div whose caption survived), so no retry is spent on it —
     the live failure mode was 7/9 tags surviving and burning both
     whole-paper attempts on single-chunk drops."""
     import json
@@ -612,7 +614,13 @@ async def test_translate_chunk_img_mismatch_gets_one_retry(monkeypatch):
 
     bank = await read_databank(fx)
     assert bank["p1"]["translated"] is True
-    assert len([c for c in fx.calls if c.method == "run_inference"]) == 2
+    # one call: the dropped tag was reinserted, not re-asked for
+    assert len([c for c in fx.calls if c.method == "run_inference"]) == 1
+    assert (
+        '<img src="../figures/p1/fig_00.png" />'
+        in fx._files["databank/markdown/p1.en.md"]
+    )
+    assert bank["p1"]["translation_quality"]["img_tags"] == [1, 1]
 
 
 # ── furniture-aware gate + relevance ordering ─────────────────────────
