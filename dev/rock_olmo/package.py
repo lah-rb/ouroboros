@@ -110,6 +110,7 @@ class Packer:
         self._spans: list[tuple[str, int, int]] = []
         self.pad_tokens = 0
         self.hard_cuts = 0
+        self.atomic_overflow = 0
 
     def _flush(self) -> None:
         if not self._ids:
@@ -129,14 +130,36 @@ class Packer:
         self._spans.append((doc_id, start, len(self._ids)))
 
     def add_document(
-        self, doc_id: str, paras: list[list[int]], *, mask_val: int = 1
+        self,
+        doc_id: str,
+        paras: list[list[int]],
+        *,
+        mask_val: int = 1,
+        atomic: bool = False,
     ) -> None:
-        """Paragraph-bounded append with EOS after the last paragraph."""
+        """Paragraph-bounded append with EOS after the last paragraph.
+
+        `atomic`: a document that fits in one block is never split across
+        two — the block is flushed first when the remainder is too small
+        (the `add_example` rule). A fill-in-the-middle document is only
+        useful whole: its middle sits at the END, after the sentinels, so
+        a middle trained in the next block has no prefix or suffix to
+        condition on. Measured on the 2026-09-19 smoke: 26 % of FIM
+        documents straddled a block boundary under the paragraph rule.
+        A document longer than a block falls back to the paragraph rule
+        and is counted in `atomic_overflow`."""
         pieces = list(paras)
         if pieces:
             pieces[-1] = pieces[-1] + [EOS_ID]
         else:
             pieces = [[EOS_ID]]
+        if atomic:
+            total = sum(len(p) for p in pieces)
+            if total <= self.seq:
+                if len(self._ids) + total > self.seq:
+                    self._flush()
+            else:
+                self.atomic_overflow += 1
         for ids in pieces:
             if len(ids) > self.seq:
                 self.hard_cuts += 1
@@ -198,6 +221,7 @@ def write_shards(
         "pad_tokens": packer.pad_tokens,
         "pad_fraction": round(packer.pad_tokens / max(1, n_written * packer.seq), 4),
         "hard_cuts": packer.hard_cuts,
+        "atomic_overflow": packer.atomic_overflow,
     }
 
 
@@ -245,6 +269,43 @@ def default_mix_stage1() -> dict:
     return {}
 
 
+ATOMIC_SOURCE_PREFIXES = ("fim/",)
+
+
+def _atomic(doc: dict) -> bool:
+    """Fill-in-the-middle documents are packed whole (see Packer.add_document)."""
+    return str(doc.get("source", "")).startswith(ATOMIC_SOURCE_PREFIXES)
+
+
+def first_fit_bins(lengths: list[int], seq: int, window: int = 256) -> list[list[int]]:
+    """Bin the atomic documents (indices into `lengths`) into blocks of `seq`
+    tokens: first fit over a window of open bins, the oldest bin closing when
+    none fits. Sequential atomic packing padded 15.5 % of the stage-0 pack
+    (two ~2k-token documents per block, the third never fitting); first fit
+    over 256 open bins brings that to a few percent. A document longer than
+    `seq` gets a bin of its own (the Packer hard-cuts it by paragraphs)."""
+    bins: list[list[int]] = []
+    open_bins: list[tuple[int, int]] = []  # (remaining, bin index), oldest first
+    for i, n in enumerate(lengths):
+        if n > seq:
+            bins.append([i])
+            continue
+        for k, (rem, b) in enumerate(open_bins):
+            if n <= rem:
+                bins[b].append(i)
+                if rem - n <= 0:
+                    open_bins.pop(k)
+                else:
+                    open_bins[k] = (rem - n, b)
+                break
+        else:
+            bins.append([i])
+            open_bins.append((seq - n, len(bins) - 1))
+            if len(open_bins) > window:
+                open_bins.pop(0)
+    return bins
+
+
 # ── commands ─────────────────────────────────────────────────────────
 def stage1(args) -> None:
     t0 = time.time()
@@ -278,8 +339,17 @@ def stage1(args) -> None:
         f"[{time.time()-t0:4.0f}s] packing {len(order)} document instances", flush=True
     )
     pk = Packer(args.seq)
+    # atomic (fim/*) documents are bin-packed first fit into whole blocks; the
+    # rest follow the paragraph rule. write_shards shuffles the blocks, so the
+    # two populations still interleave across the run.
+    atomic_idx = [i for i in order if _atomic(docs[i])]
+    for b in first_fit_bins([per_doc_tokens[i] for i in atomic_idx], args.seq):
+        for j in b:
+            pk.add_document(docs[atomic_idx[j]]["doc_id"], per_doc[atomic_idx[j]], atomic=True)
+        pk.finish()
     for i in order:
-        pk.add_document(docs[i]["doc_id"], per_doc[i])
+        if not _atomic(docs[i]):
+            pk.add_document(docs[i]["doc_id"], per_doc[i])
     pk.finish()
     os.makedirs(args.out, exist_ok=True)
     for old in glob.glob(os.path.join(args.out, "*.bin")) + glob.glob(
@@ -291,7 +361,7 @@ def stage1(args) -> None:
     for src, idxs in sorted(val_by_source.items()):
         vp = Packer(args.seq)
         for i in idxs:
-            vp.add_document(docs[i]["doc_id"], per_doc[i])
+            vp.add_document(docs[i]["doc_id"], per_doc[i], atomic=_atomic(docs[i]))
         vp.finish()
         val_stats[src] = write_shards(args.out, f"val-{src}", vp, rng, shuffle=False)
     lic = collections.Counter()

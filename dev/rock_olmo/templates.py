@@ -35,6 +35,7 @@ import hashlib
 from dataclasses import dataclass
 
 from interconnect import _derivation_phrase, _tol_phrase
+from probe_scoring import strongest_bands
 
 
 @dataclass(frozen=True)
@@ -206,6 +207,9 @@ def fields(fact) -> dict:
             if rel and len(rel) == len(bands)
             else bands[0]
         )
+        # by INTENSITY (top4/top3 above are by position) — the §22 XML records
+        f["strong4"] = _join(strongest_bands(bands, rel, 4), "cm-1")
+        f["strong3"] = _join(strongest_bands(bands, rel, 3), "cm-1")
         f["laser_nm"] = str(p.get("laser_nm") or "")
         f["locality"] = str(p.get("locality") or "")
     elif k == "ir_troughs":

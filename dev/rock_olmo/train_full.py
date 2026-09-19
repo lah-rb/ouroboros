@@ -227,7 +227,14 @@ def evaluate_only(model, evals: dict, batch: int = 1) -> dict:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--stage", type=int, choices=(1, 2), default=1)
+    ap.add_argument(
+        "--stage",
+        type=int,
+        choices=(0, 1, 2),
+        default=1,
+        help="0 = FIM primer (stage-1 schedule, recorded as 0), 1 = constant "
+        "after warmup, 2 = linear to zero",
+    )
     ap.add_argument(
         "--corpus",
         required=True,
@@ -261,6 +268,12 @@ def main() -> int:
         "--eval-only",
         action="store_true",
         help="per-source val loss of --init on --corpus, then stop",
+    )
+    ap.add_argument(
+        "--save-final-fp32",
+        action="store_true",
+        help="also save the fp32 endpoint as <out>/final_fp32 (the init for "
+        "the next stage; chaining from the bf16 `final` rounds the weights)",
     )
     args = ap.parse_args()
 
@@ -305,7 +318,8 @@ def main() -> int:
         }
     steps_per_epoch = max(1, len(train_ds) // args.accum)
     total = 20 if args.smoke else int(steps_per_epoch * args.epochs)
-    warm = max(5, int(total * args.warmup_frac)) if args.stage == 1 else 20
+    constant = args.stage in (0, 1)
+    warm = max(5, int(total * args.warmup_frac)) if constant else 20
     print(
         f"  blocks {len(train_ds):,} = {len(train_ds)*seq:,} tokens/epoch | {steps_per_epoch} steps/epoch x {args.epochs} = {total} steps | warmup {warm} | eval sets {list(evals)}",
         flush=True,
@@ -322,7 +336,7 @@ def main() -> int:
         per_device_eval_batch_size=1,
         gradient_accumulation_steps=args.accum,
         learning_rate=args.lr,
-        lr_scheduler_type="constant_with_warmup" if args.stage == 1 else "linear",
+        lr_scheduler_type="constant_with_warmup" if constant else "linear",
         warmup_steps=warm,
         weight_decay=0.1,
         adam_beta1=0.9,
@@ -360,6 +374,11 @@ def main() -> int:
     )
     trainer.train(resume_from_checkpoint=args.resume)
     final_eval = trainer.evaluate()
+    fp32_dir = ""
+    if args.save_final_fp32:
+        fp32_dir = os.path.join(args.out, "final_fp32")
+        model.save_pretrained(fp32_dir, safe_serialization=True)
+        AutoTokenizer.from_pretrained(args.init).save_pretrained(fp32_dir)
     # bf16 endpoint beside the fp32 checkpoints
     final_dir = os.path.join(args.out, "final")
     model.to(torch.bfloat16).save_pretrained(final_dir, safe_serialization=True)
@@ -385,6 +404,7 @@ def main() -> int:
         "history": tel.history,
         "git": _git(),
         "final_dir": final_dir,
+        "final_fp32_dir": fp32_dir,
     }
     json.dump(run, open(os.path.join(args.out, "run.json"), "w"), indent=1)
     print(

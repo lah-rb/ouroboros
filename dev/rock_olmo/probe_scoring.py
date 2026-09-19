@@ -36,6 +36,17 @@ def score(task: str, item: dict, gen: str) -> bool:
     return False
 
 
+def strongest_bands(bands: list, rel: list, n: int = 4) -> list[float]:
+    """The n strongest Raman bands BY INTENSITY (ties by position), positions
+    in cm-1. `bands_cm1` is position-sorted and `templates.top4` takes the first
+    four BY POSITION; the XML records of §22 rank by `rel`. Falls back to the
+    first n positions when the intensities are missing or misaligned."""
+    if not rel or len(rel) != len(bands):
+        return [float(b) for b in bands[:n]]
+    ranked = sorted(zip(bands, rel), key=lambda br: (-float(br[1]), float(br[0])))
+    return [float(b) for b, _ in ranked[:n]]
+
+
 def strongest_lines(groups: list[dict], n: int = 3) -> list[float]:
     """The n strongest LIBS lines (nm) across ionisation stages."""
     lines = sorted(

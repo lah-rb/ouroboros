@@ -8,7 +8,7 @@ import tempfile
 
 import numpy as np
 
-from package import Packer, expand_repeats, write_shards
+from package import Packer, expand_repeats, first_fit_bins, write_shards
 from packed_dataset import EOS_ID, PAD_ID, shards_for
 
 
@@ -40,6 +40,51 @@ def test_oversized_paragraph_is_hard_cut_and_counted():
     assert pk.hard_cuts == 1 and len(pk.blocks) == 3
     flat = [x for blk in pk.blocks for x in blk if x != PAD_ID]
     assert flat == _para(20) + [EOS_ID]
+
+
+def _blocks_holding(pk, doc_id):
+    return [i for i, spans in enumerate(pk.spans) if any(s[0] == doc_id for s in spans)]
+
+
+def test_atomic_document_never_straddles():
+    # default rule: 11 tokens in block 0, then b's first paragraph (4) fits
+    # and its second (4+EOS) does not -> b straddles two blocks
+    pk = Packer(seq=16)
+    pk.add_document("a", [_para(10)])
+    pk.add_document("b", [_para(4), _para(4)])
+    pk.finish()
+    assert _blocks_holding(pk, "b") == [0, 1]
+    # atomic: b (9 tokens with EOS) fits a block but not the remainder -> flush first
+    pk = Packer(seq=16)
+    pk.add_document("a", [_para(10)])
+    pk.add_document("b", [_para(4), _para(4)], atomic=True)
+    pk.finish()
+    assert _blocks_holding(pk, "b") == [1] and pk.atomic_overflow == 0
+    assert list(pk.blocks[1][:9]) == _para(4) + _para(4) + [EOS_ID]
+    # longer than a block: falls back to the paragraph rule, counted
+    pk = Packer(seq=16)
+    pk.add_document("c", [_para(10), _para(10)], atomic=True)
+    pk.finish()
+    assert pk.atomic_overflow == 1 and _blocks_holding(pk, "c") == [0, 1]
+
+
+def test_first_fit_bins_fill_blocks_and_isolate_oversize():
+    rng = random.Random(3)
+    lengths = [rng.randint(100, 2000) for _ in range(5000)] + [5000]
+    bins = first_fit_bins(lengths, 4096)
+    assert sorted(i for b in bins for i in b) == list(range(len(lengths)))
+    assert all(sum(lengths[i] for i in b) <= 4096 for b in bins if len(b) > 1)
+    assert [5000] in [[lengths[i] for i in b] for b in bins]  # oversize alone
+    used = sum(lengths[:-1])
+    pad = len([b for b in bins if lengths[b[0]] <= 4096]) * 4096 - used
+    assert pad / (used + pad) < 0.05  # sequential packing of the same sizes pads ~15 %
+    # every bin is packable as a whole by the Packer (atomic docs never straddle)
+    pk = Packer(seq=4096)
+    for b in bins[:50]:
+        for i in b:
+            pk.add_document(f"d{i}", [_para(lengths[i] - 1)], atomic=True)
+        pk.finish()
+    assert all(len(_blocks_holding(pk, f"d{i}")) == 1 for b in bins[:50] for i in b if lengths[i] <= 4096)
 
 
 def test_stage2_masks_prompt_and_trains_completion_plus_eos():

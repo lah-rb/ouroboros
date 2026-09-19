@@ -2125,3 +2125,104 @@ framing diversity, mirrored frames or initialisation (≤ 0.055 everywhere).
 test needs a frame without the formula. (iv) Carry paper prose explicitly in
 the next stream. Next direction per §20b and §21b: retrieval-in-the-loop for
 identification (candidates the model can SEE), forward recipe unchanged.
+
+## 22. v3: FIM primer → pile → XML fill anneal — pre-registration (2026-09-19)
+
+**Question.** (i) Can a 1B OLMo-2 acquire the fill-in-the-middle (FIM)
+sentinels its tokenizer reserves — `<|fim_prefix|>` 100258, `<|fim_middle|>`
+100259, `<|fim_suffix|>` 100260, embeddings untrained (row norm 0.88 against
+10.8 for common tokens) — at fine-tune scale, as CONDITIONING on the suffix
+and not merely the grammar? (ii) Does a FIM blank over an intensity-ranked XML
+record lift the numeric-key backward direction (bands → species) above the
+≤ 0.055 ceiling of §19–§21c, while the symbolic slots (formula ↔ species) hold
+≥ 0.90?
+
+**Why now.** §21c standing conclusions (i)–(iv). The single-key backward probe
+(`probe_backward_identity.py`, 2026-09-19): after the synth pilot's mirrored
+framings, formula → species reaches 0.97–0.99 on synth targets (controls 0.01,
+untouched 0.00) while structure → species (cell parameters, a numeric key)
+stays ≤ 0.011 and bands → species ≤ 0.055 — the wall is the approximate
+numeric key, not direction. GLM (Du 2022) avoids the reversal curse with blank
+infilling in pretraining; Bavarian 2022 shows FIM is a data transformation a
+next-token model learns from rearranged documents; OLMo 3 applies FIM in
+mid-training only. Operator decisions (2026-09-19): scraper paused for this
+pass; init from BASE; stage 0 = clean dolmino-mix-1124 (pes2o-heavy; OLMo 3's
+midtraining mix carries 5 % real science PDFs and ~50 % synthetic and is not
+used); stage 1 = v2's recipe with more tokens, copies ≤ 2 and a ~5 % FIM share
+on replay documents only; stage 2 = confined XML records (top-4 Raman bands and
+top-4 LIBS lines by intensity, species / formula / system attributes) with ONE
+FIM blank each, middle-only loss, numeric-key mitigations DEFERRED; stage-0
+budget gated on the running smoke.
+
+**Measured before the design (2026-09-19).** The FIM smoke (28.8 M tokens from
+`stage1/final`, lr 2e-5, accum 8, 877 steps; §22 smoke) shares its source
+shards with `replay.py`: 3,196 of its 24,383 documents are replay documents,
+40 of the 117 `val-replay` documents among them (text-prefix match) — the smoke
+endpoint is never used for a replay-bound claim, and the stage-0 driver excludes
+every replay document by dolmino id and first-2000-char hash. Under the
+paragraph packing rule ~26 % of the smoke's FIM documents straddled a block, so
+their middles trained without prefix or suffix (`Packer.add_document(atomic=)`
+fixes this; the smoke UNDER-states achievable recovery). The old recovery items
+(154 wiki sentences, world-knowledge blanks) are replaced by class-stratified
+items over all val documents: `copy_suffix` (the answer also occurs verbatim in
+the suffix only — the conditioning test), `copy_prefix` (control), `free`.
+
+**Design, frozen before the stage-0 launch.**
+
+| Stage | Item | Value |
+|---|---|---|
+| 0 | source | dolmino-mix-1124 shards pes2o-0025 + pes2o-0024, wiki-0001, dclm-0001 (ODC-BY); `fim_transform.py --clip 8000 --fim-rate 0.9 --exclude-jsonl v4/replay/replay.jsonl` |
+| 0 | mix | 55 / 25 / 20 pes2o / wiki / dclm by est. tokens; middles: short span 20–200 chars ½, uniform split ½; PSM ½ / SPM ½; `fim/*` documents packed atomically |
+| 0 | val | 120 val documents per subset written twice (plain + rearranged twin) → `val-plain` / `val-fim` on the same documents; remaining 1 % val documents held out of training and used only for recovery items; `val-paper_markdown` borrowed from v4 as the domain guard |
+| 0 | budgets | S ≈ 150 M tokens (~22 h) or L ≈ 300 M (~44 h), both packed in advance; GATE below |
+| 0 | training | `train_full.py --stage 0` (= stage-1 schedule: constant after 5 % warmup), lr 2e-5 (the smoke's rate), accum 8 = 32k tokens/step, one epoch, eval every 400 steps, `--save-final-fp32` |
+| 0 | gate | on `fim_smoke/final` with the NEW items (`copy_suffix` exact, PSM): ≥ 0.50 → S; 0.20–0.50 → L; < 0.20 → hold and report (options then: L at 3e-5, or no stage 0 with the grammar learned in stage 2 — confounded). Written before the number lands; the only branch in this section |
+| 1 | pile | `corpus_stage1.py --root v6`: accepted papers with markdown (`.en.md` preferred) incl. supplements, binder ×2 (v4 ×4), packs (val with their paper), reference facts ×4 distinct frames + 2 inverse (unchanged), hom / webmineral / mindat ×2 (v4 ×3); val fractions hom 3 % / webmineral 2 % / mindat 8 % / binder 10 % (nested in the 1 % split) |
+| 1 | replay | v4 `replay.jsonl` (20 M tokens, ≈ 15 %) with ⅓ of its TRAIN documents rearranged with the sentinels (`fim/<subset>`, ≈ 5 % of the stage); replay val rows never rearranged |
+| 1 | training | from `v3_stage0/final_fp32`; `--stage 1`, lr 4e-5, accum 16 = 65k tokens/step, 2 epochs; §19 halving rule: `val-replay` > 1.03 × its step-0 value at any eval → resume from the last checkpoint at 2e-5 (`--override-lr`), a second crossing recorded, not acted on |
+| 2 | records | one canonical record per species (`corpus_xml.py`): `<mineral species formula system>` + `<raman laser_nm><top>…</top><next>…</next>×3</raman>` (integers, strongest 4 by `rel`) + `<libs><line>…</line>×4</libs>` (2 dp, `strongest_lines`); attribute-order × block-order permutations ×4; variants `full` and `raman_only`; 1,689 trained species; the 96 `probe_species.json` species with facts (U) never rendered; held-out probe permutation `formula system species` never rendered |
+| 2 | blanks | one per record, `fim_wrap` PSM and SPM: species, identity (`species="…" formula="…"`), formula, raman (inner), libs (inner), top, system → 96 FIM examples + 6 plain appearances (3 seeded 8-record bundles × 2 variants, `[source: reference/xml]`) per species ≈ 19.7 M XML tokens |
+| 2 | mix | XML 65 % / carried paper prose 20 % / carried reference + other prose 7 % / replay 8 % ≈ 30 M tokens; FIM rows loss on middle + EOS only (`Packer.add_example`, verbatim tokenisation), plain bundles and carried prose full loss |
+| 2 | training | from `v3_stage1/final_fp32`; `--stage 2` (linear → 0, 20 warmup), lr 2e-5, accum 8, one epoch (~930 steps), eval every 40, mid checkpoint at step 470 |
+| all | probes | `probe_fim_recovery.py` (by class), `probe_recall.py` (seen 200 + probe set), `probe_backward_identity.py --max-new 60`, `probe_xml_fill.py` (kinds × variants × orders × groups; trained vs held-out permutation), base + every stage endpoint on identical items |
+
+**Predictions.**
+
+| # | Prediction | Falsified if |
+|---|---|---|
+| S0-1 | stage-0 endpoint `copy_suffix` exact ≥ 0.70 (S) / ≥ 0.60 (L); `free` ≥ 0.10; base and v2 stage 1 read 0.000 on every class | `copy_suffix` below the bar |
+| S0-2 | `val-plain` ≤ base + 1 %; `val-fim − val-plain` shrinks from step 0 and is non-increasing over the last 5 evals | either violated |
+| S0-3 | borrowed `val-paper_markdown` ≤ 1.626 × 1.02 (no domain change from clean text) | exceeded |
+| S0-4 | sentinel embedding row norms ≥ 3.0 (from 0.88) | any row < 3.0 |
+| S1-1 | `val-paper_markdown` ≤ 0.90 × its step-0 value (v2: −18.9 %) | > 0.90 × |
+| S1-2 | `val-replay` ≤ 1.03 × step 0, or the halving fired and was logged | exceeded without the rule firing |
+| S1-3 | `val-binder_markdown` ≤ step 0 + 10 % (v2: +36 % at ×4) | > +10 % |
+| S1-4 | recall probe frame on the seen 200: formula ≥ 0.35, bands ≥ 0.50 (v2 stage 1: 0.38 / 0.51) | either below |
+| S1-5 | `copy_suffix` at the stage-1 endpoint ≥ 0.5 × the stage-0 value (the 5 % replay share keeps the skill) | below |
+| P1 | `species` fill (formula visible) ≥ 0.90 lenient AND `formula` fill ≥ 0.90 (held-out permutation, trained species) | either < 0.90 |
+| P2 | `raman` fill ≥ 0.625 (v2 stage-2 bands) | < 0.625 |
+| P3 | `identity` fill on `full` records ≥ 0.10 lenient (chance ≈ 0.001); informal goal: any value > 0.055 | < 0.10 — FIM blanks do not lift the numeric backward direction |
+| P4 | `libs` fill ≥ 0.90 | < 0.90 |
+| P5 | vs the stage-1 endpoint's step-0 losses: `val-paper_markdown` ≤ +2 %, `val-replay` ≤ +3 % | either exceeded (then the step-470 checkpoint is the endpoint, recorded) |
+| P6 | U species `species` / `identity` fill within ±5 points of the stage-1 endpoint on the same items; `probe_recall --probe-set` formula / bands ≥ stage-1 endpoint − 5 points | either violated |
+| P7 | recall probe frame on the seen 200: formula ≥ 0.60, bands ≥ 0.60, crystal ≥ 0.45; `formula_to_species[probe]` strict ≥ 0.90 | any below |
+| P8 | trained − held-out permutation gap ≤ 0.15 on every kind; `val-xml_fim` reaches its floor within the first 40 % of steps | gap > 0.15 (schema collapse) |
+
+Expected NOT to work: `identity` on `raman_only` records whose strongest-4 key
+is shared within ±10 cm⁻¹ by another species (~11 %, §19); `top` completion
+above chance; anything about U beyond P6. If `copy_prefix` ≫ `copy_suffix` at
+the stage-0 endpoint the primer taught the grammar only, and P3 is reported as
+uninterpretable rather than as a falsification of FIM blanks.
+
+**Not tuned post hoc.** Rates, budgets, mixes, blank kinds, val floors and every
+bar are fixed here; the gate is the one branch and its rule precedes its input.
+A change means a new subsection.
+
+**Measured before freeze (to fill).** Gate reading on the smoke (by class, with
+base and `stage1/final` floors); base losses on the v6 val sets (`--eval-only`);
+realised shares from each `manifest.json`; contamination and straddle counts
+above; sentinel norms of the base.
+
+**Freeze (to fill).** sha256 of `v6/stage0/docs/fim_recovery_items.json`,
+`fim_manifest.json`, `v6/stage1/docs_manifest.json`, `v6/stage2/docs_manifest.json`,
+`probe_species.json`, each stage's `manifest.json`.

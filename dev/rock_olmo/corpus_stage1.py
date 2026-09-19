@@ -19,10 +19,18 @@ ORDER OF OPERATIONS, because the probe set depends on the text:
      as distinct framings, never copies).
 
 RECORD. {doc_id, source, text, license, provenance, val, max_repeats,
-tokens_est}. `val` is a seeded 1 % document-level split per source, the
-same in both stages. `max_repeats` is the copy count the packager may apply
-(binder 4, encyclopaedic sheets 3, everything else 1 — templated facts are
-already expanded into distinct frames).
+tokens_est}. `val` is a seeded document-level split per source, the same
+in both stages: 1 % by default, larger for the small sources
+(VAL_FRACTION_BY_SOURCE) so every val-<source> clears the ~20-block floor
+§19 found necessary (binder's val set was two documents, mindat's three
+blocks). The 1 % split is nested inside the larger ones, so the v4 val
+papers stay val. `max_repeats` is the copy count the packager may apply
+(binder and the encyclopaedic sheets 2, everything else 1 — §19: four
+binder copies memorised, "≤ 2 copies, more distinct documents"; templated
+facts are already expanded into distinct frames).
+
+ROOT. Default v4; `--root ~/corpora/rock-olmo-training/v6` renders the v3
+pass's stage-1 pile beside it (v4 artefacts stay byte-identical).
 
 Papers: review_status == "accepted" and a markdown path; the English
 translation (`md_en_path`) is preferred when it exists, matching the
@@ -52,23 +60,40 @@ import emit
 from figtext_inline import InlineStats, inline_figtext, read_sidecar
 
 CORPUS = os.path.expanduser("~/corpora/ouroboros-spectra")
-V4 = os.path.expanduser("~/corpora/rock-olmo-training/v4")
-DOCS = os.path.join(V4, "stage1", "docs")
+DEFAULT_ROOT = os.path.expanduser("~/corpora/rock-olmo-training/v4")
+ROOT = DEFAULT_ROOT
+V4 = ROOT  # historical name, kept for callers
+DOCS = os.path.join(ROOT, "stage1", "docs")
 SEED = 20260824
 VAL_FRACTION = 0.01
+# §19: a val set under ~20 blocks is noise; small sources draw more (nested
+# in the 1 % split, so a 1 % val document is val at every larger fraction)
+VAL_FRACTION_BY_SOURCE = {
+    "hom": 0.03,
+    "webmineral": 0.02,
+    "mindat_prose": 0.08,
+    "binder_markdown": 0.10,
+}
 N_REFERENCE_FRAMES = 4  # distinct statement frames per fact (the "4x")
 N_INVERSE_FRAMES = 2
 CHARS_PER_TOKEN = 3.5
 REPEATS = {
     "paper_markdown": 1,
     "supplement_markdown": 1,
-    "binder_markdown": 4,
+    "binder_markdown": 2,  # v4 ran 4; §19 measured memorisation (val −58 %)
     "pack_prose": 1,
     "reference": 1,
-    "hom": 3,
-    "webmineral": 3,
-    "mindat_prose": 3,
+    "hom": 2,  # v4 ran 3
+    "webmineral": 2,  # v4 ran 3
+    "mindat_prose": 2,  # v4 ran 3
 }
+
+
+def set_root(root: str) -> None:
+    """Point the renderer at another corpus root (v6 for the v3 pass)."""
+    global ROOT, V4, DOCS
+    ROOT = V4 = os.path.expanduser(root)
+    DOCS = os.path.join(ROOT, "stage1", "docs")
 LICENSE = {
     "hom": "restricted-hom",
     "webmineral": "restricted-webmineral",
@@ -78,10 +103,10 @@ LICENSE = {
 }
 
 
-def is_val(doc_id: str) -> bool:
+def is_val(doc_id: str, fraction: float = VAL_FRACTION) -> bool:
     return (
         int(hashlib.sha256(f"{SEED}|{doc_id}".encode()).hexdigest()[:8], 16) % 10_000
-        < VAL_FRACTION * 10_000
+        < fraction * 10_000
     )
 
 
@@ -103,7 +128,7 @@ def record(
         "text": text,
         "license": license_,
         "provenance": provenance,
-        "val": is_val(val_key or doc_id),
+        "val": is_val(val_key or doc_id, VAL_FRACTION_BY_SOURCE.get(source, VAL_FRACTION)),
         "max_repeats": REPEATS.get(source, 1),
         "tokens_est": int(len(text) / CHARS_PER_TOKEN),
     }
@@ -219,6 +244,8 @@ def render_papers(
 
 
 def render_packs() -> list[dict]:
+    """Pack prose splits WITH its paper (§19: 12 of 13 val papers had their
+    pack in train, so the paper val loss read the pack's paraphrase)."""
     out = []
     for r in emit.paper_records(set()):
         key = (r.get("provenance") or {}).get("paper_key", "")
@@ -229,6 +256,7 @@ def render_packs() -> list[dict]:
                 r["text"],
                 (r.get("provenance") or {}).get("license") or "unknown",
                 {"paper_key": key},
+                val_key=f"paper:{key}",
             )
         )
     return out
@@ -372,15 +400,23 @@ def main() -> int:
         default=[],
         help="sources to skip (hom webmineral mindat_prose packs)",
     )
+    ap.add_argument(
+        "--root",
+        default=DEFAULT_ROOT,
+        help="corpus root (v4 default; v6 for the v3 pass)",
+    )
     args = ap.parse_args()
+    set_root(args.root)
     t0 = time.time()
     manifest: dict = {
         "seed": SEED,
+        "root": ROOT,
         "val_fraction": VAL_FRACTION,
+        "val_fraction_by_source": VAL_FRACTION_BY_SOURCE,
         "repeats": REPEATS,
         "sources": {},
     }
-    mpath = os.path.join(V4, "stage1", "docs_manifest.json")
+    mpath = os.path.join(ROOT, "stage1", "docs_manifest.json")
     if os.path.exists(mpath):
         manifest = json.load(open(mpath))
 
