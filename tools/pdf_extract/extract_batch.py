@@ -86,6 +86,11 @@ from typing import Optional
 import fitz  # pymupdf
 from PIL import Image
 
+# The loop detector shared with ocr_loop_repair.py and the root tests lives
+# beside this file; the tool runs as a script, so put its own directory first.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import ocr_loop_lib as _loops  # noqa: E402
+
 # ── Verification constants ────────────────────────────────────────────
 
 # Numeric tokens: integers/decimals incl. signs and exponents. Single
@@ -627,6 +632,51 @@ class _GraphQLVisionRecognizer:
         self.last_vision_model = ""
         self._lock = threading.Lock()
         self._warmed = False
+        # LOOP GUARD counters (see _loop_guard); surfaced in the paper report.
+        self.loop_retries = 0
+        self.loop_collapses = 0
+
+    def _loop_guard(
+        self, text: str, data_uri: str, prompt: str, max_tokens: int, temperature: float
+    ) -> str:
+        """LOOP GUARD (2026-09-19). paddle's tokens never pass the server's
+        generation-time repetition guard — this path runs the model's own
+        create_chat_completion inside the vision instance — and the census
+        that follows only rejects runs over 200 words. Measured 2026-09-19:
+        972 of 4,345 extracted markdowns carried loops of 40–200 words that a
+        faithful translation reproduced and the text-side guard then killed,
+        on every model. So the guard sits HERE, per region: a looping answer
+        is asked again once, warmer (the tool's default 0.8 is not greedy, so
+        a second draw is a real second chance), and what still loops is
+        collapsed to the extraction marker with one unit kept. Markup repeats
+        (table cells, figure markers) are not loops — ocr_loop_lib.prose_unit."""
+        if not _loops.find_loops(text):
+            return text
+        warm = min(1.0, max(float(temperature), 0.6) + 0.2)
+        try:
+            text2, _served = _vision_completion(
+                self.base_url,
+                self.model,
+                data_uri,
+                prompt,
+                max_tokens,
+                warm,
+                strict=self.strict,
+            )
+        except Exception:  # noqa: BLE001 — the retry is best effort
+            text2 = ""
+        if text2 and not _loops.find_loops(text2):
+            self.loop_retries += 1
+            return text2
+
+        def _cost(t: str) -> int:
+            c = _loops.loop_cost(t)
+            return c["words"] + c["chars"]
+
+        cand = text2 if text2 and _cost(text2) < _cost(text) else text
+        collapsed, _ = _loops.collapse_loops(cand)
+        self.loop_collapses += 1
+        return collapsed
 
     def _one(self, item: dict, max_tokens: int, temperature: float) -> str:
         data_uri = _encode_png_data_uri(item["image"])
@@ -666,7 +716,7 @@ class _GraphQLVisionRecognizer:
             )
         if served:
             self.last_vision_model = served
-        return text
+        return self._loop_guard(text, data_uri, prompt, max_tokens, temperature)
 
     def predict(self, items, **kw):
         from concurrent.futures import ThreadPoolExecutor
@@ -1520,6 +1570,10 @@ def extract_paper(
         # until there is enough of it to calibrate against.
         report["table_token_leak"] = len(_TABLE_TOKEN_LEAK.findall(joined))
         report["largest_table_rows"] = _largest_table_rows(joined)
+        _rec = getattr(pipe, "_ouro_recognizer", None)
+        if _rec is not None:
+            report["loop_retries"] = int(getattr(_rec, "loop_retries", 0))
+            report["loop_collapses"] = int(getattr(_rec, "loop_collapses", 0))
         served = getattr(
             getattr(pipe, "_ouro_recognizer", None), "last_vision_model", ""
         )
