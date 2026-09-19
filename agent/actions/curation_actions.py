@@ -1213,6 +1213,29 @@ _CURATE_DOC_CACHE: dict[str, tuple[tuple, int, int]] = {}
 #: rounds per lane observed), so aging fires well inside one run without
 #: adding a sidecar write per round.
 _CURATE_STARVED: dict[str, int] = {}
+#: DEGENERATE POISON PILL (2026-09-19). A transport fault declines the round
+#: without burning the paper — right for a dropped connection, wrong for the
+#: engine's repetition guard: a document that makes THIS model orbit will
+#: make it orbit again, and the selector hands the same paper straight back.
+#: Measured overnight 2026-09-19 on the remote qwen3-next seat: 9 packs in
+#: the first five hours, then 3.5 hours of consecutive "cycle period" and
+#: "long-cycle" aborts on two documents (five in a row on one 3.3M-char
+#: thesis), each a 15–30-minute turn, while 70 repacks waited. So the faults
+#: are counted per paper for the life of the process: at the cap an ACCEPTED
+#: paper is booked pack_failed with the count and the last fault in
+#: pack_quality (it leaves the queue with provenance, like a gate failure),
+#: and an unreviewed one is skipped by this process's selector.
+_CURATE_DEGENERATE_FAULTS: dict[str, int] = {}
+_CURATE_MAX_DEGENERATE_FAULTS = 3
+_CURATE_SKIP: set[str] = set()
+_CURATE_DEGENERATE_MARKERS = ("cycle period", "long-cycle", "run-length", "degenerate")
+
+
+def _is_degenerate_fault(text: str) -> bool:
+    low = str(text).lower()
+    return any(m in low for m in _CURATE_DEGENERATE_MARKERS)
+
+
 # Papers booked TERMINAL by this process (denied, review_failed, packed,
 # pack_failed), keyed to WHEN. The claim set guards work in flight; once a
 # round books and releases, the only guard left is the on-disk status -- and a
@@ -1608,7 +1631,7 @@ async def select_curate_paper(
     )
     lane_seat = _lane_seat_tokens(effects)
     for key, rec in databank.items():
-        if key in _CURATE_CLAIMS or _recently_booked(key):
+        if key in _CURATE_CLAIMS or _recently_booked(key) or key in _CURATE_SKIP:
             continue
         if not _curation_pending(rec):
             continue
@@ -1803,6 +1826,38 @@ async def _book_curate_oversize(effects, paper_key: str, reason: str) -> None:
         logger.exception("failed to book curate_oversize for %s", paper_key)
     _CURATE_DOC_CACHE.pop(paper_key, None)
     _CURATE_STARVED.pop(paper_key, None)
+
+
+async def _book_pack_failed_degenerate(effects, rec: dict, fault: str, n: int) -> None:
+    """An accepted paper that made the model degenerate ``n`` times leaves the
+    pack queue as pack_failed, with the count and the last fault in
+    pack_quality — the same terminal state a failed pack gate books, so the
+    pack_failed pool stays the one place to look. Papers side (pack_status is
+    papers-owned), FULL merged row, never a stub."""
+    from datetime import datetime, timezone
+
+    from agent.actions.scholarly_actions import append_records
+
+    key = str(rec.get("paper_key") or "")
+    try:
+        row = dict(rec)
+        row["pack_status"] = "pack_failed"
+        row["pack_quality"] = {
+            **(rec.get("pack_quality") or {}),
+            "degenerate_faults": n,
+            "last_fault": fault[:200],
+            "model": _provenance_model(effects),
+        }
+        row["updated_at"] = datetime.now(timezone.utc).isoformat()
+        await append_records(effects, [row])
+        logger.warning(
+            "curate drain: %s made the model degenerate %d times — booked pack_failed",
+            key,
+            n,
+        )
+    except Exception:  # noqa: BLE001 — a booking failure must not break the lane
+        logger.exception("failed to book pack_failed (degenerate) for %s", key)
+    _CURATE_STARVED.pop(key, None)
 
 
 _REFUSAL_TOKENS_RE = re.compile(
@@ -2445,6 +2500,25 @@ async def action_curate_drain_batch(step_input):
                         f"({str(e)[:160]}); review by hand",
                     )
                     continue
+                if _is_degenerate_fault(str(e)):
+                    # See _CURATE_DEGENERATE_FAULTS: the same paper will orbit
+                    # the same model again; count it, and at the cap take it
+                    # out of this queue instead of handing it straight back.
+                    n = _CURATE_DEGENERATE_FAULTS.get(key, 0) + 1
+                    _CURATE_DEGENERATE_FAULTS[key] = n
+                    if n >= _CURATE_MAX_DEGENERATE_FAULTS:
+                        if rec.get("review_status") == "accepted":
+                            await _book_pack_failed_degenerate(effects, rec, str(e), n)
+                        else:
+                            _CURATE_SKIP.add(key)
+                            logger.warning(
+                                "curate drain: %s made the model degenerate %d times — "
+                                "skipped for this process",
+                                key,
+                                n,
+                            )
+                        _CURATE_DOC_CACHE.pop(key, None)
+                        continue
                 logger.warning("curate drain transport fault on %s: %s", key, e)
                 return _summary_out(outcomes, f"transport fault ({str(e)[:120]})")
             except Exception:  # noqa: BLE001 — code faults must not burn papers
