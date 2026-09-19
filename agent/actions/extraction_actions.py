@@ -375,7 +375,10 @@ def latin_language_vote(text: str) -> tuple[str, float]:
 
 
 def collapse_degenerate_runs(
-    text: str, limit: int = 200, max_period: int = 24
+    text: str,
+    limit: int = 200,
+    max_period: int = 24,
+    unit_filter=None,
 ) -> tuple[str, int]:
     """Collapse back-to-back periodic word repeats longer than ``limit``
     into one unit plus an explicit marker. Returns (text, words_collapsed).
@@ -388,6 +391,14 @@ def collapse_degenerate_runs(
     loop marks where the model read NOTHING — the marker says so instead
     of the junk pretending to be content. Mirrored in
     tools/pdf_extract/extract_batch.py (separate venvs — keep in sync).
+
+    ``unit_filter(unit_text) -> bool`` keeps only the runs it accepts. At the
+    200-word cut nothing legitimate is periodic, so extraction passes none;
+    a caller collapsing SHORTER runs must exclude markup — measured over the
+    2026-09-19 translation queue at limit 40: 3,249 of 4,664 runs were the
+    repeated cell attribute ``style='text-align: center; …'`` of ordinary
+    HTML tables, 81 the figure-removed marker, and the 1,227 prose-like runs
+    were OCR loops almost without exception.
     """
     import re as _re
 
@@ -405,7 +416,11 @@ def collapse_degenerate_runs(
             else:
                 if run + period > limit:
                     # Keep the first unit; junk = the repeats after it.
-                    spans.append((i - run, i, period))
+                    start = i - run
+                    if unit_filter is None or unit_filter(
+                        " ".join(words[start : start + period])
+                    ):
+                        spans.append((start, i, period))
                 run = 0
     if not spans:
         return text, 0

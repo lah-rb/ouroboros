@@ -105,6 +105,26 @@ _MAX_REPEAT_WORDS = 200
 #: Recorded failures a chunk may collect (across rounds, within one epoch)
 #: before it stops being retried whole and waits for the salvage pass.
 _CHUNK_MAX_FAILURES = 3
+#: SOURCE-LOOP COLLAPSE (2026-09-19). A chunk whose SOURCE carries a degenerate
+#: OCR run — one phrase dozens of times back to back — is translated faithfully
+#: and then killed by the engine's repetition guard (12 exact repeats of a
+#: short period, ~50–60 words), on every model: muse's degenerate aborts sat
+#: on sources with a median distinct-n-gram ratio of 0.30 vs 0.89 for banked
+#: chunks, and the 27B reproduced both of its failures on such sources. The
+#: OCR census leaves runs up to 200 words in the text by design (whole-
+#: document ruin was the question there). So collapse PROSE runs longer than
+#: this many words into the extraction marker before prompting, and judge
+#: the paper against the collapsed source. Chunk boundaries and the parts
+#: bank stay bound to the ORIGINAL text. Markup units are never collapsed:
+#: measured over the 2026-09-19 queue, 3,249 of 4,664 runs over 40 words were
+#: the repeated cell attribute of ordinary HTML tables and 81 the
+#: figure-removed marker.
+_SOURCE_LOOP_WORDS = 40
+#: Scripts without spaces (CJK) are invisible to the word census; a repeated
+#: substring of at least this many characters, at least this many times back
+#: to back, is the same loop in another alphabet.
+_SOURCE_LOOP_CHARS = 6
+_SOURCE_LOOP_CHAR_REPS = 8
 #: The salvage pass re-cuts a failing chunk into this many smaller pieces.
 _SALVAGE_PIECES = 3
 #: A paper whose gaps would exceed this share of its chunks is retired
@@ -138,6 +158,51 @@ def _budget_chunks() -> int:
         return max(0, int(raw)) if raw else 8
     except ValueError:
         return 8
+
+
+def _prose_unit(unit: str) -> bool:
+    """A repeated unit worth collapsing: it carries letters and no markup.
+    Table cells and the figure-removed marker repeat legitimately."""
+    if "<" in unit or ">" in unit or unit.count("|") >= 2:
+        return False
+    return re.search(r"[^\W\d_]{2,}", unit) is not None
+
+
+_CHAR_LOOP_RE = re.compile(
+    r"(.{%d,80}?)(?:\1){%d,}" % (_SOURCE_LOOP_CHARS, _SOURCE_LOOP_CHAR_REPS - 1),
+    re.S,
+)
+
+
+def collapse_source_loops(text: str) -> tuple[str, dict]:
+    """Collapse degenerate OCR loops in a SOURCE chunk before translation.
+
+    Two passes: the extraction census for word-periodic prose runs over
+    ``_SOURCE_LOOP_WORDS`` (markup excluded via ``_prose_unit``), then a
+    character-periodic pass for the runs the word census cannot see (CJK).
+    Returns (text, {"words": n, "chars": n}) — what was cut, for provenance.
+    """
+    from agent.actions.extraction_actions import collapse_degenerate_runs
+
+    out, words = collapse_degenerate_runs(
+        text, limit=_SOURCE_LOOP_WORDS, unit_filter=_prose_unit
+    )
+    chars = 0
+
+    def _sub(m: re.Match) -> str:
+        nonlocal chars
+        unit = m.group(1)
+        if not _prose_unit(unit):
+            return m.group(0)
+        reps = len(m.group(0)) // len(unit)
+        chars += len(m.group(0)) - len(unit)
+        return unit + (
+            f"*[degenerate OCR run collapsed: {reps - 1} repeats of "
+            f"{unit[:40]!r} — content at this location was not read]*"
+        )
+
+    out = _CHAR_LOOP_RE.sub(_sub, out)
+    return out, {"words": words, "chars": chars}
 
 
 def chunk_markdown(md: str, target_chars: int = _CHUNK_CHARS) -> list[str]:
@@ -553,6 +618,16 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
         return _decline(f"markdown unreadable: {md_rel}")
     src = fc.content
     chunks = chunk_markdown(src)
+    # SOURCE-LOOP COLLAPSE (see _SOURCE_LOOP_WORDS): the prompt, the span
+    # checks, the salvage pieces and the paper gate all see the collapsed
+    # chunk; n and len(src) — the parts-file binding — stay on the original.
+    source_collapsed = {"words": 0, "chars": 0}
+    for _i, _c in enumerate(chunks):
+        _c2, _rep = collapse_source_loops(_c)
+        if _rep["words"] or _rep["chars"]:
+            chunks[_i] = _c2
+            source_collapsed["words"] += _rep["words"]
+            source_collapsed["chars"] += _rep["chars"]
 
     _TRANSLATE_CLAIMS.add(key)
     try:
@@ -867,6 +942,8 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
         )
         too_gappy = len(gaps) / n > _GAP_MAX_FRACTION
         gap_quality = {"chunks": n, "gap_chunks": len(gaps), "gaps": gaps[:20]}
+        if source_collapsed["words"] or source_collapsed["chars"]:
+            gap_quality["source_collapsed"] = dict(source_collapsed)
 
         rec["translate_attempts"] = attempts + 1  # an assembly is an attempt
         rec["translate_epoch"] = epoch
