@@ -2178,12 +2178,12 @@ the suffix only — the conditioning test), `copy_prefix` (control), `free`.
 | 0 | training | `train_full.py --stage 0` (= stage-1 schedule: constant after 5 % warmup), lr 2e-5 (the smoke's rate), accum 8 = 32k tokens/step, one epoch, eval every 400 steps, `--save-final-fp32` |
 | 0 | gate | on `fim_smoke/final` with the NEW items (`copy_suffix` exact, PSM): ≥ 0.50 → S; 0.20–0.50 → L; < 0.20 → hold and report (options then: L at 3e-5, or no stage 0 with the grammar learned in stage 2 — confounded). Written before the number lands; the only branch in this section |
 | 1 | pile | `corpus_stage1.py --root v6`: accepted papers with markdown (`.en.md` preferred) incl. supplements, binder ×2 (v4 ×4), packs (val with their paper), reference facts ×4 distinct frames + 2 inverse (unchanged), hom / webmineral / mindat ×2 (v4 ×3); val fractions hom 3 % / webmineral 2 % / mindat 8 % / binder 10 % (nested in the 1 % split) |
-| 1 | replay | v4 `replay.jsonl` (20 M tokens, ≈ 15 %) with ⅓ of its TRAIN documents rearranged with the sentinels (`fim/<subset>`, ≈ 5 % of the stage); replay val rows never rearranged |
+| 1 | replay | v4 `replay.jsonl` (20 M tokens, ≈ 15 %) with ⅓ of its TRAIN documents rearranged with the sentinels (`fim/<subset>`; planned ≈ 5 % of the stage, realised 2.8 % — the rearranged copies are clipped to 8,000 chars); replay val rows never rearranged; `val-fim` borrowed from the stage-0 S pack (dolmino documents disjoint from replay) so the sentinel loss is read through stages 1 and 2 |
 | 1 | training | from `v3_stage0/final_fp32`; `--stage 1`, lr 4e-5, accum 16 = 65k tokens/step, 2 epochs; §19 halving rule: `val-replay` > 1.03 × its step-0 value at any eval → resume from the last checkpoint at 2e-5 (`--override-lr`), a second crossing recorded, not acted on |
 | 2 | records | one canonical record per species (`corpus_xml.py`): `<mineral species formula system>` + `<raman laser_nm><top>…</top><next>…</next>×3</raman>` (integers, strongest 4 by `rel`) + `<libs><line>…</line>×4</libs>` (2 dp, `strongest_lines`); attribute-order × block-order permutations ×4; variants `full` and `raman_only`; 1,689 trained species; the 96 `probe_species.json` species with facts (U) never rendered; held-out probe permutation `formula system species` never rendered |
 | 2 | blanks | one per record, `fim_wrap` PSM and SPM: species, identity (`species="…" formula="…"`), formula, raman (inner), libs (inner), top, system → 96 FIM examples + 6 plain appearances (3 seeded 8-record bundles × 2 variants, `[source: reference/xml]`) per species ≈ 19.7 M XML tokens |
 | 2 | mix | XML 65 % / carried paper prose 20 % / carried reference + other prose 7 % / replay 8 % ≈ 30 M tokens; FIM rows loss on middle + EOS only (`Packer.add_example`, verbatim tokenisation), plain bundles and carried prose full loss |
-| 2 | training | from `v3_stage1/final_fp32`; `--stage 2` (linear → 0, 20 warmup), lr 2e-5, accum 8, one epoch (~930 steps), eval every 40, mid checkpoint at step 470 |
+| 2 | training | from `v3_stage1/final_fp32`; `--stage 2` (linear → 0, 20 warmup), lr 2e-5, accum 8, one epoch (818 steps over the packed 6,545 blocks), eval every 40, mid checkpoint at the half-epoch step 410 |
 | all | probes | `probe_fim_recovery.py` (by class), `probe_recall.py` (seen 200 + probe set), `probe_backward_identity.py --max-new 60`, `probe_xml_fill.py` (kinds × variants × orders × groups; trained vs held-out permutation), base + every stage endpoint on identical items |
 
 **Predictions.**
@@ -2218,11 +2218,46 @@ uninterpretable rather than as a falsification of FIM blanks.
 bar are fixed here; the gate is the one branch and its rule precedes its input.
 A change means a new subsection.
 
-**Measured before freeze (to fill).** Gate reading on the smoke (by class, with
-base and `stage1/final` floors); base losses on the v6 val sets (`--eval-only`);
-realised shares from each `manifest.json`; contamination and straddle counts
-above; sentinel norms of the base.
+**Measured before freeze (2026-09-19 21:50Z; the smoke still running).**
+Contamination 3,196 / 40 and straddle 5,539 of 21,663 FIM train documents
+(25.6 %) as above. Stage-0 documents (`fim_manifest.json`): pes2o 79,988
+rearranged + 9,040 plain (176.0 M est. tokens, two shards), wiki 122,837 +
+13,756 (80.0 M), dclm 57,704 + 6,745 (64.0 M); 7,819 replay documents
+excluded (2,578 / 2,527 / 2,714); 120 val documents written per subset (735 /
+1,316 / 507 further val documents held out of training for the items);
+recovery items 402 = 134 per class, 67 numeric each. Packs: L 69,626 blocks =
+285,188,096 tokens, pad 1.56 % (shares fim/pes2o .489, fim/wiki .235,
+fim/dclm .175, plain .055 / .026 / .020); S 37,191 blocks = 152,334,336
+tokens, pad 1.54 % (same shares ±0.01); val-fim 108 blocks, val-plain 96,
+borrowed val-paper_markdown 114. Stage-1 pile (`corpus_stage1 --root v6`):
+2,256 papers (359 English translations) + 406 supplements + 23 binder, 139,887
+documents; probe species re-verified against the pile, none swapped. Pack:
+33,804 blocks = 138,461,184 tokens/epoch (pad 7.0 %; v2: 140.3 M); weighted
+shares paper 53.3 %, webmineral 10.9 %, reference 9.4 %, replay plain 10.2 %,
+replay-FIM 2.8 %, hom 5.3 %, supplement 4.4 %, mindat 1.5 %, binder 1.2 %,
+pack 1.0 %; val blocks paper 137, reference 31, replay 63, binder 38, hom 29,
+webmineral 34, mindat 22, supplement 6, pack 3 (the last two reported only),
+fim 108 (borrowed). Two epochs = 4,224 steps at 65k tokens/step. Stage-2
+render (`corpus_xml`): 1,685 trained species (19 val), 100 untouched;
+161,704 FIM rows (species / identity / formula / raman / top 26,960 each,
+libs 13,480, system 13,424), 1,272 bundles. Pack (`package_xml`, middle
+loss): 6,545 blocks = 25,894,534 real tokens, pad 3.4 %, 0 rows dropped;
+shares xml_fim 61.5 % + xml_plain 3.6 % = 65.0 %, paper 20.0 % (178 papers),
+other 7.0 %, replay 8.0 %; val xml_fim 45 blocks, xml_plain 3, borrowed
+paper_markdown / replay / reference / fim. Still to fill at the gate: the
+smoke's by-class reading with the base and `stage1/final` floors; base losses
+on the v6 val sets; base sentinel norms.
 
-**Freeze (to fill).** sha256 of `v6/stage0/docs/fim_recovery_items.json`,
-`fim_manifest.json`, `v6/stage1/docs_manifest.json`, `v6/stage2/docs_manifest.json`,
-`probe_species.json`, each stage's `manifest.json`.
+**Freeze (2026-09-19 21:50Z; sha256 first 16).** `fim_recovery_items.json`
+7581e2756b312012; `fim_manifest.json` 3b302930d9b401a3; `packed_L/manifest.json`
+d7f08662e7c86904; `packed_S/manifest.json` 28a29b23cf8a6fdf;
+`stage1/docs_manifest.json` bedd6a8d7ac6ac16; `stage1/manifest.json`
+a6c6850f64ea95bd; `stage2/docs_manifest.json` c5782b8a95b33ca9;
+`probe_species.json` f869a580539a0305. The probe set is re-ranked by the
+standing rule (the hundred least-exposed candidates over the rendered pile,
+§19): against the v6 pile 43 of §19–§21's 100 species were replaced (they are
+now ordinary trained species), so U in this section is THIS file's list, not
+§21's; every within-pass comparison (base, s0, s1, s2) uses the same list.
+`stage2/manifest.json` b1d80755f0ce7b51. Logistics, not design: stage
+0 evaluates every 400 steps and writes 120 val documents per subset because
+an evaluation over all 2,543 val documents would cost minutes per pass.
