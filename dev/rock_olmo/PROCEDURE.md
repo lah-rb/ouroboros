@@ -2324,6 +2324,19 @@ stage 1) at two rates (3e-5, 2e-5) reached one ceiling; sentinel embedding rows
 unmoved (0.88). Verdicts as of the stop: S0-1 ✗, S0-2 ✗ (absolute) / ✓ (gap),
 S0-3 ✗ (+4.8 %), S0-4 ✗. Checkpoints 1,000 and 1,500 kept.
 
+**Anneal of checkpoint-1500 (run 2026-09-20 15:46–17:38Z, `v3_stage0_anneal`).**
+348 steps, linear 3e-5 → 0 from a fresh optimizer. Losses step 0 → 160 → 320
+(end): fim 2.252 → 2.249 → 2.248, plain 2.242 → 2.238 → 2.238, paper 1.709 →
+1.708 → 1.711. The decay recovered NOTHING of the drift (−0.004 on fim and
+plain, +0.002 on paper), so the "re-warming bump that re-decay repairs"
+reading written above is falsified for this run: the shift is a genuine
+change of what the model predicts on plain text (the 90 % fill tax and the
+dolmino-only distribution), not a transient of the constant rate. The run
+ended in the pre-fix trainer's tokenizer load after writing `final_fp32`
+(weights + config; tokenizer copied in afterwards; no bf16 `final`, no
+`run.json` — the history is the log). This endpoint is the §22b fallback
+init for stage 1.
+
 ### 22b. The untried lever: sentinel embedding scale — pre-registration (2026-09-20 08:20Z)
 
 **Observation (measured on the base weights).** Embeddings are untied. Trained
