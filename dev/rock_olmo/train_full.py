@@ -207,7 +207,7 @@ def evaluate_only(model, evals: dict, batch: int = 1) -> dict:
                         ),
                     ).logits
                 shift_logits = logits[:, :-1, :].float()
-                shift_labels = labels[:, 1:]
+                shift_labels = labels[:, 1:].to(shift_logits.device)  # lm_head may sit on either card
                 loss = torch.nn.functional.cross_entropy(
                     shift_logits.reshape(-1, shift_logits.size(-1)),
                     shift_labels.reshape(-1),

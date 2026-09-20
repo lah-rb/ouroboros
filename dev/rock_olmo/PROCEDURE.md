@@ -2244,9 +2244,64 @@ libs 13,480, system 13,424), 1,272 bundles. Pack (`package_xml`, middle
 loss): 6,545 blocks = 25,894,534 real tokens, pad 3.4 %, 0 rows dropped;
 shares xml_fim 61.5 % + xml_plain 3.6 % = 65.0 %, paper 20.0 % (178 papers),
 other 7.0 %, replay 8.0 %; val xml_fim 45 blocks, xml_plain 3, borrowed
-paper_markdown / replay / reference / fim. Still to fill at the gate: the
-smoke's by-class reading with the base and `stage1/final` floors; base losses
-on the v6 val sets; base sentinel norms.
+paper_markdown / replay / reference / fim.
+
+**Gate reading (2026-09-19 23:06Z).** Smoke: 877 steps, 28,737,536 tokens,
+6.86 M tok/h; val-fim 2.361 → 2.238 (−5.2 %, flat over the last ~200 steps),
+val-plain 2.241 → 2.209 (−1.4 %). New items (PSM), exact by class:
+
+| model | copy_suffix | copy_prefix | free | all | numeric |
+|---|---|---|---|---|---|
+| base | 0.000 | 0.007 | 0.000 | 0.002 | 0.005 |
+| v2 stage 1 (`stage1/final`) | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 |
+| smoke (`fim_smoke/final`) | **0.187** | 0.239 | 0.052 | 0.159 | 0.154 |
+
+`copy_suffix` 0.187 < 0.20 → the HOLD branch (n = 134, s.e. ≈ 0.034; one
+item below the L band). Sentinel embedding rows: base 0.897 / 0.879 / 0.884,
+smoke 0.900 / 0.881 / 0.887 — they did not move. Adam bounds a coordinate's
+drift by lr × steps (2e-5 × 877 ≈ 0.018), and with sign-noisy gradients the
+rows random-walk by ~0.03; the acquired infilling therefore lives in the
+transformer layers reading the untrained-but-distinct sentinel vectors, and
+S0-4 (norms ≥ 3.0) is expected to FAIL as written at any fine-tune rate. It is
+kept as stated (a falsified mechanism prediction is a result). The operator
+decides the branch; the branch taken is recorded in §22a below, not edited
+into the design table.
+
+### 22a. Stage-0 branch taken: L at 3e-5 with a check-in schedule (2026-09-19 23:25Z)
+
+Operator ruling on the HOLD reading: run the L pack at lr 3e-5 (the pre-listed
+HOLD option) and pre-register a CHECK-IN SCHEDULE with expected results, so a
+run that gains nothing over the smoke is caught early instead of after 44 h.
+
+Second reading, taken before the ruling: the same 402 items in SPM order
+(suffix, prefix, middle — the middle follows the prefix directly) on the smoke
+endpoint read `copy_suffix` **0.515**, `copy_prefix` 0.522, `free` 0.134, all
+0.391 (base ≈ 0 in both orders). The suffix conditioning exists after 28.7 M
+tokens; PSM — where the model must leave the suffix's end and continue the
+prefix — is the harder order, and the gate stays defined on PSM.
+
+Design as the §22 table with two changes: lr **3e-5** (constant after the 5 %
+warmup = 435 steps), and `packed_L` (285,188,096 tokens, 69,626 blocks, 8,703
+steps at 32k tokens/step, ≈ 42 h at the smoke's 6.86 M tok/h). Checkpoints
+every 500 steps (two kept); each new checkpoint is probed on CPU beside the
+training (PSM and SPM, all 402 items; `checkin_stage0.sh`, ~10 min) and the
+reading appended to `~/tmp/analysis/v3/stage0_checkins/checkins.jsonl`.
+
+| check-in (step ≈ tokens) | PSM `copy_suffix` ≥ | SPM `copy_suffix` ≥ | note |
+|---|---|---|---|
+| 1,000 (33 M ≈ the smoke's budget) | 0.20 | 0.50 | ≥ the smoke, on the un-straddled pack at the higher rate |
+| 2,000 (66 M) | 0.30 | 0.55 | |
+| 4,000 (131 M) | 0.40 | 0.60 | |
+| 6,000 (197 M) | 0.50 | 0.65 | |
+| 8,703 endpoint (285 M) | 0.60 (S0-1) | 0.65 | `free` ≥ 0.10 |
+
+STOP RULE (written before the run): PSM `copy_suffix` rises by < 0.05 across
+two consecutive check-ins while still < 0.50, or reads below the smoke's 0.187
+at any check-in from step 1,000 on → stop the run, report, decide (the smoke's
+plateau repeated at a higher rate would mean the budget is not the lever).
+val-fim (every 400 steps) is expected non-increasing; a rise of > 1 % held over
+three evaluations is a stop-and-look. A check-in below its bar but above the
+stop rule continues and is reported as a miss against this table.
 
 **Freeze (2026-09-19 21:50Z; sha256 first 16).** `fim_recovery_items.json`
 7581e2756b312012; `fim_manifest.json` 3b302930d9b401a3; `packed_L/manifest.json`

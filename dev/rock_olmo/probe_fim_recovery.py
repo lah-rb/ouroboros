@@ -58,12 +58,19 @@ def _tally(rows: list[tuple[dict, bool, bool]]) -> dict:
     }
 
 
+BASE_TOKENIZER = os.path.expanduser("~/models/OLMo-2-0425-1B")
+
+
 def run(name: str, path: str, items: list[dict], device: str, batch: int, max_new: int, order: str) -> dict:
-    tok = AutoTokenizer.from_pretrained(path)
+    try:
+        tok = AutoTokenizer.from_pretrained(path)
+    except (OSError, ValueError):
+        tok = AutoTokenizer.from_pretrained(BASE_TOKENIZER)  # Trainer checkpoints carry no tokenizer
     tok.padding_side = "left"
     if tok.pad_token_id is None:
         tok.pad_token = tok.eos_token
-    model = AutoModelForCausalLM.from_pretrained(path, dtype=torch.bfloat16).to(device).eval()
+    dtype = torch.float32 if device == "cpu" else torch.bfloat16  # the check-ins run on CPU beside training
+    model = AutoModelForCausalLM.from_pretrained(path, dtype=dtype).to(device).eval()
     prompts = [fim_wrap(it["prefix"], "", it["suffix"], order) for it in items]
     gens: list[str] = []
     t0 = time.time()
