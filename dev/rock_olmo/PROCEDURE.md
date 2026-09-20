@@ -2392,6 +2392,33 @@ by the token's amplitude or by something the pass cannot reach.
 **Not tuned post hoc.** The bar, the matched design and the two branches are
 fixed here before the run.
 
+**§22b result (run 2026-09-20 17:38–20:04Z, `v3_stage0_ab`, 500 steps, 16.4 M
+tokens; probe on checkpoint-500, CPU fp32, 402 items).**
+
+| | §22a step 500 (base init) | A/B (scaled sentinels) | verdict |
+|---|---|---|---|
+| PSM copy_suffix / copy_prefix / free | 0.157 / 0.246 / 0.022 | 0.179 / 0.284 / 0.030 | **B1 ✗** (bar 0.26; +0.022 on s.e. 0.035) |
+| SPM copy_suffix / copy_prefix / free | 0.545 / 0.590 / 0.187 | 0.522 / 0.552 / 0.179 | B2 ✓ (within ±0.05) |
+| step 0: fim / plain / paper | 2.310 / 2.195 / 1.626 | 2.322 / 2.195 / 1.626 | louder unknown tokens cost 0.012 at step 0 |
+| step 400: fim / plain / paper | 2.239 / 2.215 / 1.664 | 2.239 / 2.214 / 1.682 | B3 ✗ (fim equal, not lower; plain within ±0.01) |
+| step 500 (A/B end): fim / plain / paper | — | 2.241 / 2.223 / 1.695 | |
+| sentinel row norms after training | 0.88 (unmoved) | 10.82 (unmoved) | B4 ✓ |
+
+The surgery took (the rows are exactly as loud as trained tokens and, as
+predicted, still cannot move) and made no difference to either order. The
+hypothesis that the PSM ceiling is a signal-amplitude problem is FALSIFIED.
+What remains standing: the ceiling is reached by ~16 M tokens, is the same
+from two inits at two rates with silent or loud sentinels, and sits at PSM
+≈ 0.18 / SPM ≈ 0.53 on these items. The adjacent-side reading (the model
+continues whatever precedes `<|fim_middle|>` and pulls from the far block
+about as well as an ordinary LM copies from earlier context) is the
+description that survives; a fine-tune of this size does not install the PSM
+switch, and the reason is not the token. **Branch taken per the rule:**
+stage 1 inits from the anneal endpoint `v3_stage0_anneal/final_fp32`
+(one-sided conditioning, format learned, plain +2.0 % / paper +5.2 % drift
+carried in), with the caveat recorded in §22a: if stage 2's identity fill
+does not move, the SPM-order results are the interpretable half.
+
 **Freeze (2026-09-19 21:50Z; sha256 first 16).** `fim_recovery_items.json`
 7581e2756b312012; `fim_manifest.json` 3b302930d9b401a3; `packed_L/manifest.json`
 d7f08662e7c86904; `packed_S/manifest.json` 28a29b23cf8a6fdf;
