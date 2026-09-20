@@ -2257,7 +2257,12 @@ val-plain 2.241 → 2.209 (−1.4 %). New items (PSM), exact by class:
 | smoke (`fim_smoke/final`) | **0.187** | 0.239 | 0.052 | 0.159 | 0.154 |
 
 `copy_suffix` 0.187 < 0.20 → the HOLD branch (n = 134, s.e. ≈ 0.034; one
-item below the L band). Sentinel embedding rows: base 0.897 / 0.879 / 0.884,
+item below the L band). Base losses on the v6 stage-1 val sets (`--eval-only`,
+the S1 bars' denominators are the stage-1 run's own step 0, but these are the
+reference): paper_markdown 1.6019, supplement_markdown 1.6033, binder_markdown
+1.5972 (a different val draw from §19's 1.852), reference 1.6924, replay
+2.1195, hom 2.5022, webmineral 2.3150, mindat_prose 2.6666, pack_prose 2.3731,
+fim (borrowed stage-0 val) 2.3087. Sentinel embedding rows: base 0.897 / 0.879 / 0.884,
 smoke 0.900 / 0.881 / 0.887 — they did not move. Adam bounds a coordinate's
 drift by lr × steps (2e-5 × 877 ≈ 0.018), and with sign-noisy gradients the
 rows random-walk by ~0.03; the acquired infilling therefore lives in the
