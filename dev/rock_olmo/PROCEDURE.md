@@ -2419,6 +2419,33 @@ stage 1 inits from the anneal endpoint `v3_stage0_anneal/final_fp32`
 carried in), with the caveat recorded in §22a: if stage 2's identity fill
 does not move, the SPM-order results are the interpretable half.
 
+### 22c. Stage 1 launched from the anneal endpoint (2026-09-20 20:30Z)
+
+`train_full.py --stage 1 --init v3_stage0_anneal/final_fp32 --epochs 2 --lr 4e-5
+--accum 16` on `v6/stage1`: 33,804 blocks, 4,224 steps, warmup 211, ten val
+sets. Step-0 losses (the S1 denominators) beside the base model's on the same
+val sets:
+
+| val set | base | stage-1 step 0 (primer) | primer cost |
+|---|---|---|---|
+| paper_markdown | 1.602 | 1.708 | +6.6 % |
+| supplement_markdown | 1.603 | 1.736 | +8.3 % |
+| binder_markdown | 1.597 | 1.657 | +3.8 % |
+| reference | 1.692 | 2.016 | **+19.1 %** |
+| replay | 2.120 | 2.177 | +2.7 % (bound for the run: 2.242) |
+| hom | 2.502 | 2.634 | +5.3 % |
+| webmineral | 2.315 | 2.430 | +5.0 % |
+| mindat_prose | 2.667 | 2.935 | +10.1 % |
+| pack_prose | 2.373 | 2.516 | +6.0 % |
+| fim (borrowed) | 2.309 | 2.248 | −2.6 % |
+
+The primer's tax is largest on the templated reference frames (+19 %) and
+the short encyclopaedic registers, smallest on long prose; the one gain is
+the sentinel format itself. S1-1 (paper ≤ 0.90 × step 0 = 1.537) and S1-2
+(replay ≤ 1.03 × step 0 = 2.242) are judged against this table as
+pre-registered; the base-relative recovery is reported beside them so the
+primer's cost can be seen to be repaid or not.
+
 **Freeze (2026-09-19 21:50Z; sha256 first 16).** `fim_recovery_items.json`
 7581e2756b312012; `fim_manifest.json` 3b302930d9b401a3; `packed_L/manifest.json`
 d7f08662e7c86904; `packed_S/manifest.json` 28a29b23cf8a6fdf;
