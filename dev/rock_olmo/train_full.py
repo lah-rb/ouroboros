@@ -374,15 +374,19 @@ def main() -> int:
     )
     trainer.train(resume_from_checkpoint=args.resume)
     final_eval = trainer.evaluate()
+    try:  # a Trainer checkpoint dir (the §22a anneal's init) carries no tokenizer
+        tokenizer = AutoTokenizer.from_pretrained(args.init)
+    except (OSError, ValueError):
+        tokenizer = AutoTokenizer.from_pretrained(os.path.expanduser("~/models/OLMo-2-0425-1B"))
     fp32_dir = ""
     if args.save_final_fp32:
         fp32_dir = os.path.join(args.out, "final_fp32")
         model.save_pretrained(fp32_dir, safe_serialization=True)
-        AutoTokenizer.from_pretrained(args.init).save_pretrained(fp32_dir)
+        tokenizer.save_pretrained(fp32_dir)
     # bf16 endpoint beside the fp32 checkpoints
     final_dir = os.path.join(args.out, "final")
     model.to(torch.bfloat16).save_pretrained(final_dir, safe_serialization=True)
-    AutoTokenizer.from_pretrained(args.init).save_pretrained(final_dir)
+    tokenizer.save_pretrained(final_dir)
     tokens_seen = getattr(trainer.state, "num_input_tokens_seen", 0)
     hours = (time.time() - t_start) / 3600
     run = {

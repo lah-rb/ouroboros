@@ -2308,6 +2308,77 @@ val-fim (every 400 steps) is expected non-increasing; a rise of > 1 % held over
 three evaluations is a stop-and-look. A check-in below its bar but above the
 stop rule continues and is reported as a miss against this table.
 
+**§22a result (2026-09-20 07:39Z): STOPPED at step 1,500 by the rule.**
+Check-ins (CPU, fp32 checkpoints, 402 items): PSM `copy_suffix` 0.157 / 0.231 /
+0.179 at steps 500 / 1,000 / 1,500 (s.e. ≈ 0.035 — one flat line from 16 M
+tokens), SPM 0.545 / 0.537 / 0.560; step 1,500 read below the smoke's 0.187.
+Losses (step 0 / 400 / 800 / 1,200): fim 2.310 / 2.239 / 2.247 / 2.250; plain
+2.195 / 2.215 / 2.234 / 2.239; borrowed paper 1.626 / 1.664 / 1.690 / 1.704;
+fim − plain gap 0.115 → 0.011 (the format is learned; the absolute rise is the
+re-warming bump of restarting an annealed model at a constant rate plus the
+90 % fill tax). Re-windowing the identical blanks to 150 / 400 characters did
+not rescue PSM (checkpoint-1500: 0.128 / 0.138; smoke 0.231 / 0.188) while SPM
+held at 0.46–0.50 for both — the model fills from the side ADJACENT to the
+generation point and has not learned the PSM switch. Two inits (base, v2
+stage 1) at two rates (3e-5, 2e-5) reached one ceiling; sentinel embedding rows
+unmoved (0.88). Verdicts as of the stop: S0-1 ✗, S0-2 ✗ (absolute) / ✓ (gap),
+S0-3 ✗ (+4.8 %), S0-4 ✗. Checkpoints 1,000 and 1,500 kept.
+
+### 22b. The untried lever: sentinel embedding scale — pre-registration (2026-09-20 08:20Z)
+
+**Observation (measured on the base weights).** Embeddings are untied. Trained
+rows: norm median 10.82, p5 6.66, p95 14.18. The three sentinel rows: 0.897 /
+0.879 / 0.884, random directions (cosine to the mean embedding 0.001 / 0.034 /
+−0.012), identical to the 272 other never-trained ids; lm_head rows 1.784
+against a median 1.813 (ordinary). A sentinel therefore enters the residual
+stream at one twelfth of a normal token's amplitude, and Adam at 2e-5–3e-5
+cannot grow it within a fine-tune (drift ≤ lr × steps per coordinate; observed
+0.003 after 877 and 1,500 steps).
+
+**Hypothesis.** The PSM ceiling is a signal problem, not a capacity problem:
+resuming the prefix after a long suffix is a switch keyed on `<|fim_middle|>`,
+and the layers cannot key a reliable switch on a near-silent token. SPM needs
+no switch (the middle follows the adjacent prefix), which is why SPM reads
+0.50–0.55 from the first check-in and PSM stays at 0.15–0.23 regardless of
+tokens, rate or init. Bavarian et al. (2022) found FIM "for free" from 50 M to
+6.9 B parameters WHEN TRAINED FROM SCRATCH, where the sentinel rows grow with
+everything else — so this is a fine-tuning-from-converged limitation, not an
+architecture or scale one, and the fix is to make the tokens audible.
+
+**Intervention (`scale_sentinels.py`).** Rescale the three input rows to the
+trained-row median norm (10.82), keeping their directions (mutually near-
+orthogonal and orthogonal to every trained token, as random directions in
+2,048 dimensions are). No new information; lm_head untouched; written to
+`~/models/OLMo-2-0425-1B-sentinels`, the base left byte-identical.
+
+**Design: a matched A/B at 16 M tokens.** Same pack (`packed_L`), same seed
+(block order), same rate and schedule as §22a up to step 500 (`--epochs 0.0575
+--warmup-frac 0.87` reproduces the 435-step warmup and the constant 3e-5 to
+step 500), same `--accum 8`; the only change is the init. Readout: the 402
+items on checkpoint-500, CPU fp32, PSM and SPM — the same instrument and
+dtype as the §22a step-500 check-in (PSM 0.157 / 0.246 / 0.022, SPM 0.545 /
+0.590 / 0.187 for copy_suffix / copy_prefix / free); val-fim and val-plain at
+step 400 against §22a's 2.239 / 2.215. Cost ≈ 2.3 h training + 10 min probe.
+
+| # | prediction if the hypothesis holds | falsified if |
+|---|---|---|
+| B1 | PSM `copy_suffix` at step 500 ≥ 0.30 (§22a: 0.157; +0.10 ≈ 3 s.e. is the adoption bar) | < 0.26 |
+| B2 | SPM `copy_suffix` within ±0.05 of 0.545 (SPM never needed the switch) | a large SPM change would mean the mechanism is not the switch |
+| B3 | val-fim at step 400 < 2.239; val-plain within ±0.01 of 2.215 (the fill tax and re-warming bump are unchanged by the init) | val-fim ≥ 2.239 |
+| B4 | the scaled rows stay near 10.8 (they still cannot move) | — |
+
+**Decision rule.** B1 met (≥ 0.26) → adopt the scaled init: rebuild nothing,
+run stage 0 on `packed_S` at 3e-5 with the §22a check-in bars (raised: PSM ≥
+0.35 at 1,000, 0.45 at 2,000, 0.55 at the S endpoint ≈ 4,650 steps) and the
+same stop rule, then anneal, then stage 1. B1 not met → the ceiling is not the
+embedding signal; anneal checkpoint-1500 (linear to zero over ~350 steps) and
+proceed to stage 1 with the §22a verdicts standing. Either outcome is a
+result: the A/B decides whether "fine-tune-scale FIM acquisition" is bounded
+by the token's amplitude or by something the pass cannot reach.
+
+**Not tuned post hoc.** The bar, the matched design and the two branches are
+fixed here before the run.
+
 **Freeze (2026-09-19 21:50Z; sha256 first 16).** `fim_recovery_items.json`
 7581e2756b312012; `fim_manifest.json` 3b302930d9b401a3; `packed_L/manifest.json`
 d7f08662e7c86904; `packed_S/manifest.json` 28a29b23cf8a6fdf;
