@@ -2483,6 +2483,23 @@ the sentinel format itself. S1-1 (paper ≤ 0.90 × step 0 = 1.537) and S1-2
 pre-registered; the base-relative recovery is reported beside them so the
 primer's cost can be seen to be repaid or not.
 
+**Halving rule FIRED at step 2,199 / epoch 1.041 (2026-09-21 17:45Z).**
+val-replay 2.2590 > the bound 2.2423 (+3.8 % of step 0). The series rose
+monotonically and slowly throughout the first epoch (2.177 → 2.205 at step
+500 → 2.216 at 1,000 → 2.224 at 1,500 → 2.234 at 2,000, then the 2.259 jump
+at the epoch boundary as the second pass began). Pre-registered response
+executed without deviation: run stopped, resumed from `checkpoint-2000` with
+`--lr 2e-5 --override-lr` (the callback logged `[LR OVERRIDE] resumed at step
+2000; base_lrs -> 2e-05` and the resumed run's step-0 replay reads 2.234,
+i.e. the 199 steps after the checkpoint were discarded). Logs:
+`train_v3_stage1_20260920_142944.log` (4e-5, steps 0–2,199) and
+`train_v3_stage1_20260921_114740.log` (2e-5, from step 2,000). A second
+crossing is recorded, not acted on. Note for comparison: §19's identical
+rule fired at epoch 0.28; this run held to epoch 1.04, which is the one
+visible benefit of starting from a primer already shifted toward the replay
+distribution. At the crossing, paper stood at 1.350 (−21.0 % of step 0,
+−15.7 % of base) and fim at 2.362 (+5.1 %).
+
 **Freeze (2026-09-19 21:50Z; sha256 first 16).** `fim_recovery_items.json`
 7581e2756b312012; `fim_manifest.json` 3b302930d9b401a3; `packed_L/manifest.json`
 d7f08662e7c86904; `packed_S/manifest.json` 28a29b23cf8a6fdf;
