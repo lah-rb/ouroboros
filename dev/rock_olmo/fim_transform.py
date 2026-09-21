@@ -92,12 +92,30 @@ _WORD_RE = re.compile(r"\b[A-Z][a-z]{3,}\b")
 
 
 # ── the grammar ──────────────────────────────────────────────────────
-def fim_wrap(prefix: str, middle: str, suffix: str, order: str = "psm") -> str:
-    """The one place the sentinel grammar is spelled out."""
+#: sentinel strings per model family (prefix, suffix, middle) — the grammar is the same
+SENTINEL_SETS = {
+    "olmo": (PRE, SUF, MID),  # OLMo-2 / OLMo-3 (identical tokenizer)
+    "starcoder": ("<fim_prefix>", "<fim_suffix>", "<fim_middle>"),  # SantaCoder / StarCoder / StarCoder2
+    "qwen": ("<|fim_prefix|>", "<|fim_suffix|>", "<|fim_middle|>"),  # Qwen2.5-Coder (same spelling as OLMo)
+    "deepseek": ("<｜fim▁begin｜>", "<｜fim▁end｜>", "<｜fim▁hole｜>"),  # DeepSeek-Coder: begin P end S hole M
+}
+
+
+def fim_wrap(
+    prefix: str,
+    middle: str,
+    suffix: str,
+    order: str = "psm",
+    *,
+    tokens: tuple[str, str, str] = (PRE, SUF, MID),
+) -> str:
+    """The one place the sentinel grammar is spelled out. `tokens` =
+    (prefix, suffix, middle) sentinel strings; default OLMo's."""
+    pre, suf, mid = tokens
     if order == "psm":
-        return f"{PRE}{prefix}{SUF}{suffix}{MID}{middle}"
+        return f"{pre}{prefix}{suf}{suffix}{mid}{middle}"
     if order == "spm":
-        return f"{SUF}{suffix}{PRE}{prefix}{MID}{middle}"
+        return f"{suf}{suffix}{pre}{prefix}{mid}{middle}"
     raise ValueError(f"order must be psm or spm, not {order!r}")
 
 

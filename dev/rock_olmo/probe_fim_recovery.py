@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import torch  # noqa: E402
 from transformers import AutoModelForCausalLM, AutoTokenizer  # noqa: E402
 
-from fim_transform import fim_wrap  # noqa: E402
+from fim_transform import SENTINEL_SETS, fim_wrap  # noqa: E402
 
 
 def _judge(answer: str, gen: str) -> tuple[bool, bool]:
@@ -61,7 +61,16 @@ def _tally(rows: list[tuple[dict, bool, bool]]) -> dict:
 BASE_TOKENIZER = os.path.expanduser("~/models/OLMo-2-0425-1B")
 
 
-def run(name: str, path: str, items: list[dict], device: str, batch: int, max_new: int, order: str) -> dict:
+def run(
+    name: str,
+    path: str,
+    items: list[dict],
+    device: str,
+    batch: int,
+    max_new: int,
+    order: str,
+    sentinels: str = "olmo",
+) -> dict:
     try:
         tok = AutoTokenizer.from_pretrained(path)
     except (OSError, ValueError):
@@ -69,9 +78,13 @@ def run(name: str, path: str, items: list[dict], device: str, batch: int, max_ne
     tok.padding_side = "left"
     if tok.pad_token_id is None:
         tok.pad_token = tok.eos_token
+    tokens = SENTINEL_SETS[sentinels]
+    for s in tokens:  # every sentinel must be ONE token of this tokenizer, or the probe measures nothing
+        ids = tok(s, add_special_tokens=False)["input_ids"]
+        assert len(ids) == 1, f"{name}: sentinel {s!r} tokenises to {ids} under {path}"
     dtype = torch.float32 if device == "cpu" else torch.bfloat16  # the check-ins run on CPU beside training
     model = AutoModelForCausalLM.from_pretrained(path, dtype=dtype).to(device).eval()
-    prompts = [fim_wrap(it["prefix"], "", it["suffix"], order) for it in items]
+    prompts = [fim_wrap(it["prefix"], "", it["suffix"], order, tokens=tokens) for it in items]
     gens: list[str] = []
     t0 = time.time()
     with torch.no_grad():
@@ -94,6 +107,7 @@ def run(name: str, path: str, items: list[dict], device: str, batch: int, max_ne
         "model": name,
         "path": path,
         "order": order,
+        "sentinels": sentinels,
         **_tally(rows),
         "by_class": {c: _tally(r) for c, r in sorted(by_class.items())},
         "seconds": round(time.time() - t0),
@@ -109,6 +123,12 @@ def main() -> int:
     ap.add_argument("--batch", type=int, default=16)
     ap.add_argument("--max-new", type=int, default=8)
     ap.add_argument("--order", choices=("psm", "spm"), default="psm")
+    ap.add_argument(
+        "--sentinels",
+        choices=sorted(SENTINEL_SETS),
+        default="olmo",
+        help="which model family's sentinel strings to wrap with (the grammar is shared)",
+    )
     ap.add_argument("--out", default=os.path.expanduser("~/tmp/analysis/fim_smoke/recovery.json"))
     args = ap.parse_args()
     items = json.load(open(args.items))
@@ -116,7 +136,7 @@ def main() -> int:
     res = []
     for spec in args.models.split(","):
         name, path = spec.split("=", 1)
-        r = run(name, os.path.expanduser(path), items, args.device, args.batch, args.max_new, args.order)
+        r = run(name, os.path.expanduser(path), items, args.device, args.batch, args.max_new, args.order, args.sentinels)
         res.append(r)
         cls = " ".join(f"{c}={v['exact']:.3f}(n={v['n']})" for c, v in r["by_class"].items())
         print(

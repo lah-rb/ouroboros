@@ -33,6 +33,14 @@ def test_wrap_unwrap_roundtrip_both_orders():
         ft.fim_wrap("a", "b", "c", "msp")
 
 
+def test_other_families_share_the_grammar_with_their_own_sentinels():
+    sc = ft.SENTINEL_SETS["starcoder"]
+    assert ft.fim_wrap("P", "M", "S", "psm", tokens=sc) == "<fim_prefix>P<fim_suffix>S<fim_middle>M"
+    assert ft.fim_wrap("P", "M", "S", "spm", tokens=sc) == "<fim_suffix>S<fim_prefix>P<fim_middle>M"
+    assert ft.fim_wrap("P", "M", "S", "psm") == ft.fim_wrap("P", "M", "S", "psm", tokens=ft.SENTINEL_SETS["olmo"])
+    assert all(len(v) == 3 for v in ft.SENTINEL_SETS.values())
+
+
 def test_transform_reconstructs_the_document():
     rng = random.Random(3)
     modes = set()
