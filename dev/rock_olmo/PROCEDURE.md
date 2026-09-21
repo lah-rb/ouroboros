@@ -2419,6 +2419,43 @@ stage 1 inits from the anneal endpoint `v3_stage0_anneal/final_fp32`
 carried in), with the caveat recorded in §22a: if stage 2's identity fill
 does not move, the SPM-order results are the interpretable half.
 
+### 22d. Exposure census for the rebase question (2026-09-21; side analysis, no training)
+
+Question from the operator: how do the candidate bases differ in prior
+exposure to (a) chemistry / mineralogy text and (b) fill-in-the-middle
+material? FIM exposure is a recipe quantity (rate × tokens, from the papers
+and mix cards); topic exposure was measured with ONE fixed classifier — a
+mineralogy / vibrational-spectroscopy lexicon, a document counting at ≥ k
+distinct terms within its first 20,000 characters — over 20,000-document
+samples of each source of OLMo-2's pretraining mix (`allenai/olmo-mix-1124`;
+local dolmino shards for pes2o / wiki / dclm, one Hub shard each for arXiv
+and three StarCoder languages). Scratchpad `topic_census.py`; results
+`~/tmp/analysis/v3/topic_census.json`.
+
+| source (OLMo-2 pretraining share) | ≥ 2 terms (docs) | ≥ 4 terms (docs) |
+|---|---|---|
+| pes2o (1.5 %) | 17.5 % | 6.3 % |
+| dclm web (95 %) | 2.1 % (4.0 % of chars) | 0.4 % |
+| wiki (0.1 %) | 0.4 % | 0.1 % |
+| arXiv (0.5 %; LaTeX source, one 38 MB shard — under-read) | 0.4 % | 0.0 % |
+| StarCoder code (2 %): Python / C# / JavaScript | 0.2 / 0.1 / 0.0 % | 0.0 % |
+
+Estimates (order of magnitude): OLMo-2-1B saw ≈ 25–30 B tokens of domain-heavy
+text (≥ 4 terms; ~0.7 % of ~3.9 T, three quarters of it inside DCLM web) and
+≈ 150 B at mention level, plus a few ×10⁸ in the dolmino midtraining's pes2o;
+the v6 stage-1 pile is 138 M tokens/epoch, ≈ 1 % of that. A code corpus at
+the measured rates gives StarCoder2-3B (The Stack v2, ~3.3 T tokens, 17
+languages, no Wikipedia/arXiv for the 3B) at most ~10⁸ domain-heavy tokens —
+two to three orders of magnitude less latent chemistry. FIM: OLMo-2 0;
+this pass 49 M (primer) + 3.6 M (stage-1 replay share); OLMo-3-7B ≈ 5.2 B
+(StackEdu 10.0 B tokens = 10 % of its 100 B midtraining mix, FIM on ~52 % of
+documents; OLMo-3's mix card also lists 5 % olmOCR science PDFs and 5 %
+STEM crawl); StarCoder2-3B ≈ 1.65 T (rate 0.5 over pretraining). A rebase to
+StarCoder2 therefore trades ~300× less prior chemistry for ~30,000× more FIM
+than the primer delivered, and puts the whole burden of the domain on the
+pile. Calibration probes of both foreign bases on the 402 prose items are
+staged for the stage-1 gap (`probes_calibration.sh`).
+
 ### 22c. Stage 1 launched from the anneal endpoint (2026-09-20 20:30Z)
 
 `train_full.py --stage 1 --init v3_stage0_anneal/final_fp32 --epochs 2 --lr 4e-5
