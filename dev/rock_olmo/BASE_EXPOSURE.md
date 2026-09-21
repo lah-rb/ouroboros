@@ -92,6 +92,39 @@ math/CS-heavy; physics papers would score higher on a body-text window.
 | StarCoder2-3B | 3 B | rate 0.5 throughout | — | ≈ 1.65 T | `<fim_prefix>` 1, `<fim_middle>` 2, `<fim_suffix>` 3 (verified) |
 | Qwen2.5-Coder-1.5B, DeepSeek-Coder-1.3B, CodeGemma-2B | 1.3–2 B | native | — | ~10¹¹–10¹² | family-specific strings (see `fim_transform.SENTINEL_SETS`) |
 
+## The sentinel rows themselves: a three-point gradient
+
+Measured directly from the embedding matrices (CPU read, 2026-09-21). Norms
+are given relative to each model's own median trained-row norm, because the
+three models normalise differently in absolute terms (OLMo-2 median 10.82 at
+hidden 2048, OLMo-3 8.03 at 4096, StarCoder2 0.54 at 3072).
+
+| base | FIM exposure | `<fim_prefix>` | `<fim_middle>` | `<fim_suffix>` | pairwise cos among the three |
+|---|---|---|---|---|---|
+| OLMo-2-1B | 0 | 0.08× | 0.08× | 0.08× | 0.02 / −0.02 / 0.05 (orthogonal) |
+| OLMo-3-7B | ≈ 5.2 B (midtraining) | 0.30× | **0.32×** | 0.30× | 0.24 / 0.28 / 0.26 (a shared subspace) |
+| StarCoder2-3B | ≈ 1.65 T (pretraining) | 0.93× | **1.63×** | 1.45× | 0.21 / 0.18 / 0.31 |
+
+Three readings:
+
+1. **Midtraining moves the rows but does not finish them.** OLMo-3's
+   sentinels grew about 4× relative to their initialisation yet remain at a
+   third of a normal token's amplitude after 5.2 B FIM tokens. Our 49 M-token
+   primer moved OLMo-2's by 0.003 (§22b), which is what the same slope
+   predicts at 1 % of the tokens.
+2. **The three tokens acquire a shared direction.** At initialisation they
+   are mutually orthogonal (cos ≈ 0.02, as random vectors in 2,048 dimensions
+   are); after training they carry a common component (cos ≈ 0.25 in OLMo-3,
+   0.18–0.31 in StarCoder2). A "this is FIM grammar" subspace is part of what
+   gets learned, and it is not something rescaling can manufacture.
+3. **`<fim_middle>` ends up the loudest of the three** in the base that
+   learned FIM from scratch (1.63× against 0.93× for the prefix sentinel).
+   That is the token at which the model must stop continuing the suffix and
+   resume the prefix — the switch §22b was about. Amplitude is therefore a
+   *correlate* of a working switch, not its cause: rescaling OLMo-2's rows to
+   1.0× median changed nothing (§22b, PSM 0.179 vs 0.157), because the layers
+   that would read a loud sentinel were never trained alongside one.
+
 Two things follow from the OLMo-3 row.
 
 - **OLMo 3 is the first OLMo whose sentinels were trained.** OLMo-2 and
