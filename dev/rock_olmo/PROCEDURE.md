@@ -2208,6 +2208,34 @@ the suffix only — the conditioning test), `copy_prefix` (control), `free`.
 | P7 | recall probe frame on the seen 200: formula ≥ 0.60, bands ≥ 0.60, crystal ≥ 0.45; `formula_to_species[probe]` strict ≥ 0.90 | any below |
 | P8 | trained − held-out permutation gap ≤ 0.15 on every kind; `val-xml_fim` reaches its floor within the first 40 % of steps | gap > 0.15 (schema collapse) |
 
+**P9–P11 (operator, added 2026-09-21 22:40Z — before stage 2 runs, after the
+stage-1 halving; nothing about stage 2 has been measured).** Operator's
+prediction: stage 2 may regain what stage 1 eroded of the sentinel skill,
+since fill on the XML schema is precisely what stage 2 trains. Formalised as
+three predictions, because "the FIM loss" and "the fill behaviour" come
+apart under this stream:
+
+*Why they come apart.* `val-fim` is dolmino PROSE, up to 2,000 tokens,
+scored on every token, so its value is dominated by ordinary continuation of
+the prefix and suffix; only a few tokens per document sit at the middle. The
+stage-2 FIM rows are ~115-token XML records trained with loss on the MIDDLE
+ONLY (§22 design), so they deliver almost no prose-continuation signal —
+that comes from the stream's 27 % carried prose and 8 % replay. The
+recovery probe, by contrast, scores exactly the behaviour at the middle.
+
+| # | prediction (stage-2 endpoint vs the stage-1 endpoint on the same instrument) | falsified if |
+|---|---|---|
+| P9 | `val-fim` recovers at least 25 % of the gap the stage-1 run opened (from the stage-0 anneal endpoint's 2.248 to whatever stage 1 ends at) | it recovers < 25 %, or rises further |
+| P10 | The 402 PROSE recovery items: PSM `copy_suffix` at the stage-2 endpoint ≥ its stage-1 endpoint value; the strong form, ≥ the stage-0 endpoint's 0.179, is reported separately | it falls below the stage-1 endpoint value |
+| P11 | In-domain fill is not in doubt and is the control: `val-xml_fim` falls monotonically to a floor and the XML `species` fill clears P1. If P10 holds while P11's in-domain numbers are strong, narrow schema training TRANSFERS back to open-domain infilling; if P10 fails while P11 holds, the fill skill is schema-bound | — |
+
+Either outcome of P10 is decision-relevant for a v4. Transfer would mean the
+49 M-token primer bought little that 26 M tokens of in-domain blanks could
+not, i.e. stage 0 is skippable and its 2–19 % drift tax avoidable.
+Schema-binding would mean the identity-fill result (P3) is a statement about
+this schema rather than about fill in general, and it would have to be
+reported that way.
+
 Expected NOT to work: `identity` on `raman_only` records whose strongest-4 key
 is shared within ±10 cm⁻¹ by another species (~11 %, §19); `top` completion
 above chance; anything about U beyond P6. If `copy_prefix` ≫ `copy_suffix` at
