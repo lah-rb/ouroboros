@@ -104,7 +104,10 @@ def _fold(rows: list[tuple[dict, bool, bool]]) -> dict:
 
 @torch.no_grad()
 def run_model(name: str, path: str, jobs: list[dict], device: str, batch: int, max_new: int) -> dict:
-    tok = AutoTokenizer.from_pretrained(path)
+    try:
+        tok = AutoTokenizer.from_pretrained(path)
+    except (OSError, ValueError):  # a Trainer checkpoint dir carries no tokenizer
+        tok = AutoTokenizer.from_pretrained(os.path.expanduser("~/models/OLMo-2-0425-1B"))
     tok.padding_side = "left"
     if tok.pad_token_id is None:
         tok.pad_token = tok.eos_token

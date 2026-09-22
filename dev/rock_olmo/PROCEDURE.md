@@ -2238,7 +2238,81 @@ reported that way.
 
 Expected NOT to work: `identity` on `raman_only` records whose strongest-4 key
 is shared within ±10 cm⁻¹ by another species (~11 %, §19); `top` completion
-above chance; anything about U beyond P6. If `copy_prefix` ≫ `copy_suffix` at
+above chance; anything about U beyond P6.
+
+### 22e. Stage-2 result and the §22 scorecard (run 2026-09-22 16:07–20:59Z)
+
+818 steps, 26,804,224 tokens, 4.8 h; endpoints `v3_stage2/final`,
+`final_fp32`, mid checkpoint 410 kept. Losses vs the run's step 0: xml_fim
+0.8067 → 0.2854 (floor 0.145 at step 120, then a monotone rise to 0.285),
+xml_plain 0.9848 → 0.6001, paper 1.3180 → 1.3394 (+1.6 %), replay 2.2520 →
+2.2886 (+1.6 %), prose fim 2.3610 → 2.4252 (+2.7 %).
+
+**XML fill, trained species (T = 200 seeded, V = the 19 val species, U = the
+100 untouched), lenient; base and stage 1 read ≤ 0.06 on every row.**
+
+| blank kind | what it asks | T | V | U | trained − held-out permutation |
+|---|---|---|---|---|---|
+| libs | lines from the rest | **1.000** | 0.908 | 0.968 | 0.000 |
+| raman | bands from the rest | **0.949** | 0.197 | 0.142 | 0.062 |
+| formula | formula from species | **0.925** | 0.638 | 0.522 | 0.082 |
+| top | strongest band given three | **0.923** | 0.204 | 0.124 | 0.051 |
+| system | crystal system | **0.920** | 0.421 | 0.505 | 0.065 |
+| species | species, FORMULA VISIBLE | **0.688** | 0.000 | 0.003 | −0.011 |
+| identity | species + formula, NUMERIC KEY ONLY | **0.014** | 0.000 | 0.000 | 0.000 |
+
+**The decisive contrast is inside one model, one schema, one record.** The
+`species` blank (0.688) and the `identity` blank (0.014) differ in exactly
+one respect: whether the formula stays visible beside the gap. Removing the
+symbolic co-key and leaving the intensity-ranked bands, the LIBS lines and
+the crystal system collapses recall by a factor of 49. §19–§21c inferred
+this from separate probes; here it is a within-record manipulation. Fill is
+not the lever for an approximate numeric key.
+
+Generalisation splits as designed: for V and U the SCHEMA transfers (libs
+0.91/0.97 from the formula's chemistry, formula 0.64/0.52, system 0.42/0.51)
+while the species-specific numbers do not (raman 0.20/0.14, top 0.20/0.12) —
+the model learned the format for every species and the facts only for the
+ones it was shown.
+
+**Other instruments.** Recall, probe frame, seen 200: formula 0.520 → 0.855
+(v2 stage 2: 0.615), bands 0.675 → 0.665 (0.625), crystal 0.183 → 0.198
+(0.467). Backward identity in a never-trained PROSE frame, 1,077 species:
+species→formula 0.555 → 0.832; formula→species 0.006 → **0.051** (8.5×, from
+the XML identity blank alone — real transfer out of the schema, but far
+below §21c's 0.97 from mirrored prose framings); structure→species 0.001.
+Prose recovery items: PSM copy_suffix 0.201 → 0.187, SPM 0.545 → 0.500.
+
+**Scorecard.**
+
+| # | prediction | result | verdict |
+|---|---|---|---|
+| P1 | species ≥ 0.90 AND formula ≥ 0.90 | 0.688 / 0.925 | ✗ (species) |
+| P2 | raman ≥ 0.625 | 0.949 | ✓ |
+| P3 | identity ≥ 0.10 (informal > 0.055) | 0.014 | ✗ |
+| P4 | libs ≥ 0.90 | 1.000 | ✓ |
+| P5 | paper ≤ +2 %, replay ≤ +3 % | +1.6 %, +1.6 % | ✓ |
+| P6 | U within ±5 pts; probe-set recall ≥ s1 − 5 pts | U fill ✓; probe-set bands 0.640 → 0.490 | ✗ (−15 pts on untouched bands) |
+| P7 | formula ≥ 0.60, bands ≥ 0.60, crystal ≥ 0.45; formula→species strict ≥ 0.90 | 0.855 ✓, 0.665 ✓, 0.198 ✗, 0.044 ✗ | ✗ |
+| P8 | permutation gap ≤ 0.15; xml_fim floors in the first 40 % | max gap 0.082; floor at 15 % | ✓ (with the later rise noted) |
+| P9 | val-fim recovers ≥ 25 % of the stage-1 loss | +2.7 %, moved away | ✗ |
+| P10 | prose PSM copy_suffix ≥ the stage-1 value | 0.187 vs 0.201 | ✗ (within noise; held, did not recover) |
+| P11 | in-domain control strong | xml_fim −64.6 %, T fill 0.92–1.00 | ✓ |
+| S0-1…4 | primer bars | see §22a/§22b | ✗ ✗/✓ ✗ ✗ |
+| S1-1…5 | stage-1 bars | paper 1.318 ✓, replay +3.4 % ✗, binder −13.0 % ✓, recall ✓, sentinel 82 % ✓ | 4 of 5 |
+
+**Standing conclusions.** (i) A fill blank teaches every slot of a rigid
+record to near-ceiling from the rest of the record, including the symbolic
+backward slot when a symbolic co-key is visible (0.688), and fails at the
+approximate numeric key (0.014) — the §21c wall reproduced within a single
+record. (ii) Confining stage 2 to the schema cost the prose crystal-system
+frame (0.198 against v2's 0.467, which taught it as Q→A prose) and 15 points
+of band recall on untouched species, while buying +24 points of formula
+recall over v2. (iii) Fill training does not transfer back to open-domain
+infilling (P10) and does not restore the prose fill loss (P9); the skill is
+schema-bound, so P3 is a statement about this schema. (iv) The XML identity
+blank did move the symbolic backward direction in prose 8.5-fold, which is
+the one transfer this stage produced. If `copy_prefix` ≫ `copy_suffix` at
 the stage-0 endpoint the primer taught the grammar only, and P3 is reported as
 uninterpretable rather than as a falsification of FIM blanks.
 
