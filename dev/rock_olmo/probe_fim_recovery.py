@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import torch  # noqa: E402
 from transformers import AutoModelForCausalLM, AutoTokenizer  # noqa: E402
 
-from fim_transform import SENTINEL_SETS, fim_wrap  # noqa: E402
+from fim_transform import SENTINEL_SETS, SPM_STYLES, fim_wrap  # noqa: E402
 
 
 def _judge(answer: str, gen: str) -> tuple[bool, bool]:
@@ -84,7 +84,8 @@ def run(
         assert len(ids) == 1, f"{name}: sentinel {s!r} tokenises to {ids} under {path}"
     dtype = torch.float32 if device == "cpu" else torch.bfloat16  # the check-ins run on CPU beside training
     model = AutoModelForCausalLM.from_pretrained(path, dtype=dtype).to(device).eval()
-    prompts = [fim_wrap(it["prefix"], "", it["suffix"], order, tokens=tokens) for it in items]
+    style = SPM_STYLES.get(sentinels, "suffix_first")
+    prompts = [fim_wrap(it["prefix"], "", it["suffix"], order, tokens=tokens, spm_style=style) for it in items]
     gens: list[str] = []
     t0 = time.time()
     with torch.no_grad():
@@ -108,6 +109,7 @@ def run(
         "path": path,
         "order": order,
         "sentinels": sentinels,
+        "spm_style": style,
         **_tally(rows),
         "by_class": {c: _tally(r) for c, r in sorted(by_class.items())},
         "seconds": round(time.time() - t0),

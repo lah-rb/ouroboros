@@ -101,6 +101,16 @@ SENTINEL_SETS = {
 }
 
 
+#: SPM spellings. PSM is universal (`PRE p SUF s MID m`); SPM is NOT.
+#: "suffix_first" (`SUF s PRE p MID m`) is what this project trains.
+#: "bigcode" (`PRE SUF s MID p m`) is SantaCoder / StarCoder / StarCoder2's,
+#: where the leading token is always `<fim_prefix>` and the prefix follows
+#: `<fim_middle>`. Measured 2026-09-22 on StarCoder2-3B, 60 copy_suffix items:
+#: suffix_first 0.000, bigcode 0.467, its own PSM 0.500 — a model reads only
+#: the spelling it was trained on, so the style travels with the family.
+SPM_STYLES = {"olmo": "suffix_first", "starcoder": "bigcode", "qwen": "suffix_first", "deepseek": "suffix_first"}
+
+
 def fim_wrap(
     prefix: str,
     middle: str,
@@ -108,13 +118,17 @@ def fim_wrap(
     order: str = "psm",
     *,
     tokens: tuple[str, str, str] = (PRE, SUF, MID),
+    spm_style: str = "suffix_first",
 ) -> str:
     """The one place the sentinel grammar is spelled out. `tokens` =
-    (prefix, suffix, middle) sentinel strings; default OLMo's."""
+    (prefix, suffix, middle) sentinel strings; default OLMo's. `spm_style`
+    selects the SPM layout (see SPM_STYLES); PSM is the same everywhere."""
     pre, suf, mid = tokens
     if order == "psm":
         return f"{pre}{prefix}{suf}{suffix}{mid}{middle}"
     if order == "spm":
+        if spm_style == "bigcode":
+            return f"{pre}{suf}{suffix}{mid}{prefix}{middle}"
         return f"{suf}{suffix}{pre}{prefix}{mid}{middle}"
     raise ValueError(f"order must be psm or spm, not {order!r}")
 

@@ -33,12 +33,19 @@ def test_wrap_unwrap_roundtrip_both_orders():
         ft.fim_wrap("a", "b", "c", "msp")
 
 
-def test_other_families_share_the_grammar_with_their_own_sentinels():
+def test_other_families_share_psm_but_not_spm():
     sc = ft.SENTINEL_SETS["starcoder"]
+    # PSM is universal
     assert ft.fim_wrap("P", "M", "S", "psm", tokens=sc) == "<fim_prefix>P<fim_suffix>S<fim_middle>M"
-    assert ft.fim_wrap("P", "M", "S", "spm", tokens=sc) == "<fim_suffix>S<fim_prefix>P<fim_middle>M"
     assert ft.fim_wrap("P", "M", "S", "psm") == ft.fim_wrap("P", "M", "S", "psm", tokens=ft.SENTINEL_SETS["olmo"])
-    assert all(len(v) == 3 for v in ft.SENTINEL_SETS.values())
+    # SPM is not: ours puts the suffix sentinel first, BigCode's always leads with the prefix one
+    assert ft.fim_wrap("P", "M", "S", "spm", tokens=sc) == "<fim_suffix>S<fim_prefix>P<fim_middle>M"
+    assert ft.fim_wrap("P", "M", "S", "spm", tokens=sc, spm_style="bigcode") == "<fim_prefix><fim_suffix>S<fim_middle>PM"
+    # both styles keep the middle recoverable and the prefix adjacent to it
+    for style in ("suffix_first", "bigcode"):
+        body = ft.fim_wrap("alpha ", "beta", " gamma", "spm", spm_style=style)
+        assert body.endswith("beta") and "alpha " in body and " gamma" in body
+    assert set(ft.SPM_STYLES) == set(ft.SENTINEL_SETS) and all(len(v) == 3 for v in ft.SENTINEL_SETS.values())
 
 
 def test_transform_reconstructs_the_document():
