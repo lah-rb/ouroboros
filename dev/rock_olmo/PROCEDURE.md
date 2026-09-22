@@ -2532,7 +2532,47 @@ pre-halving slope; paper held flat at 1.326–1.329 across the same span, so
 the second epoch is buying little on the papers and slowly costing replay.
 Note for comparison: §19's identical rule fired at epoch 0.28; this run held
 to epoch 1.04, which is the one visible benefit of starting from a primer
-already shifted toward the replay distribution. At the crossing, paper stood at 1.350 (−21.0 % of step 0,
+already shifted toward the replay distribution.
+
+**Stage-1 result (ended 2026-09-22 15:21Z).** 4,224 steps, 276,807,680
+tokens, 21.5 h wall; endpoints `v3_stage1/final` (bf16) and `final_fp32`.
+
+| val set | step 0 | final | vs step 0 | vs base | v2 (§19) vs its base |
+|---|---|---|---|---|---|
+| reference | 2.016 | 0.3472 | −82.8 % | −79.5 % | −76.5 % |
+| webmineral | 2.430 | 0.4072 | −83.2 % | −82.4 % | −82.2 % |
+| hom | 2.634 | 1.1064 | −58.0 % | −55.8 % | −54.4 % |
+| pack_prose | 2.516 | 1.5603 | −38.0 % | −34.3 % | −36.5 % |
+| mindat_prose | 2.935 | 1.8600 | −36.6 % | −30.3 % | −31.0 % |
+| supplement_markdown | 1.736 | 1.1979 | −31.0 % | −25.3 % | (new source) |
+| paper_markdown | 1.708 | 1.3180 | −22.8 % | −17.7 % | −18.9 % (final 1.3181) |
+| binder_markdown | 1.657 | 1.4412 | −13.0 % | −9.7 % | **+36.4 %** |
+| replay | 2.177 | 2.2518 | **+3.4 %** | +6.3 % | +4.4 % |
+| fim | 2.248 | 2.3610 | +5.0 % | +2.2 % | (none) |
+
+**Verdicts.** S1-1 ✓ (paper 1.318 ≤ the 1.537 bar; and identical to v2's
+1.3181 to four figures, so the primer's +6.6 % paper tax was fully repaid).
+S1-2 ✗ (replay +3.4 % against the +3 % bound; the halving slowed the climb
+from ~0.010 to ~0.003 per 500 steps but did not stop it — the same verdict
+v2 recorded at +4.4 %). S1-3 ✓ decisively (binder −13.0 % against v2's
++36.4 % at four copies: the ≤ 2-copy decision removed the memorisation §19
+diagnosed). S1-4 and S1-5 are probe results, reported with the gap bundle.
+
+**What the second epoch bought (for the v4 recipe).** Comparing e0.95 with
+the endpoint, counting exposures as repeats × epochs: reference (×1, 116k
+distinct frame-documents) −14.8 % over the first half of epoch 2 and −29 %
+across the whole of it, still falling at 2 exposures; webmineral −6 %;
+papers, packs, supplements and hom each 1.6–2.3 %; mindat flat; binder
+turned UP. v2's minima say the same in its own units: binder turned at 2.6
+exposures, hom and mindat at 2.9, webmineral at 5.2, while papers and
+reference were still falling at the end. **The turn point is a property of a
+source's diversity, not of the epoch count**, so the efficient recipe is one
+pass with per-source repeats set near each source's turn point and the extra
+tokens spent on NEW documents (more papers; `N_REFERENCE_FRAMES` 6 instead
+of 4) rather than on a second reading — the operator's "1.5× tokens, one
+fewer epoch", qualified by where the extra 0.5× comes from.
+
+At the crossing, paper stood at 1.350 (−21.0 % of step 0,
 −15.7 % of base) and fim at 2.362 (+5.1 %).
 
 **Freeze (2026-09-19 21:50Z; sha256 first 16).** `fim_recovery_items.json`
