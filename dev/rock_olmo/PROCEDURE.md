@@ -2522,10 +2522,17 @@ executed without deviation: run stopped, resumed from `checkpoint-2000` with
 i.e. the 199 steps after the checkpoint were discarded). Logs:
 `train_v3_stage1_20260920_142944.log` (4e-5, steps 0–2,199) and
 `train_v3_stage1_20260921_114740.log` (2e-5, from step 2,000). A second
-crossing is recorded, not acted on. Note for comparison: §19's identical
-rule fired at epoch 0.28; this run held to epoch 1.04, which is the one
-visible benefit of starting from a primer already shifted toward the replay
-distribution. At the crossing, paper stood at 1.350 (−21.0 % of step 0,
+crossing is recorded, not acted on. **Second crossing recorded at step 3,098
+/ epoch 1.467 (2026-09-22 08:4xZ): replay 2.2430 against the bound 2.2423,
+over by 0.0007 — at the logged resolution (three decimals) this is AT the
+bound, not past it, and the rate stays 2e-5 to the end as the rule
+requires.** After the halving replay went 2.234 → 2.236 → 2.241 → 2.243 over
+epochs 1.04–1.47, i.e. the climb continued at roughly a quarter of its
+pre-halving slope; paper held flat at 1.326–1.329 across the same span, so
+the second epoch is buying little on the papers and slowly costing replay.
+Note for comparison: §19's identical rule fired at epoch 0.28; this run held
+to epoch 1.04, which is the one visible benefit of starting from a primer
+already shifted toward the replay distribution. At the crossing, paper stood at 1.350 (−21.0 % of step 0,
 −15.7 % of base) and fim at 2.362 (+5.1 %).
 
 **Freeze (2026-09-19 21:50Z; sha256 first 16).** `fim_recovery_items.json`
