@@ -2711,3 +2711,38 @@ now ordinary trained species), so U in this section is THIS file's list, not
 `stage2/manifest.json` b1d80755f0ce7b51. Logistics, not design: stage
 0 evaluates every 400 steps and writes 120 val documents per subset because
 an evaluation over all 2,543 val documents would cost minutes per pass.
+
+### 22f. Controlled chained recall and the provenance-phrase ablation (2026-09-22 23:15Z)
+
+Operator request: the §22 probes mix cues, so re-test showing each model ONLY named
+fields, one target per turn, gold answers of earlier turns carried forward (teacher
+forcing). `probe_chains.py`; report `~/tmp/analysis/v3/chain_probe/chain_report.md`
+(every prompt, response, HIT/NEAR/MISS). Three minerals: Gypsum (826 paper mentions),
+Celestine (7), Uranophane (53 mentions in 2 papers; a v3 validation species, so never in
+v3's XML stage 2 — v2's stage 2 trained every species, so no mineral is stage-1-only for
+v2). Eight chains, 18 steps per mineral, prose Q/A and XML (PSM, SPM) for both models;
+v2 also re-asked with its raw IMA spelling wherever a formula is a cue.
+
+Best-format HITs over the 54 steps: v3 25 (XML·SPM), v2 9 (prose; its XML answers are
+tag soup — it never saw the schema). By direction, three minerals each:
+
+- **name → formula:** both models 2/3 (Gypsum, Celestine); neither knows Uranophane
+  from its name alone — both answer a Ca-uranyl PHOSPHATE (the autunite family).
+- **name + formula → top band / first LIBS line:** v3 5/6 and 6/6, v2 0/6 and 0/6. v3's
+  line answers are element knowledge (the line list is a function of the formula), and
+  it recalls Uranophane's lines despite never seeing its record.
+- **spectra alone → name or formula (chains 3–8, step 1):** 0 for both models on every
+  mineral, every format. Answers are fluent and wrong (Quartz, Molybdite, Arsenolite).
+- **formula → name:** Gypsum only. Celestine's SrSO4 gives Hexahydrite / Carnotite (v3)
+  and an echo of the formula (v2); v2 names Strontianite once given bands or lines.
+- **spectra as context help the forward direction:** Uranophane's formula, wrong from the
+  name alone, is right in both models once bands or LIBS lines accompany the name.
+
+**Ablation (`probe_sample_id.py`, the 200 seen species).** Band recall through the v4
+probe frame with its parts removed: with the RRUFF sample ID / without the ID / without
+the phrase "peak-picked from the RRUFF spectrum": v2 0.565 / 0.560 / 0.420; v3 stage 1
+0.655 / 0.685 / 0.325; v3 stage 2 0.645 / 0.680 / 0.340. The sample ID carries nothing;
+the provenance phrase carries a quarter of v2's band recall and half of v3's. Band lists
+were always learned beside that phrase, so recall is conditioned on the learning context
+rather than on the species name — which is also why a plain question ("What is its
+strongest Raman band?") reads so low.
