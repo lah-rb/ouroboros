@@ -2336,7 +2336,32 @@ closed. (b) The symbolic backward slot is the last thing the schema teaches:
 species fill 0.406 → 0.688 across the second half while every forward slot
 was near ceiling by the midpoint, still rising at the end. A longer stage 2
 could plausibly carry P1's species number toward 0.90; identity (0.006 →
-0.014) gives no such sign, so more steps would not rescue the numeric key. If `copy_prefix` ≫ `copy_suffix` at
+0.014) gives no such sign, so more steps would not rescue the numeric key.
+
+**Head-to-head with v2 under today's probes (2026-09-22 22:10Z; correction).**
+The §22e comparisons to "v2 stage 2" quoted §19's numbers, which were scored
+against v2's own gold. Since §21, facts carry the `formula_norm` spelling
+(`CaSO4·2H2O`), while v2 was trained on the raw IMA spelling (`CaS6+O4.2H2O`),
+so today's exact-string scorer marks v2 down for spelling alone. Re-run on the
+SAME 200 seen species and 100 untouched species, probe frame:
+
+| task | v2 stage 2 | v3 stage 1 | v3 stage 2 |
+|---|---|---|---|
+| formula, as scored (exact string) | 0.275 | 0.535 | 0.845 |
+| formula, spelling-fair (generation passed through `normalize_formula`) | **0.725** | 0.695 | **0.925** |
+| bands (first three by position, ±10) | 0.555 | 0.675 | 0.665 |
+| crystal system | **0.426** | 0.183 | **0.198** |
+| inverse (bands → species) | 0.000 | 0.000 | 0.000 |
+| formula → species, prose probe frame | 0.009 | 0.006 | 0.051 |
+| untouched: formula / bands / crystal (as scored) | 0.310 / 0.460 / 0.440 | 0.540 / 0.640 / 0.270 | 0.650 / 0.490 / 0.260 |
+
+Spelling-fair formula recall is +20 points over v2 (0.925 vs 0.725; the
+earlier "+24" compared different items against different golds), and v3's
+stage 1 alone (0.695) nearly matches v2's finished two-stage model. The
+exact-string scorer also fails hydrates written with "." instead of "·"
+(v3 writes "." in prose and "·" in XML), which is most of v3's 0.845 → 0.925.
+Crystal system is a genuine −23 points against v2. Both stage-2 methods cost
+untouched-species band recall to the same level (0.46–0.49). If `copy_prefix` ≫ `copy_suffix` at
 the stage-0 endpoint the primer taught the grammar only, and P3 is reported as
 uninterpretable rather than as a falsification of FIM blanks.
 
