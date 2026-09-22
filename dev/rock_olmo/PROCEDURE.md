@@ -2312,7 +2312,31 @@ recall over v2. (iii) Fill training does not transfer back to open-domain
 infilling (P10) and does not restore the prose fill loss (P9); the skill is
 schema-bound, so P3 is a statement about this schema. (iv) The XML identity
 blank did move the symbolic backward direction in prose 8.5-fold, which is
-the one transfer this stage produced. If `copy_prefix` ≫ `copy_suffix` at
+the one transfer this stage produced.
+
+**Mid checkpoint vs endpoint (probe 2026-09-22 21:39Z, same 15,615 prompts).**
+Trained / val / untouched, lenient:
+
+| blank | step 410 | step 818 |
+|---|---|---|
+| species | 0.406 / 0.000 / 0.003 | 0.688 / 0.000 / 0.003 |
+| identity | 0.006 / 0 / 0 | 0.014 / 0 / 0 |
+| formula | 0.844 / 0.599 / 0.460 | 0.925 / 0.638 / 0.522 |
+| raman | 0.887 / 0.184 / 0.164 | 0.949 / 0.197 / 0.142 |
+| libs | 0.999 / 0.882 / 0.968 | 1.000 / 0.908 / 0.968 |
+| top | 0.869 / 0.191 / 0.130 | 0.923 / 0.204 / 0.124 |
+| system | 0.842 / 0.395 / 0.448 | 0.920 / 0.421 / 0.505 |
+
+(a) The val-xml_fim rise (0.145 → 0.285) was calibration, not behaviour:
+greedy fill on the 19 held-out species IMPROVED from step 410 to 818 on
+formula, raman, libs, top and system. The loss rose because the model grew
+more confident, so its wrong answers on unseen species cost more; its argmax
+did not get worse. The endpoint stands as the artefact and P8's caveat is
+closed. (b) The symbolic backward slot is the last thing the schema teaches:
+species fill 0.406 → 0.688 across the second half while every forward slot
+was near ceiling by the midpoint, still rising at the end. A longer stage 2
+could plausibly carry P1's species number toward 0.90; identity (0.006 →
+0.014) gives no such sign, so more steps would not rescue the numeric key. If `copy_prefix` ≫ `copy_suffix` at
 the stage-0 endpoint the primer taught the grammar only, and P3 is reported as
 uninterpretable rather than as a falsification of FIM blanks.
 
