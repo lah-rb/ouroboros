@@ -2746,3 +2746,16 @@ the provenance phrase carries a quarter of v2's band recall and half of v3's. Ba
 were always learned beside that phrase, so recall is conditioned on the learning context
 rather than on the species name — which is also why a plain question ("What is its
 strongest Raman band?") reads so low.
+
+**Key ambiguity ceilings (2026-09-22, all 1,785 XML records; a key matches another
+species when every value is within tolerance, bands ±10 cm-1, lines ±0.2 nm).** Share
+of species uniquely identified / oracle ceiling (mean 1/candidates): top band alone
+0.6 % / 0.033 (median 42 candidates); four strongest bands 90.0 % / 0.946; four LIBS
+lines 31.9 % / 0.495 (Uranophane shares its lines with 15 Ca–Si–O–H species); bands +
+lines 99.1 % / 0.996; formula 92.2 % / 0.958 (polymorphs); formula + bands 99.7 % /
+0.998. The identity result (0.014 against a 0.946 ceiling) is therefore a learning
+failure, not an ill-posed question: four bands identify a species almost as well as a
+formula, but only jointly — each band alone leaves ~42 candidates — so bands→name is a
+four-way conjunctive lookup over individually ambiguous numbers, while formula→name is
+a single-key lookup. Lines→name is capped near 0.5 by chemistry and must be scored
+against that ceiling.
