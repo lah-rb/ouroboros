@@ -2957,3 +2957,45 @@ proximity is out of reach in this tokenisation; StarCoder2 (digit-level tokens) 
 
 **Freeze (sha256, first 16).** `stage2r/docs_manifest.json` 791fa244e6f91891; `stage2r/manifest.json`
 92e8b8d59095ceb8; `real_remeasurements.json` 793fff5f671a2dfa; `resolution_items_frozen.json` 7f430318a213af2a.
+
+### 22h. Result: jitter taught the model to ignore the bands, not to match them (run 2026-09-23 15:50–22:39Z)
+
+1,171 steps, 38,371,328 tokens, endpoint `v3_stage2r/final`. Final vs step 0: paper +1.6 %,
+replay +1.8 %, prose fim 2.361 → 2.430, reference 0.347 → 0.505.
+
+**Resolution probe, bands → name (correct field; v3g in its native no-field rendering).**
+
+| condition | v3g | v3r |
+|---|---|---|
+| T exact canonical | 0.46 | 0.05 |
+| T fresh draws lab / portable / handheld | 0.12 / 0.02 / 0.02 | 0.05 / 0.04 / 0.03 |
+| R real re-measurement, native / grid 5 / grid 10 | 0.09 / 0.05 / 0.03 | 0.01 / 0.03 / 0.01 |
+| R set-match subgroup, grid 5 / 10 | 0.04 / 0.04 | 0.04 / 0.00 |
+
+**bands + lines → name** (LIBS lines exact): v3r 0.39–0.44 in EVERY condition — exact,
+every instrument class, every real re-measurement, and 0.36 on the "neither" subgroup
+whose real four-band set shares nothing with the canonical one. `probe_band_jitter` on
+v3r: bands → name 0.03 at every δ; bands + lines → name 0.43 at δ = 0 and 0.36 at δ = 10.
+Pair probe (exact values): lines → name 0.08 (v3g) → 0.29 (v3r), lines → formula 0.33 →
+0.41 (ceilings 0.49 / 0.51), bands → name 0.47 → 0.03. With every band draw different and
+the lines always exact, the model moved its identification onto the lines — the one
+invariant cue — and learned nothing from the bands, not even the exact values.
+
+**Scorecard.** H1 ✗ (full-record held-out-order raman fill 0.918 → 0.718, system 0.887 →
+0.804; recall probe-frame bands 0.665 → 0.595, −7; formula held). H2 ✓ (+1.6 % / +1.8 %).
+H3 ✗ (handheld 0.03, portable 0.04 against bars of 0.30 / 0.20). H4 ✗ (exact 0.05). H5 ✗
+(correct field ≈ wrong field everywhere: the field is not read). H6 ✗ (set-match 0.04 /
+0.00). H7 ✓ (trivially: the lines carry it). H8 ✓ (V 0.00). Unpredicted, and continuing
+the §22g trend: prose crystal-system probe frame 0.198 (control) → 0.401 (v3g) → 0.533
+(v3r); bands + formula → name 0.61 → 0.72 and lines + formula → name 0.57 → 0.71.
+
+**Reading.** Pure bands → name had no shortcut available (its rows show only bands) and
+learned nothing in 16 fresh draws per species; where a shortcut existed, the model took
+it. Two explanations remain and this run cannot separate them: the tokenization (every
+three-digit band is one token, so 493 and 495 share nothing on the surface and proximity
+must come from embedding geometry), or the budget (16 noisy examples per species for
+1,666 species). Per the pre-registered rule (H3 failed), the next step is the
+tokenization test. A cheaper discriminating version than the StarCoder2 rebase exists:
+the same arm on OLMo-2 with band values rendered digit by digit (so 493 and 495 share
+their leading tokens, as StarCoder2's tokenizer would make them) and the LIBS lines
+jittered too, so no exact cue is left to route around.
