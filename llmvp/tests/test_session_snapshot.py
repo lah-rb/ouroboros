@@ -323,6 +323,9 @@ def test_windowing_forbid_on_snapshot_linked_sessions(monkeypatch):
         def render_generation_prompt_segments(self, reasoning=None):
             return []
 
+        def prefills_think_opener(self, reasoning=None):
+            return False
+
         def stop_tokens(self, mode=None):
             return []
 

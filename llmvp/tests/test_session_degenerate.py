@@ -63,6 +63,9 @@ class _FakeRenderer:
     def render_generation_prompt_segments(self, reasoning=None):
         return []
 
+    def prefills_think_opener(self, reasoning=None):
+        return False  # the gen prompt above renders nothing, opener included
+
     def stop_tokens(self, mode=None):
         return []
 
@@ -149,6 +152,15 @@ def test_legacy_splice_is_deleted():
     assert "instance.load_state" not in src.replace(
         "instance.load_state, static", ""
     ), "the only load_state target allowed is the pristine static"
+    # The replay restore moved into a helper — hold it to the same rule.
+    restore_src = inspect.getsource(sm.SessionManager._restore_replay_static)
+    assert "instance.load_state" not in restore_src.replace(
+        "instance.load_state, static", ""
+    ), "the replay restore may only load the pristine static"
+    # State (de)serialization belongs to the backend, never the session layer.
+    module_src = inspect.getsource(sm)
+    for op in ("get_state_seq", "set_state_seq", "state_seq_get", "state_seq_set"):
+        assert op not in module_src, f"{op} must stay in the backend"
 
 
 # ── session temperature floor ─────────────────────────────────────────

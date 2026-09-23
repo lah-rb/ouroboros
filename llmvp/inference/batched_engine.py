@@ -41,7 +41,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
-from inference.decode_constants import BUFFER_MODE_MAX_TOKENS
+from inference.decode_constants import BUFFER_MODE_MAX_TOKENS, END_LENGTH
 from inference.token_pipeline import (  # noqa: F401 — Verdict re-exported
     TokenPipeline,
     Verdict,
@@ -439,7 +439,7 @@ _END_KV_PRESSURE = "kv_pressure_truncated"
 # "completed" because the ENGINE's budget can be lower than the caller's
 # max_tokens (admission sizes against free cells), so the caller's
 # `tokens_generated >= max_tokens` test cannot detect this cut either.
-_END_LENGTH = "length"
+_END_LENGTH = END_LENGTH  # shared with the pool loop (decode_constants)
 # Held back from the pool when sizing admissions: the batch being decoded, the
 # transient cells of a stream mid-join, and ordinary accounting drift. The
 # reactive ladder (_relieve_pressure) remains the backstop — this is a margin,

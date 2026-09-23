@@ -20,7 +20,7 @@ import logging
 from core.config import resolve_working_seats
 import os
 import time
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from typing import Any, AsyncGenerator, Dict, Iterator, List, Optional
 
 import anyio
@@ -30,7 +30,7 @@ from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
 
 from .base import BaseBackend, BackendCapabilities
 from inference.repetition import DegenerateGenerationError, RepetitionGuard
-from inference.decode_constants import BUFFER_MODE_MAX_TOKENS
+from inference.decode_constants import BUFFER_MODE_MAX_TOKENS, END_LENGTH
 from inference.token_pipeline import TokenPipeline, build_capture_meta
 
 log = logging.getLogger("llm-mvp")
@@ -53,6 +53,23 @@ SNAP_GEN_RESERVE = 8192
 # [SEQ_FLOW_BASE + flow_hot_set, + session_snapshot_max). Own allocator —
 # snapshots are explicitly purged and capacity-rejected, never LRU-evicted,
 # so entangling them with the flow band's LRU would silently shrink it.
+
+
+def _p50_p95(samples) -> Dict[str, Optional[float]]:
+    """Median and 95th percentile of recent timings (None when empty)."""
+    vals = sorted(samples)
+    if not vals:
+        return {"p50": None, "p95": None}
+    return {
+        "p50": round(vals[len(vals) // 2], 2),
+        "p95": round(vals[min(len(vals) - 1, int(len(vals) * 0.95))], 2),
+    }
+
+
+# The binding's automatic hybrid checkpoint FIFO (Llama(ctx_checkpoints=...)).
+# Zero disables every save site — see the comment at the Llama() call in
+# _create_primary_instance for why nothing here would ever read them.
+_FORK_CTX_CHECKPOINTS = 0
 
 
 @dataclasses.dataclass
@@ -307,6 +324,16 @@ class LlamaCppBackend(BaseBackend):
         # (history-form-shadowed) <|return|>. Non-zero confirms the stop is doing
         # real work; a spike alongside short turns would flag premature firing.
         self._h_final_channel_stops = 0
+        # Per-turn rollback (inference/turn_checkpoint.py). The mode is resolved
+        # at load (_resolve_turn_rollback); "none" until then and on batched.
+        self._turn_rollback = "none"
+        self._h_turn_ckpt_saves = 0
+        self._h_turn_ckpt_restores = 0
+        self._h_turn_ckpt_failures = 0
+        self._turn_ckpt_ms: Dict[str, deque] = {
+            "save": deque(maxlen=64),
+            "restore": deque(maxlen=64),
+        }
         # In-process context-refresh accounting. The vanilla-compare verdict proved
         # the long-run output rot ("souring": the model emits short JSON action-stubs
         # instead of full files) is LLMVP-PROCESS-level — it clears with a fresh
@@ -520,6 +547,51 @@ class LlamaCppBackend(BaseBackend):
         else:
             self._static_states["default"] = value
 
+    # ── Full-replay session KV: base, invariant, restore ───────────────
+    #
+    # A replay session's KV is trustworthy iff it holds EXACTLY the persona
+    # static followed by the session's token history. That one check is the
+    # authority for "may this turn append?" — it catches every way the live KV
+    # has been seen to drift from token_history (a degenerate span left
+    # resident, an abandoned turn's ghost span, a replay that failed after the
+    # restore, a snapshot seeded into history but never prefilled), none of
+    # which could all be tracked by remembering to set a flag.
+
+    def _persona_static(self, instance: Any) -> Any:
+        """The static-state blob of the persona THIS instance serves."""
+        return self._static_states.get(getattr(instance, "_persona", None) or "default")
+
+    def session_base_len(self, instance: Any) -> int:
+        """KV length of the instance's pristine persona static (0 if none)."""
+        st = self._persona_static(instance)
+        return int(getattr(st, "n_tokens", 0) or 0) if st is not None else 0
+
+    def session_kv_matches(self, instance: Any, history: List[int]) -> bool:
+        """True iff the live KV is exactly [persona static] + ``history``."""
+        ids = getattr(instance, "input_ids", None)
+        if ids is None:
+            return False
+        base = self.session_base_len(instance)
+        n = int(getattr(instance, "n_tokens", 0) or 0)
+        if n != base + len(history):
+            return False
+        if not history:
+            return True
+        return bool(np.array_equal(ids[base:n], np.asarray(history, dtype=ids.dtype)))
+
+    def restore_session_static(self, instance: Any) -> None:
+        """Whole-state restore of the instance's OWN persona static.
+
+        `static_state` is the DEFAULT persona's blob; restoring it onto a
+        user_sim slot handed that session the wrong SOUL on turn 0 and on
+        every replay after a dirty turn.
+        """
+        st = self._persona_static(instance)
+        if st is not None:
+            instance.load_state(st)
+        else:
+            instance.reset()
+
     def _detect_capabilities(self) -> BackendCapabilities:
         return BackendCapabilities(
             streaming=True,
@@ -627,6 +699,16 @@ class LlamaCppBackend(BaseBackend):
             # native n-gram speculative decoding (gated by config.model.speculative).
             n_batch=int(getattr(self.config.model, "n_batch", 2048) or 2048),
             draft_model=self._make_draft(),
+            # The binding's own hybrid checkpoints OFF. On a hybrid/recurrent model
+            # (and on SWA without swa_full) it snapshots the recurrent state twice
+            # per generate (an N-1 split + the finally) and periodically inside
+            # long evals — ~113 MiB GPU->host each on qwen4exp, up to 16 retained
+            # (~1.8 GiB of unified memory per instance). Nothing here consumes
+            # them: every generate passes reset=False, which bypasses the
+            # binding's prefix-match restore, and draft models are skipped on
+            # hybrids. Turn rollback uses its own session-owned checkpoint
+            # (inference/turn_checkpoint.py), taken exactly where it is needed.
+            ctx_checkpoints=_FORK_CTX_CHECKPOINTS,
             # RoPE/YaRN overrides — omitted entirely unless a config sets them,
             # so the default path is byte-identical to before this existed.
             **self._rope_kwargs(),
@@ -1486,10 +1568,12 @@ class LlamaCppBackend(BaseBackend):
         # declaration drift. The per-request debug lines stay for tracing; this
         # is the line an operator actually sees.
         _ignored = []
-        if getattr(self.config.model, "resident_strip_reasoning", False):
+        from core.config import strip_prior_reasoning_effective
+
+        if strip_prior_reasoning_effective(self.config.model):
             _ignored.append(
-                "resident_strip_reasoning (prior-turn CoT will ACCUMULATE in "
-                "the live seq across every turn)"
+                "strip_prior_reasoning / resident_strip_reasoning (prior-turn "
+                "CoT will ACCUMULATE in the live seq across every turn)"
             )
         if getattr(
             getattr(self.config, "generation", None), "degen_retry_enabled", None
@@ -2760,6 +2844,157 @@ class LlamaCppBackend(BaseBackend):
             detail,
         )
 
+    def _resolve_turn_rollback(self) -> None:
+        """Which per-turn rollback this model supports — one line at load.
+
+        partial: hybrid/recurrent memory. A turn checkpoint captures the
+          recurrent state (PARTIAL_ONLY), and a rollback restores it before the
+          tail rm the recurrent half would otherwise refuse.
+        seq_rm:  attention-only memory where a tail rm is already exact
+          (can_shift, or an M-RoPE attention cache). Metadata-only checkpoint.
+        none:    batched seats (a seat has no eval for the replay half), or a
+          memory that refuses tail removal outright (iSWA without swa_full).
+        """
+        from inference.turn_checkpoint import (
+            MODE_NONE,
+            MODE_PARTIAL,
+            MODE_SEQ_RM,
+            PARTIAL_ONLY,
+            SEQ,
+        )
+
+        mode, detail = MODE_NONE, ""
+        if os.environ.get("LLMVP_TURN_ROLLBACK", "1") == "0":
+            # Kill switch (like LLMVP_THINK_STRIP): replay sessions go back to
+            # restore-and-replay for every repair, and nothing is stripped or
+            # dropped by rollback.
+            detail = "disabled by LLMVP_TURN_ROLLBACK=0"
+        elif self._decode_mode == "batched":
+            detail = "batched seats"
+        elif self._is_hybrid:
+            ctx = getattr(self._primary_instance, "_ctx", None)
+            try:
+                import llama_cpp as _lc
+
+                n_rs = int(_lc.llama_n_rs_seq(ctx.ctx))
+            except Exception:  # noqa: BLE001 — unaskable reads as the default 0
+                n_rs = 0
+            try:
+                size = int(ctx.get_state_seq_size_ext(SEQ, PARTIAL_ONLY))
+            except Exception:  # noqa: BLE001
+                size = 0
+            if n_rs > 0:
+                # The per-token snapshot ring (speculative rollback) changes the
+                # recurrent tail-rm semantics this path is built on.
+                detail = f"n_rs_seq={n_rs} — unvalidated with a snapshot ring"
+            elif size <= 0:
+                detail = "partial state size 0"
+            else:
+                # Asked before warm-up, the seq holds no recurrent state yet —
+                # the size here is a header, not the checkpoint (112.6 MiB on
+                # qwen4exp); each capture measures and times the real one.
+                mode = MODE_PARTIAL
+                detail = "recurrent-state checkpoint per turn; size + ms in health"
+        elif self._session_can_shift or self._resident_active:
+            mode, detail = MODE_SEQ_RM, "attention memory: a tail rm is exact"
+        else:
+            detail = "the memory refuses tail removal"
+        self._turn_rollback = mode
+        log.info("🧩 turn rollback: %s (%s)", mode, detail)
+
+    def _turn_store(self, inst: Any) -> Any:
+        """The instance's TurnCheckpointStore (created on first use), or None
+        when this model has no rollback."""
+        if self._turn_rollback == "none":
+            return None
+        store = getattr(inst, "_turn_ckpt_store", None)
+        if store is None or store.mode != self._turn_rollback:
+            from inference.turn_checkpoint import TurnCheckpointStore
+
+            store = TurnCheckpointStore(self._turn_rollback)
+            inst._turn_ckpt_store = store
+        return store
+
+    def _retire_abandoned_stream_sync(self, inst: Any) -> None:
+        """Close a stream a consumer abandoned on this instance (see
+        generate_stream_async) — synchronous, for callers already on a worker
+        thread that must not touch the KV while it can still decode."""
+        prior = getattr(inst, "_active_stream_gen", None)
+        if prior is None:
+            return
+        log.warning(
+            "🧹 retiring abandoned stream on instance [%s] before reuse",
+            getattr(inst, "_persona", "default"),
+        )
+        if not self._close_stream_gen(prior):
+            self._mark_decode_failure(
+                inst, RuntimeError("abandoned stream would not close")
+            )
+        inst._active_stream_gen = None
+
+    def rollback_turn(self, instance: Any, pos: int) -> bool:
+        """Roll a session's instance back to the turn boundary ``pos``.
+
+        True only when the KV now holds exactly [0, pos). False either leaves
+        the KV untouched (nothing to roll back to — no checkpoint, a different
+        position, a replaced context, a changed prefix) or reset it after a
+        failure part-way; the session's invariant check decides what follows.
+        Sync — run it on a worker thread under the session's generation guard.
+        """
+        from inference.turn_checkpoint import RestoreOutcome
+
+        store = self._turn_store(instance)
+        if store is None:
+            return False
+        self._retire_abandoned_stream_sync(instance)
+        if getattr(instance, "_needs_context_refresh", False):
+            return False
+        outcome = store.restore(instance, int(pos))
+        if outcome is RestoreOutcome.OK:
+            self._h_turn_ckpt_restores += 1
+            self._turn_ckpt_ms["restore"].append(store.last_restore_ms)
+            return True
+        if outcome is RestoreOutcome.FAILED_RESET:
+            self._h_turn_ckpt_failures += 1
+        return False
+
+    def strip_turn(self, instance: Any, rollback_pos: int, tokens: List[int]) -> str:
+        """Replace everything after the turn boundary ``rollback_pos`` with
+        ``tokens`` — on a hybrid, the reasoning strip: roll the turn back and
+        re-evaluate its prompt up to the reasoning plus its clean answer.
+
+        Returns "stripped" (the KV now ends with ``tokens``), "untouched" (no
+        rollback was possible; the raw turn is still in the KV) or "reset" (a
+        failure part-way emptied the context; the session's next turn replays).
+        Only this turn's own tokens are re-evaluated — never the history.
+        """
+        n_before = int(instance.n_tokens)
+        if not self.rollback_turn(instance, rollback_pos):
+            return "untouched" if int(instance.n_tokens) == n_before else "reset"
+        try:
+            instance.eval(list(tokens))
+        except Exception as e:  # noqa: BLE001 — fail closed, like the rollback
+            if isinstance(e, RuntimeError) and self._is_fatal_decode(e):
+                self._mark_decode_failure(instance, e)
+            log.error("🧹 turn strip replay failed (%s) — resetting instance", e)
+            with contextlib.suppress(Exception):
+                instance.reset()
+            return "reset"
+        return "stripped"
+
+    def drop_turn_checkpoint(self, instance: Any) -> None:
+        """Forget the instance's turn checkpoint (session end). The buffer is
+        kept for the next session on this slot."""
+        store = getattr(instance, "_turn_ckpt_store", None)
+        if store is not None:
+            store._ck = None
+
+    def turn_checkpoint_pos(self, instance: Any) -> Optional[int]:
+        """Where the instance's live turn checkpoint sits, if it has one."""
+        store = getattr(instance, "_turn_ckpt_store", None)
+        ck = getattr(store, "checkpoint", None)
+        return None if ck is None else int(ck.pos)
+
     def _pool_seq_map(self):
         """The pool band layout for the CURRENT flags (see seq_layout.py) —
         the one place _snap_seq_base/_reasoning_seq_base/n_seq_max derive
@@ -3438,6 +3673,12 @@ class LlamaCppBackend(BaseBackend):
                     )
                 except Exception:  # noqa: BLE001 — unknowable => keep old gate
                     mrope = False
+            # ...and the exception is for M-RoPE ATTENTION caches only. The GDN
+            # qwens and qwen4exp are IMROPE too, but their can_shift=False sits
+            # on a hybrid memory whose recurrent half refuses the tail seq_rm
+            # the resident purge/strip/window rely on — the exception granted
+            # there would hand a replay-only model the resident path.
+            mrope = mrope and not self._is_hybrid
             self._resident_active = can_shift or mrope
             if mrope and not can_shift:
                 log.info(
@@ -3489,6 +3730,7 @@ class LlamaCppBackend(BaseBackend):
             log.debug("primary per-seq clamp skipped", exc_info=True)
 
         self._log_session_strategy()
+        self._resolve_turn_rollback()
 
         # Resolve the persona-per-slot assignment (multi-persona pooling).
         # Falls back to all-default for configs without slot_personas and for
@@ -4247,6 +4489,9 @@ class LlamaCppBackend(BaseBackend):
                 return
             await self._release_seat(seat)
             return
+        # A turn checkpoint belongs to the session that took it — the next
+        # lease on this slot must not roll back to a stranger's turn boundary.
+        self.drop_turn_checkpoint(inst)
         # Cancellation-proof, mirroring _release_seat: the requeue + counter
         # decrement run in a ``finally`` so a CancelledError landing in the
         # heal (a BaseException that sails past ``except Exception``) can no
@@ -4694,6 +4939,17 @@ class LlamaCppBackend(BaseBackend):
 
         tracker = get_tracker()
 
+        # Per-request outcome stash, reset BEFORE anything can raise. Readers
+        # (session_turn_complete, run_completion, the strip) consume it after
+        # a success only — but a request that fails at the context guard or
+        # mid-decode must not leave the PREVIOUS request's reason and tokens
+        # behind for the next reader to take as its own.
+        instance._last_end_reason = ""
+        instance._last_effective_max = None
+        instance._last_length_cause = ""
+        instance._last_completion_tokens = None
+        instance._last_gen_start_pos = None
+
         # Per-request reasoning level for STATELESS completions. Only the
         # completion path ever puts "reasoning" in generate kwargs (the session
         # layer consumes it before generate — see session_manager gen_kwargs),
@@ -4743,6 +4999,9 @@ class LlamaCppBackend(BaseBackend):
         # only the prompt tail and produced blind rewrites/refusals
         # (45f031ac run, cycle-25 process_command placeholder splice).
         static_in_prompt = kwargs.pop("static_in_prompt", True)
+        # Session turns on a rollback-capable model: the KV position of the
+        # turn boundary to checkpoint (inference/turn_checkpoint.py).
+        turn_checkpoint_at = kwargs.pop("turn_checkpoint_at", None)
 
         # ── Per-flow static-prefix KV cache (opt-in) ──────────────────────
         # Pin [global static + this flow's static head] (flow_prefix_len tokens)
@@ -4928,13 +5187,17 @@ class LlamaCppBackend(BaseBackend):
         # watchdog cancelling a runaway — where the finally captures the
         # partial text instead of discarding the evidence.
         gen_end_reason: Optional[str] = None
+        hit_cap = False  # stopped by effective_max (not EOG / stop-text)
 
         # KV position where generation begins: generate() evals dynamic_tokens
         # (reset=False) at [n_tokens, n_tokens+len), then samples from there.
         gen_start_pos = instance.n_tokens + len(dynamic_tokens)
 
         try:
-            for token in instance.generate(dynamic_tokens, **gen_kwargs):
+            gen_prompt = self._turn_checkpoint_split(
+                instance, dynamic_tokens, turn_checkpoint_at
+            )
+            for token in instance.generate(gen_prompt, **gen_kwargs):
                 # End-of-generation token check (caller-side by contract)
                 if llama_cpp.llama_token_is_eog(instance._model.vocab, token):
                     log.debug(
@@ -4979,14 +5242,28 @@ class LlamaCppBackend(BaseBackend):
                     yield text
 
                 if verdict.stop or len(completion_tokens) >= effective_max:
+                    hit_cap = (
+                        not verdict.stop and len(completion_tokens) >= effective_max
+                    )
                     break
 
             # Flush any remaining bytes (final multi-byte char or buffered-mode
             # content). Preserve a specific in-loop reason (e.g.
-            # final_channel_close) — only plain budget/EOG exits fall through
-            # to "completed".
+            # final_channel_close); a budget exit is "length", EOG/stop-text
+            # "completed". The budget is effective_max — min(max_tokens,
+            # context remaining) — so a turn cut at the CONTEXT ceiling stops
+            # well below the caller's max_tokens, and "completed" there read as
+            # a clean finish: the 2026-09-22 qwen4exp engine.py turn stopped at
+            # 78,120 of a 262,144 request with no </think> and was logged
+            # truncated=False. (The batched loop fixed the same hole 07-27.)
             if gen_end_reason is None:
-                gen_end_reason = "completed"
+                gen_end_reason = END_LENGTH if hit_cap else "completed"
+            instance._last_end_reason = gen_end_reason
+            instance._last_effective_max = int(effective_max)
+            if hit_cap:
+                instance._last_length_cause = (
+                    "context" if effective_max < max_tokens else "max_tokens"
+                )
             _tail = pipeline.flush()
             if _tail:
                 yield _tail
@@ -5047,6 +5324,48 @@ class LlamaCppBackend(BaseBackend):
                     "abandoned by consumer (watchdog cancel or disconnect)"
                 )
             tracker.finish()
+
+    def _turn_checkpoint_split(
+        self, instance: Any, dynamic_tokens: List[int], at: Optional[int]
+    ) -> List[int]:
+        """Checkpoint the turn boundary ``at``, and return what remains to
+        generate from.
+
+        The boundary may sit INSIDE this request's prompt — a replay turn feeds
+        [history + this turn] in one go — so the history part is evaluated
+        first, the checkpoint is taken at exactly ``at``, and generate() gets
+        the rest. On an append turn ``at`` is the live position and nothing
+        splits. A capture failure is logged and leaves the turn without a
+        checkpoint (the session falls back to restore-and-replay); nothing is
+        mutated beyond the eval the turn needed anyway.
+        """
+        instance._turn_ckpt_ok = False
+        if at is None:
+            return dynamic_tokens
+        store = self._turn_store(instance)
+        k = int(at) - int(instance.n_tokens)
+        if store is None or not 0 <= k < len(dynamic_tokens):
+            if store is not None:
+                log.warning(
+                    "turn checkpoint at %s not inside this prompt (n_tokens=%d, "
+                    "prompt=%d) — turn runs without one",
+                    at,
+                    int(instance.n_tokens),
+                    len(dynamic_tokens),
+                )
+            return dynamic_tokens
+        if k:
+            instance.eval(dynamic_tokens[:k])
+        try:
+            ck = store.capture(instance)
+        except Exception:  # noqa: BLE001 — a failed capture must not fail the turn
+            log.exception("turn checkpoint capture raised — turn runs without one")
+            ck = None
+        if ck is not None:
+            instance._turn_ckpt_ok = True
+            self._h_turn_ckpt_saves += 1
+            self._turn_ckpt_ms["save"].append(ck.save_ms)
+        return dynamic_tokens[k:]
 
     async def generate_async(
         self,
@@ -5147,18 +5466,8 @@ class LlamaCppBackend(BaseBackend):
             # close fired 1.1s into the NEXT request on the same instance
             # → copy_logits(None) → the mission made no inference progress
             # for 23 minutes. Retire it before the new stream's first token.
-            prior = getattr(instance, "_active_stream_gen", None)
-            if prior is not None:
-                log.warning(
-                    "🧹 retiring abandoned stream on instance [%s] before reuse",
-                    getattr(instance, "_persona", "default"),
-                )
-                if not await run_in_threadpool(self._close_stream_gen, prior):
-                    self._mark_decode_failure(
-                        instance,
-                        RuntimeError("abandoned stream would not close"),
-                    )
-                instance._active_stream_gen = None
+            if getattr(instance, "_active_stream_gen", None) is not None:
+                await run_in_threadpool(self._retire_abandoned_stream_sync, instance)
             sync_gen = self.generate_stream_sync(
                 instance, prompt_tokens, max_tokens, temperature, **kwargs
             )
@@ -5435,6 +5744,22 @@ class LlamaCppBackend(BaseBackend):
             "checked_out": self._checked_out,
             "shared_model": True,
             "hybrid_model": self._is_hybrid,
+            # The binding's automatic checkpoint FIFO is disabled
+            # (_FORK_CTX_CHECKPOINTS) — anything but 0 here means a code path
+            # re-enabled it and is paying ~113 MiB per snapshot for nothing.
+            # Per-turn rollback (inference/turn_checkpoint.py): mode, counts,
+            # and recent capture/restore wall times (ms).
+            "turn_rollback": self._turn_rollback,
+            "turn_ckpt_saves": self._h_turn_ckpt_saves,
+            "turn_ckpt_restores": self._h_turn_ckpt_restores,
+            "turn_ckpt_failures": self._h_turn_ckpt_failures,
+            "turn_ckpt_ms": {k: _p50_p95(v) for k, v in self._turn_ckpt_ms.items()},
+            "fork_ckpt_bytes": sum(
+                int(
+                    getattr(getattr(i, "_hybrid_cache_mgr", None), "cache_size", 0) or 0
+                )
+                for i in self._all_instances
+            ),
             "jit_enabled": self._jit_enabled,
             "instances": [
                 {
@@ -5584,10 +5909,13 @@ class LlamaCppBackend(BaseBackend):
         analysis channel — pos_min jumped by the shift amount). The recompute is
         tiny (just the short answer, not history).
 
-        No-op for hybrid/recurrent models (``memory_can_shift()`` is False, e.g.
-        Qwen3.5/Qwen3-Next): their memory is a fixed recurrent state, not a
-        removable KV span, so reasoning doesn't accumulate unboundedly and
-        per-turn excision doesn't apply (and would corrupt the recurrent state).
+        Refused (False, KV untouched) when ``memory_can_shift()`` is False. On a
+        hybrid/recurrent model the in-place tail rm is refused by the recurrent
+        half — NOT because reasoning doesn't accumulate there: it does, in the
+        attention (and indexer) caches, 27,648 B/tok on qwen4exp. Those models
+        strip by TURN ROLLBACK instead — ``strip_turn``: restore the turn's
+        recurrent checkpoint first, then the tail rm succeeds (see
+        inference/turn_checkpoint.py).
         """
         if self._decode_mode == "batched":
             # Deferred in batched v1: the strip needs a tail seq_rm + a

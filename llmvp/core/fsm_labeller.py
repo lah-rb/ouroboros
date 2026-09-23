@@ -334,7 +334,10 @@ def _bracket_think_start_phase(atoms: list["Atom"]) -> "Phase":
 
 
 def label_atoms(
-    atoms: list[Atom], family: str = "harmony", single_turn: bool = True
+    atoms: list[Atom],
+    family: str = "harmony",
+    single_turn: bool = True,
+    prefilled_think: bool | None = None,
 ) -> list[tuple[str, str]]:
     """Label each atom with D/T/C/E using an explicit FSM.
 
@@ -364,6 +367,20 @@ def label_atoms(
                 assistant role mid-turn, and a truncated/empty final
                 must not block a later real one). Pass False to label a
                 multi-turn transcript verbatim.
+        prefilled_think: The CALLER's knowledge that this generation's
+                prompt ended with the thinking opener (the renderer's
+                ``prefills_think_opener``), so the stream starts INSIDE a
+                think block whose opener is in the prompt, not the output.
+                True starts the tag-shaped families in THINKING outright.
+                None/False keep the stream-content inference below, which
+                can only recognise a prefilled think by SEEING its closer —
+                so a prefilled think that never closes (a turn cut off
+                mid-thought) looks exactly like a plain-content stream and
+                every word of the deliberation labels C. That is how a
+                qwen4exp turn capped at the context ceiling handed 325k
+                chars of unfinished thinking to the file extractor as its
+                "answer" (2026-09-22; the extractor built engine.py from a
+                187-byte snippet inside it).
 
     Returns:
         List of (atom_text, label) pairs suitable for downstream phase
@@ -397,9 +414,13 @@ def label_atoms(
     if shape is _ThinkShape.CHANNEL:
         phase = Phase.DELIM
     elif shape is _ThinkShape.ANGLE:
-        phase = _chatml_start_phase(atoms)
+        phase = Phase.THINKING if prefilled_think else _chatml_start_phase(atoms)
     elif shape is _ThinkShape.BRACKET:
         phase = _bracket_think_start_phase(atoms)
+        # A stream carrying its own [INST] turn is a prompt+response dump —
+        # its DELIM start is about the prompt, and the hint does not apply.
+        if prefilled_think and phase is not Phase.DELIM:
+            phase = Phase.THINKING
     elif shape is _ThinkShape.INV_CHANNEL:
         # Gemma: generation is content from the first token UNLESS the model
         # opens its thought channel — the opener compound flips to THINKING
@@ -669,11 +690,17 @@ def extract_content(
 
 
 def extract_phases(
-    atoms: list[Atom], family: str = "harmony", single_turn: bool = True
+    atoms: list[Atom],
+    family: str = "harmony",
+    single_turn: bool = True,
+    prefilled_think: bool | None = None,
 ) -> dict[str, str]:
     """Extract text grouped by phase label. Returns a dict keyed by
-    D/T/C/E with the concatenated text for each label, stripped."""
-    labelled = label_atoms(atoms, family=family, single_turn=single_turn)
+    D/T/C/E with the concatenated text for each label, stripped.
+    ``prefilled_think``: see :func:`label_atoms`."""
+    labelled = label_atoms(
+        atoms, family=family, single_turn=single_turn, prefilled_think=prefilled_think
+    )
     phases: dict[str, list[str]] = {"D": [], "T": [], "C": [], "E": []}
     for text, lbl in labelled:
         phases[lbl].append(text)
@@ -700,8 +727,14 @@ def fsm_extract_content(
 
 
 def fsm_extract_phases(
-    raw_text: str, family: str = "harmony", single_turn: bool = True
+    raw_text: str,
+    family: str = "harmony",
+    single_turn: bool = True,
+    prefilled_think: bool | None = None,
 ) -> dict[str, str]:
-    """Featurize raw text and return all phases as a {D,T,C,E} dict."""
+    """Featurize raw text and return all phases as a {D,T,C,E} dict.
+    ``prefilled_think``: see :func:`label_atoms`."""
     atoms = featurize(raw_text, family=family)
-    return extract_phases(atoms, family=family, single_turn=single_turn)
+    return extract_phases(
+        atoms, family=family, single_turn=single_turn, prefilled_think=prefilled_think
+    )

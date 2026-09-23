@@ -456,24 +456,42 @@ class FormatRenderer:
         s = self.render_generation_prompt(reasoning=reasoning)
         return [(s, True)] if s else []
 
+    def prefills_think_opener(self, reasoning: str | None = None) -> bool:
+        """Whether THIS request's generation prompt ends with the think opener.
+
+        True means the generation starts INSIDE a think block whose opener
+        sits in the prompt, not in the output — so the output stream can only
+        announce the phase by CLOSING it. Decided by inspecting the rendered
+        string rather than re-deriving the enablement branch, so it can never
+        drift from ``render_generation_prompt``: a thinking-off config, a
+        gate-closed level, a closed-literal prefill (``<think>\\n\\n</think>``),
+        or a family that never prefills (gemma) all read False.
+
+        Consumers: the think-hold below, and the FSM labeller's
+        ``prefilled_think`` hint — without it, a prefilled think that never
+        closes is indistinguishable from a plain-content answer.
+        """
+        t = self.s.thinking
+        if t.style != "inline_tags" or not t.open_tag:
+            return False
+        tail = t.open_tag + ("\n" if t.open_tag_newline else "")
+        return self.render_generation_prompt(reasoning=reasoning).endswith(tail)
+
     def think_hold(self, reasoning: str | None = None) -> tuple | None:
         """(close_tag, hold_tokens) when THIS request should think-hold.
 
         Engages iff the family declares ``force_open_hold_tokens`` AND the
         generation prompt this request would render actually PREFILLS the
-        opener — decided by inspecting the rendered string rather than
-        re-deriving the enablement branch, so it can never drift from
-        ``render_generation_prompt``. A thinking-off config, a gate-closed
-        level, or a family that never prefills (gemma) returns None. See
-        inference/think_hold.py for the mechanism and the laguna evidence.
+        opener (``prefills_think_opener``). A thinking-off config, a
+        gate-closed level, or a family that never prefills (gemma) returns
+        None. See inference/think_hold.py for the mechanism and the laguna
+        evidence.
         """
         t = self.s.thinking
         n = int(getattr(t, "force_open_hold_tokens", 0) or 0)
-        if n <= 0 or t.style != "inline_tags" or not t.open_tag or not t.close_tag:
+        if n <= 0 or not t.close_tag:
             return None
-        rendered = self.render_generation_prompt(reasoning=reasoning)
-        tail = t.open_tag + ("\n" if t.open_tag_newline else "")
-        if rendered.endswith(tail):
+        if self.prefills_think_opener(reasoning):
             return (t.close_tag, n)
         return None
 

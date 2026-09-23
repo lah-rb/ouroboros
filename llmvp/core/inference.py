@@ -193,6 +193,15 @@ def _resolve_think_hold(reasoning: "str | None") -> "dict | None":
         return None
 
 
+def _prefills_think(reasoning: "str | None") -> bool:
+    """Whether a generation prompt rendered at ``reasoning`` ended with the
+    think opener — the FSM hint that keeps an unterminated think from being
+    read as the answer (see ``fsm_labeller.label_atoms``). Pass the SAME level
+    the prompt was rendered with: None for the chat/tool paths, which render
+    the generation prompt at the default."""
+    return _get_format_renderer(config.model.family).prefills_think_opener(reasoning)
+
+
 def _get_fsm_family() -> str:
     """Return the model family name to drive FSM phase transitions.
 
@@ -204,7 +213,7 @@ def _get_fsm_family() -> str:
     return config.model.family
 
 
-def _strip_delimiter(text: str) -> str:
+def _strip_delimiter(text: str, prefilled_think: bool | None = None) -> str:
     """Strip delimiter tokens from model output using the FSM labeller.
 
     The FSM walks the atom stream produced by ``training.featurizer``
@@ -222,6 +231,11 @@ def _strip_delimiter(text: str) -> str:
 
     Args:
         text: Raw model output.
+        prefilled_think: Whether the generation prompt ended with the think
+            opener (``renderer.prefills_think_opener``). None keeps the FSM's
+            stream-content inference; True lets it label an UNTERMINATED
+            prefilled think as thinking rather than content — see
+            ``fsm_labeller.label_atoms``.
 
     Returns:
         Cleaned response text (content phase only). Empty string if no
@@ -243,9 +257,20 @@ def _strip_delimiter(text: str) -> str:
         from core.generation_tracker import get_tracker
 
         family = _get_fsm_family()
-        phases = fsm_extract_phases(text, family=family)
+        phases = fsm_extract_phases(
+            text, family=family, prefilled_think=prefilled_think
+        )
         content = phases.get("C", "").strip()
         thinking = phases.get("T", "").strip()
+        if prefilled_think and not content and thinking:
+            # The model never left its prefilled think — a turn cut off
+            # mid-thought. Before the hint, this whole deliberation came back
+            # as the ANSWER. Loud, because the caller now gets "" instead.
+            log.warning(
+                "🧠 unterminated prefilled think: %d chars routed to thinking, "
+                "content empty (the turn never closed its reasoning)",
+                len(thinking),
+            )
 
         log.debug(
             "FSM extraction: input=%r → content=%r thinking=%r",
@@ -502,7 +527,7 @@ async def run_completion(
         log.info(
             "run_completion: raw answer len=%d, first100=%r", len(answer), answer[:100]
         )
-        answer = _strip_delimiter(answer)
+        answer = _strip_delimiter(answer, prefilled_think=_prefills_think(reasoning))
         log.info(
             "run_completion: after strip len=%d, first100=%r", len(answer), answer[:100]
         )
@@ -914,7 +939,7 @@ async def run_chat_completion(
             temperature=temperature,
             **gen_kwargs,
         )
-        answer = _strip_delimiter(answer)
+        answer = _strip_delimiter(answer, prefilled_think=_prefills_think(None))
         tokens_generated = _approximate_token_count(answer)
         log_interaction(prompt=str(messages)[:500], response=answer, mode="chat")
         return answer, tokens_generated
@@ -986,7 +1011,7 @@ async def run_tool_completion(
                 temperature=temperature,
                 **({"request_id": str(request_id)} if request_id else {}),
             )
-            answer = _strip_delimiter(answer)
+            answer = _strip_delimiter(answer, prefilled_think=_prefills_think(None))
             total_tokens += _approximate_token_count(answer)
         finally:
             if backend.capabilities.manual_pooling and instance is not None:

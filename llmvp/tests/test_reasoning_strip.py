@@ -192,9 +192,12 @@ def test_replay_refuses_out_of_range_t0(t0, why):
     assert inst._ctx.ops == [], "must not touch the KV on a refused strip"
 
 
-def test_replay_is_a_noop_for_hybrid_recurrent_models():
-    """memory_can_shift() False (Qwen3.5/Qwen3-Next): the memory is a fixed
-    recurrent state, not a removable KV span. Excision would corrupt it."""
+def test_in_place_strip_refuses_a_memory_that_cannot_tail_rm():
+    """memory_can_shift() False: the IN-PLACE strip (a bare tail rm + replay)
+    must refuse and touch nothing — on a hybrid the recurrent half rejects the
+    rm. Hybrids strip by turn rollback instead (strip_turn; see
+    test_session_turn_rollback.py), which restores the recurrent checkpoint
+    before the rm."""
     backend = _backend()
     inst = make_instance(n_tokens=8, can_shift=False)
     assert backend.strip_reasoning_replay(inst, 5, [61]) is False

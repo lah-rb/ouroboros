@@ -458,6 +458,26 @@ class CompletionResponse:
     # generation. Lets the client trace split inference time per call.
     prefill_ms: float = 0.0
     decode_ms: float = 0.0
+    # Session turns only (None / defaults on stateless completions). The id to
+    # pass to rewindSessionTurn; whether the turn entered the session's context
+    # (False: it produced no answer and was rolled out at commit); and why
+    # generation stopped ("length" = budget or context ceiling).
+    session_turn_id: Optional[int] = None
+    turn_committed: bool = True
+    end_reason: str = ""
+
+
+@strawberry.type
+class RewindResult:
+    """Outcome of rewindSessionTurn. ``reason``: rolled_back | history_truncated
+    (replay without a checkpoint — the next turn replays) | already_absent
+    (the turn was dropped at commit, or already rewound) | not_last_turn |
+    in_flight | refused (a resident memory refused the tail removal)."""
+
+    ok: bool
+    reason: str
+    turn_count: int
+    tokens: int
 
 
 @strawberry.type
@@ -1025,6 +1045,9 @@ class Query:
             flow_key=cache.get("flow_key", ""),
             prefill_ms=cache.get("prefill_ms", 0.0),
             decode_ms=cache.get("decode_ms", 0.0),
+            session_turn_id=cache.get("turn_id"),
+            turn_committed=not cache.get("turn_dropped", False),
+            end_reason=cache.get("end_reason", ""),
         )
 
     @strawberry.field
@@ -1402,6 +1425,20 @@ class Mutation:
             resident=info["resident"],
             turn_count=info["turn_count"],
             created_at=time.time(),
+        )
+
+    @strawberry.mutation
+    async def rewind_session_turn(self, session_id: str, turn_id: int) -> RewindResult:
+        """Take back the session's LAST turn (by the id sessionCompletion
+        returned) so a retry or the next step starts from the context before
+        it. One level of undo; see RewindResult for the outcomes."""
+        mgr = _get_session_manager()
+        r = await mgr.rewind_turn(session_id, turn_id)
+        return RewindResult(
+            ok=r["ok"],
+            reason=r["reason"],
+            turn_count=r["turn_count"],
+            tokens=r["tokens"],
         )
 
     @strawberry.mutation

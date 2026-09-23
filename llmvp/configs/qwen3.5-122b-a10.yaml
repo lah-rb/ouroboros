@@ -74,6 +74,16 @@ model:
   # canon: always-on thinking model — always think, never adapt (operator)
   thinking_available: true
   thinking: "on"
+  # STRIP ON — the template's own history shape (step 3c). The qwen3.5
+  # assistant-history branch renders reasoning only for turns AFTER the last
+  # user query (dev/qwen35_chat_template.jinja), so a session
+  # history that keeps every turn's thinking was off-template for this model.
+  # On replay it runs by turn rollback (a per-turn recurrent checkpoint; the
+  # history is never re-prefilled) — gated 2026-09-22 on qwen3.8-27b (same GDN
+  # memory class): rollback + strip bit-identical to the inline path at
+  # 2k/30k/100k. Verify on this model with the rollback probe before leaning on
+  # it: dev/cache_strategy_stress.py --mode rollback.
+  strip_prior_reasoning: true
   session_full_replay: true
 
 prompt:

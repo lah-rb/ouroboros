@@ -27,6 +27,7 @@ from typing import Any, AsyncGenerator, Optional
 
 from starlette.concurrency import run_in_threadpool
 
+from core.config import strip_prior_reasoning_effective
 from core.interaction_logger import log_interaction
 from inference.tokenizer import get_cached_tokenizer, tokenize_segments, tokenize_text
 from inference.repetition import DegenerateGenerationError
@@ -158,6 +159,19 @@ def reasoning_span(
 
 
 @dataclass
+class TurnMark:
+    """What it takes to take one session turn back (rewind_turn)."""
+
+    turn_id: int
+    pre_turn_pos: int  # KV length before the turn — the rollback boundary
+    history_len: int  # len(token_history) before the turn (replay sessions)
+    turn_count: int  # turn_count before the turn
+    committed: bool = False
+    dropped: bool = False  # rolled out at commit (an answerless turn)
+    rewound: bool = False
+
+
+@dataclass
 class SessionState:
     """Internal state for an active memoryful session."""
 
@@ -193,10 +207,14 @@ class SessionState:
     # needle recalled at both depths in both paths. `memory_can_shift` gates
     # REMOVAL and SHIFTING (seq_rm/seq_cp/windowing); continuing forward needs
     # neither, and the recurrent state after [0,N) is exactly what extends.
-    # kv_dirty means the live KV no longer matches token_history — a degenerate
-    # turn left its span resident while the history never took it — so the next
-    # turn MUST restore-and-replay once. This architecture supports restart or
-    # continue, never rewind (a bare n_tokens rewind dies at the next decode).
+    # kv_dirty means the live KV may no longer match token_history — a
+    # degenerate or abandoned turn left its span resident while the history
+    # never took it. The AUTHORITY is the verified invariant (backend
+    # session_kv_matches); the flag is the reason. Repair is a TURN ROLLBACK to
+    # the last committed boundary where the model has one (hybrids restore the
+    # boundary's recurrent checkpoint — inference/turn_checkpoint.py), else a
+    # restore-and-replay. A bare n_tokens rewind is never a repair: on a hybrid
+    # it leaves the recurrent state past the rewind and dies at the next decode.
     kv_dirty: bool = False
     # Resident session flow-fork (model.resident_session_flow_fork): an invariant
     # per-flow preamble ABOVE the global static, pinned + forked onto the live seq at
@@ -213,6 +231,26 @@ class SessionState:
     # and corrupt the snapshot (see SessionSnapshotOverflow).
     snapshot_key: Optional[str] = None
     snapshot_forked: bool = False
+    # Whether the LAST turn's generation prompt prefilled the think opener
+    # (renderer.prefills_think_opener at that turn's reasoning level). The
+    # FSM needs it to tell an unterminated think from an answer: the opener
+    # is in the prompt, so the output stream can only show a closer — and a
+    # turn cut off mid-thought shows none.
+    last_prefilled_think: Optional[bool] = None
+    # A resident purge the memory refused (see session_turn's degenerate
+    # handler): the live seq still holds a span no turn committed, and there
+    # is no sound way back. Further turns raise instead of decoding on it.
+    kv_lost: bool = False
+    # What happened to the LAST turn at commit (replay sessions with turn
+    # rollback): its reasoning was stripped from the context, or — a turn that
+    # produced no answer — it was rolled back out entirely.
+    last_turn_stripped: bool = False
+    last_turn_dropped: bool = False
+    # Monotonic turn ids (every session_turn call, committed or not) and the
+    # LAST turn's mark. A caller rewinds by id, so a blind "take back the last
+    # turn" after a server-side drop can never erase the good turn before it.
+    turn_seq: int = 0
+    last_turn: Optional[TurnMark] = None
 
 
 class SessionSnapshotOverflow(RuntimeError):
@@ -524,7 +562,12 @@ class SessionManager:
                 else:
                     # Replay fallback (recurrent models / resident off): seed
                     # the history; turn 1 re-prefills it on the static base.
+                    # The KV holds only the static here — it does NOT match the
+                    # seeded history, and before the invariant check the append
+                    # path took "non-empty history + non-empty KV" for a match
+                    # and silently never prefilled the snapshot.
                     session.token_history = list(snap_entry["dyn_tokens"])
+                    session.kv_dirty = True
             except BaseException:
                 # Unpin FIRST: release_instance on a still-pinned seat is a
                 # no-op in the batched backend, which would re-leak it.
@@ -618,6 +661,11 @@ class SessionManager:
             raise ValueError(f"Session {session_id} not found")
 
         instance = session.instance
+        if session.kv_lost:
+            raise RuntimeError(
+                f"Session {session_id} lost its KV (a resident purge was refused "
+                "by the memory) — end it and start a new session"
+            )
 
         # The entire turn — KV-base restore, generation, reasoning strip —
         # is one continuous span of GPU work. Hold ONE
@@ -681,29 +729,44 @@ class SessionManager:
                 pre_turn_pos = int(getattr(instance, "n_tokens", 0) or 0)
             else:
                 # Append fast path: continue from the live KV when it still
-                # matches token_history. (append_ok is pre-bound above so the
-                # later `not resident and not append_ok` never depends on
-                # short-circuit evaluation to stay defined.) Turn 0 and any dirtied session fall
-                # back to the restore-and-replay path below.
-                append_ok = (
-                    bool(session.token_history)
-                    and not session.kv_dirty
-                    and int(getattr(instance, "n_tokens", 0) or 0) > 0
+                # holds exactly [persona static] + token_history — VERIFIED, not
+                # remembered (see backend.session_kv_matches). (append_ok is
+                # pre-bound above so the later `not resident and not append_ok`
+                # never depends on short-circuit evaluation to stay defined.)
+                # Turn 0 keeps the restore: cheap, and a known-good base.
+                append_ok = bool(session.token_history) and self._replay_kv_matches(
+                    instance, session
                 )
+                if append_ok and session.kv_dirty:
+                    # A failure BEFORE anything was evaluated (a context-window
+                    # refusal) sets the flag without touching the KV.
+                    log.info(
+                        "🧩 Session %s: dirty flag set but the KV verifies "
+                        "clean — appending",
+                        session_id,
+                    )
+                if not append_ok and session.token_history:
+                    # The KV ran past the last committed turn (a degenerate
+                    # span, an abandoned stream, a refused-then-kept turn).
+                    # Roll it back to that turn's checkpoint instead of
+                    # re-prefilling the whole history.
+                    append_ok = await self._rollback_to_history(
+                        session_id, instance, session
+                    )
                 if not append_ok:
-                    static = getattr(self._backend, "static_state", None)
-                    if static is not None:
-                        await run_in_threadpool(instance.load_state, static)
-                    else:
-                        await run_in_threadpool(instance.reset)
-                    if session.kv_dirty:
+                    await self._restore_replay_static(instance)
+                    if session.token_history:
                         log.info(
-                            "🧩 Session %s: KV was dirty — restored static and "
+                            "🧩 Session %s: KV %s — restored static and "
                             "replaying %d history tokens",
                             session_id,
+                            "was dirty" if session.kv_dirty else "diverged",
                             len(session.token_history),
                         )
-                    session.kv_dirty = False
+                    # kv_dirty is NOT cleared here: it clears when this turn
+                    # COMMITS. Cleared up front, a replay that failed after the
+                    # restore left a static-only KV marked clean, and the next
+                    # turn appended onto a session with no history in it.
 
             # Build turn tokens — different paths for first turn vs continuation
             renderer = _get_format_renderer(config.model.family)
@@ -751,7 +814,11 @@ class SessionManager:
                 # user turn + the generation prompt. Append only that.
                 turn_tokens = flow_turn_suffix
                 turn_only = turn_tokens
+                # build_full_prompt rendered this suffix's gen prompt at the
+                # default level.
+                session.last_prefilled_think = renderer.prefills_think_opener(None)
             else:
+                session.last_prefilled_think = renderer.prefills_think_opener(reasoning)
                 segments: list = []
                 if session.turn_count > 0:
                     segments += renderer.render_turn_transition_segments()
@@ -868,8 +935,41 @@ class SessionManager:
             if sampling_overrides:
                 gen_kwargs["sampling_overrides"] = dict(sampling_overrides)
 
+            # Replay sessions on a rollback-capable model checkpoint the turn
+            # boundary (the KV right before this turn's prompt), so this turn
+            # can later be rolled back — stripped, dropped, or repaired after
+            # an abandon/degeneration — without replaying the history.
+            session.last_turn_dropped = False
+            session.last_turn_stripped = False
+            if (
+                not resident
+                and flow_turn_suffix is None
+                and getattr(self._backend, "_turn_rollback", "none") != "none"
+            ):
+                pre_turn_pos = self._backend.session_base_len(instance) + len(
+                    session.token_history
+                )
+                gen_kwargs["turn_checkpoint_at"] = pre_turn_pos
+            elif not resident and hasattr(self._backend, "session_base_len"):
+                pre_turn_pos = self._backend.session_base_len(instance) + len(
+                    session.token_history
+                )
+            session.turn_seq += 1
+            mark = TurnMark(
+                turn_id=session.turn_seq,
+                pre_turn_pos=int(pre_turn_pos),
+                history_len=len(session.token_history),
+                turn_count=session.turn_count,
+            )
+            session.last_turn = mark
+
             # Collect generated text for next turn's assistant prefix
             generated_parts: list[str] = []
+            # Set on commit. Anything else leaving the try — an error, OR the
+            # consumer abandoning this generator (GeneratorExit at the yield,
+            # which no except clause below sees) — leaves a replay session's
+            # KV holding a span its history never took.
+            completed = False
 
             # Generate (KV cache has full prior context from load_state). If the
             # turn degenerates (e.g. the Gemma-4 repetition collapse), the backend
@@ -895,28 +995,36 @@ class SessionManager:
                     # for non-thinking families; skips truncated turns (handled in
                     # _maybe_strip_reasoning). Crash-free here (no save_state),
                     # unlike the splice path. Off by default (parity w/ full_replay).
-                    if _think_strip_enabled() and getattr(
-                        config.model, "resident_strip_reasoning", False
+                    if _think_strip_enabled() and strip_prior_reasoning_effective(
+                        config.model
                     ):
                         from core.inference import _strip_delimiter
 
-                        content = _strip_delimiter("".join(generated_parts))
+                        content = _strip_delimiter(
+                            "".join(generated_parts),
+                            prefilled_think=session.last_prefilled_think,
+                        )
                         await self._maybe_strip_reasoning(instance, content)
                 else:
-                    # Full replay — no state surgery of any kind: extend the
-                    # history with this turn's exact tokens (turn segments +
-                    # generated ids exposed by the backend) — the next turn
-                    # re-prefills it. strip_reasoning (tail seq_rm) is skipped
-                    # by design: the operation is unsound on recurrent state,
-                    # and the family configs using full replay are non-thinking.
-                    gen_ids = list(
-                        getattr(instance, "_last_completion_tokens", None) or []
+                    # Full replay — commit EXACTLY what the live KV now holds:
+                    # the raw turn, its stripped form, or (an answerless turn,
+                    # rolled back) nothing. See _commit_replay_turn.
+                    await self._commit_replay_turn(
+                        session_id,
+                        session,
+                        instance,
+                        turn_only,
+                        "".join(generated_parts),
+                        pre_turn_pos,
+                        config,
                     )
-                    session.token_history.extend(turn_only)
-                    session.token_history.extend(gen_ids)
                 session.last_assistant_text = "".join(generated_parts)
                 session.last_turn_at = time.monotonic()
-                session.turn_count += 1
+                if not session.last_turn_dropped:
+                    session.turn_count += 1
+                mark.committed = True
+                mark.dropped = session.last_turn_dropped
+                completed = True
 
                 log.info(
                     "Session %s turn %d complete (%d chars generated)",
@@ -935,11 +1043,31 @@ class SessionManager:
                         await run_in_threadpool(instance.purge_to, pre_turn_pos)
                     else:
 
-                        def _purge_resident() -> None:
-                            instance._ctx.memory_seq_rm(0, pre_turn_pos, -1)
+                        def _purge_resident() -> bool:
+                            # A hybrid's recurrent half REFUSES a tail rm
+                            # (qwen3-next runs resident): it returns False and
+                            # changes nothing. Rewinding n_tokens over an
+                            # untouched KV desynchronised positions from cells
+                            # and the next decode failed or silently reset.
+                            if (
+                                instance._ctx.memory_seq_rm(0, pre_turn_pos, -1)
+                                is False
+                            ):
+                                return False
                             instance.n_tokens = pre_turn_pos
+                            return True
 
-                        await run_in_threadpool(_purge_resident)
+                        if not await run_in_threadpool(_purge_resident):
+                            session.kv_lost = True
+                            log.error(
+                                "🛑 Session %s degenerate generation (%s) — "
+                                "resident purge REFUSED by the memory (hybrid "
+                                "tail rm); the degenerate span is still in the "
+                                "KV, so the session is closed to further turns",
+                                session_id,
+                                e.reason,
+                            )
+                            raise
                     log.warning(
                         "🛑 Session %s degenerate generation (%s) — resident, "
                         "purged turn span back to pos %d",
@@ -994,6 +1122,218 @@ class SessionManager:
 
                     asyncio.get_running_loop().create_task(_teardown(session_id))
                 raise
+            finally:
+                if not completed and not resident:
+                    # Synchronous on purpose: this also runs under
+                    # GeneratorExit, where awaiting is not an option. The next
+                    # turn's invariant check does the actual repair.
+                    session.kv_dirty = True
+
+    def _replay_kv_matches(self, instance: Any, session: SessionState) -> bool:
+        """Whether a replay session's live KV is [persona static] + history.
+
+        Backend doubles without the invariant fall back to the old heuristic
+        (non-empty KV and no dirty flag)."""
+        check = getattr(self._backend, "session_kv_matches", None)
+        if check is None:
+            return (
+                int(getattr(instance, "n_tokens", 0) or 0) > 0 and not session.kv_dirty
+            )
+        return bool(check(instance, session.token_history))
+
+    async def _restore_replay_static(self, instance: Any) -> None:
+        """Restore the instance's own persona static (see
+        backend.restore_session_static); doubles without it use the old
+        default-persona blob."""
+        restore = getattr(self._backend, "restore_session_static", None)
+        if restore is not None:
+            await run_in_threadpool(restore, instance)
+            return
+        static = getattr(self._backend, "static_state", None)
+        if static is not None:
+            await run_in_threadpool(instance.load_state, static)
+        else:
+            await run_in_threadpool(instance.reset)
+
+    async def _rollback_to_history(
+        self, session_id: str, instance: Any, session: SessionState
+    ) -> bool:
+        """Roll a diverged replay KV back to its last committed turn boundary.
+
+        The boundary's checkpoint was taken when the failed turn started, so
+        this restores the recurrent state and drops the stray tail — no replay.
+        False (and the KV untouched, or reset) when there is no usable
+        checkpoint; the caller then restores the static base and replays."""
+        rollback = getattr(self._backend, "rollback_turn", None)
+        base_len = getattr(self._backend, "session_base_len", None)
+        if rollback is None or base_len is None:
+            return False
+        boundary = int(base_len(instance)) + len(session.token_history)
+        if not await run_in_threadpool(rollback, instance, boundary):
+            return False
+        if not self._replay_kv_matches(instance, session):
+            return False
+        log.info(
+            "⏪ Session %s: rolled the KV back to the last committed turn "
+            "(pos %d) — no replay",
+            session_id,
+            boundary,
+        )
+        return True
+
+    async def _commit_replay_turn(
+        self,
+        session_id: str,
+        session: SessionState,
+        instance: Any,
+        turn_only: list,
+        raw: str,
+        pre_turn_pos: int,
+        config: Any,
+    ) -> None:
+        """Commit a finished replay turn to token_history — as whatever the
+        live KV now holds.
+
+        Without a turn checkpoint (no rollback on this model/turn) the raw turn
+        is committed, as always. With one:
+
+        * an ANSWERLESS turn — a prefilled think that never closed (cut at the
+          budget or the context ceiling), or a closed think with nothing after
+          it — is rolled back out of the context entirely (drop_answerless_turns,
+          auto-on here). Committed, it sat under every later turn as a
+          context-sized non-answer: the 2026-09-22 engine.py turn was 78,120
+          tokens of unfinished thinking.
+        * with strip_prior_reasoning, a turn whose reasoning CLOSED is rolled
+          back and re-evaluated as its prompt up to the reasoning plus its clean
+          answer — the template's no-reasoning form for a prior turn. Only this
+          turn's own tokens are re-evaluated; the history is never replayed.
+        """
+        gen_in_kv = self._generated_in_kv(instance)
+        if not getattr(instance, "_turn_ckpt_ok", False):
+            session.token_history.extend(turn_only)
+            session.token_history.extend(gen_in_kv)
+            session.kv_dirty = False
+            return
+
+        family = config.model.family
+        renderer = _get_format_renderer(family)
+        delim = getattr(renderer, "delimiter_pattern", lambda: "")()
+        if delim:
+            from core.fsm_labeller import fsm_extract_phases
+
+            content = fsm_extract_phases(
+                raw, family=family, prefilled_think=session.last_prefilled_think
+            ).get("C", "")
+        else:
+            content = raw
+        content = content.strip()
+
+        drop = getattr(config.model, "drop_answerless_turns", None)
+        if not content and (drop is None or drop):
+            ok = await run_in_threadpool(
+                self._backend.rollback_turn, instance, pre_turn_pos
+            )
+            session.last_turn_dropped = True
+            # The turn never enters history either way; a failed rollback just
+            # leaves the invariant to force a replay next turn.
+            session.kv_dirty = not ok
+            log.warning(
+                "🗑 Session %s: answerless turn (%d generated tokens%s) %s",
+                session_id,
+                len(gen_in_kv),
+                ", unterminated think" if session.last_prefilled_think else "",
+                "rolled out of the context" if ok else "NOT rolled back — replaying",
+            )
+            return
+
+        if _think_strip_enabled() and strip_prior_reasoning_effective(config.model):
+            stripped = await self._strip_replay_turn(
+                session, instance, turn_only, content, pre_turn_pos, config
+            )
+            if stripped is not None:
+                session.token_history.extend(stripped)
+                session.last_turn_stripped = True
+                return
+
+        session.token_history.extend(turn_only)
+        session.token_history.extend(gen_in_kv)
+        session.kv_dirty = False
+
+    async def _strip_replay_turn(
+        self,
+        session: SessionState,
+        instance: Any,
+        turn_only: list,
+        content: str,
+        pre_turn_pos: int,
+        config: Any,
+    ) -> list | None:
+        """Strip this turn's reasoning by rollback + replay of the turn's own
+        tokens. Returns the tokens now committed after ``pre_turn_pos`` (or
+        None: nothing was stripped and the raw turn is still in the KV)."""
+        gen_tokens = list(getattr(instance, "_last_completion_tokens", None) or [])
+        gen_start = getattr(instance, "_last_gen_start_pos", None)
+        if not gen_tokens or gen_start is None:
+            return None
+        if pre_turn_pos + len(turn_only) != int(gen_start):
+            return None  # the turn prompt does not end where generation began
+        think_on = bool(getattr(config.model, "thinking_available", True)) and (
+            config.model.thinking != "off"
+        )
+        tokenizer = get_cached_tokenizer()
+        span = reasoning_span(
+            config.model.family, think_on, gen_tokens, int(gen_start), tokenizer
+        )
+        if span is None:
+            return None  # no closed reasoning (or the model opened its own)
+        t0, prefix = span
+        n_kept = t0 - pre_turn_pos
+        if not 0 <= n_kept <= len(turn_only):
+            return None
+        kept = list(turn_only[:n_kept])
+        replay = tokenize_segments(tokenizer, [(prefix, True), (content, False)])
+        new_tail = kept + list(replay)
+        outcome = await run_in_threadpool(
+            self._backend.strip_turn, instance, pre_turn_pos, new_tail
+        )
+        if outcome == "untouched":
+            return None
+        # "reset": the context is empty; the history still takes the stripped
+        # form and the next turn replays it.
+        session.kv_dirty = outcome != "stripped"
+        log.info(
+            "🧹 turn reasoning stripped by rollback: %d generated → %d replayed "
+            "(%s)",
+            len(gen_tokens),
+            len(new_tail),
+            outcome,
+        )
+        return new_tail
+
+    @staticmethod
+    def _generated_in_kv(instance: Any) -> list:
+        """The generated ids the live KV actually holds.
+
+        The binding's generate YIELDS a token and evaluates it only when the
+        consumer resumes, so a loop that stops on the budget or a stop text
+        leaves the last yielded token unevaluated. Committing it to history
+        anyway made token_history one token longer than the KV, and every
+        later append sat at the wrong position relative to a replay of the
+        same history."""
+        gen = list(getattr(instance, "_last_completion_tokens", None) or [])
+        start = getattr(instance, "_last_gen_start_pos", None)
+        if start is None or not isinstance(getattr(instance, "n_tokens", None), int):
+            return gen
+        in_kv = int(instance.n_tokens) - int(start)
+        if in_kv in (len(gen), len(gen) - 1) and in_kv >= 0:
+            return gen[:in_kv]
+        log.warning(
+            "🧩 generated span mismatch: %d generated, %d in KV — committing "
+            "the generated ids; the next turn's invariant check will replay",
+            len(gen),
+            in_kv,
+        )
+        return gen
 
     async def _maybe_strip_reasoning(self, instance: Any, content: str) -> None:
         """Strip this turn's reasoning from the KV via truncate-and-replay
@@ -1103,9 +1443,11 @@ class SessionManager:
                     # Recovery recipe: the vendor's own fix for the Qwen3
                     # endless-repetition failure (temp 1.0 + presence 1.5),
                     # with the penalty window widened so presence actually
-                    # sees a paragraph-scale cycle. The degenerate span was
-                    # already purged by session_turn's error path, so this
-                    # re-drives the SAME turn on clean pre-turn state.
+                    # sees a paragraph-scale cycle. The degenerate span is gone
+                    # before this re-drive decodes — purged in place (resident)
+                    # or rolled back to the turn boundary at the retry's start
+                    # (replay: a checkpoint restore, else a replay) — so the
+                    # SAME turn re-runs on clean pre-turn state.
                     turn_temp = float(gen_cfg.degen_retry_temperature or 1.0)
                     overrides = {
                         "present_penalty": float(
@@ -1168,6 +1510,18 @@ class SessionManager:
             # BELOW max_tokens, so the caller's `tokens >= max_tokens` test
             # cannot see it and would read a severed turn as complete.
             "end_reason": str(getattr(_inst, "_last_end_reason", "") or ""),
+            # The budget the ENGINE enforced (min(max_tokens, context left)) and,
+            # on a budget stop, which of the two bound — "context" means the
+            # session itself ran out of window, not the caller's allowance.
+            "effective_max": getattr(_inst, "_last_effective_max", None),
+            "length_cause": str(getattr(_inst, "_last_length_cause", "") or ""),
+            # Replay sessions with turn rollback: this turn's reasoning was
+            # stripped from the context, or — it produced no answer — the whole
+            # turn was rolled back out of it (and never entered history).
+            "turn_stripped": bool(getattr(_sess, "last_turn_stripped", False)),
+            "turn_dropped": bool(getattr(_sess, "last_turn_dropped", False)),
+            # The id a caller passes to rewindSessionTurn to take this turn back.
+            "turn_id": getattr(getattr(_sess, "last_turn", None), "turn_id", None),
             # Prefer the per-stream wall spans (batched seats stash them —
             # concurrency-accurate); the global tracker's single-generation
             # timing is only correct when one stream runs at a time (pool).
@@ -1215,7 +1569,10 @@ class SessionManager:
         # the GenerationTracker side-channel.
         from core.inference import _strip_delimiter
 
-        text = _strip_delimiter(raw_text)
+        text = _strip_delimiter(
+            raw_text,
+            prefilled_think=getattr(_sess, "last_prefilled_think", None),
+        )
 
         log.info(
             "Session %s turn complete: raw=%d chars / %d tokens → content=%d chars",
@@ -1225,35 +1582,137 @@ class SessionManager:
             len(text) if text else 0,
         )
 
-        # Derived truncation flag: the generation loop in
-        # inference/backends/llama_cpp_backend.py:generate_stream_sync
-        # breaks when ``len(completion_tokens) >= effective_max`` (the
-        # max_tokens budget). We count chunks yielded as an equivalent
-        # proxy. This is the signal that distinguishes "empty response
-        # because the model chose to say nothing" from "empty response
-        # because the budget ran out mid-analysis channel and FSM
-        # stripped the unfinished reasoning" — the bug class that
-        # motivated this observability work.
-        truncated = generated_tokens >= max_tokens
+        # Truncation flag — distinguishes "empty response because the model
+        # chose to say nothing" from "empty response because the budget ran
+        # out mid-analysis and the FSM stripped the unfinished reasoning".
+        # The chunk count against max_tokens is only HALF the test: the
+        # engine's budget is min(max_tokens, context remaining), so a turn cut
+        # at the context ceiling stops far below max_tokens and only the
+        # engine's end_reason can say so (2026-09-22: 78,120 of 262,144, logged
+        # untruncated, and its unfinished thinking was mined for a file).
+        truncated = generated_tokens >= max_tokens or cache["end_reason"] in (
+            "length",
+            "kv_pressure_truncated",
+        )
+        cache["truncated"] = truncated
 
         # Log the session interaction so it appears in interactions.jsonl.
 
+        # The FSM forwarded thinking to the tracker a few lines above; read it
+        # back the same way the stateless path does (core/inference.py). Without
+        # this, EVERY session turn logs `thinking` absent while the stateless
+        # path logs it populated — a split by CODE PATH, not by model behaviour.
+        # It reads exactly like a model that stopped emitting a thinking
+        # channel, and on 2026-09-22 it was analysed as one: a qwen4exp walk
+        # turn whose 151,595 chars of CoT were sitting in `raw_text` the whole
+        # time got written up as "the model reasons in the open content
+        # channel". The channel was fine; the log was half-blind.
+        #
+        # raw_length now decomposes: closed thinking gives
+        # raw == thinking + content, while an UNTERMINATED thinking phase gives
+        # thinking absent against a large raw — the two are finally
+        # distinguishable from the log alone, which is the case that matters
+        # (a turn that never closes its phase hands its whole deliberation to
+        # the file extractor).
+        from core.generation_tracker import get_tracker
+
+        _think = (get_tracker().get_thinking() or {}).get("content", "") or ""
+        _extra = {
+            "raw_text": raw_text,
+            "raw_length": len(raw_text),
+            "extracted_length": len(text),
+            "generated_tokens": generated_tokens,
+            "max_tokens": max_tokens,
+            "truncated": truncated,
+            "end_reason": cache["end_reason"],
+            "effective_max": cache["effective_max"],
+            "length_cause": cache["length_cause"],
+            "turn_stripped": cache["turn_stripped"],
+            "turn_dropped": cache["turn_dropped"],
+            "delimiter_configured": bool(delim),
+        }
+        if _think:
+            # Same 200k cap as the stateless path — bounds file growth on
+            # marathon thinks without losing the shape of one.
+            _extra["thinking"] = _think[:200_000]
         log_interaction(
             prompt=prompt,
             response=text,
             mode=f"session:{session_id}:turn{_sess.turn_count if _sess else '?'}",
-            extra={
-                "raw_text": raw_text,
-                "raw_length": len(raw_text),
-                "extracted_length": len(text),
-                "generated_tokens": generated_tokens,
-                "max_tokens": max_tokens,
-                "truncated": truncated,
-                "delimiter_configured": bool(delim),
-            },
+            extra=_extra,
         )
 
         return text, generated_tokens, cache
+
+    async def rewind_turn(self, session_id: str, turn_id: int) -> dict:
+        """Take the session's LAST turn back, by id — one level of undo.
+
+        Replay sessions roll the KV back to the turn's boundary (a hybrid
+        restores the boundary's recurrent checkpoint; no checkpoint → the
+        history is truncated and the next turn replays it). Resident sessions
+        tail-remove the turn's span, which a memory may refuse. A dropped or
+        already-rewound turn is "already_absent" — nothing to take back.
+        Refused while a turn is generating, and for any id but the last."""
+        session = self._sessions.get(session_id)
+        if session is None:
+            raise ValueError(f"Session {session_id} not found")
+
+        def result(ok: bool, reason: str) -> dict:
+            return {
+                "ok": ok,
+                "reason": reason,
+                "turn_count": session.turn_count,
+                "tokens": len(session.token_history),
+            }
+
+        if session.in_flight:
+            return result(False, "in_flight")
+        mark = session.last_turn
+        if mark is None or mark.turn_id != int(turn_id):
+            return result(False, "not_last_turn")
+        if mark.dropped or mark.rewound or not mark.committed:
+            return result(True, "already_absent")
+
+        instance = session.instance
+        resident = bool(getattr(self._backend, "_resident_active", False))
+        async with self._generation_guard():
+            if resident:
+                if hasattr(instance, "purge_to"):
+                    await run_in_threadpool(instance.purge_to, mark.pre_turn_pos)
+                else:
+
+                    def _tail_rm() -> bool:
+                        if (
+                            instance._ctx.memory_seq_rm(0, mark.pre_turn_pos, -1)
+                            is False
+                        ):
+                            return False
+                        instance.n_tokens = mark.pre_turn_pos
+                        return True
+
+                    if not await run_in_threadpool(_tail_rm):
+                        return result(False, "refused")
+                how = "rolled_back"
+            else:
+                rollback = getattr(self._backend, "rollback_turn", None)
+                ok = bool(
+                    rollback is not None
+                    and await run_in_threadpool(rollback, instance, mark.pre_turn_pos)
+                )
+                del session.token_history[mark.history_len :]
+                if not ok:
+                    session.kv_dirty = True  # the next turn restores + replays
+                how = "rolled_back" if ok else "history_truncated"
+            session.turn_count = mark.turn_count
+            mark.rewound = True
+        log.info(
+            "⏪ Session %s: turn %d rewound (%s) — turn_count=%d",
+            session_id,
+            mark.turn_id,
+            how,
+            session.turn_count,
+        )
+        return result(True, how)
 
     async def session_snapshot(self, session_id: str, key: str) -> dict:
         """Pin the session's current context under ``key`` (semi-permanent).

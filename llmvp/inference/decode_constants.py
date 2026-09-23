@@ -17,3 +17,11 @@ STOP_TAIL_SLACK = 8
 # so llama.cpp emits correct piece boundaries. Bounded — an unbounded prior
 # list re-grows the O(n²) per-token cost incremental detok exists to remove.
 DETOK_TAIL = 16
+
+# End reason for a generation stopped by its own token budget — the ENGINE's
+# budget, which can sit below the caller's max_tokens (the pool path caps at
+# the context remaining; batched admission sizes against free cells), so the
+# caller's `tokens_generated >= max_tokens` test cannot see the cut. Both
+# loops report it; `CompletionOutcome.truncated_by_engine` and
+# sessionCompletion read it.
+END_LENGTH = "length"
