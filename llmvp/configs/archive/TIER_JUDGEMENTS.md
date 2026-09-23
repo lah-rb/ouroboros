@@ -4461,3 +4461,54 @@ green on the framework's word; the judge disproved it by winning without the
 medallion. Likewise a room-graph audit reported "8 reachable, zero unplaced" —
 true, and blind to one of those rooms being hollow. **Reachability and
 placement do not measure content, and goal state does not measure behaviour.**
+
+## 2026-09-21 — FRONTIER SCORECARD: qwen3.8-flash-next APEX, STRUCTURAL-ONLY, loses 1–3 / 2–4
+
+**Delivery: FRONTIER 3–1 · Character: FRONTIER 4–2 · OVERALL: FRONTIER.**
+Panels agreed, no split, not flagged CLOSE. Out-of-band scorecard, NOT
+ladder-bearing and NOT a tier placement; METHODS §5 family caveat applies
+(Opus judge, Claude-authored frontier). Record:
+`dev/blind_panel/records/flight_20260921_apex_vs_frontier.md`.
+
+**THE CEILING IS THE HEADLINE. This artifact stopped at `top_phase:
+structural`** — no functional phase, no test gate, no quality gate, no polish.
+The 2026-08-22 scorecard that TIED the frontier on Delivery was a COMPLETED
+artifact; reading 1–3 against that 2–2 measures the four missing phases, not
+the model. Do not put these two numbers in the same column.
+
+All three Delivery-deciding defects are functional/quality-phase work, and all
+three were verified in the tree after the verdict:
+  * **`flee` does not exist** — advertised in help and README, and the only
+    occurrence in the artifact is `README.md:31`.
+  * **`examine` is a cross-module seam bug** — `parser.py:63` aliases it to
+    `look` and drops the target, `engine.py:435` is `_look(self)`. All 11
+    authored `description` strings are unreachable.
+  * **`?` crashes the process** — `parser.py:144`, `tokens[0]` unguarded after
+    non-alphanumerics are stripped. Uncaught `IndexError` in the main loop.
+
+**What the structural phase alone delivered is the real finding.** WON,
+**45/47 NEAR-FULL**, **12/12 rooms reachable with ZERO unplaced entities**
+(the campaign's most common decisive defect, absent again), the flight's
+**only schema-versioned save** — which took **A2** outright, the frontier
+tracebacking `KeyError` where this refuses cleanly — plus **B5 ambition** and
+**B9 workability**, the latter on the cleanest modification probe of the two:
+a new room, a new weapon and a damage change entirely in `world.json`, zero
+Python. A structural-ceiling artifact took three axes off the frontier.
+
+**Campaign first:** a cross-module seam bug that degraded a CONTENT layer
+instead of blocking the win. That class has been terminal seven times.
+
+**Quant provenance.** This is Myric APEX MIDDLE. The Unsloth UD-IQ4_XS build
+of the same checkpoint was measured head-to-head on matched missions the same
+day and deleted afterwards: it orbited three times (parser 105k tokens, engine
+105k, main ~40k of thinking), its engine.py turn ended mid-thought without
+ever emitting the file, and an escalation shipped an **852-byte stub** whose
+`process_command` returns `'Nothing happens.'` APEX produced a 43 KB engine in
+**1.46 h against 5.97 h**. The orbit is reduced, not removed — both quants had
+exactly one turn over 32k tokens.
+
+**Framework, not charged to the model:** the structural phase reported `8/8
+files clean` over a tree containing all three defects above. `.py` files are
+only syntax-checked `elif ext in env_config` and there is no env config before
+the environment phase; the AST typecheck returns `[]` on `SyntaxError`.
+Neither gate can see a wrong binding between two files that each parse.
