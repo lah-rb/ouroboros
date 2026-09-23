@@ -550,6 +550,22 @@ class MockEffects:
 
         return result
 
+    async def rewind_inference_session_turn(
+        self, session_id: str, turn_id: int
+    ) -> dict:
+        """Record the rewind; succeed for a session this mock opened."""
+        found = session_id in getattr(self, "_mock_active_sessions", set())
+        result = {
+            "ok": found,
+            "reason": "rolled_back" if found else "not_found",
+        }
+        self._record(
+            "rewind_inference_session_turn",
+            {"session_id": session_id, "turn_id": turn_id},
+            result,
+        )
+        return result
+
     async def end_inference_session(self, session_id: str) -> bool:
         """End a mock session.
 

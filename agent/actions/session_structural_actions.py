@@ -984,11 +984,13 @@ async def action_session_next_file(step_input: StepInput) -> StepOutput:
 
         arch = getattr(mission, "architecture", None)
         declared = list(_get_sweep_files(arch)) if arch is not None else []
+        truncated_files = list(ctx.get("session_truncated_files") or [])
         manifest = {
             "written": list(written_paths),
             "missing": [f for f in declared if f not in written_paths],
             "extra": [],
-            "truncated": False,
+            "truncated": bool(truncated_files),
+            "truncated_files": truncated_files,
             "salvaged": False,
             "deliberation_chars": 0,
             "attempts": 1,
@@ -1066,11 +1068,22 @@ async def action_write_session_file(step_input: StepInput) -> StepOutput:
     raw = str(ctx.get("inference_response") or "")
     written_paths = list(ctx.get("session_files_written") or [])
     changed = list(ctx.get("files_changed") or [])
+    # Turns the ENGINE cut (budget or context ceiling). Recorded for the
+    # manifest, which hardcoded truncated=False and so reported a walk whose
+    # keystone turn died at the context ceiling as an ordinary one.
+    truncated_files = list(ctx.get("session_truncated_files") or [])
+    if ctx.get("inference_truncated") and current and current not in truncated_files:
+        truncated_files.append(current)
+        logger.warning(
+            "session write: the %s turn was TRUNCATED by the engine", current
+        )
+    bookkeeping = {"session_truncated_files": truncated_files}
 
     if not current or not effects:
         return StepOutput(
             result={"write_success": False},
             observations="session write: no target file or effects",
+            context_updates=bookkeeping,
         )
 
     # fallback_path makes this a single-file site, which it is by contract —
@@ -1103,6 +1116,7 @@ async def action_write_session_file(step_input: StepInput) -> StepOutput:
                 f"session write: the turn produced no block for {current}"
                 + (f" (saw {', '.join(extra[:4])})" if extra else "")
             ),
+            context_updates=bookkeeping,
         )
 
     ok, err = await guarded_write_file(effects, current, body)
@@ -1110,6 +1124,7 @@ async def action_write_session_file(step_input: StepInput) -> StepOutput:
         return StepOutput(
             result={"write_success": False},
             observations=f"session write: {current} refused — {err or 'guard'}",
+            context_updates=bookkeeping,
         )
     if extra:
         logger.info(
@@ -1129,7 +1144,42 @@ async def action_write_session_file(step_input: StepInput) -> StepOutput:
             "files_changed": changed,
             "session_files_written": written_paths,
             "file_written": current,
+            **bookkeeping,
         },
+    )
+
+
+async def action_rewind_session_turn(step_input: StepInput) -> StepOutput:
+    """Take the walk's last turn back out of the session (llmvp
+    rewindSessionTurn) when it left nothing usable — no answer, or a block the
+    write refused.
+
+    Every later file's instruction calls the files above it FACTS that are on
+    disk; an abandoned attempt left in the context is neither, and each one
+    the walk keeps is paid for again by every turn after it. Skipped when the
+    turn never entered the context (the server rolls an answerless turn out at
+    commit) or the server predates turn ids. Always continues the walk.
+
+    Result: rewound.
+    """
+    effects = step_input.effects
+    ctx = step_input.context
+    session_id = ctx.get("structural_session_id")
+    turn_id = ctx.get("inference_session_turn_id")
+    current = ctx.get("current_file") or "?"
+    reason = "skipped"
+    if not ctx.get("inference_turn_committed", True):
+        reason = "already_absent (rolled out at commit)"
+    elif session_id and turn_id is not None and effects is not None:
+        rewind = getattr(effects, "rewind_inference_session_turn", None)
+        if rewind is not None:
+            outcome = await rewind(session_id, int(turn_id))
+            reason = str(outcome.get("reason", "?"))
+    rewound = reason in ("rolled_back", "history_truncated")
+    logger.info("session walk: unusable %s turn — rewind: %s", current, reason)
+    return StepOutput(
+        result={"rewound": rewound},
+        observations=f"session walk: {current} turn rewind — {reason}",
     )
 
 

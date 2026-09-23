@@ -1785,6 +1785,26 @@ class LocalEffects:
 
         return result
 
+    async def rewind_inference_session_turn(
+        self, session_id: str, turn_id: int
+    ) -> dict:
+        """Take back the session's last turn (see the protocol). Same client
+        as session_inference — the server that holds the session."""
+        start = time.monotonic()
+        inference = self._get_inference()
+        rewind = getattr(inference, "rewind_session_turn", None)
+        if rewind is None:
+            result = {"ok": False, "reason": "client has no rewind"}
+        else:
+            result = await rewind(session_id, turn_id)
+        self._log_entry(
+            "rewind_inference_session_turn",
+            f"session={session_id}, turn={turn_id}",
+            f"{result.get('ok')} ({result.get('reason')})",
+            start,
+        )
+        return result
+
     async def end_inference_session(self, session_id: str) -> bool:
         """End a memoryful session via LLMVP GraphQL.
 

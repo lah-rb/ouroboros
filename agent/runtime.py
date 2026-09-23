@@ -1336,6 +1336,29 @@ async def _execute_inference_action(
 # ══════════════════════════════════════════════════════════════════════
 
 
+async def _rewind_failed_attempt(
+    effects: Any, session_id: str, prior: Any, step_name: str
+) -> None:
+    """Before a session-turn retry, take the failed attempt back so the retry
+    runs on the context before it (#Turn.rewind_on_retry). Skipped when the
+    attempt never entered the context (the server rolled an answerless turn
+    out at commit) or the server/effects predate turn ids."""
+    turn_id = getattr(prior, "session_turn_id", None)
+    if turn_id is None or not getattr(prior, "turn_committed", True):
+        return
+    rewind = getattr(effects, "rewind_inference_session_turn", None)
+    if rewind is None:
+        return
+    outcome = await rewind(session_id, int(turn_id))
+    logger.info(
+        "Turn inference step %r: rewound the failed attempt (turn %s) before "
+        "retrying — %s",
+        step_name,
+        turn_id,
+        outcome.get("reason", "?"),
+    )
+
+
 async def _execute_turn_inference(
     step_def: StepDefinition,
     step_input: StepInput,
@@ -1463,6 +1486,8 @@ async def _execute_turn_inference(
                     _step_name,
                     session_id,
                 )
+            elif turn.rewind_on_retry:
+                await _rewind_failed_attempt(effects, session_id, result, _step_name)
             result = await effects.session_inference(
                 session_id=session_id,
                 prompt=rendered_prompt,
@@ -1632,6 +1657,15 @@ async def _execute_turn_inference(
         # simply never use them.
         "inference_degenerate": bool(getattr(result, "degenerate", False)),
         "inference_request_id": str(getattr(result, "request_id", "") or ""),
+        # Session turns: the server's id for this turn (rewind it by id) and
+        # whether it entered the session's context at all — a turn that
+        # produced no answer is rolled out server-side at commit.
+        "inference_session_turn_id": (
+            getattr(result, "session_turn_id", None) if result else None
+        ),
+        "inference_turn_committed": bool(
+            getattr(result, "turn_committed", True) if result else True
+        ),
     }
     # Drain the session_injections queue once it's been consumed —
     # otherwise the seed prompt would replay on every subsequent

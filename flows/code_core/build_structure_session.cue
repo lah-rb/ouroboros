@@ -124,7 +124,8 @@ build_structure_session: #FlowDefinition & {
 				required: ["mission"]
 				// EVERY cursor key must be declared or _build_step_input
 				// filters it out and the walk silently restarts from the top.
-				optional: ["pending_files", "session_files_written", "data_registry"]
+				optional: ["pending_files", "session_files_written", "data_registry",
+					"session_truncated_files"]
 			}
 			resolver: {
 				type: "rule"
@@ -168,11 +169,15 @@ build_structure_session: #FlowDefinition & {
 				transitions: {
 					default: "write_file"
 					// An empty turn writes nothing; the walk moves on and the
-					// sweep serials the file, exactly as batch's misses do.
-					no_answer: "next_file"
+					// sweep serials the file, exactly as batch's misses do —
+					// after taking the empty turn back out of the session.
+					no_answer: "rewind_failed_file"
 				}
 				config: temperature: "t*0.4"
 				retries: 2
+				// A retry runs on the context BEFORE the failed attempt, not on
+				// top of it (llmvp rewindSessionTurn; best-effort).
+				rewind_on_retry: true
 			}
 			publishes: ["inference_response"]
 		}
@@ -182,18 +187,22 @@ build_structure_session: #FlowDefinition & {
 			description: "Write this turn's file through the same guard batch uses"
 			context: {
 				required: ["current_file", "inference_response"]
-				optional: ["session_files_written", "files_changed"]
+				optional: ["session_files_written", "files_changed",
+					"inference_truncated", "session_truncated_files"]
 			}
 			resolver: {
 				type: "rule"
 				rules: [
 					{condition: "result.write_success == true", transition: "check_file"},
 					// Refused by the anti-gut guard or no usable block — leave
-					// the goal for the serial path and keep walking.
-					{condition: "true", transition: "next_file"},
+					// the goal for the serial path and keep walking, after
+					// taking the unusable turn back out of the session: every
+					// later file is told the files above it are FACTS on disk,
+					// and this one is not.
+					{condition: "true", transition: "rewind_failed_file"},
 				]
 			}
-			publishes: ["files_changed", "session_files_written"]
+			publishes: ["files_changed", "session_files_written", "session_truncated_files"]
 		}
 
 		// THE CHECKPOINT. Shares batch's gates verbatim and adds the two
@@ -263,12 +272,33 @@ build_structure_session: #FlowDefinition & {
 				]
 				transitions: {
 					default:   "write_file"
-					no_answer: "next_file"
+					no_answer: "rewind_failed_file"
 				}
 				config: temperature: "t*0.3"
 				retries: 1
+				rewind_on_retry: true
 			}
 			publishes: ["inference_response"]
+		}
+
+		// Take the walk's last turn back when it left nothing usable (no
+		// answer, or a block the write refused). Best-effort: an older server
+		// or a turn the server already rolled out leaves the session as is.
+		rewind_failed_file: #StepDefinition & {
+			action:      "rewind_session_turn"
+			description: "Take the unusable file turn back out of the session"
+			context: {
+				required: ["structural_session_id"]
+				optional: ["inference_session_turn_id", "inference_turn_committed",
+					"current_file"]
+			}
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "true", transition: "next_file"},
+				]
+			}
+			publishes: []
 		}
 
 		apply_results: #StepDefinition & {

@@ -477,6 +477,14 @@ _stock_options: {
 	// empirical recovery behavior: models that emit a malformed
 	// response typically correct by turn 3. 0 disables retries.
 	retries: int & >=0 & <=5 | *3
+
+	// SESSION turns: take the failed attempt back (rewindSessionTurn)
+	// before each retry, so the retry runs on the context BEFORE the
+	// failed attempt instead of on top of it. Off by default — some
+	// session steps retry by design on top of the bad reply (a
+	// correction that quotes it). Best-effort: an unsupported server
+	// leaves the retry as it always was.
+	rewind_on_retry: bool | *false
 }
 
 // Shape-specific fields, conjoined into #Turn by shared definition

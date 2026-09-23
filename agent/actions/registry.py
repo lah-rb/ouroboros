@@ -398,6 +398,7 @@ def build_action_registry() -> ActionRegistry:
     from agent.actions.session_structural_actions import (
         action_check_session_file,
         action_open_structural_session,
+        action_rewind_session_turn,
         action_session_next_file,
         action_write_session_file,
     )
@@ -439,6 +440,7 @@ def build_action_registry() -> ActionRegistry:
     registry.register("open_structural_session", action_open_structural_session)
     registry.register("session_next_file", action_session_next_file)
     registry.register("write_session_file", action_write_session_file)
+    registry.register("rewind_session_turn", action_rewind_session_turn)
     registry.register("check_session_file", action_check_session_file)
     # Extractor flow set (scraper v2 — PDF -> markdown+figures)
     registry.register("derive_extraction_goals", action_derive_extraction_goals)

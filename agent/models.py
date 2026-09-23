@@ -255,6 +255,9 @@ class TurnDefinition(BaseModel):
     transitions: TurnTransitions
     config: dict[str, Any] = Field(default_factory=dict)
     retries: int = Field(default=3, ge=0, le=5)
+    # Session turns: rewind the failed attempt before each retry (see
+    # flows/shared/turn.cue #Turn.rewind_on_retry).
+    rewind_on_retry: bool = False
     mode_banner: str | None = None
     response: ResponseContract
 

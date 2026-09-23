@@ -126,7 +126,8 @@
             "default": "insert_and_write",
             "no_answer": "failed"
           },
-          "retries": 3
+          "retries": 3,
+          "rewind_on_retry": false
         },
         "pre_compute": [
           {
@@ -352,7 +353,8 @@
             "default": "slice_and_write",
             "no_answer": "slice_and_write"
           },
-          "retries": 2
+          "retries": 2,
+          "rewind_on_retry": false
         },
         "pre_compute": [
           {
@@ -744,7 +746,8 @@
           "optional": [
             "pending_files",
             "session_files_written",
-            "data_registry"
+            "data_registry",
+            "session_truncated_files"
           ]
         },
         "params": {},
@@ -828,9 +831,10 @@
           ],
           "transitions": {
             "default": "write_file",
-            "no_answer": "next_file"
+            "no_answer": "rewind_failed_file"
           },
-          "retries": 2
+          "retries": 2,
+          "rewind_on_retry": true
         },
         "config": {},
         "publishes": [
@@ -849,7 +853,9 @@
           ],
           "optional": [
             "session_files_written",
-            "files_changed"
+            "files_changed",
+            "inference_truncated",
+            "session_truncated_files"
           ]
         },
         "params": {},
@@ -863,13 +869,14 @@
             },
             {
               "condition": "true",
-              "transition": "next_file"
+              "transition": "rewind_failed_file"
             }
           ]
         },
         "publishes": [
           "files_changed",
-          "session_files_written"
+          "session_files_written",
+          "session_truncated_files"
         ],
         "effects": [],
         "terminal": false
@@ -973,14 +980,43 @@
           ],
           "transitions": {
             "default": "write_file",
-            "no_answer": "next_file"
+            "no_answer": "rewind_failed_file"
           },
-          "retries": 1
+          "retries": 1,
+          "rewind_on_retry": true
         },
         "config": {},
         "publishes": [
           "inference_response"
         ],
+        "effects": [],
+        "terminal": false
+      },
+      "rewind_failed_file": {
+        "action": "rewind_session_turn",
+        "description": "Take the unusable file turn back out of the session",
+        "context": {
+          "required": [
+            "structural_session_id"
+          ],
+          "optional": [
+            "inference_session_turn_id",
+            "inference_turn_committed",
+            "current_file"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "next_file"
+            }
+          ]
+        },
+        "publishes": [],
         "effects": [],
         "terminal": false
       },
@@ -1277,7 +1313,8 @@
               "conclude": "conclude_route"
             }
           },
-          "retries": 3
+          "retries": 3,
+          "rewind_on_retry": false
         },
         "config": {},
         "publishes": [],
@@ -1694,7 +1731,8 @@
             "temperature": "t*1.0",
             "reasoning": "low"
           },
-          "retries": 3
+          "retries": 3,
+          "rewind_on_retry": false
         },
         "pre_compute": [
           {
@@ -1992,7 +2030,8 @@
             "temperature": "t*0.4",
             "reasoning": "high"
           },
-          "retries": 3
+          "retries": 3,
+          "rewind_on_retry": false
         },
         "pre_compute": [
           {
@@ -2092,7 +2131,8 @@
             "temperature": "t*0.4",
             "reasoning": "high"
           },
-          "retries": 3
+          "retries": 3,
+          "rewind_on_retry": false
         },
         "pre_compute": [
           {
@@ -2971,7 +3011,8 @@
           "config": {
             "temperature": "t*0.4"
           },
-          "retries": 3
+          "retries": 3,
+          "rewind_on_retry": false
         },
         "config": {},
         "publishes": [],
@@ -4287,7 +4328,8 @@
             "temperature": "t*0.3",
             "reasoning": "medium"
           },
-          "retries": 3
+          "retries": 3,
+          "rewind_on_retry": false
         },
         "config": {},
         "publishes": [
@@ -4937,7 +4979,8 @@
           "config": {
             "temperature": "t*0.3"
           },
-          "retries": 3
+          "retries": 3,
+          "rewind_on_retry": false
         },
         "config": {},
         "publishes": [],
@@ -7470,7 +7513,8 @@
             "default": "run_session",
             "no_answer": "failed"
           },
-          "retries": 3
+          "retries": 3,
+          "rewind_on_retry": false
         },
         "pre_compute": [
           {
@@ -7554,7 +7598,8 @@
             "default": "run_session",
             "no_answer": "failed"
           },
-          "retries": 3
+          "retries": 3,
+          "rewind_on_retry": false
         },
         "pre_compute": [
           {
@@ -7771,7 +7816,8 @@
             "default": "parse_evaluation",
             "no_answer": "flush_transient_failure"
           },
-          "retries": 3
+          "retries": 3,
+          "rewind_on_retry": false
         },
         "pre_compute": [
           {
@@ -7870,7 +7916,8 @@
             "temperature": "t*0.4",
             "reasoning": "high"
           },
-          "retries": 3
+          "retries": 3,
+          "rewind_on_retry": false
         },
         "pre_compute": [
           {
@@ -9199,7 +9246,8 @@
             "temperature": "t*0.3",
             "max_tokens": 4096
           },
-          "retries": 3
+          "retries": 3,
+          "rewind_on_retry": false
         },
         "config": {},
         "publishes": [],
@@ -10223,7 +10271,8 @@
             "default": "write_file",
             "no_answer": "write_file"
           },
-          "retries": 3
+          "retries": 3,
+          "rewind_on_retry": false
         },
         "pre_compute": [
           {
@@ -10469,7 +10518,8 @@
           "config": {
             "temperature": "t*0.4"
           },
-          "retries": 3
+          "retries": 3,
+          "rewind_on_retry": false
         },
         "config": {},
         "resolver": {
@@ -11600,7 +11650,8 @@
             "temperature": "t*0.0",
             "reasoning": "low"
           },
-          "retries": 3
+          "retries": 3,
+          "rewind_on_retry": false
         },
         "pre_compute": [
           {
@@ -11713,7 +11764,8 @@
             "default": "write_files",
             "no_answer": "build_report_failure"
           },
-          "retries": 3
+          "retries": 3,
+          "rewind_on_retry": false
         },
         "pre_compute": [
           {
@@ -13968,7 +14020,8 @@
             "temperature": "t*0.6",
             "reasoning": "low"
           },
-          "retries": 3
+          "retries": 3,
+          "rewind_on_retry": false
         },
         "config": {},
         "publishes": [
@@ -14108,7 +14161,8 @@
             "default": "done",
             "no_answer": "no_results"
           },
-          "retries": 3
+          "retries": 3,
+          "rewind_on_retry": false
         },
         "config": {},
         "publishes": [
@@ -14411,7 +14465,8 @@
             "max_tokens": 4096,
             "reasoning": "low"
           },
-          "retries": 2
+          "retries": 2,
+          "rewind_on_retry": false
         },
         "pre_compute": [
           {
@@ -14540,7 +14595,8 @@
             "temperature": "t*0.4",
             "reasoning": "xhigh"
           },
-          "retries": 3
+          "retries": 3,
+          "rewind_on_retry": false
         },
         "pre_compute": [
           {
@@ -15005,7 +15061,8 @@
             "temperature": "t*0.6",
             "reasoning": "low"
           },
-          "retries": 3
+          "retries": 3,
+          "rewind_on_retry": false
         },
         "pre_compute": [
           {
@@ -15298,7 +15355,8 @@
             "temperature": "t*0.0",
             "reasoning": "low"
           },
-          "retries": 3
+          "retries": 3,
+          "rewind_on_retry": false
         },
         "pre_compute": [
           {
@@ -15502,7 +15560,8 @@
             "max_tokens": 4096,
             "model": ""
           },
-          "retries": 2
+          "retries": 2,
+          "rewind_on_retry": false
         },
         "pre_compute": [
           {
@@ -15612,7 +15671,8 @@
             "max_tokens": 16384,
             "model": ""
           },
-          "retries": 2
+          "retries": 2,
+          "rewind_on_retry": false
         },
         "pre_compute": [
           {
@@ -15730,7 +15790,8 @@
             "default": "apply_review",
             "no_answer": "fan_out_workers"
           },
-          "retries": 2
+          "retries": 2,
+          "rewind_on_retry": false
         },
         "pre_compute": [
           {
@@ -16238,7 +16299,8 @@
             "max_tokens": 4096,
             "model": ""
           },
-          "retries": 2
+          "retries": 2,
+          "rewind_on_retry": false
         },
         "pre_compute": [
           {
@@ -16348,7 +16410,8 @@
             "max_tokens": 16384,
             "model": ""
           },
-          "retries": 2
+          "retries": 2,
+          "rewind_on_retry": false
         },
         "pre_compute": [
           {
@@ -16478,7 +16541,8 @@
             "default": "slice_and_write",
             "no_answer": "slice_and_write"
           },
-          "retries": 2
+          "retries": 2,
+          "rewind_on_retry": false
         },
         "pre_compute": [
           {
@@ -16889,7 +16953,8 @@
             "max_tokens": 4096,
             "model": ""
           },
-          "retries": 2
+          "retries": 2,
+          "rewind_on_retry": false
         },
         "pre_compute": [
           {
@@ -16999,7 +17064,8 @@
             "max_tokens": 16384,
             "model": ""
           },
-          "retries": 2
+          "retries": 2,
+          "rewind_on_retry": false
         },
         "pre_compute": [
           {
@@ -17117,7 +17183,8 @@
             "default": "apply_review",
             "no_answer": "fan_out_workers"
           },
-          "retries": 2
+          "retries": 2,
+          "rewind_on_retry": false
         },
         "pre_compute": [
           {
@@ -17316,7 +17383,8 @@
             "default": "slice_and_write",
             "no_answer": "lookup_env"
           },
-          "retries": 2
+          "retries": 2,
+          "rewind_on_retry": false
         },
         "pre_compute": [
           {
@@ -18474,7 +18542,8 @@
             "temperature": "t*0.3",
             "max_tokens": 4096
           },
-          "retries": 3
+          "retries": 3,
+          "rewind_on_retry": false
         },
         "config": {},
         "publishes": [],
@@ -19854,7 +19923,8 @@
             "temperature": "t*0.3",
             "max_tokens": 4096
           },
-          "retries": 3
+          "retries": 3,
+          "rewind_on_retry": false
         },
         "config": {},
         "publishes": [],
@@ -21314,7 +21384,8 @@
             "temperature": "t*0.3",
             "max_tokens": 4096
           },
-          "retries": 3
+          "retries": 3,
+          "rewind_on_retry": false
         },
         "config": {},
         "publishes": [],

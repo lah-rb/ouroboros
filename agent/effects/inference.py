@@ -218,9 +218,7 @@ mutation PurgeSnapshot($key: String!) {
 }
 """
 
-SESSION_COMPLETION_QUERY = """
-query SessionCompletion($request: SessionTurnRequest!) {
-    sessionCompletion(request: $request) {
+_SESSION_COMPLETION_FIELDS = """
         text
         tokensGenerated
         finished
@@ -233,7 +231,35 @@ query SessionCompletion($request: SessionTurnRequest!) {
         cacheHit
         flowKey
         prefillMs
-        decodeMs
+        decodeMs"""
+# Turn identity + commit state (llmvp 2026-09-22). A server that predates them
+# fails the whole query on the unknown fields, so session_turn falls back to
+# the legacy field set once and remembers.
+_SESSION_TURN_FIELDS = """
+        sessionTurnId
+        turnCommitted
+        endReason"""
+SESSION_COMPLETION_QUERY = (
+    "query SessionCompletion($request: SessionTurnRequest!) {\n"
+    "    sessionCompletion(request: $request) {"
+    + _SESSION_COMPLETION_FIELDS
+    + _SESSION_TURN_FIELDS
+    + "\n    }\n}\n"
+)
+SESSION_COMPLETION_QUERY_LEGACY = (
+    "query SessionCompletion($request: SessionTurnRequest!) {\n"
+    "    sessionCompletion(request: $request) {"
+    + _SESSION_COMPLETION_FIELDS
+    + "\n    }\n}\n"
+)
+
+REWIND_SESSION_TURN_MUTATION = """
+mutation RewindSessionTurn($sessionId: String!, $turnId: Int!) {
+    rewindSessionTurn(sessionId: $sessionId, turnId: $turnId) {
+        ok
+        reason
+        turnCount
+        tokens
     }
 }
 """
@@ -400,6 +426,14 @@ def _degenerate_reason(error_msg: str) -> str:
 _DEGENERATE_TOKENS = re.compile(r"aborted after (\d+) generated tokens")
 
 
+def _unknown_turn_fields(error: str | None) -> bool:
+    """A GraphQL validation error naming one of the session-turn fields — the
+    signature of an LLMVP that predates them."""
+    if not error or "Cannot query field" not in error:
+        return False
+    return any(f in error for f in ("sessionTurnId", "turnCommitted", "endReason"))
+
+
 def _degenerate_tokens(error_msg: str) -> int | None:
     m = _DEGENERATE_TOKENS.search(error_msg or "")
     return int(m.group(1)) if m else None
@@ -475,6 +509,10 @@ class InferenceEffect:
         # non-empty we are holding a seat, and a "busy" verdict on any other
         # call may be us blocking ourselves. Used by _is_self_deadlock.
         self._open_sessions: set[str] = set()
+        # Whether the server answers the session query's turn fields
+        # (sessionTurnId/turnCommitted/endReason). None = not yet known; False
+        # = an older LLMVP, so session_turn sends the legacy field set.
+        self._session_turn_fields_supported: bool | None = None
         # Health-watchdog timing. INSTANCE attributes, not function-local
         # constants, so tests can shrink them (TESTING.md: "timing knobs used
         # by drains/settles should be instance attributes"). The watchdog is
@@ -1088,6 +1126,9 @@ class InferenceEffect:
                     flow_key=completion.get("flowKey", "") or "",
                     prefill_ms=completion.get("prefillMs", 0.0) or 0.0,
                     decode_ms=completion.get("decodeMs", 0.0) or 0.0,
+                    session_turn_id=completion.get("sessionTurnId"),
+                    turn_committed=bool(completion.get("turnCommitted", True)),
+                    end_reason=completion.get("endReason", "") or "",
                 )
 
             except httpx.ConnectError as e:
@@ -1508,8 +1549,11 @@ class InferenceEffect:
             if config_overrides.get("reasoning") and not _reasoning_off():
                 request_vars["reasoning"] = str(config_overrides["reasoning"])
 
+        legacy = self._session_turn_fields_supported is False
         request_body = {
-            "query": SESSION_COMPLETION_QUERY,
+            "query": (
+                SESSION_COMPLETION_QUERY_LEGACY if legacy else SESSION_COMPLETION_QUERY
+            ),
             "variables": {"request": request_vars},
         }
 
@@ -1528,6 +1572,20 @@ class InferenceEffect:
             response_key="sessionCompletion",
             runaway_token_ceiling=SESSION_RUNAWAY_TOKEN_CEILING,
         )
+        if not legacy and _unknown_turn_fields(result.error):
+            # An older server: GraphQL validation rejected the query before
+            # anything ran, so re-sending the legacy shape is safe.
+            logger.warning(
+                "LLMVP predates session turn ids — using the legacy session query"
+            )
+            self._session_turn_fields_supported = False
+            request_body["query"] = SESSION_COMPLETION_QUERY_LEGACY
+            result = await self._request_with_health_watchdog(
+                client,
+                request_body,
+                response_key="sessionCompletion",
+                runaway_token_ceiling=SESSION_RUNAWAY_TOKEN_CEILING,
+            )
         # STALENESS ESCAPE. A session can die server-side without anyone
         # calling end_session — expiry, an eviction, a server bounce. The seat
         # went with it, so a claim we still hold is a lie, and _is_self_deadlock
@@ -1538,6 +1596,36 @@ class InferenceEffect:
         if err and ("not found" in err or "expired" in err or "unknown session" in err):
             self._open_sessions.discard(session_id)
         return result
+
+    async def rewind_session_turn(self, session_id: str, turn_id: int) -> dict:
+        """Take back the session's last turn (by the id the turn returned).
+
+        Best-effort by contract: any failure — including a server without the
+        mutation — comes back as ``{"ok": False, "reason": ...}``, never an
+        exception, so a caller's retry proceeds exactly as it did before
+        rewinds existed."""
+        client = await self._get_client()
+        try:
+            response = await client.post(
+                self._endpoint,
+                json={
+                    "query": REWIND_SESSION_TURN_MUTATION,
+                    "variables": {"sessionId": session_id, "turnId": int(turn_id)},
+                },
+            )
+            response.raise_for_status()
+            data = response.json()
+            if "errors" in data:
+                return {"ok": False, "reason": f"errors: {data['errors']}"[:300]}
+            r = data["data"]["rewindSessionTurn"]
+            return {
+                "ok": bool(r.get("ok")),
+                "reason": str(r.get("reason", "")),
+                "turn_count": int(r.get("turnCount", 0) or 0),
+                "tokens": int(r.get("tokens", 0) or 0),
+            }
+        except Exception as e:  # noqa: BLE001 — best-effort by contract
+            return {"ok": False, "reason": f"error: {e}"[:300]}
 
     async def end_session(self, session_id: str) -> bool:
         """End a memoryful session via GraphQL mutation."""

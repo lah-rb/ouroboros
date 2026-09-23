@@ -187,6 +187,15 @@ class InferenceResult:
     # of a 45k-token orbit, discarded whole). Empty = no id was minted
     # (remote passthrough or older path).
     request_id: str = ""
+    # Session turns only. The server's id for this turn — what
+    # rewind_inference_session_turn takes back — and whether the turn entered
+    # the session's context (False: it produced no answer and the server rolled
+    # it out at commit). None = not a session turn, or an older server.
+    session_turn_id: int | None = None
+    turn_committed: bool = True
+    # Why generation stopped, as the server saw it ("length" = the budget or
+    # the context ceiling; "" = not reported).
+    end_reason: str = ""
 
 
 # ── Terminal output limits ────────────────────────────────────────────
@@ -506,6 +515,19 @@ class Effects(Protocol):
 
         Returns:
             True if the session was found and ended.
+        """
+        ...
+
+    async def rewind_inference_session_turn(
+        self, session_id: str, turn_id: int
+    ) -> dict:
+        """Take back the session's LAST turn, by the id its InferenceResult
+        carried (``session_turn_id``) — one level of undo, so a retry starts
+        from the context before the failed attempt instead of on top of it.
+
+        Best-effort: never raises. Returns ``{"ok": bool, "reason": str, ...}``
+        (reasons: rolled_back, history_truncated, already_absent,
+        not_last_turn, in_flight, refused, or an error string).
         """
         ...
 
