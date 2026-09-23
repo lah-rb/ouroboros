@@ -2759,3 +2759,73 @@ formula, but only jointly — each band alone leaves ~42 candidates — so bands
 four-way conjunctive lookup over individually ambiguous numbers, while formula→name is
 a single-key lookup. Lines→name is capped near 0.5 by chemistry and must be scored
 against that ceiling.
+
+### 22g. Granular stage 2: train the spectra → identity pairs directly — pre-registration (2026-09-22 19:15Z)
+
+**Question.** §22's identity blank (species + formula from a FULL record with crystal
+system and laser visible) reached 0.014 against a 0.946 ceiling after 16 exposures per
+species, the same count at which the forward blanks reached ~0.92. §22f showed half the
+chained probe's backward cells asked for mappings never trained, and that four bands
+identify a species only jointly (one band leaves ~42 candidates). Does training each
+spectra → identity pair directly, in stripped records with only the cue fields, and a
+band-count progression (1, 2, 3, 4 bands → name) that makes the narrowing itself a
+target, lift any of them off zero?
+
+**Design (one variable: the blank policy).** Init `v3_stage1/final_fp32`, `--stage 2`,
+lr 2e-5 linear, accum 8, one epoch, eval every 40 — identical to §22 stage 2.
+`corpus_xml_granular.py` → `v6/stage2g`: every §22 row kept byte-identical (formula,
+raman, top 16 / libs, system 8 / species-with-formula 16 per species; plain bundles)
+EXCEPT the 26,656 identity rows (2.59 M tokens), replaced by stripped records
+(`corpus_xml.stripped_record`: only the cues, one blank, no system, no laser) for 10
+TRAIN_PAIRS at 8 rows per pair per species (both FIM orders; both block orders where both
+blocks exist; identical rows repeated, spread by the global shuffle): formula → name;
+bands → name; bands1/2/3 → name; lines → name; bands + lines → name; bands → formula;
+lines → formula; bands + lines → formula. 133,280 rows = 7.45 M tokens. The other 9
+probe pairs (forward, and spectra-as-context) are NOT trained — transfer for both arms.
+SIZING DEVIATION from the design stated in chat, recorded before training: at the
+identity rows' own budget the pairs would get ~1 exposure per species each, a test that
+cannot tell "does not learn" from "never shown"; 8 per pair is the count at which §22's
+libs and system blanks reached 1.00 / 0.92. The stage therefore grows from 26.8 M to
+33.4 M tokens (8,434 blocks, 1,054 steps), mix held at 65 / 20 / 7 / 8 (realised xml_fim
+62.2 %, xml_plain 2.8 %, paper 20.0 %, other 7.0 %, replay 8.0 %). Control = the §22
+endpoint `v3_stage2/final` (same init, same forward rows, identity blank instead).
+
+**Instrument.** `probe_pairs.py`: the 19 PAIRS × 100 species — T 60 seeded trained, V 19
+(the §22 val species; never in either arm's XML training), U 21 seeded untouched —
+prose, trained-order XML (PSM, SPM averaged) and held-out formula-first XML; every rate
+beside its ceiling (1 / distinct answers among all 1,785 records matching the cues).
+Items frozen in `items_frozen.json`. Also `probe_xml_fill.py`, `probe_recall.py`
+(seen 200 + probe set), `probe_backward_identity.py`, prose bounds as P5.
+
+**Measured before (control, 2026-09-22 19:10Z; group T, trained-order XML unless noted).**
+formula → name 0.27 (held-out 0.20, prose 0.07); bands + formula → name 0.61; lines +
+formula → name 0.57; bands + lines + formula → name 0.57; name → formula 0.72 (prose
+0.87); name + formula → top 0.97 (prose 0.07); name + formula + top → line 0.47; the
+three spectra + name → formula pairs 0.97 / 0.97 / 0.97; EVERY spectra-only pair 0.00
+(bands, lines, bands + lines, bands1/2/3 → name; bands, lines, bands + lines →
+formula). Ceilings (T): bands → name 0.95, lines → name 0.49, lines → formula 0.51,
+bands1 / 2 / 3 → name 0.03 / 0.38 / 0.82, all other pairs ≥ 0.97. V and U: formula →
+name 0.00, spectra-only pairs 0.00. v2 reads 0.00 on every XML cell (never saw the
+schema) and 0.00–0.03 on every backward prose cell.
+
+**Predictions (granular arm v3g vs control v3, same items).**
+
+| # | prediction | falsified if |
+|---|---|---|
+| G1 | forward protected: `probe_xml_fill` held-out-order formula / raman / top on trained species within 5 points of control (0.884 / 0.918 / 0.898); `probe_recall` probe-frame formula / bands within 5 points (0.845 / 0.665 as scored) | any drops > 5 points |
+| G2 | prose bounds as P5: paper ≤ +2 %, replay ≤ +3 % of the run's step 0 | either exceeded |
+| G3 | formula → name (T, xml) ≥ control + 0.20 (≥ 0.47): single-key and well posed, now trained in isolation | < 0.47 |
+| G4 | lines → name (T, xml) ≥ 0.25 (half its 0.49 ceiling): lines follow from elements the model already maps forward (libs fill 1.00) | < 0.25 |
+| G5 | lines → formula (T, xml) ≥ 0.25 (ceiling 0.51) | < 0.25 |
+| G6 | bands → name and bands → formula (T, xml) stay < 0.10 — the four-way conjunctive lookup is not expected to be learned at 8 exposures | ≥ 0.10 on either (a positive surprise) |
+| G7 | progression: if narrowing is learned, T xml HIT rises with k (bands1 < bands2 < bands3 < bands); if not, all four sit within 0.03 of one another | — (read, not bar) |
+| G8 | bands + lines → name / formula ≥ lines → name / formula (the bands add, never subtract) | either lower by > 0.05 |
+| G9 | V and U: every trained backward pair ≤ 0.05 (no stage-2 exposure; stage-1 inverse frames only, position-ordered); forward name → formula within 5 points of control | backward > 0.05, or forward drop > 5 |
+| G10 | held-out attribute order: formula → name held-out ≥ 0.5 × trained order (not a pure template) | < 0.5 × |
+| G11 | no transfer to prose: v3g prose on the trained backward pairs ≤ control + 0.05 (P10's schema-binding) | > control + 0.05 on any |
+
+Expected NOT to work: bands → name, bands → formula, bands1 → name (ceiling 0.03).
+
+**Freeze (sha256, first 16).** `v6/stage2g/docs_manifest.json` 5388f2f2a33eeba3;
+`v6/stage2g/manifest.json` 6e378f527a2958db; `pair_probe/items_frozen.json`
+f5e7e07a35b2b61c. Not tuned post hoc; a change is a new subsection.

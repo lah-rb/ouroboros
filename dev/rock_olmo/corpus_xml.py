@@ -243,6 +243,57 @@ def blank(text: str, kind: str) -> tuple[str, str, str]:
     raise ValueError(f"unknown blank kind {kind!r}")
 
 
+BLANK = "\x00"  # placeholder for the one blank in a stripped record
+
+
+def stripped_record(
+    rec: XmlRecord,
+    known: set[str] | frozenset[str],
+    target: str,
+    *,
+    formula_first: bool = False,
+    libs_first: bool = False,
+) -> str:
+    """The §22 schema holding ONLY the known fields plus one BLANK (§22g; shared by the
+    granular stage 2 and probe_chains so train and probe records are byte-identical).
+
+    `known` fields: "name", "formula"; "bands" (the four strongest), "bands1" / "bands2" /
+    "bands3" (the k strongest, strongest first); "lines" (all four); "top" / "line" (the
+    single value an earlier turn answered). `target` ∈ name, formula, top, line. No crystal
+    system and no laser are ever shown: absent fields are omitted, never blanked."""
+    attrs = []
+    order = (("formula", "formula"), ("species", "name")) if formula_first else (("species", "name"), ("formula", "formula"))
+    for attr, key in order:
+        if key == target:
+            attrs.append(f'{attr}="{BLANK}"')
+        elif key in known:
+            attrs.append(f'{attr}="{_esc(getattr(rec, "species" if key == "name" else "formula"))}"')
+    head = "<mineral" + ("" if not attrs else " " + " ".join(attrs)) + ">"
+    b = rec.bands
+    k = 4 if "bands" in known else next((int(x[-1]) for x in ("bands1", "bands2", "bands3") if x in known), 0)
+    raman = ""
+    if k:
+        raman = "<raman>" + f"<top>{b[0]}</top>" + "".join(f"<next>{x}</next>" for x in b[1:k]) + "</raman>"
+    elif target == "top":
+        raman = f"<raman><top>{BLANK}</top></raman>"
+    elif "top" in known:
+        raman = f"<raman><top>{b[0]}</top></raman>"
+    ls = rec.libs
+    libs = ""
+    if "lines" in known:
+        libs = "<libs>" + "".join(f"<line>{x:.2f}</line>" for x in ls) + "</libs>"
+    elif target == "line":
+        libs = f"<libs><line>{BLANK}</line></libs>"
+    elif "line" in known:
+        libs = f"<libs><line>{ls[0]:.2f}</line></libs>"
+    blocks = [x for x in ((libs, raman) if libs_first else (raman, libs)) if x]
+    return "\n".join([head, *blocks, "</mineral>"])
+
+
+def stripped_answer(rec: XmlRecord, target: str) -> str:
+    return {"name": rec.species, "formula": rec.formula, "top": str(rec.bands[0]), "line": f"{rec.libs[0]:.2f}"}[target]
+
+
 def kinds_for(rec: XmlRecord, variant: str) -> tuple[str, ...]:
     return tuple(k for k in KINDS_BY_VARIANT[variant] if k != "system" or rec.system)
 
