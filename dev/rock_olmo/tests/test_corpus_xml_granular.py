@@ -2,6 +2,7 @@
 laser), every blank reconstructs its record, the pairs cover the chained probe, and the
 budget fitter lands on the budget."""
 
+import collections
 import random
 
 import corpus_xml as cx
@@ -61,3 +62,26 @@ def test_train_pairs_are_the_spectra_to_identity_pairs_at_eight_exposures():
     per = collections.Counter(r["kind"] for r in rows)
     assert set(per.values()) == {cg.EXPOSURES} and len(per) == 10
     assert len({r["ex_id"] for r in rows}) == len(rows)  # copies carry distinct ids
+
+
+def test_resolution_arm_jitters_rounds_and_labels_the_grid():
+    import corpus_xml_resolution as cr
+
+    r = _rec()
+    t = cx.stripped_record(r, {"bands"}, "name", raman_resolution=5)
+    assert '<raman resolution_cm1="5"><top>1008</top>' in t
+    rows = cr.rows_for(r, val=False)
+    per = collections.Counter(x["kind"] for x in rows)
+    assert per["g:bands>name"] == 16 and per["g:bands+lines>name"] == 16 and per["g:bands>formula"] == 8
+    assert per["g:formula>name"] == 8 and per["g:lines>name"] == 8
+    for x in rows:
+        if "grid" in x:
+            assert all(v % x["grid"] == 0 for v in x["bands_shown"])
+            assert f'resolution_cm1="{x["grid"]}"' in x["prompt"] and "laser" not in x["prompt"]
+            assert x["completion"] in ("Gypsum", "CaSO4·2H2O")
+    # deterministic, and distinct draws per exposure
+    again = cr.rows_for(r, val=False)
+    assert [x["prompt"] for x in rows] == [x["prompt"] for x in again]
+    b2n = [x for x in rows if x["kind"] == "g:bands>name"]
+    assert len({tuple(x["bands_shown"]) for x in b2n}) > 1
+    assert cr.quantize(1008, 5) == 1010 and cr.quantize(1007.4, 5) == 1005 and cr.quantize(493, 10) == 490

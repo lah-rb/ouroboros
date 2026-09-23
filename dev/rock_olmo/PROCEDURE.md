@@ -2897,3 +2897,63 @@ proximity matter: every backward exposure drawn with fresh instrument jitter
 (`synth_variance.py` already models it), coarsened / binned values, or candidate lists in
 context — the numeric-key mitigations decision 3 deferred, now the only untested path.
 (iv) The skill stays schema-bound: prose 0.00 on every spectral pair.
+
+### 22h. Resolution arm: jittered, grid-rounded bands with a resolution field — pre-registration (2026-09-23 16:00Z)
+
+**Question.** §22g's backward lookup is an exact-string lookup (±1 cm-1 → 0.01). OLMo-2
+writes every three-digit band as one token (493, 495, 490 are unrelated symbols), and a
+real re-measurement of the same species shifts matched bands by median 1.0 / p90 7.0 cm-1
+while keeping the same four-band set only 18 % of the time. Does training every
+bands-bearing backward row on a FRESH instrument draw, rounded to that instrument's
+resolution grid and labelled with a resolution field, make bands → name survive
+measurement variation? Operator ruling (2026-09-23): this lifts decision 3's deferral of
+numeric-key mitigations; re-ranking comes in the next arm; StarCoder2 is the alternative
+if stage-2 iteration stops paying.
+
+**Design.** Identical to §22g except the numeric presentation (`corpus_xml_resolution.py`
+→ `v6/stage2r`): each row whose cues include bands draws an instrument
+(`synth_variance.sample_raman`: lab / portable / handheld .50 / .35 / .15, Gaussian σ 1.2 /
+3.0 / 3.5 cm-1, 25 % of non-lab units with a constant ±4–9 offset; no band loss, no
+re-ranking), rounds the jittered positions to the class grid (1 / 5 / 10 cm-1) and writes
+`<raman resolution_cm1="G">`. Exposures: 16 per species for bands → name and bands + lines
+→ name, 8 for the other bands pairs (§22g had 8 for all — a second difference, recorded);
+formula → name, lines → name, lines → formula repeated exactly as §22g; LIBS exact;
+§22's forward and species rows byte-identical. 159,936 new rows = 9.87 M tokens; the
+16 draws of bands → name give 15.35 distinct four-band tuples per species on average, so
+whole-string memorisation is impossible by construction. Pack: 9,369 blocks = 37.08 M
+tokens, 1,171 steps; mix xml_fim 62.5 / xml_plain 2.5 / paper 20.0 / other 7.0 / replay 8.0.
+Init `v3_stage1/final_fp32`, `--stage 2`, lr 2e-5 linear, accum 8, one epoch.
+
+**Instrument (`probe_resolution.py`).** bands → name and bands + lines → name on stripped
+records, PSM + SPM, three field renderings (none / correct / wrong). T: the probe_pairs
+seeded 60 with exact values and 4 FRESH draws per class (probe-only seed namespace). R: 100
+seeded trained species with a held-out real RRUFF / ROD re-measurement
+(`real_remeasurements.json`, 764 species: same strongest band 63 %, same four-band set
+18 %), at native integers and rounded to 5 and 10, split by set-match. V: the val species.
+
+**Measured before (§22g's v3g; best rendering for it is no field).** T exact 0.46
+(field "1": 0.15 — the unseen attribute breaks its string); fresh lab / portable /
+handheld 0.12 / 0.02 / 0.02; R real native 0.09, grid 5 0.05, grid 10 0.03; R set-match
+native 0.31, grid 5 / 10 0.04; V 0.00. bands + lines → name: T exact 0.49, lab / portable /
+handheld 0.15 / 0.07 / 0.05, R native 0.10.
+
+**Predictions (v3r, bands → name, correct field unless stated).**
+
+| # | prediction | falsified if |
+|---|---|---|
+| H1 | forward protected vs the §22 control: full-record held-out-order fill formula / raman / top within 5 points (0.884 / 0.918 / 0.898); recall probe frame formula / bands within 5 (0.845 / 0.665) | any drop > 5 |
+| H2 | prose bounds: paper ≤ +2 %, replay ≤ +3 % of the run's step 0 | either exceeded |
+| H3 | fresh synthetic draws (T): handheld ≥ 0.30 and portable ≥ 0.20 — coarse grids generalise by per-band coverage; lab (grid 1) expected < 0.20 (needs genuine proximity) | handheld < 0.30 or portable < 0.20 |
+| H4 | exact canonical values, field "1": ≥ 0.20 | < 0.20 |
+| H5 | the field is read: portable and handheld draws, correct field ≥ wrong field + 0.05 | < + 0.05 on both |
+| H6 | real re-measurements (R): overall at grid 10 < 0.10 (the four-band set changes in 82 %); set-match subgroup ≥ 0.20 at grid 5 or 10 | set-match < 0.20 at both — then variation beyond re-ranking also defeats it |
+| H7 | bands + lines → name ≥ bands → name − 0.05 in every condition | lower by > 0.05 |
+| H8 | V (never in either arm's XML) ≤ 0.05 | > 0.05 |
+
+Decision rule (operator): H3 + H6 set-match met → the re-rank arm next (train the
+ranking variation that the 82 % of real re-measurements carry). H3 met, H6 not → variation
+beyond ranking matters too; still re-rank next, with band loss. H3 failed → numeric
+proximity is out of reach in this tokenisation; StarCoder2 (digit-level tokens) next.
+
+**Freeze (sha256, first 16).** `stage2r/docs_manifest.json` 791fa244e6f91891; `stage2r/manifest.json`
+92e8b8d59095ceb8; `real_remeasurements.json` 793fff5f671a2dfa; `resolution_items_frozen.json` 7f430318a213af2a.

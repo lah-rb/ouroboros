@@ -253,6 +253,7 @@ def stripped_record(
     *,
     formula_first: bool = False,
     libs_first: bool = False,
+    raman_resolution: int | None = None,
 ) -> str:
     """The §22 schema holding ONLY the known fields plus one BLANK (§22g; shared by the
     granular stage 2 and probe_chains so train and probe records are byte-identical).
@@ -260,7 +261,9 @@ def stripped_record(
     `known` fields: "name", "formula"; "bands" (the four strongest), "bands1" / "bands2" /
     "bands3" (the k strongest, strongest first); "lines" (all four); "top" / "line" (the
     single value an earlier turn answered). `target` ∈ name, formula, top, line. No crystal
-    system and no laser are ever shown: absent fields are omitted, never blanked."""
+    system and no laser are ever shown: absent fields are omitted, never blanked.
+    `raman_resolution` (§22h) writes `<raman resolution_cm1="G">`: the grid the band values
+    were rounded to, so the model can read how far a value may sit from the reference."""
     attrs = []
     order = (("formula", "formula"), ("species", "name")) if formula_first else (("species", "name"), ("formula", "formula"))
     for attr, key in order:
@@ -271,13 +274,14 @@ def stripped_record(
     head = "<mineral" + ("" if not attrs else " " + " ".join(attrs)) + ">"
     b = rec.bands
     k = 4 if "bands" in known else next((int(x[-1]) for x in ("bands1", "bands2", "bands3") if x in known), 0)
+    rhead = f'<raman resolution_cm1="{raman_resolution}">' if raman_resolution else "<raman>"
     raman = ""
     if k:
-        raman = "<raman>" + f"<top>{b[0]}</top>" + "".join(f"<next>{x}</next>" for x in b[1:k]) + "</raman>"
+        raman = rhead + f"<top>{b[0]}</top>" + "".join(f"<next>{x}</next>" for x in b[1:k]) + "</raman>"
     elif target == "top":
-        raman = f"<raman><top>{BLANK}</top></raman>"
+        raman = f"{rhead}<top>{BLANK}</top></raman>"
     elif "top" in known:
-        raman = f"<raman><top>{b[0]}</top></raman>"
+        raman = f"{rhead}<top>{b[0]}</top></raman>"
     ls = rec.libs
     libs = ""
     if "lines" in known:
