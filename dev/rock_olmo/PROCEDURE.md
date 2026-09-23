@@ -2829,3 +2829,71 @@ Expected NOT to work: bands → name, bands → formula, bands1 → name (ceilin
 **Freeze (sha256, first 16).** `v6/stage2g/docs_manifest.json` 5388f2f2a33eeba3;
 `v6/stage2g/manifest.json` 6e378f527a2958db; `pair_probe/items_frozen.json`
 f5e7e07a35b2b61c. Not tuned post hoc; a change is a new subsection.
+
+### 22g. Result: the backward lookup is learnable, and it is a string lookup (run 2026-09-23 01:10–07:20Z)
+
+1,054 steps, 34,537,472 tokens, 6.2 h, endpoint `v3_stage2g/final`. Final vs step 0:
+paper 1.3180 → 1.3402 (+1.7 %), replay 2.2520 → 2.2932 (+1.8 %), prose fim 2.361 →
+2.431 (+3.0 %), reference 0.347 → 0.503 (control 0.493) — prose costs match the control.
+
+**Pair probe, group T (60 trained species), trained-order XML, control v3 → granular v3g.**
+
+| pair | ceiling (±10 / ±0.2) | control | granular |
+|---|---|---|---|
+| ★ formula → name | 0.97 | 0.27 | 0.39 |
+| ★ bands → name | 0.95 | 0.00 | **0.47** |
+| ★ bands + lines → name | 1.00 | 0.00 | **0.51** |
+| ★ bands + lines → formula | 1.00 | 0.00 | **0.49** |
+| ★ lines → formula | 0.51 | 0.00 | 0.33 |
+| ★ lines → name | 0.49 | 0.00 | 0.08 |
+| ★ bands → formula | 0.95 | 0.00 | 0.04 |
+| ★ bands1 / bands2 / bands3 → name | 0.03 / 0.38 / 0.82 | 0.00 | 0.28 / 0.47 / 0.44 |
+| bands + formula → name | 1.00 | 0.61 | 0.67 |
+| lines + formula → name | 0.97 | 0.57 | 0.67 |
+| name → formula | 1.00 | 0.72 | 0.75 |
+
+V and U (never in either arm's XML): every trained backward pair ≤ 0.05 in both arms.
+Prose: every spectral backward pair 0.00 in both arms; formula → name 0.07 → 0.12.
+
+**The anomaly and its test (`probe_band_jitter.py`).** One band names a trained species
+at 0.28, above the 0.03 ceiling that ±10 cm-1 matching allows — possible only if the
+model keys on the exact integer. Every band shifted by ±δ cm-1 (random sign), same 60
+species, granular arm:
+
+| pair | δ = 0 | 1 | 2 | 3 | 5 | 10 |
+|---|---|---|---|---|---|---|
+| 1 band → name | 0.28 | 0.01 | 0.01 | 0.00 | 0.00 | 0.00 |
+| 2 bands → name | 0.43 | 0.02 | 0.01 | 0.02 | 0.00 | 0.00 |
+| 4 bands → name | 0.47 | 0.01 | 0.01 | 0.00 | 0.00 | 0.00 |
+| bands + lines → name | 0.52 | 0.04 | 0.03 | 0.03 | 0.02 | 0.03 |
+
+A 1 cm-1 shift — below RRUFF's own within-species scatter (median |Δ| 1.3) — erases it.
+Exact-value ceilings (1 / species sharing the identical integers): 1 band 0.40, 2 and 4
+bands 1.00; the model reaches 70 % of the one-band exact ceiling. The same model names
+the species from the FULL record (bands + lines + system + laser) at only 0.077 lenient /
+0.000 strict (`probe_xml_fill` identity; control 0.014 / 0.000): extra fields break the
+memorised string.
+
+**Scorecard.** G1 ✓ (held-out-order full-record fill formula 0.884 → 0.949, raman 0.918
+→ 0.887, top 0.898 → 0.907; recall probe frame formula 0.845 → 0.845, bands 0.665 →
+0.615, exactly at the 5-point edge). G2 ✓ (+1.7 % / +1.8 %). G3 ✗ (formula → name 0.39
+< 0.47; +0.12). G4 ✗ (lines → name 0.08 < 0.25). G5 ✓ (lines → formula 0.33). G6 ✗ as
+worded — bands → name 0.47 ≥ 0.10, the pre-registered positive surprise — and resolved
+by the jitter test as exact-string recall, not identification; bands → formula 0.04
+holds. G7 read: 0.28 / 0.47 / 0.44 / 0.47 — rises from one band to two, then flat; the
+k = 1 and k = 2 values exceed their ±10 ceilings, i.e. no narrowing was learned, only
+string identity. G8 ✓. G9 ✓ (backward ≤ 0.05 on V and U; name → formula within 5) —
+but V's spectra + name → formula context pairs fell 12–16 points. G10 ✓ (0.24 / 0.39 =
+0.62). G11 ✓ (formula → name prose +0.05, at the edge; spectral pairs 0.00).
+Unpredicted: prose crystal-system probe frame 0.198 → 0.401 (probe set 0.260 → 0.400)
+while the v4 question frame fell 0.279 → 0.208 — frame-dependent, unexplained.
+
+**Standing conclusions.** (i) Direction is not the wall. Trained directly, a 1B model
+learns spectra → name in 8 exposures to half its ceiling (0.47–0.51), from zero. (ii) What
+it learns is the numbers as STRINGS: a 1 cm-1 shift takes 0.47 to 0.01. Numeric proximity
+plays no part in the lookup, so identification of a measured spectrum — the scientific
+task — is zero in both arms. (iii) The one remaining lever is training that makes
+proximity matter: every backward exposure drawn with fresh instrument jitter
+(`synth_variance.py` already models it), coarsened / binned values, or candidate lists in
+context — the numeric-key mitigations decision 3 deferred, now the only untested path.
+(iv) The skill stays schema-bound: prose 0.00 on every spectral pair.
