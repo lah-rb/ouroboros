@@ -427,6 +427,21 @@ class Probe:
         self.base.mkdir(parents=True, exist_ok=True)
         self.results: list[ModelResult] = []
         self.rec: Optional[subprocess.Popen] = None
+        # The pointer as we FOUND it. Every rung overwrites active_config.txt
+        # to boot the model under test, so the finally-block has to put
+        # something back — and putting back a hardcoded constant silently
+        # repoints the seat at a model the operator never chose. Observed
+        # 2026-09-20: a probe run left the pointer on PRODUCTION while the
+        # operator's server had been on qwen3-next, which the next bounce
+        # would have booted as the wrong model with no error anywhere.
+        try:
+            self.prev_pointer = (
+                LLMVP / "active_config.txt"
+            ).read_text().strip() or PRODUCTION
+        except OSError:
+            # No pointer file (fresh checkout) — the shipped default is the
+            # only honest thing to restore to.
+            self.prev_pointer = PRODUCTION
         # Same ceiling the guard enforces, read from the guard itself so the
         # probe and the thing it is refining can never drift apart.
         from inference.backends.llama_cpp_backend import _physical_memory_gb
@@ -696,9 +711,14 @@ class Probe:
             self.log(f"!! no config {cfg}")
             return ModelResult(cfg, 0, 0, note="config not found")
 
-        import yaml
+        # Resolve `extends:` before reading. The probe reads the RAW yaml so it
+        # can rewrite n_ctx per rung, but a child config declares only its
+        # overrides — an inherited `n_ctx` lives in the base, and reading the
+        # child alone raised KeyError('n_ctx') on every extends config in the
+        # fleet (2026-09-21, first hit on the qwen4exp APEX arm).
+        from core.config import _load_raw_with_inheritance
 
-        raw = yaml.safe_load(cfg_path.read_text())
+        raw, _base, _over = _load_raw_with_inheritance(cfg_path)
         m = raw["model"]
         orig = int(m["n_ctx"])
         trained = trained_context(
@@ -906,8 +926,8 @@ class Probe:
             if self.rec:
                 self.rec.terminate()
             stop_server(self.log)
-            (LLMVP / "active_config.txt").write_text(PRODUCTION)
-            self.log(f"\nserver DOWN; active_config restored to {PRODUCTION}")
+            (LLMVP / "active_config.txt").write_text(self.prev_pointer)
+            self.log(f"\nserver DOWN; active_config restored to {self.prev_pointer}")
 
         self.log("\n=== SUMMARY ===")
         for r in self.results:
