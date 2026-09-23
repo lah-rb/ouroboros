@@ -246,6 +246,13 @@ def blank(text: str, kind: str) -> tuple[str, str, str]:
 BLANK = "\x00"  # placeholder for the one blank in a stripped record
 
 
+def digit_str(v) -> str:
+    """A number written digit by digit (§22i): '493' -> '4 9 3', '422.67' -> '4 2 2 . 6 7'.
+    OLMo-2 writes every three-digit number as ONE token, so 493 and 495 share nothing on
+    the surface; spaced, each digit is its own token and neighbours share their prefix."""
+    return " ".join(str(v))
+
+
 def stripped_record(
     rec: XmlRecord,
     known: set[str] | frozenset[str],
@@ -254,6 +261,7 @@ def stripped_record(
     formula_first: bool = False,
     libs_first: bool = False,
     raman_resolution: int | None = None,
+    digits: bool = False,
 ) -> str:
     """The §22 schema holding ONLY the known fields plus one BLANK (§22g; shared by the
     granular stage 2 and probe_chains so train and probe records are byte-identical).
@@ -263,7 +271,10 @@ def stripped_record(
     single value an earlier turn answered). `target` ∈ name, formula, top, line. No crystal
     system and no laser are ever shown: absent fields are omitted, never blanked.
     `raman_resolution` (§22h) writes `<raman resolution_cm1="G">`: the grid the band values
-    were rounded to, so the model can read how far a value may sit from the reference."""
+    were rounded to, so the model can read how far a value may sit from the reference.
+    `digits` (§22i) writes band and line values digit by digit (digit_str)."""
+    fmt_b = digit_str if digits else str
+    fmt_l = (lambda x: digit_str(f"{x:.2f}")) if digits else (lambda x: f"{x:.2f}")
     attrs = []
     order = (("formula", "formula"), ("species", "name")) if formula_first else (("species", "name"), ("formula", "formula"))
     for attr, key in order:
@@ -277,19 +288,19 @@ def stripped_record(
     rhead = f'<raman resolution_cm1="{raman_resolution}">' if raman_resolution else "<raman>"
     raman = ""
     if k:
-        raman = rhead + f"<top>{b[0]}</top>" + "".join(f"<next>{x}</next>" for x in b[1:k]) + "</raman>"
+        raman = rhead + f"<top>{fmt_b(b[0])}</top>" + "".join(f"<next>{fmt_b(x)}</next>" for x in b[1:k]) + "</raman>"
     elif target == "top":
         raman = f"{rhead}<top>{BLANK}</top></raman>"
     elif "top" in known:
-        raman = f"{rhead}<top>{b[0]}</top></raman>"
+        raman = f"{rhead}<top>{fmt_b(b[0])}</top></raman>"
     ls = rec.libs
     libs = ""
     if "lines" in known:
-        libs = "<libs>" + "".join(f"<line>{x:.2f}</line>" for x in ls) + "</libs>"
+        libs = "<libs>" + "".join(f"<line>{fmt_l(x)}</line>" for x in ls) + "</libs>"
     elif target == "line":
         libs = f"<libs><line>{BLANK}</line></libs>"
     elif "line" in known:
-        libs = f"<libs><line>{ls[0]:.2f}</line></libs>"
+        libs = f"<libs><line>{fmt_l(ls[0])}</line></libs>"
     blocks = [x for x in ((libs, raman) if libs_first else (raman, libs)) if x]
     return "\n".join([head, *blocks, "</mineral>"])
 

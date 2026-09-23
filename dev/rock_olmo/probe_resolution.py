@@ -17,6 +17,12 @@ the field. PSM and SPM. Groups: T (the probe_pairs seeded 60), R (100 seeded tra
 species that have a real re-measurement), V (the val species, exact only).
 
   ./.venv/bin/python probe_resolution.py --models v3g,v3r
+  ./.venv/bin/python probe_resolution.py --models v3r,v3d --digits --jitter-lines --tag digits   # §22i
+
+§22i options: --digits writes band and line values digit by digit (the arm's training
+rendering); --jitter-lines gives every non-exact condition FRESH LIBS line draws (probe-only
+namespace), so bands + lines cannot be answered from exact lines. Results go to
+resolution_<tag>_*.
 """
 
 from __future__ import annotations
@@ -36,7 +42,7 @@ import corpus_xml as cx  # noqa: E402
 import probe_chains as pc  # noqa: E402
 import probe_pairs as pp  # noqa: E402
 import synth_variance as sv  # noqa: E402
-from corpus_xml_resolution import GRID, quantize  # noqa: E402
+from corpus_xml_resolution import GRID, jitter_lines, quantize  # noqa: E402
 from fim_transform import fim_wrap  # noqa: E402
 
 REAL = os.path.expanduser("~/corpora/rock-olmo-training/v6/stage2r/docs/real_remeasurements.json")
@@ -55,6 +61,10 @@ def forced_draw(rec: cx.XmlRecord, klass: str, k: int) -> tuple[cx.XmlRecord, in
     return dataclasses.replace(rec, bands=bands), grid
 
 
+DIGITS = False
+JITTER_LINES = False
+
+
 def prompts_for(rec: cx.XmlRecord, grid: int, wrong: int) -> list[tuple[str, str, str]]:
     """[(pair, rendering, prompt)] for both pairs, three field renderings, both orders."""
     out = []
@@ -62,7 +72,7 @@ def prompts_for(rec: cx.XmlRecord, grid: int, wrong: int) -> list[tuple[str, str
         for rendering, res in (("none", None), ("correct", grid), ("wrong", wrong)):
             if res is not None and wrong is None and rendering == "wrong":
                 continue
-            text = cx.stripped_record(rec, set(cues), target, raman_resolution=res)
+            text = cx.stripped_record(rec, set(cues), target, raman_resolution=res, digits=DIGITS)
             pre, suf = text.split(cx.BLANK)
             for order in cx.ORDERS:
                 out.append(("+".join(cues) + ">" + target, rendering, fim_wrap(pre, "", suf, order)))
@@ -74,6 +84,8 @@ def build_jobs(groups: dict, real: dict) -> list[dict]:
 
     def add(species, group, condition, rec, grid, wrong, extra=None):
         g = pc.load_gold(species)
+        if JITTER_LINES and condition != "exact":
+            rec = jitter_lines(rec, "probe", condition, len(jobs))
         for pair, rendering, prompt in prompts_for(rec, grid, wrong):
             jobs.append({"species": species, "group": group, "condition": condition, "pair": pair, "rendering": rendering,
                          "prompt": prompt, "gold_rec": g, **(extra or {})})
@@ -139,7 +151,13 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=20260922)
     ap.add_argument("--n-real", type=int, default=100)
     ap.add_argument("--out", default=os.path.expanduser("~/tmp/analysis/v3/pair_probe"))
+    ap.add_argument("--digits", action="store_true")
+    ap.add_argument("--jitter-lines", action="store_true")
+    ap.add_argument("--tag", default="", help="suffix for the result files (resolution_<tag>_...)")
     args = ap.parse_args()
+    global DIGITS, JITTER_LINES
+    DIGITS, JITTER_LINES = args.digits, args.jitter_lines
+    pre = f"resolution_{args.tag}_" if args.tag else "resolution_"
     groups = pp.sample_species({"T": 60, "V": 19, "U": 0}, args.seed)
     real = json.load(open(REAL))
     val = set(groups["V"])
@@ -149,9 +167,9 @@ def main() -> int:
     groups["R"] = cands[: args.n_real]
     jobs = build_jobs(groups, real)
     os.makedirs(args.out, exist_ok=True)
-    json.dump({k: v for k, v in groups.items()}, open(os.path.join(args.out, "resolution_items_frozen.json"), "w"), indent=1)
+    json.dump({k: v for k, v in groups.items()}, open(os.path.join(args.out, pre + "items_frozen.json"), "w"), indent=1)
     print(f"groups T {len(groups['T'])} R {len(groups['R'])} V {len(groups['V'])} -> {len(jobs):,} prompts per model", flush=True)
-    rpath = os.path.join(args.out, "resolution_results.jsonl")
+    rpath = os.path.join(args.out, pre + "results.jsonl")
     results, done = [], set()
     if os.path.exists(rpath):
         for line in open(rpath):
@@ -173,9 +191,9 @@ def main() -> int:
                 fh.write(json.dumps(row, ensure_ascii=False) + "\n")
         print(f"{m}: {len(jobs):,} prompts in {time.time() - t0:.0f}s", flush=True)
     summary = summarise(results)
-    json.dump(summary, open(os.path.join(args.out, "resolution_summary.json"), "w"), indent=1)
-    models = [m for m in ("v3g", "v3r") if any(r["model"] == m for r in results)]
-    write_report(summary, models, groups, os.path.join(args.out, "resolution_report.md"))
+    json.dump(summary, open(os.path.join(args.out, pre + "summary.json"), "w"), indent=1)
+    models = [m for m in ("v3g", "v3r", "v3d") if any(r["model"] == m for r in results)]
+    write_report(summary, models, groups, os.path.join(args.out, pre + "report.md"))
     return 0
 
 

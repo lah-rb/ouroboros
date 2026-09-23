@@ -2999,3 +2999,60 @@ tokenization test. A cheaper discriminating version than the StarCoder2 rebase e
 the same arm on OLMo-2 with band values rendered digit by digit (so 493 and 495 share
 their leading tokens, as StarCoder2's tokenizer would make them) and the LIBS lines
 jittered too, so no exact cue is left to route around.
+
+### 22i. Digit-rendered bands and jittered lines: is the tokenizer the wall? — pre-registration (2026-09-23 23:25Z)
+
+**Question.** §22h's bands-only rows — which offered no shortcut — learned nothing from 16
+fresh draws per species (bands → name 0.03 everywhere). Two explanations: OLMo-2 writes
+every three-digit band as ONE token (493, 495 unrelated on the surface), or the budget.
+This arm tests the first at identical budget and model: the same draws, written digit by
+digit so neighbouring values share their leading tokens (tokenizer check: `4 9 3` →
+`4 Ġ 9 Ġ 3`, `4 9 5` → `4 Ġ 9 Ġ 5`), and the LIBS lines jittered in every row that shows
+them, since §22h showed the model routes identification through any exact cue left.
+Operator ruling (2026-09-23): run this cheaper discriminating test before any StarCoder2
+rebase.
+
+**Design.** `corpus_xml_resolution.py --digits --jitter-lines` → `v6/stage2d`: §22h row for
+row (159,936 new rows, band draws identical — same seed namespace — so on the bands only
+the rendering changes); band and line values rendered by `corpus_xml.digit_str`; every
+row showing lines draws fresh positions (±U(0.02, 0.10) nm, random sign per line,
+`synth_variance.LIBS_POS_JITTER`); resolution field and grids as §22h. Known second
+difference: digit rendering makes the new rows 35 % longer (13.36 M vs 9.87 M tokens) at
+the same row and exposure counts. Pack 10,747 blocks = 42.46 M tokens, 1,343 steps; mix
+xml_fim 62.9 / xml_plain 2.2 / paper 20.0 / other 7.0 / replay 8.0. Init
+`v3_stage1/final_fp32`, `--stage 2`, lr 2e-5 linear, accum 8, one epoch.
+
+**Instrument.** `probe_resolution.py --digits --jitter-lines --tag digits`: §22h's groups,
+conditions and field renderings, digit-rendered, with fresh probe-only line draws in every
+non-exact condition. Also the native-rendered probe (transfer), `probe_pairs`,
+`probe_xml_fill`, `probe_recall`.
+
+**Measured before.** §22h's v3r on the digit probe: 0.00 in every cell (never saw the
+rendering; jittered lines remove its shortcut). The contrast of record is v3r on its own
+native probe: bands → name exact 0.05, fresh lab / portable / handheld 0.05 / 0.04 / 0.03,
+real 0.01–0.03.
+
+**Predictions (v3d, digit probe, correct field, bands → name unless stated).**
+
+| # | prediction | falsified if |
+|---|---|---|
+| I1 | forward protected vs the §22 control: full-record held-out-order fill formula / raman / top within 5 points (0.884 / 0.918 / 0.898); recall probe frame formula / bands within 5 (0.845 / 0.665) | any drop > 5 |
+| I2 | prose bounds: paper ≤ +2 %, replay ≤ +3 % of step 0 | either exceeded |
+| I3 | THE TEST — fresh synthetic draws: portable or handheld ≥ 0.15 (v3r 0.04 / 0.03) | both < 0.10: the tokenizer is not the (only) wall |
+| I4 | exact canonical values ≥ 0.15 | < 0.15 |
+| I5 | real re-measurements: set-match subgroup ≥ 0.20 at grid 5 or 10; overall grid 10 < 0.15 (re-ranking still defeats it) | set-match < 0.20 at both |
+| I6 | the field is read: portable and handheld, correct ≥ wrong + 0.05 | < + 0.05 on both |
+| I7 | V ≤ 0.05 | > 0.05 |
+
+Read, not barred: bands + lines → name on R:"neither" (real four-band set shares nothing
+with the canonical) measures reliance on the lines — digit-rendered jittered lines keep
+their integer prefix, so a coarse line key remains possible; ≤ 0.10 means the bands carry
+the identification. v3d on the NATIVE probe measures transfer across renderings.
+
+Decision rule: I3 met → the tokenizer was the wall; the re-rank arm next, in digit
+rendering. 0.10 ≤ I3 < 0.15 → partial; re-rank next, with more exposures. I3 < 0.10 on
+both → not the tokenizer (or not only); StarCoder2 (larger, digit-native) or a budget
+increase.
+
+**Freeze (sha256, first 16).** `stage2d/docs_manifest.json` c81288ebd3cdf47a; `stage2d/manifest.json`
+e72d6f448fc6bfc9; `resolution_digits_items_frozen.json` 7f430318a213af2a.

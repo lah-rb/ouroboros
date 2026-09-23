@@ -26,6 +26,13 @@ LIBS lines exact. Exposures per species: 16 for bands → name and bands + lines
 (coverage of the grids), 8 for every other pair. Val species get two fresh draws per pair.
 
   ./.venv/bin/python corpus_xml_resolution.py --out ~/corpora/rock-olmo-training/v6/stage2r
+
+§22i (--digits --jitter-lines --out v6/stage2d): the same arm, with band and line values
+written digit by digit (corpus_xml.digit_str) and EVERY row that shows LIBS lines drawing
+fresh line positions (synth_variance.LIBS_POS_JITTER: ±U(0.02, 0.10) nm, random sign per
+line) — §22h left the lines exact and the model routed identification through them. The
+band draws are identical to §22h's (same seed namespace), so on the bands only the
+rendering changes.
 """
 
 from __future__ import annotations
@@ -67,15 +74,30 @@ def draw(rec: cx.XmlRecord, *key: object) -> tuple[cx.XmlRecord, int, str, float
     return dataclasses.replace(rec, bands=bands), grid, inst.klass, inst.offset_cm1
 
 
-def jittered_rows(rec: cx.XmlRecord, cues: tuple[str, ...], target: str, n: int, *, val: bool, ns: str) -> list[dict]:
+def jitter_lines(rec: cx.XmlRecord, *key: object) -> cx.XmlRecord:
+    rng = sv.rng_for("s2d-lines", rec.species, *key)
+    lo, hi = sv.LIBS_POS_JITTER
+    return dataclasses.replace(rec, libs=[round(x + rng.choice((-1, 1)) * rng.uniform(lo, hi), 2) for x in rec.libs])
+
+
+def jittered_rows(
+    rec: cx.XmlRecord, cues: tuple[str, ...], target: str, n: int, *, val: bool, ns: str,
+    digits: bool = False, jitter_libs: bool = False,
+) -> list[dict]:
     kind = cg.pair_kind(cues, target)
     both = cg._both_blocks(cues, target)
+    has_bands = any(c in BAND_CUES for c in cues)
     rows = []
     for k in range(n):
-        jrec, grid, klass, off = draw(rec, ns, kind, k)
+        if has_bands:
+            jrec, grid, klass, off = draw(rec, ns, kind, k)
+        else:
+            jrec, grid, klass, off = rec, None, "none", 0.0
+        if jitter_libs and "lines" in cues:
+            jrec = jitter_lines(jrec, ns, kind, k)
         order = cx.ORDERS[k % 2]
         libs_first = both and (k // 2) % 2 == 1
-        text = cx.stripped_record(jrec, set(cues), target, libs_first=libs_first, raman_resolution=grid)
+        text = cx.stripped_record(jrec, set(cues), target, libs_first=libs_first, raman_resolution=grid, digits=digits)
         pre, suf = text.split(cx.BLANK)
         rows.append(
             {
@@ -92,18 +114,19 @@ def jittered_rows(rec: cx.XmlRecord, cues: tuple[str, ...], target: str, n: int,
                 "grid": grid,
                 "offset": off,
                 "bands_shown": jrec.bands,
+                "lines_shown": jrec.libs,
             }
         )
     return rows
 
 
-def rows_for(rec: cx.XmlRecord, *, val: bool) -> list[dict]:
+def rows_for(rec: cx.XmlRecord, *, val: bool, digits: bool = False, jitter_libs: bool = False) -> list[dict]:
     out = []
     for cues, target in cg.TRAIN_PAIRS:
         kind = cg.pair_kind(cues, target)
-        if any(c in BAND_CUES for c in cues):
+        if any(c in BAND_CUES for c in cues) or (jitter_libs and "lines" in cues):
             n = 2 if val else (EXPOSURES_HEADLINE if kind in HEADLINE else EXPOSURES_OTHER)
-            out += jittered_rows(rec, cues, target, n, val=val, ns="v" if val else "t")
+            out += jittered_rows(rec, cues, target, n, val=val, ns="v" if val else "t", digits=digits, jitter_libs=jitter_libs)
         else:
             out += cg.granular_rows(rec, val=val, pairs=((cues, target),), exposures=0 if val else EXPOSURES_OTHER)
     return out
@@ -113,6 +136,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--src", default=os.path.expanduser("~/corpora/rock-olmo-training/v6/stage2"))
     ap.add_argument("--out", default=os.path.expanduser("~/corpora/rock-olmo-training/v6/stage2r"))
+    ap.add_argument("--digits", action="store_true", help="§22i: band and line values digit by digit")
+    ap.add_argument("--jitter-lines", action="store_true", help="§22i: fresh LIBS line draws in every row that shows lines")
     args = ap.parse_args()
     from package import load_tokenizer
 
@@ -130,7 +155,9 @@ def main() -> int:
                 kept.append(r)
     new_train, new_val = [], []
     for rec in trained:
-        (new_val if rec.species in val_sp else new_train).extend(rows_for(rec, val=rec.species in val_sp))
+        (new_val if rec.species in val_sp else new_train).extend(
+            rows_for(rec, val=rec.species in val_sp, digits=args.digits, jitter_libs=args.jitter_lines)
+        )
     P = tok([r["prompt"] for r in new_train], add_special_tokens=False)["input_ids"]
     C = tok([r["completion"] for r in new_train], add_special_tokens=False)["input_ids"]
     new_tokens = sum(len(p) + len(c) + 1 for p, c in zip(P, C))
@@ -141,7 +168,7 @@ def main() -> int:
             fh.write(json.dumps(r, ensure_ascii=False) + "\n")
     for f in ("xml_plain.jsonl", "xml_records.json"):
         shutil.copyfile(os.path.join(src_docs, f), os.path.join(out_docs, f))
-    jit = [r for r in new_train if "grid" in r]
+    jit = [r for r in new_train if r.get("grid")]
     by_class = collections.Counter(r["instrument"] for r in jit)
     canon = {r.species: r.bands for r in trained}
     unchanged = collections.defaultdict(lambda: [0, 0])
@@ -156,7 +183,9 @@ def main() -> int:
         if r["kind"] == "g:bands>name":
             distinct[r["species"]].add(tuple(r["bands_shown"]))
     man = {
-        "arm": "resolution (§22h)",
+        "arm": "digits + jittered lines (§22i)" if args.digits else "resolution (§22h)",
+        "digits": args.digits,
+        "jitter_lines": args.jitter_lines,
         "grid": GRID,
         "exposures": {"headline": EXPOSURES_HEADLINE, "other": EXPOSURES_OTHER, "headline_pairs": HEADLINE},
         "train_rows_new": len(new_train),

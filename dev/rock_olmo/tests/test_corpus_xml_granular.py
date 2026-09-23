@@ -85,3 +85,24 @@ def test_resolution_arm_jitters_rounds_and_labels_the_grid():
     b2n = [x for x in rows if x["kind"] == "g:bands>name"]
     assert len({tuple(x["bands_shown"]) for x in b2n}) > 1
     assert cr.quantize(1008, 5) == 1010 and cr.quantize(1007.4, 5) == 1005 and cr.quantize(493, 10) == 490
+
+
+def test_digit_rendering_and_line_jitter_arm():
+    import corpus_xml_resolution as cr
+
+    r = _rec()
+    assert cx.digit_str(493) == "4 9 3" and cx.digit_str("422.67") == "4 2 2 . 6 7"
+    t = cx.stripped_record(r, {"bands", "lines"}, "name", raman_resolution=5, digits=True)
+    assert "<top>1 0 0 8</top><next>4 9 3</next>" in t and "<line>4 2 2 . 6 7</line>" in t
+    rows = cr.rows_for(r, val=False, digits=True, jitter_libs=True)
+    per = collections.Counter(x["kind"] for x in rows)
+    assert per["g:bands>name"] == 16 and per["g:lines>name"] == 8 and per["g:formula>name"] == 8
+    base = cr.rows_for(r, val=False)  # §22h
+    same_bands = {x["ex_id"]: x["bands_shown"] for x in base if x.get("grid")}
+    for x in rows:
+        if x.get("grid"):
+            assert x["bands_shown"] == same_bands[x["ex_id"]]  # band draws identical to §22h
+        if "lines" in x["kind"].split(">")[0].split("+"):
+            assert x["lines_shown"] != r.libs and all(abs(a - b) <= 0.101 for a, b in zip(x["lines_shown"], r.libs))
+            assert "4 2 2" in x["prompt"] or "4 2 3" in x["prompt"] or "4 2 1" in x["prompt"]
+    assert all("1008" not in x["prompt"] for x in rows if x.get("grid"))
