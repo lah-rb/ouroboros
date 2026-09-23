@@ -671,6 +671,26 @@ def _uvize_install_commands(commands: list[str], env_config: dict) -> list[str]:
     return out
 
 
+def _module_name_for(file_path: str, working_dir: str | None) -> str:
+    """The dotted import name of a Python file ("" for anything else).
+
+    Derived from the path RELATIVE to the workspace — the import check runs
+    there. An absolute target (a diagnosis can name one) used to become
+    ``private.tmp.tier.<arm>.engine``: every import check on it failed, and
+    on 2026-09-22 a correct `take` handler was reported as a failed fix while
+    the follow-up diagnosis rightly blamed the validator. Real paths are
+    compared because /tmp is /private/tmp on macOS.
+    """
+    if not file_path.endswith(".py"):
+        return ""
+    path = file_path
+    if working_dir and os.path.isabs(path):
+        rel = os.path.relpath(os.path.realpath(path), os.path.realpath(working_dir))
+        if not rel.startswith(".."):
+            path = rel
+    return path[: -len(".py")].replace(os.sep, ".").replace("/", ".").lstrip(".")
+
+
 def _substitute_command(template, file_path: str, module_name: str) -> list | None:
     """Fill {file}/{module} placeholders in an env command template."""
     if isinstance(template, list):
@@ -718,12 +738,11 @@ async def action_run_validation_checks_from_env(
     syntax_failed = False
     has_issues = False
 
+    working_dir = getattr(effects, "working_directory", None) or step_input.context.get(
+        "working_directory"
+    )
     for file_path in files:
-        module_name = ""
-        if file_path.endswith(".py"):
-            module_name = file_path.replace("/", ".").replace(".py", "")
-            if module_name.startswith("."):
-                module_name = module_name[1:]
+        module_name = _module_name_for(file_path, working_dir)
 
         # ── Run formatter before validation (non-fatal) ──────────
         # If a formatter command is configured, run it to normalize
