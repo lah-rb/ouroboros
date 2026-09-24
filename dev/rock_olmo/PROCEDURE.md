@@ -3056,3 +3056,53 @@ increase.
 
 **Freeze (sha256, first 16).** `stage2d/docs_manifest.json` c81288ebd3cdf47a; `stage2d/manifest.json`
 e72d6f448fc6bfc9; `resolution_digits_items_frozen.json` 7f430318a213af2a.
+
+### 22i. Result: the first jitter-tolerant backward signal, too weak to pass (run 2026-09-23 23:20Z – 2026-09-24 07:07Z)
+
+1,343 steps, 44,007,424 tokens, endpoint `v3_stage2d/final`. Final vs step 0: paper +1.7 %,
+replay +1.8 %, reference 0.347 → 0.488.
+
+**Digit-rendered probe (lines jittered in every non-exact condition), best rendering.**
+
+| condition | bands → name | bands + lines → name |
+|---|---|---|
+| T exact canonical | 0.10 | 0.14 |
+| T fresh lab / portable / handheld | 0.11 / 0.09 / 0.07 | 0.17 / 0.12 / 0.14 |
+| R real, native / grid 5 / grid 10 | 0.06 / 0.04 / 0.04 | 0.04 / 0.04 / 0.03 |
+| R set-match, grid 5 / 10 | 0.00 / 0.00 | 0.08 / 0.08 |
+| R "neither" (real band set shares nothing) | 0.01 | 0.00 |
+| V | 0.00 | 0.00 |
+
+v3r on its own native probe, for contrast: bands → name exact 0.05, fresh 0.05 / 0.04 /
+0.03. v3d on the NATIVE probe: 0.00 everywhere (the mapping is specific to the digit
+rendering).
+
+**What is new.** Every backward signal before this was a string: §22g reached 0.46 on exact
+values and kept 4 % of it under handheld jitter (0.02). v3d is flat — 0.10 exact, 0.07–0.11
+under every instrument class — so whatever it learned tolerates position error of several
+cm-1. The shortcut is also gone: bands + lines → name scores 0.00 on the real spectra whose
+band set shares nothing with the canonical record (v3r: 0.36), so the bands now carry the
+identification, and adding the lines lifts it (0.12–0.17). The level is low, and real
+re-measurements stay at 0.02–0.06: the ranking change that 82 % of them carry still defeats it.
+
+**Forward cost (real, not a scoring artifact).** Full-record fill in the held-out attribute
+order: raman 0.918 (control) → 0.547, system 0.887 → 0.689, species 0.693 → 0.487,
+formula 0.884 → 0.925, top 0.898 → 0.864; trained order unchanged (raman 0.968). Live check
+on 20 species: the answers are native numbers, but in the unfamiliar order the model often
+fills the raman slot with the FORMULA (Albite's band blank → "NaAlSi3O8") — slot confusion
+from 13 M tokens of stripped records whose blanks are attribute values. Recall probe frame:
+formula 0.825 (−2), bands 0.610 (−5.5), crystal system 0.492.
+
+**Scorecard.** I1 ✗ (held-out-order raman −37, system −20; recall bands −5.5). I2 ✓.
+I3 ✗ (portable 0.09, handheld 0.07 — both under 0.10 → the rule's "not the tokenizer, or not
+only" branch). I4 ✗ (exact 0.10 < 0.15). I5 ✗ (set-match 0.00 at grids 5 and 10). I6 ✗
+(correct ≈ wrong field). I7 ✓.
+
+**Reading.** The tokenizer was part of the wall: digit rendering produced the first
+backward mapping that survives jitter, where the native rendering produced none at the same
+budget and draws. It is not the whole wall: the level is 0.07–0.11 after 16 draws per
+species. Budget (16 noisy draws per species for 1,666 species, each draw now 35 % longer)
+and capacity remain confounded; a run that scales the draws on the clean pair at fixed
+rendering separates them far more cheaply than a StarCoder2 rebase. The held-out-order
+slot confusion is a separate cost of the stripped-record arms that grows with their share
+(v3g −3, v3r −20, v3d −37 on held-out raman).
