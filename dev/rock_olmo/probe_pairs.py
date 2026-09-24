@@ -38,7 +38,7 @@ from corpus_xml_granular import PAIRS, TRAIN_PAIRS, pair_kind  # noqa: E402
 from fim_transform import fim_wrap  # noqa: E402
 
 M = os.path.expanduser("~/models/olmo2-1b-spectra-full")
-ALL_MODELS = {"v2": f"{M}/stage2/final", "v3": f"{M}/v3_stage2/final", "v3g": f"{M}/v3_stage2g/final", "v3r": f"{M}/v3_stage2r/final", "v3d": f"{M}/v3_stage2d/final"}
+ALL_MODELS = {"v2": f"{M}/stage2/final", "v3": f"{M}/v3_stage2/final", "v3g": f"{M}/v3_stage2g/final", "v3r": f"{M}/v3_stage2r/final", "v3d": f"{M}/v3_stage2d/final", "v3b": f"{M}/v3_stage2b/final"}
 SPECTRAL = ("bands", "bands1", "bands2", "bands3", "lines")
 _WORD = {1: "strongest Raman band is", 2: "two strongest Raman bands are", 3: "three strongest Raman bands are"}
 

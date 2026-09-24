@@ -106,3 +106,25 @@ def test_digit_rendering_and_line_jitter_arm():
             assert x["lines_shown"] != r.libs and all(abs(a - b) <= 0.101 for a, b in zip(x["lines_shown"], r.libs))
             assert "4 2 2" in x["prompt"] or "4 2 3" in x["prompt"] or "4 2 1" in x["prompt"]
     assert all("1008" not in x["prompt"] for x in rows if x.get("grid"))
+
+
+def test_budget_arm_exposures_spec():
+    import corpus_xml_resolution as cr
+
+    r = _rec()
+    spec = cr.parse_exposures("bands>name=64,bands+lines>name=16,formula>name=8")
+    assert spec == {"g:bands>name": 64, "g:bands+lines>name": 16, "g:formula>name": 8}
+    rows = cr.rows_for(r, val=False, digits=True, jitter_libs=True, exposures=spec)
+    assert collections.Counter(x["kind"] for x in rows) == spec  # every other pair dropped
+    d = {x["ex_id"]: x for x in cr.rows_for(r, val=False, digits=True, jitter_libs=True)}  # §22i
+    shared = [x for x in rows if x["ex_id"] in d]
+    assert len([x for x in shared if x["kind"] == "g:bands>name"]) == 16  # draws 0-15 are §22i's
+    assert all(x["prompt"] == d[x["ex_id"]]["prompt"] for x in shared if x.get("grid"))
+    assert len({tuple(x["bands_shown"]) for x in rows if x["kind"] == "g:bands>name"}) > 32
+    v = cr.rows_for(r, val=True, digits=True, jitter_libs=True, exposures=spec)
+    assert collections.Counter(x["kind"] for x in v) == {"g:bands>name": 2, "g:bands+lines>name": 2, "g:formula>name": 2}
+    try:
+        cr.parse_exposures("bands>top=4")
+        raise AssertionError("an untrained pair must be refused")
+    except SystemExit:
+        pass

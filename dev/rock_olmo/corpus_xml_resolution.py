@@ -33,6 +33,12 @@ fresh line positions (synth_variance.LIBS_POS_JITTER: ±U(0.02, 0.10) nm, random
 line) — §22h left the lines exact and the model routed identification through them. The
 band draws are identical to §22h's (same seed namespace), so on the bands only the
 rendering changes.
+
+§22j (--exposures "bands>name=64,bands+lines>name=16,formula>name=8" --digits --jitter-lines
+--out v6/stage2b): the budget arm. Rows per species set per pair; a TRAIN_PAIR left out of
+the spec is not rendered. Draw k of a pair is the same draw in every arm (the seed key is
+species, split, kind, k), so the first 16 bands → name draws are §22i's and the rest are new.
+Val species keep two draws of each rendered pair.
 """
 
 from __future__ import annotations
@@ -120,15 +126,36 @@ def jittered_rows(
     return rows
 
 
-def rows_for(rec: cx.XmlRecord, *, val: bool, digits: bool = False, jitter_libs: bool = False) -> list[dict]:
+def parse_exposures(spec: str) -> dict[str, int]:
+    """'bands>name=64,formula>name=8' -> {'g:bands>name': 64, 'g:formula>name': 8}; every
+    key must name a TRAIN_PAIR."""
+    known = {cg.pair_kind(c, tg) for c, tg in cg.TRAIN_PAIRS}
+    out = {}
+    for part in filter(None, (x.strip() for x in spec.split(","))):
+        key, n = part.rsplit("=", 1)
+        kind = key if key.startswith("g:") else "g:" + key
+        if kind not in known:
+            raise SystemExit(f"--exposures: {key} is not a trained pair ({sorted(known)})")
+        out[kind] = int(n)
+    return out
+
+
+def rows_for(
+    rec: cx.XmlRecord, *, val: bool, digits: bool = False, jitter_libs: bool = False, exposures: dict[str, int] | None = None
+) -> list[dict]:
+    """`exposures` (§22j) sets the train rows per pair and drops the pairs it omits; None is
+    §22h/§22i's allocation (16 for the headline pairs, 8 for the rest, all ten pairs)."""
     out = []
     for cues, target in cg.TRAIN_PAIRS:
         kind = cg.pair_kind(cues, target)
+        if exposures is not None and kind not in exposures:
+            continue
+        n_train = exposures[kind] if exposures is not None else (EXPOSURES_HEADLINE if kind in HEADLINE else EXPOSURES_OTHER)
         if any(c in BAND_CUES for c in cues) or (jitter_libs and "lines" in cues):
-            n = 2 if val else (EXPOSURES_HEADLINE if kind in HEADLINE else EXPOSURES_OTHER)
+            n = 2 if val else n_train
             out += jittered_rows(rec, cues, target, n, val=val, ns="v" if val else "t", digits=digits, jitter_libs=jitter_libs)
         else:
-            out += cg.granular_rows(rec, val=val, pairs=((cues, target),), exposures=0 if val else EXPOSURES_OTHER)
+            out += cg.granular_rows(rec, val=val, pairs=((cues, target),), exposures=0 if val else n_train)
     return out
 
 
@@ -138,7 +165,9 @@ def main() -> int:
     ap.add_argument("--out", default=os.path.expanduser("~/corpora/rock-olmo-training/v6/stage2r"))
     ap.add_argument("--digits", action="store_true", help="§22i: band and line values digit by digit")
     ap.add_argument("--jitter-lines", action="store_true", help="§22i: fresh LIBS line draws in every row that shows lines")
+    ap.add_argument("--exposures", default="", help="§22j: train rows per pair, e.g. 'bands>name=64,formula>name=8'; omitted pairs dropped")
     args = ap.parse_args()
+    exposures = parse_exposures(args.exposures) if args.exposures else None
     from package import load_tokenizer
 
     t0 = time.time()
@@ -156,11 +185,14 @@ def main() -> int:
     new_train, new_val = [], []
     for rec in trained:
         (new_val if rec.species in val_sp else new_train).extend(
-            rows_for(rec, val=rec.species in val_sp, digits=args.digits, jitter_libs=args.jitter_lines)
+            rows_for(rec, val=rec.species in val_sp, digits=args.digits, jitter_libs=args.jitter_lines, exposures=exposures)
         )
     P = tok([r["prompt"] for r in new_train], add_special_tokens=False)["input_ids"]
     C = tok([r["completion"] for r in new_train], add_special_tokens=False)["input_ids"]
     new_tokens = sum(len(p) + len(c) + 1 for p, c in zip(P, C))
+    tokens_by_kind = collections.Counter()
+    for r, p, c in zip(new_train, P, C):
+        tokens_by_kind[r["kind"]] += len(p) + len(c) + 1
     out_docs = os.path.join(args.out, "docs")
     os.makedirs(out_docs, exist_ok=True)
     with open(os.path.join(out_docs, "xml_fim.jsonl"), "w", encoding="utf-8") as fh:
@@ -183,16 +215,17 @@ def main() -> int:
         if r["kind"] == "g:bands>name":
             distinct[r["species"]].add(tuple(r["bands_shown"]))
     man = {
-        "arm": "digits + jittered lines (§22i)" if args.digits else "resolution (§22h)",
+        "arm": "budget (§22j)" if exposures else ("digits + jittered lines (§22i)" if args.digits else "resolution (§22h)"),
         "digits": args.digits,
         "jitter_lines": args.jitter_lines,
         "grid": GRID,
-        "exposures": {"headline": EXPOSURES_HEADLINE, "other": EXPOSURES_OTHER, "headline_pairs": HEADLINE},
+        "exposures": {"per_pair": exposures} if exposures else {"headline": EXPOSURES_HEADLINE, "other": EXPOSURES_OTHER, "headline_pairs": HEADLINE},
         "train_rows_new": len(new_train),
         "train_tokens_new": new_tokens,
         "val_rows_new": len(new_val),
         "kept_rows": {"train": sum(1 for r in kept if not r.get("val")), "val": sum(1 for r in kept if r.get("val"))},
         "rows_by_kind": dict(sorted(collections.Counter(r["kind"] for r in new_train).items())),
+        "train_tokens_by_kind": dict(sorted(tokens_by_kind.items())),
         "jittered_rows_by_instrument": dict(by_class),
         "share_of_bands_shown_equal_to_canonical": {k: round(v[0] / v[1], 3) for k, v in unchanged.items()},
         "distinct_band_tuples_per_species_bands_to_name_mean": round(sum(len(v) for v in distinct.values()) / max(1, len(distinct)), 2),
@@ -200,7 +233,7 @@ def main() -> int:
         "built_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
     json.dump(man, open(os.path.join(args.out, "docs_manifest.json"), "w"), indent=1)
-    print(json.dumps({k: v for k, v in man.items() if k != "rows_by_kind"}, indent=1))
+    print(json.dumps({k: v for k, v in man.items() if k not in ("rows_by_kind", "train_tokens_by_kind")}, indent=1))
     print(f"[{time.time()-t0:.0f}s] new train rows {len(new_train):,} = {new_tokens:,} tokens")
     return 0
 

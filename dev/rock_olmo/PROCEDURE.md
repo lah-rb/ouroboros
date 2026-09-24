@@ -3106,3 +3106,102 @@ and capacity remain confounded; a run that scales the draws on the clean pair at
 rendering separates them far more cheaply than a StarCoder2 rebase. The held-out-order
 slot confusion is a separate cost of the stripped-record arms that grows with their share
 (v3g −3, v3r −20, v3d −37 on held-out raman).
+
+### 22j. Budget arm: four times the bands → name draws at fixed rendering — pre-registration (2026-09-24 18:20Z)
+
+**Question.** §22i left budget and capacity confounded: digit rendering gave a jitter-flat
+bands → name of 0.07–0.11 after 16 draws per species. This arm quadruples the draws on that
+pair and changes nothing about how a draw is made or written. If the level rises, exposure
+was the binding limit; if it stays flat, more draws is not the lever. Operator ruling
+(2026-09-24): run it clean; a literature review (deep-research workflow, 7 of 25 claims
+verified) found no evidence that sizes the draw count either way, and ranked a
+representation change (more bands, position-sorted, draws that drop and re-rank peaks)
+above budget for real spectra. That is the next arm, not this one.
+
+**Design.** `corpus_xml_resolution.py --digits --jitter-lines --exposures
+"bands>name=64,bands+lines>name=16,formula>name=8"` → `v6/stage2b`. Rows per species:
+bands → name 64 (§22i 16), bands + lines → name 16 and formula → name 8 (both as §22i). The
+other seven §22i pairs (bands → formula, bands1/2/3 → name, lines → name, lines → formula,
+bands + lines → formula) are not rendered, so the stripped share stays close to §22i's.
+Draw k of a pair is the same draw in every arm, so the first 16 bands → name draws and every
+bands + lines → name and formula → name row are byte-identical to §22i. The arm has 146,608
+new rows = 11.63 M tokens (§22i: 159,936 = 13.36 M, −13 %). bands → name has 106,624 rows =
+7.55 M tokens (§22i ≈ 1.9 M) and 55.5 distinct band tuples per species (§22i 15.4). The
+pack is 10,070 blocks = 39.81 M tokens, 1,259 steps. Mix: xml_fim 62.7 / xml_plain 2.3 /
+paper 20.0 / other 7.0 / replay 8.0. Init `v3_stage1/final_fp32`, `--stage 2`, lr 2e-5
+linear, accum 8, one epoch. Known second difference: the seven dropped pairs trained other
+routes from spectra to identity, so v3d → v3b changes the allocation along with the count.
+
+**Instrument.** `probe_resolution.py --digits --jitter-lines --tag budget`. It keeps §22i's
+groups (the same 60 T, 100 R and 19 V species; items hash unchanged), conditions and
+renderings, and adds four things:
+- **Ceiling:** a zero-parameter peak matcher over the same values. The library holds the
+  1,785 rendered species, keyed by their canonical strongest four bands and four lines. The
+  score is the F1 of bands matched within ±max(5, grid) cm⁻¹, plus the F1 of lines within
+  ±0.10 nm when the pair shows lines. Ties are split.
+- **Masks:** one field replaced by the library's per-slot median, a constant identical for
+  every species.
+- **Hundreds-boundary split:** a row is split out when a shown band crossed a hundreds
+  boundary relative to the canonical band it came from.
+- **Headline table:** exact, synthetic and real side by side.
+
+Probe line draws are now keyed by (species, condition, draw), so v3d was re-measured on this
+probe: the figures below replace §22i's as the contrast. Also `probe_pairs`,
+`probe_xml_fill` and `probe_recall`.
+
+**Measured before (v3d on this probe, correct field).**
+
+| | exact | synthetic (lab / portable / handheld) | real native / grid 5 / grid 10 | V |
+|---|---|---|---|---|
+| ceiling, bands → name | 0.98 | 0.83 (0.99 / 0.71 / 0.79) | 0.33 / 0.33 / 0.25 | 0.95 |
+| v3d, bands → name | 0.10 | 0.08 (0.11 / 0.07 / 0.07) | 0.05 / 0.02 / 0.03 | 0.00 |
+| ceiling, bands + lines → name | 1.00 | 0.96 | 0.76 / 0.74 / 0.71 | 1.00 |
+| v3d, bands + lines → name | 0.14 | 0.14 (0.17 / 0.12 / 0.13) | 0.04 / 0.03 / 0.02 | 0.00 |
+
+Masks on v3d:
+- bands → name with the bands masked: 0.00, so there is no blind name prior.
+- bands + lines → name, exact / synthetic / real:
+  - bands masked: 0.00 / 0.00 / 0.00, against a lines-only ceiling of 0.49 / 0.47 / 0.47.
+  - lines masked: 0.06 / 0.05 / 0.03.
+
+The lines add only jointly. Hundreds-boundary split on synthetic draws (10 % of rows
+cross): v3d same 0.08, crosses 0.07.
+
+Forward on v3d (§22i): held-out-order fill raman 0.547, formula 0.925; trained-order raman
+0.968; recall probe frame formula 0.825, bands 0.610.
+
+**Noise.** T holds 60 species. Near 0.1 the species-level standard error is about ±0.04, so
+the bars sit about three standard errors from v3d, and "flat" means within about one.
+
+**Predictions (v3b, this probe, correct field, bands → name unless stated).**
+
+| # | prediction | falsified if |
+|---|---|---|
+| J1 | THE TEST: fresh synthetic draws, pooled over the three classes, ≥ 0.20 (v3d 0.08) | < 0.13: four times the draws bought (almost) nothing |
+| J2 | the tolerance holds as the level rises: synthetic ≥ 0.75 × exact | < 0.5 × exact: the gain is a string lookup again |
+| J3 | exact canonical values ≥ 0.20 (v3d 0.10) | < 0.15 |
+| J4 | real re-measurements, native ≥ 0.10 (v3d 0.05; ceiling 0.33) | < 0.08 |
+| J5 | no new shortcut: with the bands masked, bands → name ≤ 0.02 and bands + lines → name ≤ 0.02 | either > 0.05 |
+| J6 | bands + lines → name, synthetic ≥ 0.19 (v3d 0.14) | < 0.14 |
+| J7 | forward holds (the stripped share is 13 % smaller than §22i's): held-out-order raman ≥ 0.50, trained-order raman ≥ 0.92, recall probe frame formula / bands within 5 points of v3d | any violated |
+| J8 | prose bounds: paper ≤ +2 %, replay ≤ +3 % of step 0 | either exceeded |
+| J9 | V ≤ 0.05 | > 0.05 |
+
+Read, not barred:
+- **Hundreds-boundary split.** Once the level rises, crossing rows should fall behind: in
+  digit rendering, 499 and 501 share no digit.
+- **Correct vs wrong field.**
+- **Dropped pairs on `probe_pairs`.** lines → name, bands → formula and bands1/2/3 → name
+  are no longer trained and are expected to fall.
+
+**Decision rule.**
+- **J1 met:** exposure was the binding limit. The representation arm comes next, at this
+  budget, because the four-band intensity key caps real spectra at 0.33.
+- **0.13 ≤ J1 < 0.20:** partial, with diminishing returns. The representation arm comes
+  next, and the capacity question (StarCoder2 or a larger model) is raised with it.
+- **J1 < 0.13:** flat. More draws is not the lever. Next is capacity or the objective: a
+  larger or digit-native model, or the retrieval / embedding route.
+
+**Freeze (sha256, first 16).** `stage2b/docs_manifest.json` da9289bedd040de0;
+`stage2b/manifest.json` 10a4f22342dec5b5; `resolution_budget_items_frozen.json`
+7f430318a213af2a.
