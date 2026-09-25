@@ -3205,3 +3205,85 @@ Read, not barred:
 **Freeze (sha256, first 16).** `stage2b/docs_manifest.json` da9289bedd040de0;
 `stage2b/manifest.json` 10a4f22342dec5b5; `resolution_budget_items_frozen.json`
 7f430318a213af2a.
+
+### 22j. Result: exposure was the binding limit; synthetic identification reaches 78 % of the matcher ceiling (run 2026-09-24 18:07Z – 2026-09-25 01:27Z)
+
+The run took 1,258 steps and 41,222,144 tokens; the endpoint is `v3_stage2b/final`. Final losses
+against step 0: paper +1.6 %, replay +1.9 %, fim +3.0 %, reference 0.347 → 0.464, xml_fim
+−29 %.
+
+**This probe, correct field (peak-matcher ceiling in brackets).**
+
+| condition | bands → name v3d | bands → name v3b | bands + lines → name v3b |
+|---|---|---|---|
+| T exact | 0.10 | **0.78** (0.98) | 0.78 (1.00) |
+| T synthetic, pooled | 0.08 | **0.65** (0.83) | 0.63 (0.96) |
+| T synthetic lab / portable / handheld | 0.11 / 0.07 / 0.07 | 0.76 / 0.67 / 0.53 | 0.72 / 0.62 / 0.53 |
+| R real native / grid 5 / grid 10 | 0.05 / 0.02 / 0.03 | 0.12 / 0.14 / 0.14 (0.33 / 0.33 / 0.25) | 0.16 / 0.15 / 0.14 |
+| R, same four-band set as the reference | 0.00–0.08 | 0.46–0.54 (0.95–1.00) | — |
+| R, top band only / neither shared (grid 10) | 0.05 / 0.00 | 0.16 / 0.00 | — |
+| V | 0.00 | 0.00 | 0.00 |
+
+Masks on v3b:
+- bands → name with the bands masked: 0.02.
+- bands + lines → name with the bands masked: 0.02; with the lines masked: 0.78 / 0.62 / 0.16,
+  the same as unmasked. The lines now add nothing, and the bands carry the identification.
+
+Hundreds-boundary split (synthetic):
+- v3b: same 0.67, crosses 0.45.
+- Matcher: same 0.85, crosses 0.61.
+
+Relative to the matcher (0.79 vs 0.74 of it), the extra carry penalty is small; a band that
+crosses a boundary is usually one that moved further.
+
+Field renderings: correct 0.78 ≈ wrong 0.77, but none 0.65. The model uses the field's
+presence (training always showed it) and not its value.
+
+**Forward.** Full-record fill in the held-out attribute order, v3d → v3b:
+
+| field | v3d | v3b |
+|---|---|---|
+| raman | 0.547 | 0.911 |
+| system | 0.689 | 0.929 |
+| species | 0.485 | 0.801 |
+| top | 0.864 | 0.894 |
+| formula | 0.925 | **0.807** |
+
+The trained-order scores are unchanged (raman 0.966, formula 0.971). Recall probe frame:
+formula 0.820 (v3d 0.825), bands 0.625 (0.610), crystal system 0.462 (0.492). The §22i slot
+confusion is largely gone. The new cost is the formula: pair-probe name → formula falls
+0.79 → 0.68 in trained order and 0.75 → 0.57 in held-out order. The three dropped
+formula-target pairs (bands / lines / bands + lines → formula) were the stripped rows that
+emitted formulas. Name-target pairs with the formula as a cue rose: formula → name
+0.19 → 0.30, lines + formula → name 0.43 → 0.63, bands + formula → name 0.46 → 0.62. The
+native-rendered pair probe still reads bands → name 0.00 (a digit-specific mapping, as §22i).
+
+**Scorecard.**
+- J1 ✓ (synthetic 0.65 against a bar of 0.20).
+- J2 ✓ (0.65 / 0.78 = 0.83).
+- J3 ✓ (0.78).
+- J4 ✓ (real native 0.12; grid 5 and 10: 0.14).
+- J5 ✓ (masked bands 0.02 and 0.02).
+- J6 ✓ (0.63).
+- J7 ✓ (held-out raman 0.911, trained raman 0.966; recall formula −0.5, bands +1.5).
+- J8 ✓ (+1.6 % / +1.9 %).
+- J9 ✓ (0.00).
+
+**Reading.**
+- **Exposure was the binding limit.** Four times the bands → name draws (16 → 64 per species,
+  with the same rendering, draw model and model) took fresh-draw identification from 0.08 to
+  0.65. On synthetic draws that is 78 % of what a perfect tolerant lookup over the same four
+  bands achieves, and 80 % on exact values. The 1B model's capacity was not the wall at this
+  scale.
+- **The real-spectrum gap is now representational.** v3b reaches 0.12–0.14 of the matcher's
+  0.33, and the gap tracks the band set:
+  - When a real re-measurement keeps the reference's four-band set, v3b identifies it half
+    the time (0.46–0.54).
+  - When only the top band survives: 0.16.
+  - When nothing is shared: 0.00.
+
+  The model learned position tolerance and no tolerance to re-ranking, which the draws never
+  showed.
+- **Next, per the decision rule: the representation arm at this budget.** Draws that drop and
+  re-rank peaks, more than four bands, position-sorted lists. Keep the formula-target
+  exposure the budget arm removed.
