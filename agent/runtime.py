@@ -53,7 +53,7 @@ from agent.loader import (
     assemble_returns,
     PromptRenderer,
 )
-from agent.turn_renderer import TurnRenderer
+from agent.turn_renderer import TurnRenderer, TurnRenderError
 
 logger = logging.getLogger(__name__)
 
@@ -1348,6 +1348,147 @@ async def _rewind_failed_attempt(
     )
 
 
+# ── Fitting a section to the serving window ──────────────────────────
+#
+# A `fit: "tail"` section (the stateless evaluator's transcript) is sized
+# against the model's REAL per-sequence window at render time instead of a
+# fixed character cut: the rest of the prompt is MEASURED with the serving
+# model's own tokenizer, the output is reserved, and the most recent part of
+# the content that fits is kept, with a marker saying what was left out. The
+# fixed 16k-char tail it replaces was sized for a 32k window and threw away
+# evidence on a 262k one (2026-09-25).
+
+# Output reserve when the turn sets no max_tokens. The largest verdict of the
+# 2026-09-25 run was 3,366 tokens (reasoning high; p90 1,546); 8k leaves a
+# longer thinker room without starving the evidence.
+_FIT_OUTPUT_RESERVE = 8192
+# The window assumed when the server does not report nCtxSeq: the smallest
+# any configured text model serves (hy3, muse). Too small costs evidence; too
+# large loses the verdict.
+_FIT_UNKNOWN_WINDOW = 32768
+_FIT_MARKER = (
+    "[… the first {omitted:,} characters of this transcript are not shown — "
+    "it was fitted to the model's {window:,}-token window; the most recent "
+    "part follows …]"
+)
+
+
+def _fit_slot(section: Any) -> tuple[str, str]:
+    """(namespace, key) a fitted section reads — and the fit writes back."""
+    path = section.ref.ref if section.ref is not None else ""
+    ns, _, key = path.partition(".")
+    if not ns or not key or "." in key:
+        raise TurnRenderError(
+            f"fit: 'tail' needs a ref to a top-level key, got {path!r}"
+        )
+    return ns, key
+
+
+def _tail_on_a_line(text: str, keep_chars: int) -> str:
+    """The last ``keep_chars`` of ``text``, starting at a line boundary."""
+    if keep_chars <= 0:
+        return ""
+    if keep_chars >= len(text):
+        return text
+    tail = text[-keep_chars:]
+    nl = tail.find("\n")
+    return tail[nl + 1 :] if 0 <= nl < len(tail) - 1 else tail
+
+
+async def _fit_tail_sections(
+    turn: Any,
+    namespaces: dict[str, Any],
+    effects: Any,
+    config: dict[str, Any],
+    step_name: str,
+) -> None:
+    """Fit every `fit: "tail"` section of ``turn`` into the serving window,
+    writing the fitted text back into ``namespaces`` for the render."""
+    from agent.scheduler.capacity_model import TOKENIZE_MARGIN
+
+    sections = [s for s in turn.sections if getattr(s, "fit", None) == "tail"]
+    if not sections:
+        return
+
+    window = 0
+    health = getattr(effects, "cache_health", None)
+    if health is not None:
+        try:
+            window = int((await health()).get("nCtxSeq") or 0)
+        except Exception:  # noqa: BLE001 — sizing never fails a step
+            window = 0
+    window_how = "reported" if window else "assumed"
+    window = window or _FIT_UNKNOWN_WINDOW
+    reserve = int(config.get("max_tokens") or 0) or _FIT_OUTPUT_RESERVE
+    counter = getattr(effects, "token_count", None)
+
+    async def _tokens(texts: list[str]) -> tuple[list[int], str]:
+        """Exact counts (with the chat-template margin) from the serving
+        tokenizer, or the chars x 13/40 estimate when the server won't say."""
+        counts: list[int] = []
+        if counter is not None:
+            try:
+                counts = await counter(texts)
+            except Exception:  # noqa: BLE001
+                counts = []
+        if len(counts) == len(texts):
+            return [int(c * TOKENIZE_MARGIN) for c in counts], "exact"
+        return [(len(t) * 13) // 40 for t in texts], "estimated"
+
+    renderer = _get_turn_renderer()
+    for section in sections:
+        ns, key = _fit_slot(section)
+        slot = namespaces.get(ns)
+        content = slot.get(key) if isinstance(slot, dict) else None
+        if not isinstance(content, str) or not content:
+            continue
+        without = {**namespaces, ns: {**slot, key: ""}}
+        (prompt_tok, content_tok), how = await _tokens(
+            [renderer.render(turn, without), content]
+        )
+        marker_tok = (len(_FIT_MARKER) * 13) // 40 + 16
+        budget = window - prompt_tok - reserve
+        if content_tok <= budget:
+            logger.info(
+                "fit %s: %s whole — %d tok beside a %d-tok prompt and %d "
+                "reserve in a %d window (%s, %s counts)",
+                step_name,
+                key,
+                content_tok,
+                prompt_tok,
+                reserve,
+                window,
+                window_how,
+                how,
+            )
+            continue
+        budget -= marker_tok
+        kept = content
+        for _ in range(3):
+            keep_chars = int(len(kept) * max(budget, 0) / max(content_tok, 1))
+            kept = _tail_on_a_line(kept, keep_chars)
+            if not kept:
+                break
+            (content_tok,), how = await _tokens([kept])
+            if content_tok <= budget:
+                break
+        marker = _FIT_MARKER.format(omitted=len(content) - len(kept), window=window)
+        slot[key] = f"{marker}\n{kept}" if kept else marker
+        (logger.info if kept else logger.warning)(
+            "fit %s: kept the last %d of %d chars of %s — a %d-tok prompt and "
+            "%d reserve in a %d window (%s, %s counts)",
+            step_name,
+            len(kept),
+            len(content),
+            key,
+            prompt_tok,
+            reserve,
+            window,
+            window_how,
+            how,
+        )
+
+
 async def _execute_turn_inference(
     step_def: StepDefinition,
     step_input: StepInput,
@@ -1395,18 +1536,20 @@ async def _execute_turn_inference(
         namespaces["context"].update(computed)
         pre_compute_ms = (time.monotonic() - _pc_start) * 1000
 
-    # Render the prompt via TurnRenderer.
-    _render_start = time.monotonic()
-    turn_renderer = _get_turn_renderer()
-    rendered_prompt = turn_renderer.render(turn, namespaces)
-    prompt_render_ms = (time.monotonic() - _render_start) * 1000
-
     # Config overrides come from turn.config, with flow.defaults as
     # a floor for anything turn.config doesn't override.
     merged_config: dict[str, Any] = {
         **flow_def.defaults.config,
         **turn.config,
     }
+
+    # Render the prompt via TurnRenderer — after fitting any `fit: "tail"`
+    # section to the serving window (its time counts as render time).
+    _render_start = time.monotonic()
+    turn_renderer = _get_turn_renderer()
+    await _fit_tail_sections(turn, namespaces, effects, merged_config, _step_name)
+    rendered_prompt = turn_renderer.render(turn, namespaces)
+    prompt_render_ms = (time.monotonic() - _render_start) * 1000
     config_overrides: dict[str, Any] = {}
     if "temperature" in merged_config:
         config_overrides["temperature"] = merged_config["temperature"]

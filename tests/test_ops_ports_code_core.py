@@ -813,7 +813,12 @@ class TestEvaluationIsStatelessAndBounded:
     memoryful session, so a 77-turn transcript's KV plus the eval prompt
     overflowed the 32k window and the session's verdict was LOST — any
     session deep enough to pass the e2e finale would overflow its own
-    evaluation. The turn is now stateless over a bounded session tail."""
+    evaluation. The turn is now stateless over a transcript fitted to the
+    serving window.
+
+    Stateless for real since 2026-09-25: leaving inference_session_id
+    undeclared never did it (the key is ambient), so the branch now ends the
+    tester's session first — see TestEvaluationRoutesTheCallItClaims."""
 
     def test_evaluate_outcome_declares_no_session(self):
         step = _compiled()["interact"]["steps"]["evaluate_outcome"]
@@ -821,21 +826,54 @@ class TestEvaluationIsStatelessAndBounded:
             step["context"].get("optional", []) + step["context"].get("required", [])
         )
 
-    def test_evidence_is_the_bounded_tail(self):
+    def test_the_stateless_branch_releases_the_session_first(self):
+        steps = _compiled()["interact"]["steps"]
+        release = steps["release_session_for_eval"]
+        assert release["action"] == "end_inference_session"
+        assert [r["transition"] for r in release["resolver"]["rules"]] == [
+            "evaluate_outcome"
+        ]
+
+    def test_evidence_is_the_whole_transcript_fitted_at_render(self):
         step = _compiled()["interact"]["steps"]["evaluate_outcome"]
         evidence = next(s for s in step["turn"]["sections"] if s["type"] == "evidence")
         assert evidence["ref"] == {"$ref": "context.eval_session_tail"}
+        assert evidence["fit"] == "tail"
         tail_pc = next(
             p for p in step["pre_compute"] if p["formatter"] == "format_session_tail"
         )
         assert tail_pc["output_key"] == "eval_session_tail"
-        assert tail_pc["params"]["max_chars"] == 16000
+        assert "max_chars" not in tail_pc["params"]
 
-    def test_the_tail_formatter_actually_bounds(self):
+
+class TestSessionEvidenceIsWhole:
+    """derive_acceptance's session evidence was cut to its last 3,000 chars
+    with no marker (2026-09-25): 2 of 22 prompts began mid-line, launch
+    command gone. No step cuts a transcript by characters any more; the one
+    that must fit a window (the stateless evaluator) declares fit: "tail"."""
+
+    def test_the_formatter_returns_the_whole_transcript(self):
         from agent.formatters import format_session_tail
 
-        out = format_session_tail({"source": "x" * 100000, "max_chars": 16000}, {})
-        assert len(out) == 16000
+        src = "[Turn 0] (shell_command)\n  > python main.py\n" + "y" * 100000
+        assert format_session_tail({"source": src}, {}) == src
+
+    def test_the_formatter_refuses_a_character_cut(self):
+        from agent.formatters import format_session_tail
+
+        with pytest.raises(ValueError, match="fit"):
+            format_session_tail({"source": "x" * 100, "max_chars": 16000}, {})
+
+    def test_no_step_cuts_a_session_by_characters(self):
+        cut = sorted(
+            f"{name}.{step_name}"
+            for name, flow in _compiled().items()
+            for step_name, step in (flow.get("steps") or {}).items()
+            for pc in step.get("pre_compute") or []
+            if pc.get("formatter") == "format_session_tail"
+            and "max_chars" in (pc.get("params") or {})
+        )
+        assert cut == []
 
 
 class TestRewriteSizeGate:
@@ -939,7 +977,7 @@ class TestEvaluationModeRouter:
             for r in steps["choose_eval_mode"]["resolver"]["rules"]
         }
         assert cm["result.big_context == true"] == "evaluate_in_session"
-        assert cm["true"] == "evaluate_outcome"
+        assert cm["true"] == "release_session_for_eval"
         # both acceptance paths enter through the router
         for entry in ("load_stored_checks", "acceptance_verdict"):
             assert any(
@@ -953,6 +991,103 @@ class TestEvaluationModeRouter:
         problem = next(s for s in step["turn"]["sections"] if s["type"] == "problem")
         assert problem["ref"] == {"$ref": "context.eval_objective"}
         assert step["pre_compute"][0]["formatter"] == "strip_test_guidance"
+
+    @pytest.mark.asyncio
+    async def test_the_probe_reads_the_window_through_the_real_effects(self, tmp_path):
+        """The probe's own tests handed it an effects double WITH
+        cache_health; LocalEffects had none, so in production the probe read
+        "unknown" every time (tier_20260924-191710: 45 of 45 stateless on a
+        262k window)."""
+        from agent.actions.interactive_actions import action_probe_eval_context
+        from agent.effects.local import LocalEffects
+
+        class _Inference:
+            async def cache_health(self):
+                return {"nCtxSeq": 262144}
+
+        (tmp_path / ".agent").mkdir()
+        fx = LocalEffects(str(tmp_path), history_mode="off")
+        fx._get_inference = lambda domain="": _Inference()  # type: ignore[method-assign]
+        out = await action_probe_eval_context(
+            StepInput(
+                context={},
+                params={},
+                meta=FlowMeta(flow_name="interact", step_id="choose_eval_mode"),
+                effects=fx,
+            )
+        )
+        assert out.result == {"big_context": True, "n_ctx": 262144}
+
+
+class TestEvaluationRoutesTheCallItClaims:
+    """Drive the REAL compiled router, release and evaluation steps and
+    check the inference call each branch actually makes. The declaration-only
+    test above passed for seven weeks while every evaluation ran in the
+    tester's session: inference_session_id is ambient, so leaving it
+    undeclared never made the turn stateless."""
+
+    _VERDICT = '```json\n{"goal_met": true, "headline": "h", "summary": "s"}\n```'
+
+    def _slice(self):
+        import copy
+
+        from agent.models import FlowDefinition
+
+        interact = _compiled()["interact"]
+        names = (
+            "choose_eval_mode",
+            "release_session_for_eval",
+            "evaluate_outcome",
+            "evaluate_in_session",
+        )
+        steps = {n: copy.deepcopy(interact["steps"][n]) for n in names}
+        for n in ("evaluate_outcome", "evaluate_in_session"):
+            steps[n]["turn"]["transitions"] = {"default": "stop", "no_answer": "stop"}
+        steps["stop"] = {
+            "action": "noop",
+            "description": "end",
+            "terminal": True,
+            "status": "success",
+        }
+        return FlowDefinition.model_validate(
+            {"flow": "interact", "entry": "choose_eval_mode", "steps": steps}
+        )
+
+    async def _run(self, n_ctx: int):
+        from agent.actions.registry import build_action_registry
+        from agent.runtime import execute_flow
+
+        class _Fx(MockEffects):
+            async def cache_health(self):
+                return {"nCtxSeq": n_ctx}
+
+        fx = _Fx(inference_responses=[self._VERDICT])
+        await execute_flow(
+            flow_def=self._slice(),
+            inputs={
+                "inference_session_id": "tester-1",
+                "terminal_output": "[Turn 0] (shell_command)\n  > python main.py\n>",
+                "flow_directive": "Test this capability: Examine works.",
+            },
+            action_registry=build_action_registry(),
+            effects=fx,
+        )
+        return [c.method for c in fx.calls], fx
+
+    @pytest.mark.asyncio
+    async def test_a_small_window_ends_the_session_then_evaluates_stateless(self):
+        calls, fx = await self._run(32768)
+        assert "session_inference" not in calls
+        assert calls.index("end_inference_session") < calls.index("run_inference")
+        (ended,) = fx.calls_to("end_inference_session")
+        assert ended.args == {"session_id": "tester-1"}
+
+    @pytest.mark.asyncio
+    async def test_a_big_window_evaluates_in_the_testers_session(self):
+        calls, fx = await self._run(262144)
+        assert "run_inference" not in calls and "end_inference_session" not in calls
+        (turn,) = fx.calls_to("session_inference")
+        assert turn.args["session_id"] == "tester-1"
 
 
 # ── grounded-empty: the verification gap (2026-08-26) ─────────────────

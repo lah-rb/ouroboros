@@ -7754,6 +7754,30 @@
             },
             {
               "condition": "true",
+              "transition": "release_session_for_eval"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "release_session_for_eval": {
+        "action": "end_inference_session",
+        "description": "Release the tester's session so the evaluation runs stateless",
+        "context": {
+          "required": [],
+          "optional": [
+            "inference_session_id"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
               "transition": "evaluate_outcome"
             }
           ]
@@ -7886,7 +7910,8 @@
               "ref": {
                 "$ref": "context.eval_session_tail"
               },
-              "required": false
+              "required": false,
+              "fit": "tail"
             },
             {
               "type": "problem",
@@ -7935,8 +7960,7 @@
             "params": {
               "source": {
                 "$ref": "context.terminal_output"
-              },
-              "max_chars": 16000
+              }
             }
           }
         ],
@@ -8098,8 +8122,7 @@
             "params": {
               "source": {
                 "$ref": "context.terminal_output"
-              },
-              "max_chars": 3000
+              }
             }
           }
         ],
@@ -24438,8 +24461,7 @@
             "params": {
               "source": {
                 "$ref": "context.terminal_output"
-              },
-              "max_chars": 3000
+              }
             }
           }
         ],
@@ -24622,8 +24644,7 @@
             "params": {
               "source": {
                 "$ref": "context.terminal_output"
-              },
-              "max_chars": 3000
+              }
             }
           }
         ],
@@ -24952,8 +24973,7 @@
             "params": {
               "source": {
                 "$ref": "context.terminal_output"
-              },
-              "max_chars": 2000
+              }
             }
           }
         ],

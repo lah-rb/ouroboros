@@ -146,9 +146,24 @@ package ouroboros
 	// Default: false (omit empty sections).
 	required: bool | *false
 
+	// "tail": fit this section to the serving model's window at render
+	// time — the runtime measures the rest of the prompt, reserves the
+	// output, keeps the most recent part of this content that fits, and
+	// marks what it left out. Only for a ref to a top-level key: the
+	// runtime writes the fitted text back into that slot.
+	fit?: "tail"
+
 	// Renderer-produced sections must not declare content sources.
 	if type == "options" || type == "envelope" {
 		ref?:      _|_
+		template?: _|_
+		literal?:  _|_
+		fit?:      _|_
+	}
+
+	// A fitted section is always ref-sourced.
+	if fit != _|_ {
+		ref:       #Ref
 		template?: _|_
 		literal?:  _|_
 	}

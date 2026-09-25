@@ -327,9 +327,24 @@ interact: #FlowDefinition & {
 				type: "rule"
 				rules: [
 					{condition: "result.big_context == true", transition: "evaluate_in_session"},
-					{condition: "true", transition: "evaluate_outcome"},
+					{condition: "true", transition: "release_session_for_eval"},
 				]
 			}
+		}
+
+		// The stateless branch RELEASES the tester's session before it
+		// evaluates (2026-09-25). inference_session_id is ambient — it
+		// passes every step's context filter — so leaving it undeclared never
+		// made evaluate_outcome stateless: all 45 evaluations of
+		// tier_20260924-191710 ran in the tester's session with the tail
+		// copied on top. Ending the session clears the id (the evaluation
+		// routes stateless) and frees the instance it pinned — on a
+		// one-instance pool a stateless call beside an open session waits
+		// forever. end_eval_session_* then no-op on the cleared id.
+		release_session_for_eval: #StepDefinition & _templates.close_session & {
+			_next:       "evaluate_outcome"
+			description: "Release the tester's session so the evaluation runs stateless"
+			context: optional: ["inference_session_id"]
 		}
 
 		// The ORIGINAL evaluation: joins the tester's memoryful session so
@@ -417,9 +432,13 @@ interact: #FlowDefinition & {
 			// the evaluation errored, and the session's verdict was LOST —
 			// scored failed by overflow, not on the merits. Any session deep
 			// enough to pass the e2e finale would overflow its own verdict.
-			// inference_session_id is deliberately NOT declared (the context
-			// filter makes the turn stateless); the evidence is a BOUNDED
-			// session tail — the decisive late-game stretch always fits.
+			// Stateless because release_session_for_eval ended the session
+			// before this step (NOT because inference_session_id is left
+			// undeclared — it is ambient). The transcript is fitted to the
+			// serving window at render time (fit: "tail"): the rest of the
+			// prompt is measured, the output reserved, and the most recent
+			// stretch that fits is kept with a marker — the decisive
+			// late-game stretch always fits.
 			context: {
 				optional: ["terminal_output"]
 			}
@@ -427,7 +446,7 @@ interact: #FlowDefinition & {
 				response_shape: "json_document"
 				sections: [
 					{type: "role", template:        "personas/interact_evaluator"},
-					{type: "evidence", ref:         {$ref: "context.eval_session_tail"}},
+					{type: "evidence", ref:         {$ref: "context.eval_session_tail"}, fit: "tail"},
 					// The acceptance-check results are DELIBERATELY NOT shown
 					// here (removed 2026-08-06). They used to appear as an
 					// "Acceptance checks" evidence block, and the evaluator
@@ -475,12 +494,12 @@ interact: #FlowDefinition & {
 			pre_compute: [
 				{formatter: "strip_test_guidance", output_key: "eval_objective"
 					params: source:                              {$ref: "input.flow_directive"}},
-				// Bounded transcript for the stateless evaluation: 16k chars
-				// (~4-5k tokens) covers the decisive late-game stretch of
-				// even a 77-turn session with the whole prompt well under
-				// the 32k window.
+				// The whole transcript; the evidence section's fit: "tail"
+				// sizes it to the serving window. It replaces a fixed 16k-char
+				// cut sized for 32k windows (hy3, muse) that threw evidence
+				// away on bigger ones.
 				{formatter: "format_session_tail", output_key: "eval_session_tail"
-					params: {source: {$ref: "context.terminal_output"}, max_chars: 16000}},
+					params: {source: {$ref: "context.terminal_output"}}},
 			]
 			publishes: ["inference_response"]
 		}
@@ -581,7 +600,7 @@ interact: #FlowDefinition & {
 			}
 			pre_compute: [
 				{formatter: "format_session_tail", output_key: "session_tail"
-					params: {source: {$ref: "context.terminal_output"}, max_chars: 3000}},
+					params: {source: {$ref: "context.terminal_output"}}},
 			]
 			// HIGH: writes the acceptance checks that gate goal_met — a badly
 			// derived check could permanently veto a correct pass (9819411);

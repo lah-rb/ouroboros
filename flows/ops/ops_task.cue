@@ -265,7 +265,7 @@ ops_task: #FlowDefinition & {
 				{formatter: "format_project_listing", output_key: "workspace_context"
 					params: {source: {$ref: "context.project_manifest"}}},
 				{formatter: "format_session_tail", output_key: "session_tail"
-					params: {source: {$ref: "context.terminal_output"}, max_chars: 3000}},
+					params: {source: {$ref: "context.terminal_output"}}},
 			]
 			config: temperature: "t*0.1"
 			// assessment/planning steps run deliberate (head-swap; session-path)
@@ -355,7 +355,7 @@ ops_task: #FlowDefinition & {
 				{formatter: "format_project_listing", output_key: "workspace_context"
 					params: {source: {$ref: "context.project_manifest"}}},
 				{formatter: "format_session_tail", output_key: "session_tail"
-					params: {source: {$ref: "context.terminal_output"}, max_chars: 3000}},
+					params: {source: {$ref: "context.terminal_output"}}},
 			]
 			// MEDIUM: re-derive the output contract from the scanned world — dev/REASONING_DEPTH_POLICY_2026-08-16.md
 			config: reasoning: "medium"
@@ -528,7 +528,7 @@ ops_task: #FlowDefinition & {
 				{formatter: "format_validation_results", output_key: "validation_summary"
 					params: {source: {$ref: "context.validation_results"}}},
 				{formatter: "format_session_tail", output_key: "session_tail"
-					params: {source: {$ref: "context.terminal_output"}, max_chars: 2000}},
+					params: {source: {$ref: "context.terminal_output"}}},
 			]
 			config: temperature: "t*0.1"
 			// assessment/planning steps run deliberate (head-swap; session-path)

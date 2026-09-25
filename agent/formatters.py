@@ -203,10 +203,23 @@ def format_workspace_ledger(params: dict, namespaces: dict) -> str:
 
 
 def format_session_tail(params: dict, namespaces: dict) -> str:
-    """Tail of a terminal session transcript, for the completion judge."""
-    out = str(params.get("source") or "")
-    n = int(params.get("max_chars", 2000))
-    return out[-n:] if len(out) > n else out
+    """A terminal session transcript, WHOLE, for a step that judges or derives
+    from it.
+
+    It used to cut to the last ``max_chars`` (2,000 by default) with no
+    marker: derive_acceptance received a transcript that began mid-line,
+    launch command gone (2026-09-25). A step that must fit a window now
+    declares ``fit: "tail"`` on the section that shows it, and the runtime
+    sizes it against the model's real window at render time. ``max_chars``
+    is refused rather than ignored, so a character cut cannot come back
+    quietly.
+    """
+    if "max_chars" in params:
+        raise ValueError(
+            'format_session_tail no longer cuts: declare fit: "tail" on the '
+            "section that renders it"
+        )
+    return str(params.get("source") or "")
 
 
 def strip_test_guidance(params: dict, namespaces: dict) -> str:

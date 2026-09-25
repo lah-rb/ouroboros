@@ -11,7 +11,7 @@ being silently dropped.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -117,6 +117,11 @@ class Section(BaseModel):
     literal: str | None = None
     title: str | None = None
     required: bool = False
+    # "tail": the runtime fits this ref-sourced section to the serving
+    # model's window before rendering — keeps the most recent part that fits
+    # beside the rest of the prompt (measured) and the output reserve, and
+    # says what it left out. Unset: the section renders whole.
+    fit: Literal["tail"] | None = None
 
 
 class OptionArg(BaseModel):

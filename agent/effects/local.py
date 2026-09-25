@@ -1527,6 +1527,21 @@ class LocalEffects:
             logger.info("inference domain %r -> %s (model=%s)", domain, endpoint, model)
         return client
 
+    async def cache_health(self) -> dict:
+        """The serving model's cache/feature register (``health``: nCtxSeq,
+        decodeMode, …), or {} when the server will not say.
+
+        interact's evaluation-mode probe asked the effects for this from
+        2026-08-07, but only InferenceEffect had it: the probe read "unknown"
+        on every run, so every evaluation took the small-window branch — on
+        a 262k window (tier_20260924-191710, 45 of 45).
+        """
+        try:
+            return await self._get_inference().cache_health()
+        except Exception as e:  # noqa: BLE001 — a health read never fails a step
+            logger.debug("cache_health failed: %s", e)
+            return {}
+
     async def token_count(self, texts: list[str], model: str = "") -> list[int]:
         """Exact token counts from the serving model's own tokenizer.
 
