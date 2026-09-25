@@ -51,6 +51,15 @@ resolution field), drawn from the full spectra (export_spectra.py):
   real·kK      the held-out real re-measurement's own strongest K, K = 4, 6, 8; and K = 6
                rounded to grids 5 and 10
 The ceiling's library is keyed on each species' canonical strongest K (the same K).
+
+§22l (--anneal, tag anneal): v3b's own format again: the strongest four, intensity-ranked
+<top>/<next>, digits, jittered lines. Every §22j budget-probe condition, byte-identical, plus:
+  variation·t1/t2/t3   fresh draws of the §22k variation model at ⅓, ⅔ and full severity
+                       (probe-only namespace; class sampled as in training), 4 per tier
+  chain                the two-step route: the model first fills <reference> with the canonical
+                       strongest four (corpus_xml.denoise_record), then names that list as a
+                       resolution-1 stripped record. Scored for exact, the variation tiers and
+                       real·native (PSM and SPM); results in resolution_anneal_chain.jsonl.
 """
 
 from __future__ import annotations
@@ -61,6 +70,7 @@ import dataclasses
 import json
 import os
 import random
+import re
 import sys
 import time
 
@@ -83,7 +93,7 @@ FIELD_RENDERINGS = ("none", "correct", "wrong")
 MASKS = {"bands>name": ("mask-bands",), "bands+lines>name": ("mask-bands", "mask-lines")}
 #: the field rendering each arm trained with (§22g had no field; every later arm writes it)
 TRAINED_RENDERING = {"v3g": "none"}
-MODEL_ORDER = ("v3g", "v3r", "v3d", "v3b", "v3k")
+MODEL_ORDER = ("v3g", "v3r", "v3d", "v3b", "v3k", "v3l")
 KS = (4, 6, 8)
 SYNTH_K = 6
 BAND_TOL, LINE_TOL = 5, 0.10
@@ -168,6 +178,39 @@ def forced_variation_draw(species: str, peaks, pool, klass: str, d: int, k: int 
 DIGITS = False
 JITTER_LINES = False
 SORTED = False
+ANNEAL = False
+SEVERITY_TIERS = ((1, 1 / 3), (2, 2 / 3), (3, 1.0))
+NUM_RE = re.compile(r"<(?:top|next)>([0-9 .]+)</(?:top|next)>")
+
+
+def forced_severity_draw(species: str, peaks, pool, tier: int, scale: float, d: int) -> tuple[list[int], int]:
+    """(the draw's strongest four, intensity-ranked, grid-rounded, de-duplicated; grid): a fresh
+    §22k variation draw at `scale` of the fitted severity (probe-only namespace)."""
+    rng = sv.rng_for("probe-s2l", species, tier, d)
+    inst = sv.sample_raman(rng)
+    u = scale * rng.betavariate(sv.SAMPLE_SEVERITY_ALPHA, sv.SAMPLE_SEVERITY_BETA)
+    grid = GRID[inst.klass]
+    bands: list[int] = []
+    for p, _ in sorted(sv.vary_spectrum(rng, list(peaks), inst, pool, severity=u), key=lambda x: -x[1]):
+        q = quantize(p, grid)
+        if q not in bands:
+            bands.append(q)
+        if len(bands) == 4:
+            break
+    return bands, grid
+
+
+def parse_reference(gen: str) -> list[int]:
+    """The band values of a generated <reference> fill, in order (digit rendering tolerated)."""
+    head = gen.split("</reference>", 1)[0]
+    out = []
+    for m in NUM_RE.finditer(head):
+        s = m.group(1).replace(" ", "")
+        try:
+            out.append(int(round(float(s))))
+        except ValueError:
+            continue
+    return out[:4]
 
 
 def variants_for(rec: cx.XmlRecord, pair: str, grid: int, wrong: int, lib: Library, k: int | None = None) -> list[tuple[str, int | None, cx.XmlRecord]]:
@@ -234,6 +277,58 @@ def build_jobs_variation(groups: dict, real: dict, real_full: dict, canon: dict,
             _add(jobs, lib, sp, "R", f"real·k{SYNTH_K}·grid{grid}", dataclasses.replace(rec, bands=shown), grid, 1,
                  key_k=SYNTH_K, carry=crosses_100(shown, allc, by_index=False), extra=extra)
     return jobs
+
+
+def build_jobs_anneal(groups: dict, real: dict, canon: dict, pool: list, lib: Library) -> tuple[list[dict], list[dict]]:
+    """(direct jobs: the budget probe's, then the variation tiers; chain jobs)."""
+    jobs = build_jobs(groups, real, lib)
+    chain: list[dict] = []
+
+    def chain_add(sp, grp, condition, rec, grid):
+        g = pc.load_gold(sp)
+        text = cx.denoise_record(rec, raman_resolution=grid, digits=True)
+        pre, suf = text.split(cx.BLANK)
+        for order in cx.ORDERS:
+            chain.append({"species": sp, "group": grp, "condition": condition, "order": order, "observed": rec.bands,
+                          "prompt1": fim_wrap(pre, "", suf, order), "gold_rec": g, "canon": g["bands"]})
+
+    for sp in groups["T"]:
+        rec = pp._rec(pc.load_gold(sp))
+        chain_add(sp, "T", "exact", rec, 1)
+        for tier, scale in SEVERITY_TIERS:
+            for d in range(DRAWS):
+                bands, grid = forced_severity_draw(sp, canon[sp], pool, tier, scale, d)
+                jrec = dataclasses.replace(rec, bands=bands)
+                _add(jobs, lib, sp, "T", f"variation·t{tier}", jrec, grid, 10 if grid == 1 else 1, k=d,
+                     carry=crosses_100(bands, rec.bands, by_index=False))
+                chain_add(sp, "T", f"variation·t{tier}", jrec, grid)
+    for sp in groups["R"]:
+        rec = dataclasses.replace(pp._rec(pc.load_gold(sp)), bands=list(real[sp]["bands"]))
+        chain_add(sp, "R", "real·native", rec, 1)
+    return jobs, chain
+
+
+def run_chain(path: str, chain: list[dict], model: str) -> list[dict]:
+    """Step 1: fill the reference; step 2: name the reconstructed list."""
+    gens1 = pc.generate(path, [c["prompt1"] for c in chain], "cuda:0", 48)
+    prompts2, parsed = [], []
+    for c, g1 in zip(chain, gens1):
+        bands = parse_reference(g1)
+        parsed.append(bands)
+        rec = cx.XmlRecord("", "", "", bands or [0], "", [])
+        text = cx.stripped_record(rec, {"bands"}, "name", raman_resolution=1, digits=True)
+        pre, suf = text.split(cx.BLANK)
+        prompts2.append(fim_wrap(pre, "", suf, c["order"]))
+    gens2 = pc.generate(path, prompts2, "cuda:0", 24)
+    rows = []
+    for c, g1, bands, g2 in zip(chain, gens1, parsed, gens2):
+        canon = c["canon"]
+        recall = sum(any(abs(b - x) <= 5 for x in bands) for b in canon) / len(canon) if bands else 0.0
+        ans = pc.extract(g2, "xml", "name")
+        rows.append({"model": model, "species": c["species"], "group": c["group"], "condition": c["condition"], "order": c["order"],
+                     "reference": bands, "reference_recall": round(recall, 3), "answer": ans[:60],
+                     "status": pc.score("name", ans, c["gold_rec"]) if bands else "MISS"})
+    return rows
 
 
 def build_jobs(groups: dict, real: dict, lib: Library) -> list[dict]:
@@ -306,6 +401,17 @@ LAYOUT = {
                    ("R:set-match", "real·native"), ("R:set-match", "real·grid5"), ("R:set-match", "real·grid10"),
                    ("R:top-match", "real·grid10"), ("R:neither", "real·grid10"), ("V", "exact")],
     },
+    "anneal": {
+        "headline": [("T", "exact"), ("T", "synthetic·all"), ("T", "variation·t1"), ("T", "variation·t2"), ("T", "variation·t3"),
+                     ("R", "real·native"), ("R", "real·grid5"), ("R", "real·grid10"), ("V", "exact")],
+        "shortcut": [("T", "exact"), ("T", "variation·t3"), ("R", "real·native")],
+        "boundary": [("T", "synthetic·all"), ("T", "variation·t1"), ("T", "variation·t2"), ("T", "variation·t3"),
+                     ("R", "real·native"), ("R", "real·grid5"), ("R", "real·grid10")],
+        "detail": [("T", "exact"), ("T", "synthetic·lab"), ("T", "synthetic·portable"), ("T", "synthetic·handheld"),
+                   ("T", "variation·t1"), ("T", "variation·t2"), ("T", "variation·t3"),
+                   ("R", "real·native"), ("R", "real·grid5"), ("R", "real·grid10"),
+                   ("R:set-match", "real·native"), ("R:top-match", "real·native"), ("R:neither", "real·native"), ("V", "exact")],
+    },
     "variation": {
         "headline": [("T", "exact·k4"), ("T", "exact·k6"), ("T", "exact·k8"), ("T", "synthetic·all"), ("T", "synthetic·lab"),
                      ("T", "synthetic·portable"), ("T", "synthetic·handheld"), ("R", "real·k4"), ("R", "real·k6"), ("R", "real·k8"),
@@ -321,7 +427,8 @@ LAYOUT = {
 }  # fmt: skip
 
 
-def write_report(summary: dict, models: list[str], groups: dict, path: str) -> None:
+def write_report(summary: dict, models: list[str], groups: dict, path: str, results: list[dict] | None = None,
+                 chain_rows: list[dict] | None = None) -> None:
     def val(m, g, c, p, r):
         return summary.get(f"{m}|{g}|{c}|{p}|{r}")
 
@@ -344,7 +451,7 @@ def write_report(summary: dict, models: list[str], groups: dict, path: str) -> N
     for p in ("bands>name", "bands+lines>name"):
         L.append(f"\n## {p.replace('>', ' → ')}\n")
         L.append("### Headline: exact vs jittered vs real\n")
-        lay = LAYOUT["variation" if SORTED else "legacy"]
+        lay = LAYOUT["variation" if SORTED else ("anneal" if ANNEAL else "legacy")]
         cols = lay["headline"]
         L.append("| | " + " | ".join(f"{g} {c}" for g, c in cols) + " |")
         L.append("|---|" + "---|" * len(cols))
@@ -373,6 +480,34 @@ def write_report(summary: dict, models: list[str], groups: dict, path: str) -> N
         for g, c in lay["detail"]:
             L.append(f"| {g} | {c} | {cell('ceiling', g, c, p, 'correct')} | "
                      + " | ".join(f"{cell(m, g, c, p, 'none')} | {cell(m, g, c, p, 'correct')} | {cell(m, g, c, p, 'wrong')}" for m in models) + " |")
+    if results:
+        L.append("\n## Collapse check: share of each model's most common bands → name answer\n")
+        L.append("| model | most common answer | share |")
+        L.append("|---|---|---|")
+        for m in models:
+            c = collections.Counter(r["answer"] for r in results if r["model"] == m and r["pair"] == "bands>name")
+            if c:
+                a, k = c.most_common(1)[0]
+                L.append(f"| {m} | {a or '(empty)'} | {k / sum(c.values()):.2f} |")
+    if chain_rows:
+        conds = [("T", "exact"), ("T", "variation·t1"), ("T", "variation·t2"), ("T", "variation·t3"), ("R", "real·native")]
+        L.append("\n## Two-step chain: reconstruct the reference bands, then name them\n")
+        L.append("Direct = bands → name at the correct field (as above). Chain = the model fills <reference> "
+                 "from the measured list, then names that list. Recall = share of the canonical strongest four "
+                 "within ±5 cm-1 of a reconstructed band.\n")
+        L.append("| model | " + " | ".join(f"{g} {c} direct / chain / recall" for g, c in conds) + " |")
+        L.append("|---|" + "---|" * len(conds))
+        for m in models:
+            cells = []
+            for g, c in conds:
+                rows = [r for r in chain_rows if r["model"] == m and r["group"] == g and r["condition"] == c]
+                if not rows:
+                    cells.append("—")
+                    continue
+                hit = sum(r["status"] == "HIT" for r in rows) / len(rows)
+                rec = sum(r["reference_recall"] for r in rows) / len(rows)
+                cells.append(f"{cell(m, g, c, 'bands>name', tr(m))} / {hit:.2f} / {rec:.2f}")
+            L.append(f"| {m} | " + " | ".join(cells) + " |")
     n = {k: len(groups[k]) for k in groups}
     L.append(f"\nGroups: T {n['T']}, R {n['R']} (real re-measurements), V {n['V']}.")
     open(path, "w", encoding="utf-8").write("\n".join(L) + "\n")
@@ -388,10 +523,13 @@ def main() -> int:
     ap.add_argument("--digits", action="store_true")
     ap.add_argument("--jitter-lines", action="store_true")
     ap.add_argument("--variation", action="store_true", help="§22k: position-sorted strongest-K lists (implies --digits --jitter-lines)")
+    ap.add_argument("--anneal", action="store_true", help="§22l: budget conditions + variation tiers + two-step chain (implies --digits --jitter-lines)")
     ap.add_argument("--tag", default="", help="suffix for the result files (resolution_<tag>_...)")
     args = ap.parse_args()
-    global DIGITS, JITTER_LINES, SORTED
-    DIGITS, JITTER_LINES, SORTED = args.digits or args.variation, args.jitter_lines or args.variation, args.variation
+    global DIGITS, JITTER_LINES, SORTED, ANNEAL
+    DIGITS = args.digits or args.variation or args.anneal
+    JITTER_LINES = args.jitter_lines or args.variation or args.anneal
+    SORTED, ANNEAL = args.variation, args.anneal
     pre = f"resolution_{args.tag}_" if args.tag else "resolution_"
     groups = pp.sample_species({"T": 60, "V": 19, "U": 0}, args.seed)
     real = json.load(open(REAL))
@@ -400,10 +538,15 @@ def main() -> int:
     cands = sorted(s for s in real if s in trained_names and s not in val)
     random.Random(args.seed).shuffle(cands)
     groups["R"] = cands[: args.n_real]
+    chain: list[dict] = []
     if args.variation:
         canon, real_full, pool = cv.load_spectra()
         lib = Library(spectra=canon)
         jobs = build_jobs_variation(groups, real, real_full, canon, pool, lib)
+    elif args.anneal:
+        canon, _, pool = cv.load_spectra()
+        lib = Library()
+        jobs, chain = build_jobs_anneal(groups, real, canon, pool, lib)
     else:
         lib = Library()
         jobs = build_jobs(groups, real, lib)
@@ -440,10 +583,29 @@ def main() -> int:
                 fh.write(json.dumps(row, ensure_ascii=False) + "\n")
         print(f"{m}: {len(jobs):,} prompts in {time.time() - t0:.0f}s", flush=True)
     results = [r for rs in by_model.values() for r in rs]
+    chain_rows: list[dict] = []
+    if chain:
+        cpath = os.path.join(args.out, pre + "chain.jsonl")
+        cached = collections.defaultdict(list)
+        if os.path.exists(cpath):
+            for line in open(cpath):
+                r = json.loads(line)
+                cached[r["model"]].append(r)
+        cached = collections.defaultdict(list, {m: rs for m, rs in cached.items() if len(rs) == len(chain)})
+        for m in args.models.split(","):
+            if m not in cached:
+                t0 = time.time()
+                cached[m] = run_chain(pp.ALL_MODELS[m] if m in pp.ALL_MODELS else os.path.expanduser(m), chain, m)
+                print(f"{m}: chain {len(chain):,} x 2 steps in {time.time() - t0:.0f}s", flush=True)
+        with open(cpath, "w", encoding="utf-8") as fh:
+            for rs in cached.values():
+                for r in rs:
+                    fh.write(json.dumps(r, ensure_ascii=False) + "\n")
+        chain_rows = [r for rs in cached.values() for r in rs]
     summary = summarise(results, jobs)
     json.dump(summary, open(os.path.join(args.out, pre + "summary.json"), "w"), indent=1)
     models = [m for m in MODEL_ORDER if m in by_model] + sorted(m for m in by_model if m not in MODEL_ORDER)
-    write_report(summary, models, groups, os.path.join(args.out, pre + "report.md"))
+    write_report(summary, models, groups, os.path.join(args.out, pre + "report.md"), results, chain_rows)
     return 0
 
 

@@ -173,3 +173,40 @@ def test_representation_draws_reproduce_the_real_statistics():
     assert rep["species"] >= 600
     assert abs(sim["top1"] - real["top1"]) < 0.06 and abs(sim["set4"] - real["set4"]) < 0.06
     assert abs(sim["present"] - real["present"]) < 0.03 and abs(sim["extra4"] - real["extra4"]) < 0.04
+
+
+def test_denoise_record_and_reference_answer():
+    r = _rec()
+    t = cx.denoise_record(cx.XmlRecord("Gypsum", "", "", [1010, 495, 1140], "", []), raman_resolution=5, digits=True)
+    assert t.split("\n") == ["<mineral>", '<raman resolution_cm1="5"><top>1 0 1 0</top><next>4 9 5</next><next>1 1 4 0</next></raman>',
+                             f"<reference>{cx.BLANK}</reference>", "</mineral>"]
+    assert "Gypsum" not in t
+    assert cx.raman_inner(r.bands, digits=True) == "<top>1 0 0 8</top><next>4 9 3</next><next>4 1 4</next><next>1 1 4 0</next>"
+
+
+def test_anneal_rows():
+    import corpus_xml_anneal as ca
+
+    r = _rec()
+    peaks = [(1008.0, 1.0), (493.0, 0.6), (414.0, 0.5), (1140.0, 0.45), (620.0, 0.3), (670.0, 0.25), (1135.0, 0.2), (180.0, 0.1)]
+    pool = [300.0, 850.0, 1320.0, 560.0, 990.0]
+    rows = ca.rows_for(r, peaks, pool, val=False)
+    by = collections.Counter((x["kind"], x["variant"]) for x in rows)
+    assert by[("g:bands>name", "stripped·jitter")] == 12 and by[("g:bands+lines>name", "stripped·jitter")] == 4
+    assert all(by[("g:bands>name", f"stripped·variation·tier{t}")] == 12 for t in (1, 2, 3))
+    assert all(by[(ca.REFERENCE_KIND, f"denoise·tier{t}")] == 5 for t in (1, 2, 3))
+    assert by[("g:formula>name", "stripped")] == 4 and by[("g:name>formula", "stripped")] == 8
+    var = [x for x in rows if x["variant"].startswith("stripped·variation")]
+    for x in var:
+        b = x["bands_shown"]
+        assert 1 <= len(b) <= 4 and len(set(b)) == len(b) and all(v % x["grid"] == 0 for v in b)
+        assert "<top>" in x["prompt"] and "<band>" not in x["prompt"] and x["completion"] == "Gypsum"
+    sev = {t: [x["severity"] for x in var if x["tier"] == t] for t in (1, 2, 3)}
+    assert max(sev[1]) <= 1 / 3 + 1e-9 and sum(sev[1]) / 12 < sum(sev[3]) / 12  # the tiers scale the severity
+    ref = [x for x in rows if x["kind"] == ca.REFERENCE_KIND]
+    assert all("<reference><|fim" in x["prompt"] or "<reference>" in x["prompt"] for x in ref)
+    assert all(x["completion"] == cx.raman_inner(r.bands, digits=True) and "Gypsum" not in x["prompt"] for x in ref)
+    assert rows == ca.rows_for(r, peaks, pool, val=False)  # deterministic
+    v = collections.Counter(x["kind"] for x in ca.rows_for(r, peaks, pool, val=True))
+    assert v["g:bands>name"] == 2 + 3 * 2 and v[ca.REFERENCE_KIND] == 3 * 2
+    assert 0.15 < sum(ca.kept_sample(f"id{i}") for i in range(4000)) / 4000 < 0.25

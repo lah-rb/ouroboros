@@ -3475,3 +3475,98 @@ prompts out of about 107 k are shared between two species.
 
 The side goals held: no slot confusion, and name → formula recovered, so the name → formula
 rows did their job.
+
+### 22l. The v3b anneal: clean key first, graded real-like noise, and a two-step route — pre-registration (2026-09-25 16:00Z)
+
+**Question.** §22k collapsed: from the stage-1 endpoint, real-like variation taught bands → name
+nothing (one fixed answer, 0.00 on its own training prompts). The literature (review
+2026-09-25) supports three readings and remedies:
+- **A plateau, not a capacity limit.** Models repeat one output while attention learns
+  slowly (Gopalani & Hu 2025; Hoffmann et al., ICML 2024). Networks fit even random labels
+  (Zhang et al. 2017), so failing on its own training prompts points at optimization.
+- **Clean first, then noise raised gradually.** Clean-then-noisy and gradual schedules beat
+  mixing from the start (Wei et al., NAACL 2021: +2.4 and +3.4 against +1.9). Replay and a
+  re-warmed learning rate curb forgetting (Ibrahim et al. 2024).
+- **Intermediate supervision can make a mapping that cannot be learned end to end
+  learnable** (Wies, Levine & Shashua, ICLR 2023), but only when the step is easier than the
+  whole (Zhou et al. 2023). Canonical targets beat randomized ones (Tetko et al. 2020).
+
+Operator ruling (2026-09-25): anneal v3b as the proving ground (about 40 % of a full stage-2
+run), and include a two-step route: reconstruct the reference bands, then name them.
+
+**Design.** `corpus_xml_anneal.py` → `v6/stage2l`. Init `v3_stage2b/final_fp32`. v3b's own format
+throughout: the strongest four, intensity-ranked `<top>/<next>`, digits, jittered lines,
+resolution field. Rows per trained species:
+
+| rows | what |
+|---|---|
+| 12 | bands → name, clean position-jitter draws (§22h model, fresh namespace): the key, replayed |
+| 12 × 3 | bands → name, variation draws (§22k model) at ⅓, ⅔ and full fitted severity. Tiers are MIXED: packer and trainer both shuffle, and v3b is the clean first stage. Canonical top-4 shown: 0.68 / 0.59 / 0.52 (real re-measurements 0.59) |
+| 5 × 3 | bands → reference (the denoise step). The measured list is shown; the blank is the canonical strongest four (`corpus_xml.denoise_record`). Step two is bands → name at resolution 1 |
+| 4 + 4 + 8 | replay: bands + lines → name (clean), formula → name, name → formula |
+
+Also: 20 % of the §22 full-record rows (stable hash), every bundle, every val row. That is
+131,614 new rows = 10.06 M tokens, plus 26,655 kept rows. Mix 70 / 18 / 5 / 7 (XML / paper /
+other / replay). Pack: 4,904 blocks = 19.50 M tokens, 613 steps.
+
+Training: lr re-warmed to 1e-5 over 20 steps (half of stage 2's), linear to 0, accum 8, one
+epoch, eval every 40 steps.
+
+**Instrument.** `probe_resolution.py --anneal --tag anneal`: every §22j budget-probe
+condition, byte-identical (verified against the stored v3b rows), plus:
+- **variation·t1/t2/t3:** fresh variation draws at the three severities, probe-only
+  namespace, class sampled, 4 per tier.
+- **the chain:** fill `<reference>`, then name it. Run for exact, the tiers and real·native.
+- **a collapse check:** the share of the most common bands → name answer.
+
+Also `probe_pairs`, `probe_xml_fill`, `probe_recall`.
+
+**Measured before (v3b on this probe, correct field, bands → name; ceiling in brackets).**
+
+| condition | v3b | ceiling |
+|---|---|---|
+| exact | 0.78 | 0.98 |
+| synthetic, position-only, pooled | 0.65 | 0.83 |
+| variation t1 / t2 / t3 | 0.28 / 0.23 / 0.20 | 0.56 / 0.42 / 0.35 |
+| real native / grid 5 / grid 10 | 0.12 / 0.14 / 0.14 | 0.33 / 0.33 / 0.25 |
+| V | 0.00 | 0.95 |
+
+- **Collapse check:** 25 % of v3b's answers are "Kurnakovite", a fallback guess.
+- **Chain:** 0.00 everywhere (never trained on the reference pair).
+- **Forward (v3b):** held-out raman 0.911; pair-probe name → formula, trained order, 0.68.
+- **Prose:** step 0 of this run is the v3b endpoint.
+
+**Noise.** T holds 60 species; at 0.2 the species-level standard error is about ±0.05 per
+condition. R holds 100 species, about ±0.04.
+
+**Predictions (v3l, this probe, correct field, bands → name unless stated).**
+
+| # | prediction | falsified if |
+|---|---|---|
+| L1 | THE TEST: real native ≥ 0.20 (v3b 0.12; ceiling 0.33) | < 0.15 |
+| L2 | the key survives: exact ≥ 0.70 and position-only synthetic ≥ 0.55 (v3b 0.78 / 0.65); the most common answer's share ≤ 0.25 | exact < 0.60, or that share > 0.40 |
+| L3 | variation is learned: t3 ≥ 0.28 (v3b 0.20; ceiling 0.35), with t1 ≥ t2 ≥ t3 | t3 ≤ 0.22 |
+| L4 | the two-step route: reference recall at t3 ≥ 0.60 (0.52 of the canonical four are shown); chain at t3 ≥ direct at t3 − 0.05 | chain < direct − 0.05 at t3 |
+| L5 | forward: held-out raman ≥ 0.85; name → formula, trained order, ≥ 0.75 | either below |
+| L6 | prose against this run's step 0: paper ≤ +1 %, replay ≤ +1.5 % | either exceeded |
+| L7 | masks: bands masked ≤ 0.03 on both pairs; V ≤ 0.05 | any exceeded |
+
+Read, not barred: the chain against direct on real native; the hundreds-boundary split; the
+field renderings; R set-match, top-match and neither.
+
+**Decision rule.**
+- **L1 met:** the anneal (clean key, then graded noise) carries to real spectra. It becomes
+  part of the stage-2 recipe; if the chain beats direct on real spectra, the two-step route
+  goes in too. Then, per the operator's roadmap, model scale and the chemistry-physics data
+  gap.
+- **L1 not met, L3 met:** the model learns the simulator, not reality. Refine the variation
+  model: the 5–10 cm⁻¹ shift tail it under-fits, and laser- or orientation-dependent
+  intensities.
+- **L3 not met, or L2 broken:** noise tolerance does not come this way at 1B. The retrieval /
+  embedding route, or scale.
+
+**Freeze (sha256, first 16).**
+- `stage2l/docs_manifest.json` 6498f634b7c91c54
+- `stage2l/manifest.json` dced9e3112e25eee
+- `stage2k/docs/spectra_full.json` b2c46f89a63a47a6
+- `resolution_anneal_items_frozen.json` 7f430318a213af2a

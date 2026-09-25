@@ -87,3 +87,25 @@ def test_forced_variation_draw_is_sorted_grid_rounded_and_seeded():
         assert g == grid and bands == sorted(set(bands)) and 1 <= len(bands) <= pr.SYNTH_K and all(b % grid == 0 for b in bands)
         assert (bands, g) == pr.forced_variation_draw("A", peaks, pool, klass, 0)
     assert pr.forced_variation_draw("A", peaks, pool, "lab", 0) != pr.forced_variation_draw("A", peaks, pool, "lab", 1)
+
+
+def test_parse_reference_reads_digit_rendered_bands():
+    g = "<top>1 0 0 8</top><next>4 9 3</next><next>4 1 4</next><next>1 1 4 0</next></reference>\n</mineral>"
+    assert pr.parse_reference(g) == [1008, 493, 414, 1140]
+    assert pr.parse_reference("<top>1 0 0 8</top><next>4 9") == [1008]  # a truncated fill keeps what closed
+    assert pr.parse_reference("Sulphur") == []
+
+
+def test_forced_severity_draw_scales_with_the_tier():
+    peaks = [(1008.0, 1.0), (493.0, 0.6), (415.0, 0.5), (1140.0, 0.4), (620.0, 0.3), (670.0, 0.2), (1135.0, 0.15)]
+    pool = [300.0, 850.0, 560.0, 990.0, 1320.0]
+    for tier, scale in pr.SEVERITY_TIERS:
+        bands, grid = pr.forced_severity_draw("A", peaks, pool, tier, scale, 0)
+        assert 1 <= len(bands) <= 4 and len(set(bands)) == len(bands) and all(b % grid == 0 for b in bands)
+        assert (bands, grid) == pr.forced_severity_draw("A", peaks, pool, tier, scale, 0)
+    kept = {t: 0.0 for t, _ in pr.SEVERITY_TIERS}
+    for t, s in pr.SEVERITY_TIERS:
+        for d in range(200):
+            bands, _ = pr.forced_severity_draw("A", peaks, pool, t, s, d)
+            kept[t] += sum(any(abs(x - c) <= 12 for x in bands) for c in (1008, 493, 415, 1140)) / 4
+    assert kept[1] > kept[3]  # full severity keeps fewer canonical bands than a third of it

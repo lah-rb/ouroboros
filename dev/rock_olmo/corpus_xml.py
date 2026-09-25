@@ -311,6 +311,26 @@ def stripped_record(
     return "\n".join([head, *blocks, "</mineral>"])
 
 
+def raman_inner(bands, *, digits: bool = False) -> str:
+    """The inside of a <raman> block in intensity order: <top>..</top><next>..</next>.."""
+    fmt_b = digit_str if digits else str
+    return f"<top>{fmt_b(bands[0])}</top>" + "".join(f"<next>{fmt_b(x)}</next>" for x in bands[1:])
+
+
+def denoise_record(observed: XmlRecord, *, raman_resolution: int | None = None, digits: bool = False) -> str:
+    """§22l: a measured spectrum and a BLANK reference block. The model fills in the
+    species' canonical strongest four from a noisy observation (the first half of a
+    two-step identification; canonical bands -> name is the stripped bands > name pair):
+
+        <mineral>
+        <raman resolution_cm1="5"><top>1 0 1 0</top><next>4 9 5</next>...</raman>
+        <reference>BLANK</reference>
+        </mineral>"""
+    rhead = f'<raman resolution_cm1="{raman_resolution}">' if raman_resolution else "<raman>"
+    raman = rhead + raman_inner(observed.bands, digits=digits) + "</raman>"
+    return "\n".join(["<mineral>", raman, f"<reference>{BLANK}</reference>", "</mineral>"])
+
+
 def stripped_answer(rec: XmlRecord, target: str) -> str:
     return {"name": rec.species, "formula": rec.formula, "top": str(rec.bands[0]), "line": f"{rec.libs[0]:.2f}"}[target]
 
