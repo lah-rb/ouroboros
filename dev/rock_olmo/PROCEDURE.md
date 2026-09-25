@@ -3570,3 +3570,77 @@ field renderings; R set-match, top-match and neither.
 - `stage2l/manifest.json` dced9e3112e25eee
 - `stage2k/docs/spectra_full.json` b2c46f89a63a47a6
 - `resolution_anneal_items_frozen.json` 7f430318a213af2a
+
+### 22l. Result: the anneal carries to real spectra; 0.12 → 0.23, at 70 % of the matcher ceiling (run 2026-09-25 16:00–19:38Z)
+
+The run took 613 steps and 20.09 M tokens; the endpoint is `v3_stage2l/final`. Final losses
+against step 0 (the v3b endpoint): paper +2.5 %, replay +2.5 %, fim +2.7 %, reference +2.5 %,
+xml_fim −24.3 %. Against the stage-1 step 0: paper +4.2 %, replay +4.4 %.
+
+**This probe, correct field, bands → name (ceiling in brackets).**
+
+| condition | v3b | v3l |
+|---|---|---|
+| exact | 0.78 | **0.89** (0.98) |
+| synthetic, position-only, pooled | 0.65 | **0.76** (0.83) |
+| variation t1 / t2 / t3 | 0.28 / 0.23 / 0.20 | **0.47 / 0.38 / 0.34** (0.56 / 0.42 / 0.35) |
+| real native / grid 5 / grid 10 | 0.12 / 0.14 / 0.14 | **0.23 / 0.23 / 0.19** (0.33 / 0.33 / 0.25) |
+| R, same four-band set / top band only / neither (native) | 0.54 / 0.11 / 0.00 | 0.69 / 0.28 / 0.00 (1.00 / 0.30 / 0.13) |
+| V | 0.00 | 0.00 |
+
+- **bands + lines → name:** real 0.23, t3 0.30.
+- **Masks:** bands masked ≤ 0.01 on both pairs.
+- **Fallback guess:** the most common answer's share falls from 0.25 ("Kurnakovite") to 0.14
+  ("Aenigmatite").
+
+**Two-step chain** (direct / chain / reference recall of the canonical four within ±5):
+
+| condition | v3l |
+|---|---|
+| exact | 0.89 / 0.88 / 0.98 |
+| t1 | 0.47 / 0.43 / 0.67 |
+| t2 | 0.38 / 0.37 / 0.61 |
+| t3 | 0.34 / 0.30 / 0.52 |
+| real native | 0.23 / 0.23 / 0.56 |
+
+Recall equals the share of the canonical four the measured list already shows (0.68 / 0.59 /
+0.52 by tier). The reference step learned to copy the canonical bands it can see, not to
+restore the missing ones. The chain therefore adds nothing over the direct route: the
+intermediate step is not easier than the whole (Zhou et al. 2023).
+
+**Forward** (v3b → v3l):
+
+| measure | v3b | v3l |
+|---|---|---|
+| held-out raman | 0.911 | 0.921 |
+| held-out system | 0.929 | 0.939 |
+| held-out species | 0.801 | 0.784 |
+| held-out formula | 0.807 | 0.805 |
+| held-out top | 0.894 | 0.877 |
+| name → formula, trained order | 0.68 | 0.79 |
+| name → formula, held-out order | 0.57 | 0.62 |
+
+Recall frame: formula 0.835, bands 0.610.
+
+**Scorecard.**
+- L1 ✓ (real native 0.23).
+- L2 ✓ (exact 0.89, position-only 0.76, most common answer's share 0.14).
+- L3 ✓ (t3 0.34, t1 ≥ t2 ≥ t3).
+- L4 ◐ (chain 0.30 ≥ direct − 0.05 = 0.29 at t3, but recall 0.52 < 0.60: copying only).
+- L5 ✓ (held-out raman 0.921; name → formula 0.79).
+- L6 ✗ (paper and replay +2.5 % against bars of +1 % / +1.5 %).
+- L7 ✓ (masks ≤ 0.01, V 0.00).
+
+**Reading.**
+- **The clean-key-then-noise curriculum works where training from scratch collapsed.** The
+  same variation draws that taught v3k nothing (§22k) take v3b to:
+  - within 0.01 of the matcher ceiling at full severity;
+  - 70 % of the ceiling on real re-measurements, up from 36 %.
+- **The key sharpened too:** exact 0.78 → 0.89, position-only 0.65 → 0.76.
+- **The remaining real gap is mostly the key itself.** Four intensity-ranked bands cap a
+  perfect lookup at 0.33, and v3l sits at 0.23. A longer key (the matcher reaches 0.45 with
+  six bands) is the obvious next lever, now as a further anneal on this model.
+- **Per the decision rule (L1 met):** the anneal joins the stage-2 recipe. The two-step route
+  does not, since the chain equals the direct route on real spectra.
+- **The price is prose drift** (L6 ✗). The anneal cut the paper share to 18 % and re-warmed
+  the learning rate. The final recipe needs the stage-2 prose share, or a lower anneal rate.
