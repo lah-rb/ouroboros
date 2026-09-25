@@ -11,10 +11,9 @@ content: |
     `fetch_record` and the earlier file declares `get_record`, change YOUR
     call — the earlier file is already on disk and other files may already
     bind to it.
-  - A `serialized round trip` finding means this file writes keys into a saved
-    payload that nothing ever reads back. Either read them where the payload
-    is loaded, or stop writing them. Both are honest; storing data no reader
-    consumes is not.
+  - A `serialized round trip` finding names a key of the save file the design
+    declared that one half of the save/load pair handles and the other does
+    not, and names this file as the one to fix. Make this file's half agree.
   - An `entity registry` finding means an id that was promised is not in the
     file as written, or a reference points at an id no file defines. Make the
     ids real.

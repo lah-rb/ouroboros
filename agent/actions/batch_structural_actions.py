@@ -482,9 +482,9 @@ def _edge_targets(room: dict) -> list[str]:
 #
 # A blind panel found the decisive defect of a shipped artifact and BOTH
 # existing checks were blind to it. `_transfer_shape_violations` indexes
-# dict-literal producers; `_serialized_roundtrip_violations` reads keys off
-# a SERIALIZED payload. Neither can see two functions disagreeing about what
-# a single in-memory state field holds:
+# dict-literal producers; the round-trip check (roundtrip_contract.py) reads
+# keys off a SERIALIZED payload. Neither can see two functions disagreeing
+# about what a single in-memory state field holds:
 #
 #     game.py:231   self.state.player["equipped_weapon"] = item.name   # NAME
 #     game.py:426   self.state.player["equipped_weapon"] = loot_id     # ID
