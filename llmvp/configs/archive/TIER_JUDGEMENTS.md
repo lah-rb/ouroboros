@@ -4512,3 +4512,86 @@ files clean` over a tree containing all three defects above. `.py` files are
 only syntax-checked `elif ext in env_config` and there is no env config before
 the environment phase; the AST typecheck returns `[]` on `SyntaxError`.
 Neither gate can see a wrong binding between two files that each parse.
+
+## 2026-09-23 — FRONTIER SCORECARD: qwen3.8-flash-next APEX, strip ON, functional phase, Delivery LEVEL 2–2 / Character 1–5
+
+**Delivery: 2–2 · Character: FRONTIER 5–1 · OVERALL: FRONTIER.** No panel
+split (a level panel points nowhere), not flagged CLOSE — "the nearest this
+flight comes to a CLOSE case". Out-of-band scorecard, NOT ladder-bearing and
+NOT a tier placement; METHODS §5 family caveat applies (Opus judge,
+Claude-authored frontier). Record:
+`dev/blind_panel/records/flight_20260923_apex_strip_vs_frontier.md`.
+
+**Tally corrected by the judge.** Its first report said "Delivery: A 3–1"
+over axis choices summing 2–2; asked to reconcile (no re-play), it confirmed
+the slip and kept every axis. Always re-add the axis lines before recording.
+
+Local took **A2 state integrity** (whole-world save round-trips a fight in
+progress; the frontier's save drops its boss's phase-2 bonus), **A3
+robustness** (zero tracebacks, EOF clean at every prompt, against the
+frontier's three EOF tracebacks), **B5 ambition** (topic-menu dialogue graph,
+a re-forming boss with a timed weakness window, a lock-and-key/room-change
+layer — the last authored and never wired).
+
+Against the structural-only arm of 09-21 (FRONTIER 3–1 / 4–2): Delivery closed
+to level, Character lost B9. Different designs, n=1 each.
+
+**Cycle-capped, not complete:** 30 cycles, 24/57 goals, 33 functional goals
+untested. Verified B defects: `talk to <name>` seam bug (parser keeps `to`,
+substring name match), monsters that never block, `equip armour` failing (fix
+diagnosed, cap landed first), the unwired lock/flag layer.
+
+**Framework, charged to B9 by the judge — produced by the flows, not forced:**
+330 dead lines in `main.py`, a shadow `to_dict`/`from_dict` from the two
+in-session repairs of `main.py`. The round-trip checker reported its OWN blind
+spot (it follows payload producers only as class methods) as an UNVERIFIED
+violation naming no file; the session check defaulted it onto `main.py`; the
+repair instruction ("Rewrite the SAME file … not opinions") framed it as
+`main.py`'s defect; the loop repeated a byte-identical prompt and the second
+repair escalated to a full serializer. The model's own thinking named
+`save.py` as the real target; returning `main.py` unchanged was available and
+never considered. The sweep then renamed correct code in `save.py` on an
+INFERRED theory of the checker and closed the goal on the patch's own
+validation — the round-trip check was never re-run, and re-run today it
+still reports UNVERIFIED (it follows class methods only, under any name).
+Chain and fix candidates in the flight record.
+
+**Strip ON did its job** (the reason this arm exists): structural walk 305 →
+144 min, 7/7 files in-session, depth at file 5 184k → 21k tokens, 0 context
+overflows; the judge judged the model's design, not a keystone rebuilt from a
+fragment of its own thinking.
+
+## 2026-09-24 — FRONTIER SCORECARD: qwen3.8-flash-next APEX, contract round-trip checker, loses 1–3 / 1–5
+
+**Delivery: FRONTIER 3–1 · Character: FRONTIER 5–1 · OVERALL: FRONTIER.** No
+panel split, not flagged CLOSE. Out-of-band scorecard, NOT ladder-bearing and
+NOT a tier placement; METHODS §5 family caveat applies (Opus judge,
+Claude-authored frontier). Axis lines re-added: they sum to the reported
+tallies. Record:
+`dev/blind_panel/records/flight_20260924_apex_contract_checker_vs_frontier.md`.
+
+Both artifacts WON and NEAR-FULL (local 46/47, unmet #16). Local took **A3
+robustness** (EOF clean at every prompt vs the frontier's three EOF
+tracebacks + corrupt-save traceback) and **B9 workability** (both probes
+data-only in one file; the loader names cross-reference placement errors).
+
+Against 09-23 (Delivery 2–2 / Character FRONTIER 5–1; local A2, A3, B5): the
+swing axis is **A2** — this design's load fails after the first kill. Verified
+in the tree: `engine._apply_save` builds `defeated_monsters` as id STRINGS (as
+the declared contract says) and twenty lines later calls `.behavior` on them —
+a value-vocabulary slip inside one function (the judge labelled it a
+cross-module seam; corrected in the record). The key-level round-trip check
+cannot see it (every key agrees); a static type check or the untested
+save/load runtime goals would. Different designs each flight, n=1.
+
+**Cycle-capped:** 30 cycles, 27/80 goals, 18/71 functional verified, 53
+untested (combat, NPCs, boss, save/load among them).
+
+**Framework:** the round-trip ride is gone — 9/9 files, zero repair turns,
+the checker comparing the declared save shape. Two smaller rides cost 3 of
+30 cycles: a derived acceptance check's `.out` file charged to the project by
+the runtime-file observer (1 cycle), and an authored regression test
+asserting a room name's CASE vetoing a working, freshly fixed `examine`
+(2 cycles at the cap; ships as the judge's "one failing test"). Hybrid
+rollback recovered two degenerate turns (an engine.py thinking orbit caught
+at 79,872 tokens; a tester token run) with no history replay.
