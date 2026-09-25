@@ -98,20 +98,30 @@ def test_pending_directive_routes_to_replan_before_greenfield_planning():
 
 def test_design_and_plan_research_is_web_research_gated():
     # Proactive domain research only fires when config.web_research is on, so a
-    # hermetic run (tb adapter sets it off) stays fully offline. In the design_gate
-    # topology the research fork lives on design_gate_pass (post-coherence, the old
-    # parse_architecture fork) and design_gate_route (pre-design routing) — both
-    # web_research-gated, else → derive_goals.
+    # hermetic run (tb adapter sets it off) stays fully offline. The ONE research
+    # fork is on design_gate_route, BEFORE the first design pass (2026-09-24:
+    # it used to sit on design_gate_pass, after the blueprint was fixed) — gated
+    # on web_research AND no architecture yet; without web access a first design
+    # goes straight to design_initial.
     c = _compiled()
     steps = c["design_and_plan"]["steps"]
-    for step in ("design_gate_pass", "design_gate_route"):
-        rules = steps[step]["resolver"]["rules"]
-        research_rule = next(
-            (r for r in rules if r["transition"] == "domain_research"), None
-        )
-        assert research_rule is not None, f"{step} lost its research fork"
-        assert "config.web_research == true" in research_rule["condition"]
-        assert rules[-1]["transition"] == "derive_goals"
+    forks = {
+        name: r
+        for name, st in steps.items()
+        for r in (st.get("resolver") or {}).get("rules", [])
+        if r["transition"] == "domain_research"
+    }
+    assert set(forks) == {"design_gate_route"}, forks
+    cond = forks["design_gate_route"]["condition"]
+    assert "config.web_research == true" in cond
+    assert "has_architecture == false" in cond
+    rules = steps["design_gate_route"]["resolver"]["rules"]
+    after = rules[[r["transition"] for r in rules].index("domain_research") + 1]
+    assert after == {
+        "condition": "result.has_architecture == false",
+        "transition": "design_initial",
+    }
+    assert rules[-1]["transition"] == "derive_goals"
 
 
 def test_web_research_flag_default_on_off_is_explicit():

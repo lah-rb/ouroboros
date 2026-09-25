@@ -7,6 +7,7 @@
 # Pre-computed context keys:
 #   project_file_list — formatted project manifest
 #   existing_architecture — formatted current architecture (empty if mode 1)
+#   research_summary — what domain research found (empty when it did not run)
 
 id: design_and_plan/design_architecture
 description: "Design or reconcile project architecture"
@@ -229,6 +230,20 @@ sections:
   content: |
     ## Mission Objective
     {context.mission_objective}
+
+# Domain research runs BEFORE the first design pass (design_and_plan routes a
+# no-architecture mission through `research` first when web research is on),
+# so what it found can shape the blueprint. Until 2026-09-24 it ran after the
+# design gate and reached no prompt at all.
+- id: domain_research
+  when: context.research_summary
+  content: |
+    ## Domain Research
+    What a search of this problem domain turned up. Use what fits the
+    objective above; it is background from other projects, not a
+    requirement list.
+
+    {context.research_summary}
 
 - id: existing_architecture
   when: context.existing_architecture

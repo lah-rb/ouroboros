@@ -3379,6 +3379,10 @@
           "type": "rule",
           "rules": [
             {
+              "condition": "result.has_architecture == false and context.mission.config.web_research == true",
+              "transition": "domain_research"
+            },
+            {
               "condition": "result.has_architecture == false",
               "transition": "design_initial"
             },
@@ -3391,12 +3395,176 @@
               "transition": "derive_goals"
             },
             {
-              "condition": "context.mission.config.web_research == true",
-              "transition": "domain_research"
+              "condition": "true",
+              "transition": "derive_goals"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "domain_research": {
+        "action": "noop",
+        "description": "Route domain research: deep sweep (opt-in) or one-shot",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "context.mission.config.deep_research == true",
+              "transition": "deep_domain_research"
             },
             {
               "condition": "true",
-              "transition": "derive_goals"
+              "transition": "quick_domain_research"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "quick_domain_research": {
+        "action": "flow",
+        "description": "Search for domain knowledge to inform the project",
+        "config": {},
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "effects": [],
+        "flow": "research",
+        "input_map": {
+          "research_query": {
+            "$ref": "context.mission.objective"
+          },
+          "max_results": 3
+        },
+        "params": {},
+        "publishes": [
+          "research_summary"
+        ],
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.status == 'success'",
+              "transition": "save_research"
+            },
+            {
+              "condition": "true",
+              "transition": "design_initial"
+            }
+          ]
+        },
+        "terminal": false
+      },
+      "deep_domain_research": {
+        "action": "flow",
+        "description": "Parallel verified research sweep (opt-in)",
+        "config": {},
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "effects": [],
+        "flow": "deep_research",
+        "input_map": {
+          "brief": {
+            "$ref": "context.mission.objective"
+          },
+          "working_directory": {
+            "$ref": "context.mission.config.working_directory"
+          }
+        },
+        "params": {},
+        "publishes": [
+          "research_summary"
+        ],
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.status == 'success'",
+              "transition": "save_research"
+            },
+            {
+              "condition": "true",
+              "transition": "design_initial"
+            }
+          ]
+        },
+        "terminal": false
+      },
+      "save_research": {
+        "action": "push_note",
+        "description": "",
+        "context": {
+          "required": [],
+          "optional": [
+            "mission",
+            "research_summary"
+          ]
+        },
+        "params": {
+          "category": "codebase_observation",
+          "content_key": "research_summary",
+          "tags": [
+            "proactive",
+            "domain_knowledge"
+          ],
+          "source_flow": "design_and_plan"
+        },
+        "param_schema": {
+          "category": {
+            "type": "string",
+            "required": false,
+            "default": "general",
+            "description": "Classification for retrieval filtering",
+            "enum": [
+              "general",
+              "task_learning",
+              "codebase_observation",
+              "failure_analysis",
+              "requirement_discovered",
+              "approach_rejected",
+              "dependency_identified"
+            ]
+          },
+          "content_key": {
+            "type": "string",
+            "required": false,
+            "default": "reflection",
+            "description": "Context key containing the note content"
+          },
+          "tags": {
+            "type": "list",
+            "required": false,
+            "description": "Freeform tags for cross-referencing",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "design_initial"
             }
           ]
         },
@@ -3414,7 +3582,8 @@
           "optional": [
             "project_manifest",
             "repo_map_formatted",
-            "design_gate_feedback"
+            "design_gate_feedback",
+            "research_summary"
           ]
         },
         "params": {},
@@ -3425,7 +3594,8 @@
             "repo_map_formatted",
             "project_file_list",
             "existing_architecture",
-            "design_gate_feedback"
+            "design_gate_feedback",
+            "research_summary"
           ],
           "input_keys": []
         },
@@ -3487,7 +3657,8 @@
           "optional": [
             "project_manifest",
             "repo_map_formatted",
-            "design_gate_feedback"
+            "design_gate_feedback",
+            "research_summary"
           ]
         },
         "params": {},
@@ -3498,7 +3669,8 @@
             "repo_map_formatted",
             "project_file_list",
             "existing_architecture",
-            "design_gate_feedback"
+            "design_gate_feedback",
+            "research_summary"
           ],
           "input_keys": []
         },
@@ -3781,7 +3953,7 @@
       },
       "design_gate_pass": {
         "action": "noop",
-        "description": "Blueprint coherent \u2014 proceed (preserves the web_research fork)",
+        "description": "Blueprint coherent \u2014 derive goals (research already ran, before design)",
         "context": {
           "required": [
             "mission"
@@ -3789,178 +3961,6 @@
           "optional": []
         },
         "params": {},
-        "config": {},
-        "resolver": {
-          "type": "rule",
-          "rules": [
-            {
-              "condition": "context.mission.config.web_research == true",
-              "transition": "domain_research"
-            },
-            {
-              "condition": "true",
-              "transition": "derive_goals"
-            }
-          ]
-        },
-        "publishes": [],
-        "effects": [],
-        "terminal": false
-      },
-      "domain_research": {
-        "action": "noop",
-        "description": "Route domain research: deep sweep (opt-in) or one-shot",
-        "context": {
-          "required": [
-            "mission"
-          ],
-          "optional": []
-        },
-        "params": {},
-        "config": {},
-        "resolver": {
-          "type": "rule",
-          "rules": [
-            {
-              "condition": "context.mission.config.deep_research == true",
-              "transition": "deep_domain_research"
-            },
-            {
-              "condition": "true",
-              "transition": "quick_domain_research"
-            }
-          ]
-        },
-        "publishes": [],
-        "effects": [],
-        "terminal": false
-      },
-      "quick_domain_research": {
-        "action": "flow",
-        "description": "Search for domain knowledge to inform the project",
-        "config": {},
-        "context": {
-          "required": [
-            "mission"
-          ],
-          "optional": []
-        },
-        "effects": [],
-        "flow": "research",
-        "input_map": {
-          "research_query": {
-            "$ref": "context.mission.objective"
-          },
-          "max_results": 3
-        },
-        "params": {},
-        "publishes": [
-          "research_summary"
-        ],
-        "resolver": {
-          "type": "rule",
-          "rules": [
-            {
-              "condition": "result.status == 'success'",
-              "transition": "save_research"
-            },
-            {
-              "condition": "true",
-              "transition": "derive_goals"
-            }
-          ]
-        },
-        "terminal": false
-      },
-      "deep_domain_research": {
-        "action": "flow",
-        "description": "Parallel verified research sweep (opt-in)",
-        "config": {},
-        "context": {
-          "required": [
-            "mission"
-          ],
-          "optional": []
-        },
-        "effects": [],
-        "flow": "deep_research",
-        "input_map": {
-          "brief": {
-            "$ref": "context.mission.objective"
-          },
-          "working_directory": {
-            "$ref": "context.mission.config.working_directory"
-          }
-        },
-        "params": {},
-        "publishes": [
-          "research_summary"
-        ],
-        "resolver": {
-          "type": "rule",
-          "rules": [
-            {
-              "condition": "result.status == 'success'",
-              "transition": "save_research"
-            },
-            {
-              "condition": "true",
-              "transition": "derive_goals"
-            }
-          ]
-        },
-        "terminal": false
-      },
-      "save_research": {
-        "action": "push_note",
-        "description": "",
-        "context": {
-          "required": [],
-          "optional": [
-            "mission",
-            "research_summary"
-          ]
-        },
-        "params": {
-          "category": "codebase_observation",
-          "content_key": "research_summary",
-          "tags": [
-            "proactive",
-            "domain_knowledge"
-          ],
-          "source_flow": "design_and_plan"
-        },
-        "param_schema": {
-          "category": {
-            "type": "string",
-            "required": false,
-            "default": "general",
-            "description": "Classification for retrieval filtering",
-            "enum": [
-              "general",
-              "task_learning",
-              "codebase_observation",
-              "failure_analysis",
-              "requirement_discovered",
-              "approach_rejected",
-              "dependency_identified"
-            ]
-          },
-          "content_key": {
-            "type": "string",
-            "required": false,
-            "default": "reflection",
-            "description": "Context key containing the note content"
-          },
-          "tags": {
-            "type": "list",
-            "required": false,
-            "description": "Freeform tags for cross-referencing",
-            "items": {
-              "type": "string"
-            }
-          }
-        },
         "config": {},
         "resolver": {
           "type": "rule",
@@ -13969,7 +13969,7 @@
     "steps": {
       "plan_queries": {
         "action": "inference",
-        "description": "Generate 2-3 targeted search queries from the research question",
+        "description": "Generate up to 3 targeted search queries from the research question",
         "context": {
           "required": [],
           "optional": []
@@ -14002,6 +14002,11 @@
             {
               "type": "instruction",
               "template": "research/plan_queries_guidance",
+              "required": false
+            },
+            {
+              "type": "instruction",
+              "literal": "Write at most 3 queries, most important first. Only the first 3 are searched and anything past them is dropped, so rank by how much the answer would change what gets built, and don't spend one on a question another query already covers.",
               "required": false
             },
             {

@@ -13,6 +13,14 @@
 
 package ouroboros
 
+// THE ONE NUMBER for how many search queries a research pass runs. The
+// planner is TOLD it (plan_queries interpolates it into its instruction) and
+// the extractor ENFORCES it (extract_queries.max_queries), so the prompt and
+// the cap cannot disagree. They did: the guidance asked for "a couple", the
+// model wrote five, and a silent max_queries: 3 dropped the last two — on
+// 2026-09-24 one of those was the mission's own boss-weakness question.
+_research_max_queries: 3
+
 research: #FlowDefinition & {
 	flow:    "research"
 	version: 2
@@ -43,7 +51,7 @@ research: #FlowDefinition & {
 
 		plan_queries: #StepDefinition & {
 			action:      "inference"
-			description: "Generate 2-3 targeted search queries from the research question"
+			description: "Generate up to \(_research_max_queries) targeted search queries from the research question"
 			turn: #Turn & {
 				response_shape: "json_document"
 				sections: [
@@ -51,6 +59,7 @@ research: #FlowDefinition & {
 					{type: "problem", ref:          {$ref: "input.research_query"}, title: "Research question"},
 					{type: "evidence", ref:         {$ref: "input.research_context"}, title: "Background context"},
 					{type: "instruction", template: "research/plan_queries_guidance"},
+					{type: "instruction", literal: "Write at most \(_research_max_queries) queries, most important first. Only the first \(_research_max_queries) are searched and anything past them is dropped, so rank by how much the answer would change what gets built, and don't spend one on a question another query already covers."},
 					{type: "envelope"},
 				]
 				response: {
@@ -72,7 +81,7 @@ research: #FlowDefinition & {
 			action:      "extract_search_queries"
 			description: "Parse generated queries into structured list"
 			context: required: ["inference_response"]
-			params: max_queries: 3
+			params: max_queries: _research_max_queries
 			resolver: {
 				type: "rule"
 				rules: [

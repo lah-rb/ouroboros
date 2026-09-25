@@ -188,6 +188,12 @@ def test_compiled_design_gate_wiring():
     assert _rules(steps, "build_repomap")["true"] == "design_gate_route"
     # route step keeps the pre-design routing (design / reconcile / derive)
     route = _rules(steps, "design_gate_route")
+    assert (
+        route[
+            "result.has_architecture == false and context.mission.config.web_research == true"
+        ]
+        == "domain_research"
+    ), "a first design researches the domain BEFORE designing"
     assert route["result.has_architecture == false"] == "design_initial"
     assert route["result.drift_detected == true"] == "design_reconcile"
     assert route["result.has_tasks == true"] == "derive_goals"
@@ -213,11 +219,35 @@ def test_compiled_design_gate_wiring():
         ground["result.coherent == false and meta.attempt <= 2"] == "design_reconcile"
     )
     assert ground["true"] == "failed"  # BLOCK on budget exhaustion (user decision)
-    # pass preserves the web_research fork
-    assert (
-        _rules(steps, "design_gate_pass")["context.mission.config.web_research == true"]
-        == "domain_research"
-    )
+    # the pass goes straight to goals: research already ran, before design
+    assert _rules(steps, "design_gate_pass") == {"true": "derive_goals"}
+
+
+def test_domain_research_feeds_the_first_design_pass():
+    """Research ran AFTER the design gate until 2026-09-24 (a porting leftover
+    from promoting design to a full phase): the blueprint was fixed before a
+    single search and the summary reached no prompt. It now runs first and
+    every exit leads into design_initial, whose prompt renders the summary."""
+    steps = _compiled()["design_and_plan"]["steps"]
+    for st in ("quick_domain_research", "deep_domain_research"):
+        rules = _rules(steps, st)
+        assert rules["result.status == 'success'"] == "save_research"
+        assert rules["true"] == "design_initial", f"{st} must not skip design"
+    assert _rules(steps, "save_research") == {"true": "design_initial"}
+    # no research path leads to derive_goals any more
+    for st in ("domain_research", "quick_domain_research", "deep_domain_research"):
+        assert "derive_goals" not in _rules(steps, st).values()
+    design = steps["design_initial"]
+    assert "research_summary" in design["context"]["optional"]
+    assert "research_summary" in design["prompt_template"]["context_keys"]
+
+
+def test_the_design_template_renders_research_only_when_present():
+    import yaml
+
+    tpl = yaml.safe_load(open("prompts/design_and_plan/design_architecture.yaml"))
+    secs = [s for s in tpl["sections"] if "research_summary" in str(s)]
+    assert len(secs) == 1 and secs[0].get("when") == "context.research_summary"
 
 
 def test_critique_context_is_fresh_and_bundle_is_sufficient():

@@ -102,16 +102,98 @@ design_and_plan: #FlowDefinition & {
 			resolver: {
 				type: "rule"
 				rules: [
+					// A first design researches the domain first, when the run
+					// allows web access (config.web_research; the tb adapter
+					// turns it off for hermetic, comparison-clean runs).
+					{condition: "result.has_architecture == false and context.mission.config.web_research == true", transition: "domain_research"},
 					{condition: "result.has_architecture == false", transition: "design_initial"},
 					{condition: "result.drift_detected == true", transition: "design_reconcile"},
 					// Goals exist, no drift — re-derive goals (idempotent)
 					{condition: "result.has_tasks == true", transition: "derive_goals"},
-					// Proactive grounding research only when the run allows web
-					// access (config.web_research; the tb adapter turns it off for
-					// hermetic, comparison-clean runs).
-					{condition: "context.mission.config.web_research == true", transition: "domain_research"},
 					{condition: "true", transition: "derive_goals"},
 				]
+			}
+		}
+
+		// ── Phase 1c: Domain research, BEFORE the first design pass ──
+		//
+		// It ran after the design gate passed until 2026-09-24 — a porting
+		// leftover from promoting design to a full phase. The architecture
+		// (file layout, state shapes, save contract) was fixed before a single
+		// search, and the summary reached nothing but a note that later
+		// prompts did not carry. Research now feeds design_initial's prompt
+		// directly (research_summary); the structural phase does not need it.
+		//
+		// Domain research is BIMODAL (opt-in via mission config
+		// deep_research, Luke 2026-07-24): the deep_research sweep costs
+		// ~66 completions/wave — nearly free on batched gpt-oss, punishing
+		// on pooled 20 tok/s substrates — so the default stays the
+		// one-shot search and missions must opt in. A/B lineage:
+		// gptoss_393k_retest (one-shot) vs gptoss_deepresearch_ab (sweep).
+		domain_research: #StepDefinition & {
+			action:      "noop"
+			description: "Route domain research: deep sweep (opt-in) or one-shot"
+			context: required: ["mission"]
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "context.mission.config.deep_research == true", transition: "deep_domain_research"},
+					{condition: "true", transition: "quick_domain_research"},
+				]
+			}
+		}
+
+		quick_domain_research: #StepDefinition & {
+			action:      "flow"
+			description: "Search for domain knowledge to inform the project"
+			flow:        "research"
+			context: required: ["mission"]
+			input_map: {
+				research_query: {$ref: "context.mission.objective"}
+				max_results:    3
+			}
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.status == 'success'", transition: "save_research"},
+					// No results or a failed search: design proceeds without it.
+					{condition: "true", transition: "design_initial"},
+				]
+			}
+			publishes: ["research_summary"]
+		}
+
+		deep_domain_research: #StepDefinition & {
+			action:      "flow"
+			description: "Parallel verified research sweep (opt-in)"
+			flow:        "deep_research"
+			context: required: ["mission"]
+			input_map: {
+				brief:             {$ref: "context.mission.objective"}
+				working_directory: {$ref: "context.mission.config.working_directory"}
+			}
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.status == 'success'", transition: "save_research"},
+					{condition: "true", transition: "design_initial"},
+				]
+			}
+			publishes: ["research_summary"]
+		}
+
+		// Kept as the mission's record of what research found.
+		save_research: #StepDefinition & _templates.push_note & {
+			context: optional: ["mission", "research_summary"]
+			params: {
+				category:    "codebase_observation"
+				content_key: "research_summary"
+				tags: ["proactive", "domain_knowledge"]
+				source_flow: "design_and_plan"
+			}
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "design_initial"}]
 			}
 		}
 
@@ -130,7 +212,7 @@ design_and_plan: #FlowDefinition & {
 				// path has one: the gate clears it to "" on a pass, so
 				// design_initial renders no feedback section at all.
 				optional: ["project_manifest", "repo_map_formatted",
-					"design_gate_feedback"]
+					"design_gate_feedback", "research_summary"]
 			}
 			prompt_template: {
 				template: "design_and_plan/design_architecture"
@@ -142,6 +224,9 @@ design_and_plan: #FlowDefinition & {
 					// the defect it was meant to fix. See the gate_feedback
 					// section in design_architecture.yaml.
 					"design_gate_feedback",
+					// What domain research found (Phase 1c) — "" when research
+					// was off or empty, and the template section is conditional.
+					"research_summary",
 				]
 				input_keys: []
 			}
@@ -344,84 +429,8 @@ design_and_plan: #FlowDefinition & {
 
 		design_gate_pass: #StepDefinition & {
 			action:      "noop"
-			description: "Blueprint coherent — proceed (preserves the web_research fork)"
+			description: "Blueprint coherent — derive goals (research already ran, before design)"
 			context: required: ["mission"]
-			resolver: {
-				type: "rule"
-				rules: [
-					{condition: "context.mission.config.web_research == true", transition: "domain_research"},
-					{condition: "true", transition: "derive_goals"},
-				]
-			}
-		}
-
-		// ── Phase 3b: Proactive domain research ─────────────────────
-
-		// Domain research is BIMODAL (opt-in via mission config
-		// deep_research, Luke 2026-07-24): the deep_research sweep costs
-		// ~66 completions/wave — nearly free on batched gpt-oss, punishing
-		// on pooled 20 tok/s substrates — so the default stays the
-		// one-shot search and missions must opt in. A/B lineage:
-		// gptoss_393k_retest (one-shot) vs gptoss_deepresearch_ab (sweep).
-		domain_research: #StepDefinition & {
-			action:      "noop"
-			description: "Route domain research: deep sweep (opt-in) or one-shot"
-			context: required: ["mission"]
-			resolver: {
-				type: "rule"
-				rules: [
-					{condition: "context.mission.config.deep_research == true", transition: "deep_domain_research"},
-					{condition: "true", transition: "quick_domain_research"},
-				]
-			}
-		}
-
-		quick_domain_research: #StepDefinition & {
-			action:      "flow"
-			description: "Search for domain knowledge to inform the project"
-			flow:        "research"
-			context: required: ["mission"]
-			input_map: {
-				research_query: {$ref: "context.mission.objective"}
-				max_results:    3
-			}
-			resolver: {
-				type: "rule"
-				rules: [
-					{condition: "result.status == 'success'", transition: "save_research"},
-					{condition: "true", transition: "derive_goals"},
-				]
-			}
-			publishes: ["research_summary"]
-		}
-
-		deep_domain_research: #StepDefinition & {
-			action:      "flow"
-			description: "Parallel verified research sweep (opt-in)"
-			flow:        "deep_research"
-			context: required: ["mission"]
-			input_map: {
-				brief:             {$ref: "context.mission.objective"}
-				working_directory: {$ref: "context.mission.config.working_directory"}
-			}
-			resolver: {
-				type: "rule"
-				rules: [
-					{condition: "result.status == 'success'", transition: "save_research"},
-					{condition: "true", transition: "derive_goals"},
-				]
-			}
-			publishes: ["research_summary"]
-		}
-
-		save_research: #StepDefinition & _templates.push_note & {
-			context: optional: ["mission", "research_summary"]
-			params: {
-				category:    "codebase_observation"
-				content_key: "research_summary"
-				tags: ["proactive", "domain_knowledge"]
-				source_flow: "design_and_plan"
-			}
 			resolver: {
 				type: "rule"
 				rules: [{condition: "true", transition: "derive_goals"}]
