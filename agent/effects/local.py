@@ -2200,7 +2200,18 @@ class LocalEffects:
             )
         if store is not None and self._history_run_start_pending:
             self._history_run_start_pending = False
-            await store.checkpoint("run_start")
+            # Attribute the run's first tree to the event that opened the
+            # store (the loop's first cycle_start): checkpointed with no ctx,
+            # the run_start commit carried no cycle, flow or step at all.
+            await store.checkpoint(
+                "run_start",
+                ctx={
+                    "cycle": getattr(event, "cycle", None),
+                    "flow": getattr(event, "flow", "") or "",
+                    "step": getattr(event, "step", "") or "",
+                    "branch": getattr(event, "branch", "") or "",
+                },
+            )
         if store is not None and store.wants_flush(event):
             await store.flush(str(getattr(event, "event_type", "")))
 

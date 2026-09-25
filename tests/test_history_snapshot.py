@@ -251,6 +251,17 @@ def test_the_store_gets_a_run_start_commit_and_one_commit_per_write(tmp_path):
     assert run["head_sha"] == commits[-1]["commit_sha"] and run["commits"] == 3
 
 
+def test_the_run_start_commit_names_the_event_that_opened_the_store(tmp_path):
+    """It was checkpointed with no ctx, so the first commit of every run had
+    no cycle, flow or step (tier_20260924-191710 commit abcbac4e2b4f)."""
+    eff = _effects(tmp_path)
+    _run(eff.emit_trace(CycleStart(mission_id="m1", cycle=3, flow="mission_control")))
+    _run(eff.history_close())
+    (first,) = reader.load_commits(str(tmp_path / ".agent"))
+    assert first["source"] == "run_start"
+    assert first["cycle"] == 3 and first["flow"] == "mission_control"
+
+
 def test_a_turn_records_the_tree_it_saw(tmp_path):
     from agent.trace import InferenceCall
 

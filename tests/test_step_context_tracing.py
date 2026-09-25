@@ -65,6 +65,102 @@ def test_step_context_restores_prior_value_after_exit():
     assert get_step_context() is None
 
 
+# ── Sub-flows inherit the parent step's attribution ──────────────────
+#
+# A sub-flow's inputs come from its input_map, which never carries the
+# loop's synthetic _trace_cycle, and rarely the goal. Every sub-flow row
+# (run_session's tester turns, patch's writes) recorded cycle 0 and no goal
+# (tier_20260924-191710: 358 turns; the cycle-40 fix commit read cyc=0).
+
+
+def _two_level(child_input_map: dict) -> dict:
+    from agent.models import FlowDefinition, StepDefinition
+
+    def _then_done(**kw):
+        return StepDefinition(
+            resolver={
+                "type": "rule",
+                "rules": [{"condition": "true", "transition": "done"}],
+            },
+            **kw,
+        )
+
+    def _done():
+        return StepDefinition(
+            action="noop", description="end", terminal=True, status="success"
+        )
+
+    return {
+        "parent": FlowDefinition(
+            flow="parent",
+            entry="call",
+            steps={
+                "call": _then_done(
+                    action="flow",
+                    flow="child",
+                    description="run the child",
+                    input_map=child_input_map,
+                ),
+                "done": _done(),
+            },
+        ),
+        "child": FlowDefinition(
+            flow="child",
+            entry="peek",
+            steps={
+                "peek": _then_done(action="peek", description="look"),
+                "done": _done(),
+            },
+        ),
+    }
+
+
+async def _run_two_level(child_input_map: dict) -> dict:
+    from agent.models import StepOutput
+    from agent.runtime import execute_flow
+
+    seen: dict = {}
+
+    async def peek(step_input) -> StepOutput:
+        seen.update(get_step_context() or {})
+        return StepOutput(result={})
+
+    async def noop(step_input) -> StepOutput:
+        return StepOutput(result={})
+
+    flows = _two_level(child_input_map)
+    await execute_flow(
+        flow_def=flows["parent"],
+        inputs={
+            "mission_id": "m1",
+            "_trace_cycle": 40,
+            "goal_id": "g-parent",
+            "flow_directive": "Fix the examine command",
+        },
+        action_registry={"peek": peek, "noop": noop},
+        effects=MockEffects(),
+        flow_registry=flows,
+    )
+    return seen
+
+
+@pytest.mark.asyncio
+async def test_a_sub_flow_step_inherits_the_parent_steps_attribution():
+    seen = await _run_two_level({})
+    assert seen["flow"] == "child" and seen["step"] == "peek"
+    assert seen["mission_id"] == "m1"
+    assert seen["cycle"] == 40
+    assert seen["goal_id"] == "g-parent"
+    assert seen["flow_directive"] == "Fix the examine command"
+
+
+@pytest.mark.asyncio
+async def test_a_sub_flows_own_goal_wins_over_the_parents():
+    seen = await _run_two_level({"goal_id": "g-child"})
+    assert seen["goal_id"] == "g-child"
+    assert seen["cycle"] == 40
+
+
 # ── Effects-side emission ────────────────────────────────────────────
 
 

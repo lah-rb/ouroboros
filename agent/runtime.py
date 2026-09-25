@@ -29,6 +29,7 @@ from agent.trace import (
     FlowInvoke,
     FlowReturn,
     annotate_turn,
+    get_step_context,
     step_context,
     trace_enabled,
 )
@@ -300,9 +301,15 @@ async def execute_flow(
         flow_def.entry,
     )
 
-    # Extract trace context from synthetic inputs (set by loop.py)
-    _trace_mission_id = inputs.get("mission_id", "")
-    _trace_cycle = inputs.get("_trace_cycle", 0)
+    # Extract trace context from synthetic inputs (set by loop.py). A
+    # sub-flow's inputs come from its input_map, which never carries these,
+    # so it inherits them from the parent step running it — that step's
+    # context is still bound here (None for a flow the loop runs). Without
+    # this every sub-flow row recorded cycle 0 and no goal: 358 turns of the
+    # 2026-09-25 run (the tester's session turns, patch) and their commits.
+    _parent_ctx = get_step_context() or {}
+    _trace_mission_id = inputs.get("mission_id") or _parent_ctx.get("mission_id", "")
+    _trace_cycle = inputs.get("_trace_cycle", _parent_ctx.get("cycle", 0))
     _can_trace = trace_enabled(effects)
 
     # Main execution loop
@@ -371,11 +378,15 @@ async def execute_flow(
                 step=step_name,
                 attempt=step_visits[step_name],
                 goal_id=str(
-                    inputs.get("goal_id") or step_input.context.get("goal_id") or ""
+                    inputs.get("goal_id")
+                    or step_input.context.get("goal_id")
+                    or _parent_ctx.get("goal_id")
+                    or ""
                 ),
                 flow_directive=str(
                     inputs.get("flow_directive")
                     or step_input.context.get("flow_directive")
+                    or _parent_ctx.get("flow_directive")
                     or ""
                 ),
             ):
