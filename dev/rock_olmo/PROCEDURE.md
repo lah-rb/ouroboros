@@ -3408,3 +3408,70 @@ Read, not barred:
 - `stage2k/manifest.json` d6e4f0e0675daecb
 - `stage2k/docs/spectra_full.json` b2c46f89a63a47a6
 - `resolution_variation_items_frozen.json` 7f430318a213af2a
+
+### 22k. Result: nothing was learned from real-like draws; the model collapsed to a fixed guess (run 2026-09-25 03:00–11:07Z)
+
+The run took 1,402 steps and 45.94 M tokens; the endpoint is `v3_stage2k/final`. Final losses
+against step 0: paper +1.6 %, replay +1.9 %, xml_fim −38.8 %, reference +49 %.
+
+**Band → name.**
+- **Variation probe:** v3k scores 0.00 in every cell of both pairs, exact canonical lists
+  included (3 hits in 25,542). 58 % of its answers are "Sulphur"; most of the rest are a
+  handful of other fixed names, whatever bands are shown.
+- **Its own TRAINING prompts** (150 per pair):
+
+  | pair | exact |
+  |---|---|
+  | bands → name | 0.00 ("Sulphur" 100 of 150) |
+  | bands + lines → name | 0.00 |
+  | formula → name | 0.56 |
+  | name → formula | 0.79 |
+
+- **The §22j budget probe (old format):** 0.00. Every arm starts from stage 1, so v3k never
+  learned bands → name in any format.
+
+The data checks out: 64 rows per species, every completion is its row's species, and 18
+prompts out of about 107 k are shared between two species.
+
+**Forward** (v3b → v3k):
+
+| measure | v3b | v3k |
+|---|---|---|
+| held-out-order raman | 0.911 | 0.934 |
+| held-out-order system | 0.929 | 0.931 |
+| held-out-order species | 0.801 | 0.839 |
+| held-out-order top | 0.894 | 0.926 |
+| held-out-order formula | 0.807 | 0.821 |
+| pair-probe name → formula, trained order | 0.68 | 0.79 |
+| pair-probe name → formula, held-out order | 0.57 | 0.73 |
+| recall frame formula | 0.820 | 0.810 |
+| recall frame bands | 0.625 | 0.615 |
+
+**Scorecard.**
+- K1 ✗ (real·k6 0.00).
+- K2 ✗ (real·k4 0.00).
+- K3 ✗ (real·k6 is not above real·k4).
+- K4 ✗ (synthetic 0.00).
+- K5 ✗ (exact·k6 0.00).
+- K6 vacuous (0.00 masked and unmasked alike).
+- K7 ✓ (held-out raman 0.934).
+- K8 ◐ (name → formula 0.79 ✓; formula fill 0.821 is under 0.85 but above the 0.807
+  falsification line).
+- K9 ✓ (paper +1.6 %, replay +1.9 %).
+- K10 vacuous.
+
+**Reading.**
+- **Outside the decision rule.** This is not the pre-registered K1 < 0.18 branch (the
+  variation model failing to carry to real spectra). The model did not learn the training
+  distribution itself, so nothing could carry.
+- **Two changes are confounded.** The arm changed the draw model and the list format (sorted
+  `<band>` lists, k 4–8) together, and the result cannot say which blocked learning:
+  - **Signal.** At the fitted severity most draws are ambiguous: a perfect tolerant lookup
+    names only 39 % of fresh draws (§22j's draws: 83 %). Under mostly ambiguous targets the
+    loss-minimising output is the marginal, and greedy decoding returns its mode.
+  - **Format.** Every draw is a different list (about 64 distinct per species), and there is
+    no clean case to anchor the key.
+- **Next.** The next arm has to separate the two.
+
+The side goals held: no slot confusion, and name → formula recovered, so the name → formula
+rows did their job.
