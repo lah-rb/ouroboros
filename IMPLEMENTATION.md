@@ -342,7 +342,7 @@ network, or subprocess.
   `end_inference_session(session_id)` — memoryful inference sessions
 - `load_mission()`, `save_mission(state)` — mission state persistence
 - `push_event(event)`, `read_events()`, `clear_events()` — event queue
-- `save_artifact(artifact)`, `load_artifact(task_id)`, `list_artifacts(filter)` — artifact storage
+- `emit_trace(event)`, `flush_traces()`, `history_close()` — the per-turn history store (`agent/history/`)
 - `read_state(key)`, `write_state(key, value)` — generic key-value state
 - `emit_trace(event)`, `flush_traces()` — runtime tracing
 
@@ -351,7 +351,7 @@ network, or subprocess.
   Production use.
 - `MockEffects` — canned responses, call recording. Testing use.
 - `DryRunEffects` — reads real, writes logged. Planned.
-- `GitManagedEffects` — auto-branching, auto-commit, rollback. Planned.
+- `GitManagedEffects` — superseded by `agent/history`: the workspace is versioned as git trees in a bare dulwich store under `.agent/history/repo.git`, with `history rollback`/`replay` on any recorded turn.
 
 ### 2.5 The Agent Cycle — mission_control
 
@@ -413,7 +413,7 @@ Mission state, event queues, and flow artifacts are file-backed JSON in `.agent/
 .agent/
 ├── mission.json          # MissionState: objective, plan, config, notes
 ├── events.json           # Event queue for user messages, signals
-├── history/              # Completed flow artifacts
+├── history/              # Per-turn history store: parquet turns/events/commits/runs + repo.git
 └── repo_map.json         # Cached AST-based repository map
 ```
 
@@ -634,8 +634,10 @@ first case where that missing context became interesting: a `source_flow` string
 passed per-call, every caller has to remember to pass it, and only one field in one
 data model actually carries the value. Other effects have the same latent need —
 `emit_trace` currently gets flow/step context from its payload rather than the effect
-knowing inherently; `save_artifact` and `run_inference` would benefit from the same
-correlation data if downstream consumers ever want to slice by step or goal.
+knowing inherently; `run_inference` would benefit from the same correlation data if
+downstream consumers ever want to slice by step or goal. (Done for inference turns
+2026-09-24: `step_context` carries `goal_id`/`flow_directive`, and the history
+store's turn rows record them.)
 
 Two plumbing shapes are worth considering when a concrete need arises:
 
@@ -659,8 +661,6 @@ for the enrichment:
 
 - `push_note` — auto-inject `source_goal_id` so projections can slice notes per goal.
 - `emit_trace` — auto-tag trace events with `goal_id` for per-goal timeline analysis.
-- `save_artifact` — artifacts currently carry `task_id` from the action; `goal_id`
-  would enable grouping artifacts under their owning goal.
 - `run_inference` — prompt-observability tooling could tag inference calls with the
   step that produced them without every action threading it manually.
 

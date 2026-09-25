@@ -645,30 +645,6 @@ class Effects(Protocol):
         """
         ...
 
-    async def save_artifact(self, artifact: Any) -> bool:
-        """Save a flow artifact to history.
-
-        Returns:
-            True on success.
-        """
-        ...
-
-    async def load_artifact(self, task_id: str) -> Any:
-        """Load the most recent artifact for a task.
-
-        Returns:
-            FlowArtifact if found, None otherwise.
-        """
-        ...
-
-    async def list_artifacts(self, filter_str: str | None = None) -> list[str]:
-        """List artifact filenames.
-
-        Returns:
-            List of artifact filenames.
-        """
-        ...
-
     async def read_state(self, key: str) -> Any:
         """Read a value from generic key-value state.
 
@@ -739,7 +715,8 @@ class Effects(Protocol):
     # ── Tracing ───────────────────────────────────────────────────
 
     async def emit_trace(self, event: Any) -> None:
-        """Record a trace event. Appends to in-memory buffer.
+        """Record a trace event: a row in the history store
+        (``.agent/history/``, LocalEffects) and a fold into the ledger.
 
         Args:
             event: A TraceEvent dataclass instance.
@@ -747,11 +724,18 @@ class Effects(Protocol):
         ...
 
     async def flush_traces(self) -> None:
-        """Persist buffered trace events to disk (JSONL).
+        """Cycle-boundary flush of the history store (buffered rows written,
+        the cycle's part files compacted, the summary head refreshed).
 
         Called at cycle boundaries by loop.py. Implementations may
-        no-op (MockEffects) or write to .agent/traces/ (LocalEffects).
+        no-op (MockEffects).
         """
+        ...
+
+    async def history_close(self, final_status: str = "ended") -> None:
+        """Finalize and close the history store (drain_effects calls it after
+        the inference sessions end, before MCP disconnects). Optional —
+        implementations without a store omit it."""
         ...
 
     # ── Effects log ───────────────────────────────────────────────

@@ -45,7 +45,7 @@ if _REPO_ROOT not in sys.path:
 # dev/ on path for the shared classifier + trace tailer (single source of truth).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from agent.trace_health import is_stub  # noqa: E402
-from contam_monitor import iter_rewrites, latest_trace  # noqa: E402
+from contam_monitor import iter_rewrites, latest_trace, tail_events  # noqa: E402
 
 # ── TaskBindingProbe prompt (the original no-task-confusion canary) ────
 CANARY_PROMPT = """You define the DONE criteria for the task in the ---YOUR TASK--- block
@@ -214,7 +214,7 @@ class ContaminationProbe(Probe):
 
     def __init__(self, window: int = 20):
         self._seen_path: str | None = None
-        self._offset = 0
+        self._offset = None  # tail_events cursor (None = from the start)
         self._win: deque[int] = deque(maxlen=window)
         self._cum_n = 0
         self._cum_stub = 0
@@ -228,16 +228,10 @@ class ContaminationProbe(Probe):
             return {"contam": "no-dir"}
         T = latest_trace(wd)
         if T and T != self._seen_path:
-            self._seen_path, self._offset = T, 0
-        new_lines: list[str] = []
+            self._seen_path, self._offset = T, None  # tail_events cursor
+        new_lines: list = []
         if T:
-            try:
-                with open(T) as fh:
-                    fh.seek(self._offset)
-                    new_lines = fh.readlines()
-                    self._offset = fh.tell()
-            except Exception:
-                pass
+            new_lines, self._offset = tail_events(T, self._offset)
         fresh = 0
         for cls, e in iter_rewrites(new_lines):
             fresh += 1

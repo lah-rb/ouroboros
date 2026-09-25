@@ -23,7 +23,7 @@ import os
 import re
 import subprocess
 from pathlib import Path
-from typing import Literal
+from typing import Mapping, Literal
 
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -112,6 +112,11 @@ class MissionYAMLConfig(BaseModel):
     # instead of the one-shot search. Feasible as a daily only on batched
     # gpt-oss; punishing on pooled substrates. Default off.
     deep_research: bool = False
+    # The history store's recording mode (see MissionConfig.history): full
+    # prompt/response/thinking + workspace snapshots by default; "metrics"
+    # drops the text; "off" keeps only the in-memory ledger.
+    history: Literal["full", "metrics", "off"] = "full"
+    history_snapshot_excludes: list[str] = Field(default_factory=list)
     principles: list[str] = Field(default_factory=list)
     tasks: list[str] = Field(default_factory=list)
     # Scraper flow set: how many candidate papers the corpus should reach.
@@ -325,3 +330,25 @@ def run_lifecycle_commands(
                 )
 
     print(f"  ✅ All {phase} commands completed")
+
+
+def resolve_history_mode(
+    cli_value: str | None,
+    config_value: str | None,
+    env: "Mapping[str, str] | None" = None,
+) -> str:
+    """The recording mode a run uses: ``OURO_HISTORY`` env (hard override,
+    the OURO_FLOW_SET shape) > CLI flag > mission config > "full"."""
+    import os as _os
+
+    from agent.history.store import HISTORY_MODES
+
+    env = _os.environ if env is None else env
+    for candidate in (env.get("OURO_HISTORY"), cli_value, config_value, "full"):
+        if candidate:
+            if candidate not in HISTORY_MODES:
+                raise ValueError(
+                    f"history mode must be one of {HISTORY_MODES}, got {candidate!r}"
+                )
+            return candidate
+    return "full"

@@ -399,7 +399,52 @@ class MockEffects:
             },
             result,
         )
+        await self._record_turn(
+            result,
+            prompt=prompt,
+            config_overrides=config_overrides,
+            purpose="action_inference",
+            static_prefix=static_prefix,
+            flow_key=flow_key,
+        )
         return result
+
+    async def _record_turn(
+        self,
+        result: InferenceResult,
+        *,
+        prompt: str,
+        config_overrides: dict | None,
+        purpose: str,
+        session_id: str = "",
+        static_prefix: str | None = None,
+        flow_key: str | None = None,
+    ) -> None:
+        """Emit the InferenceCall a real effects object would — through the
+        same builder, inside a bound step context only (parity with
+        LocalEffects; callers outside a flow don't pollute the trace).
+        Best-effort: a broken sink never fails the mocked inference."""
+        from agent.trace import build_inference_call, get_step_context
+
+        if get_step_context() is None:
+            return
+        try:
+            await self.emit_trace(
+                build_inference_call(
+                    result,
+                    prompt=prompt,
+                    response_text=result.text or "",
+                    thinking="",
+                    wall_ms=0.0,
+                    config_overrides=config_overrides,
+                    purpose=purpose,
+                    session_id=session_id,
+                    static_prefix=static_prefix,
+                    flow_key=flow_key,
+                )
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
     async def inference_pool_health(self) -> dict:
         """Return the canned pool-health facts ({} by default)."""
@@ -529,25 +574,13 @@ class MockEffects:
             result,
         )
 
-        # Emit InferenceCall when called from inside a bound step context.
-        # Mirrors the LocalEffects behaviour for parity — tests asserting
-        # that session turns emit trace events work against either effects.
-        from agent.trace import InferenceCall, count_tokens, get_step_context
-
-        ctx = get_step_context()
-        if ctx is not None:
-            await self.emit_trace(
-                InferenceCall(
-                    mission_id=ctx.get("mission_id", ""),
-                    cycle=ctx.get("cycle", 0),
-                    flow=ctx.get("flow", ""),
-                    step=ctx.get("step", ""),
-                    tokens_in=count_tokens(prompt),
-                    tokens_out=count_tokens(result.text or ""),
-                    purpose="session_inference",
-                )
-            )
-
+        await self._record_turn(
+            result,
+            prompt=prompt,
+            config_overrides=config_overrides,
+            purpose="session_inference",
+            session_id=session_id,
+        )
         return result
 
     async def rewind_inference_session_turn(
@@ -765,25 +798,6 @@ class MockEffects:
                 )
             )
         return True
-
-    async def save_artifact(self, artifact: Any) -> bool:
-        artifacts = self._state.setdefault("artifacts", {})
-        task_id = getattr(artifact, "task_id", "unknown")
-        artifacts[task_id] = artifact
-        self._record("save_artifact", {"task_id": task_id}, True)
-        return True
-
-    async def load_artifact(self, task_id: str) -> Any:
-        result = self._state.get("artifacts", {}).get(task_id)
-        self._record("load_artifact", {"task_id": task_id}, result)
-        return result
-
-    async def list_artifacts(self, filter_str: str | None = None) -> list[str]:
-        keys = list(self._state.get("artifacts", {}).keys())
-        if filter_str:
-            keys = [k for k in keys if filter_str in k]
-        self._record("list_artifacts", {"filter": filter_str}, keys)
-        return keys
 
     async def read_state(self, key: str) -> Any:
         result = self._state.get(f"kv:{key}")

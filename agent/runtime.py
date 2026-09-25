@@ -26,10 +26,9 @@ from agent.errors import (
 from agent.trace import (
     StepStart,
     StepEnd,
-    InferenceCall,
     FlowInvoke,
     FlowReturn,
-    count_tokens,
+    annotate_turn,
     step_context,
     trace_enabled,
 )
@@ -197,42 +196,19 @@ def _safe_float_temp(val: Any) -> float:
     return 0.0
 
 
-# ── Cache-aware token readers ─────────────────────────────────────────
-#
-# The InferenceResult may carry real backend token counts (cached_prefix /
-# fresh_prefill / generated) once LLMVP reports them. These read with getattr
-# defaults so they degrade gracefully: against a server that doesn't yet
-# return the fields, the cache fields are 0 and tokens_in/out fall back to
-# the whitespace approximation — no behavior change until the server upgrades.
-
-
-def _cache_fields(result: Any) -> dict:
-    """Cache-aware token + phase-timing fields for an InferenceCall, read off
-    the result (all server-measured; 0 when the server doesn't report them)."""
-    return {
-        "cached_prefix_tokens": int(getattr(result, "cached_prefix_tokens", 0) or 0),
-        "fresh_prefill_tokens": int(getattr(result, "fresh_prefill_tokens", 0) or 0),
-        "generated_tokens": int(getattr(result, "generated_tokens", 0) or 0),
-        "reasoning_tokens": int(getattr(result, "reasoning_tokens", 0) or 0),
-        "cache_hit": bool(getattr(result, "cache_hit", False)),
-        "flow_key": str(getattr(result, "flow_key", "") or ""),
-        "prefill_ms": float(getattr(result, "prefill_ms", 0.0) or 0.0),
-        "decode_ms": float(getattr(result, "decode_ms", 0.0) or 0.0),
-    }
-
-
-def _real_in(result: Any, ws_in: int) -> int:
-    """Real input tokens (cached_prefix + fresh_prefill) when the backend
-    reports them, else the whitespace fallback."""
-    cp = int(getattr(result, "cached_prefix_tokens", 0) or 0)
-    fp = int(getattr(result, "fresh_prefill_tokens", 0) or 0)
-    return (cp + fp) if (cp or fp) else ws_in
-
-
-def _real_out(result: Any, ws_out: int) -> int:
-    """Real generated tokens when the backend reports them, else whitespace."""
-    gen = int(getattr(result, "generated_tokens", 0) or 0)
-    return gen if gen else ws_out
+async def _history_checkpoint(
+    effects: Any, source: str, trigger: str, ctx: dict
+) -> None:
+    """Snapshot the workspace tree at a unit-of-work boundary. Optional on the
+    effects (MockEffects has none); never lets a snapshot failure fail a
+    step."""
+    fn = getattr(effects, "history_checkpoint", None)
+    if fn is None:
+        return
+    try:
+        await fn(source, trigger, ctx)
+    except Exception:  # noqa: BLE001
+        logger.warning("history checkpoint (%s) failed", source, exc_info=True)
 
 
 # Sub-flow step ceilings. 200 is the infinite-loop backstop for ordinary
@@ -393,6 +369,15 @@ async def execute_flow(
                 cycle=_trace_cycle,
                 flow=flow_def.flow,
                 step=step_name,
+                attempt=step_visits[step_name],
+                goal_id=str(
+                    inputs.get("goal_id") or step_input.context.get("goal_id") or ""
+                ),
+                flow_directive=str(
+                    inputs.get("flow_directive")
+                    or step_input.context.get("flow_directive")
+                    or ""
+                ),
             ):
                 if step_def.action == "inference":
                     step_output = await _execute_inference_action(
@@ -504,6 +489,17 @@ async def execute_flow(
                             ),
                         )
                     )
+                await _history_checkpoint(
+                    effects,
+                    "step_end",
+                    step_name,
+                    {
+                        "mission_id": _trace_mission_id,
+                        "cycle": _trace_cycle,
+                        "flow": flow_def.flow,
+                        "step": step_name,
+                    },
+                )
                 logger.info(
                     "Flow %r reached terminal step %r with status %r",
                     flow_def.flow,
@@ -569,6 +565,17 @@ async def execute_flow(
                             ),
                         )
                     )
+                await _history_checkpoint(
+                    effects,
+                    "step_end",
+                    step_name,
+                    {
+                        "mission_id": _trace_mission_id,
+                        "cycle": _trace_cycle,
+                        "flow": flow_def.flow,
+                        "step": step_name,
+                    },
+                )
                 logger.info(
                     "Flow %r: step %r triggers tail call to %r",
                     flow_def.flow,
@@ -675,6 +682,17 @@ async def execute_flow(
                         ],
                     )
                 )
+            await _history_checkpoint(
+                effects,
+                "step_end",
+                step_name,
+                {
+                    "mission_id": _trace_mission_id,
+                    "cycle": _trace_cycle,
+                    "flow": flow_def.flow,
+                    "step": step_name,
+                },
+            )
 
             logger.debug(
                 "Step %r → transition to %r",
@@ -1166,7 +1184,6 @@ async def _execute_inference_action(
         or step_input.context.get("edit_session_id")
         or step_input.context.get("session_id")
     )
-    tokens_in = count_tokens(rendered_prompt)
     # actually_session = did we ROUTE to a memoryful session (which self-emits
     # its own InferenceCall)? Distinct from "session_id is set": when session_id
     # is set but effects lacks session_inference we fall through to run_inference
@@ -1194,97 +1211,58 @@ async def _execute_inference_action(
     if _reasoning:
         config_overrides["reasoning"] = _reasoning
 
-    infer_start = time.monotonic()
-
-    if actually_session:
-        logger.info(
-            "Inference step %r using session %s",
-            _step_name,
-            session_id,
-        )
-        result = await effects.session_inference(
-            session_id=session_id,
-            prompt=rendered_prompt,
-            config_overrides=config_overrides if config_overrides else None,
-        )
-    else:
-        if session_id:
-            logger.warning(
-                "Inference step %r has session_id=%r but effects lacks session_inference",
+    with annotate_turn(
+        purpose="step_inference",
+        prompt_full=rendered_prompt,
+        prompt_static=(
+            flow_static_prefix if (flow_static_prefix and flow_dynamic) else ""
+        ),
+        prompt_dynamic=(flow_dynamic if (flow_static_prefix and flow_dynamic) else ""),
+        prompt_render_ms=prompt_render_ms,
+        pre_compute_ms=pre_compute_ms,
+    ):
+        if actually_session:
+            logger.info(
+                "Inference step %r using session %s",
                 _step_name,
                 session_id,
             )
-        # Cache only when there's BOTH a static head AND a dynamic tail. When a
-        # template's dynamic section is conditionally absent (e.g. feedback on
-        # the first cycle) the whole prompt is static → flow_dynamic == "" → send
-        # the full prompt normally (an empty prompt would be rejected). The
-        # cycles that DO carry feedback then build/hit the same static head.
-        run_kwargs: dict[str, Any] = {}
-        prompt_to_send = rendered_prompt
-        if flow_static_prefix and flow_dynamic:
-            import hashlib
-
-            # Key on flow:step + a hash of the static head, so different tasks
-            # (different task_spec in the head) get distinct cache entries and a
-            # hit always means the pinned prefix matches.
-            digest = hashlib.md5(flow_static_prefix.encode("utf-8")).hexdigest()[:10]
-            run_kwargs["static_prefix"] = flow_static_prefix
-            run_kwargs["flow_key"] = f"{flow_def.flow}:{_step_name}:{digest}"
-            prompt_to_send = flow_dynamic
-        result = await effects.run_inference(
-            prompt=prompt_to_send,
-            config_overrides=config_overrides if config_overrides else None,
-            **run_kwargs,
-        )
-
-    tokens_out = count_tokens(result.text) if result.text else 0
-
-    # Fetch chain-of-thought content if tracing is enabled
-    thinking_content = ""
-    if hasattr(effects, "trace_thinking") and effects.trace_thinking:
-        if hasattr(effects, "fetch_thinking"):
-            try:
-                thinking_content = await effects.fetch_thinking()
-            except Exception:
-                pass  # Non-critical — don't let thinking fetch break inference
-
-    # Capture full prompt/response when --trace-prompts is set
-    prompt_content = ""
-    response_content = ""
-    if hasattr(effects, "trace_prompts") and effects.trace_prompts:
-        prompt_content = rendered_prompt
-        response_content = result.text or ""
-
-    # Trace this inference — but ONLY when we did NOT route to a session. The
-    # session path (effects.session_inference) emits its own complete
-    # InferenceCall, so emitting here too would double-log it (e.g. ops
-    # judge_step, which reuses run_session's session). We gate on
-    # actually_session (not session_id) so a session_id-set-but-no-session
-    # fallthrough still gets traced. Mirrors the turn-based path below.
-    _can_trace = trace_enabled(effects) and not actually_session
-    if _can_trace:
-        await effects.emit_trace(
-            InferenceCall(
-                mission_id=_trace_mission_id,
-                cycle=_trace_cycle,
-                flow=flow_def.flow,
-                step=_step_name,
-                tokens_in=_real_in(result, tokens_in),
-                tokens_out=_real_out(result, tokens_out),
-                wall_ms=(time.monotonic() - infer_start) * 1000,
-                temperature=_safe_float_temp(config_overrides.get("temperature", 0)),
-                max_tokens=int(config_overrides.get("max_tokens", 0) or 0),
-                purpose="step_inference",
-                thinking_content=thinking_content,
-                prompt_content=prompt_content,
-                response_content=response_content,
-                truncated=getattr(result, "truncated", False),
-                prompt_render_ms=prompt_render_ms,
-                pre_compute_ms=pre_compute_ms,
-                reasoning=str(config_overrides.get("reasoning", "") or ""),
-                **_cache_fields(result),
+            result = await effects.session_inference(
+                session_id=session_id,
+                prompt=rendered_prompt,
+                config_overrides=config_overrides if config_overrides else None,
             )
-        )
+        else:
+            if session_id:
+                logger.warning(
+                    "Inference step %r has session_id=%r but effects lacks session_inference",
+                    _step_name,
+                    session_id,
+                )
+            # Cache only when there's BOTH a static head AND a dynamic tail. When a
+            # template's dynamic section is conditionally absent (e.g. feedback on
+            # the first cycle) the whole prompt is static → flow_dynamic == "" → send
+            # the full prompt normally (an empty prompt would be rejected). The
+            # cycles that DO carry feedback then build/hit the same static head.
+            run_kwargs: dict[str, Any] = {}
+            prompt_to_send = rendered_prompt
+            if flow_static_prefix and flow_dynamic:
+                import hashlib
+
+                # Key on flow:step + a hash of the static head, so different tasks
+                # (different task_spec in the head) get distinct cache entries and a
+                # hit always means the pinned prefix matches.
+                digest = hashlib.md5(flow_static_prefix.encode("utf-8")).hexdigest()[
+                    :10
+                ]
+                run_kwargs["static_prefix"] = flow_static_prefix
+                run_kwargs["flow_key"] = f"{flow_def.flow}:{_step_name}:{digest}"
+                prompt_to_send = flow_dynamic
+            result = await effects.run_inference(
+                prompt=prompt_to_send,
+                config_overrides=config_overrides if config_overrides else None,
+                **run_kwargs,
+            )
 
     if result.error:
         context_updates: dict[str, Any] = {
@@ -1469,7 +1447,6 @@ async def _execute_turn_inference(
     # Retry loop: turn.retries additional attempts on empty response.
     # retries=0 means one attempt total (no retries). retries=3 (default)
     # means up to 4 attempts.
-    tokens_in = count_tokens(rendered_prompt)
     max_attempts = turn.retries + 1
     result: Any = None
     attempts_made = 0
@@ -1477,87 +1454,44 @@ async def _execute_turn_inference(
 
     for attempt in range(max_attempts):
         attempts_made = attempt + 1
-        infer_start = time.monotonic()
 
-        if actually_session:
-            if attempt == 0:
-                logger.info(
-                    "Turn inference step %r using session %s",
-                    _step_name,
-                    session_id,
-                )
-            elif turn.rewind_on_retry:
-                await _rewind_failed_attempt(effects, session_id, result, _step_name)
-            result = await effects.session_inference(
-                session_id=session_id,
-                prompt=rendered_prompt,
-                config_overrides=config_overrides if config_overrides else None,
-            )
-        else:
-            if session_id and attempt == 0:
-                logger.warning(
-                    "Turn inference step %r has session_id=%r but effects lacks session_inference",
-                    _step_name,
-                    session_id,
-                )
-            result = await effects.run_inference(
-                prompt=rendered_prompt,
-                config_overrides=config_overrides if config_overrides else None,
-            )
-
-        tokens_out = count_tokens(result.text) if result.text else 0
-
-        # Fetch chain-of-thought when tracing is enabled.
-        thinking_content = ""
-        if hasattr(effects, "trace_thinking") and effects.trace_thinking:
-            if hasattr(effects, "fetch_thinking"):
-                try:
-                    thinking_content = await effects.fetch_thinking()
-                except Exception:
-                    pass
-
-        # Capture full prompt/response when --trace-prompts is set.
-        prompt_content = ""
-        response_content = ""
-        if hasattr(effects, "trace_prompts") and effects.trace_prompts:
-            prompt_content = rendered_prompt
-            response_content = result.text or ""
-
-        # Trace this attempt — but only for the stateless `run_inference`
-        # path. The session path (`effects.session_inference`) emits its
-        # own InferenceCall trace event with correct timing and context,
-        # so duplicating it here would produce two rows per inference in
-        # the trace (inflating cost reports). See LocalEffects.session_inference.
-        if trace_enabled(effects) and not actually_session:
+        with annotate_turn(
+            purpose="step_inference",
+            prompt_full=rendered_prompt,
             # One-time setup costs (render/pre_compute/injection) happen before
-            # the retry loop — attribute them to the first attempt only so
-            # retries don't multi-count them.
-            _setup = attempt == 0
-            await effects.emit_trace(
-                InferenceCall(
-                    mission_id=_trace_mission_id,
-                    cycle=_trace_cycle,
-                    flow=flow_def.flow,
-                    step=_step_name,
-                    tokens_in=_real_in(result, tokens_in),
-                    tokens_out=_real_out(result, tokens_out),
-                    wall_ms=(time.monotonic() - infer_start) * 1000,
-                    temperature=_safe_float_temp(
-                        config_overrides.get("temperature", 0)
-                    ),
-                    max_tokens=int(config_overrides.get("max_tokens", 0) or 0),
-                    purpose="step_inference",
-                    thinking_content=thinking_content,
-                    prompt_content=prompt_content,
-                    response_content=response_content,
-                    truncated=getattr(result, "truncated", False),
-                    prompt_render_ms=prompt_render_ms if _setup else 0.0,
-                    pre_compute_ms=pre_compute_ms if _setup else 0.0,
-                    injection_ms=injection_ms if _setup else 0.0,
-                    reasoning=str(config_overrides.get("reasoning", "") or ""),
-                    **_cache_fields(result),
+            # the retry loop — attributed to the first attempt only.
+            prompt_render_ms=prompt_render_ms if attempt == 0 else 0.0,
+            pre_compute_ms=pre_compute_ms if attempt == 0 else 0.0,
+            injection_ms=injection_ms if attempt == 0 else 0.0,
+            call_attempt=attempt + 1,
+        ):
+            if actually_session:
+                if attempt == 0:
+                    logger.info(
+                        "Turn inference step %r using session %s",
+                        _step_name,
+                        session_id,
+                    )
+                elif turn.rewind_on_retry:
+                    await _rewind_failed_attempt(
+                        effects, session_id, result, _step_name
+                    )
+                result = await effects.session_inference(
+                    session_id=session_id,
+                    prompt=rendered_prompt,
+                    config_overrides=config_overrides if config_overrides else None,
                 )
-            )
+            else:
+                if session_id and attempt == 0:
+                    logger.warning(
+                        "Turn inference step %r has session_id=%r but effects lacks session_inference",
+                        _step_name,
+                        session_id,
+                    )
+                result = await effects.run_inference(
+                    prompt=rendered_prompt,
+                    config_overrides=config_overrides if config_overrides else None,
+                )
 
         if result.error:
             last_error = result.error

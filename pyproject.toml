@@ -13,6 +13,15 @@ dependencies = [
     # importer). Pinned to the verified line: 1.13.x passed the convergence
     # rehearsal (counter sum / log union / LWW determinism).
     "loro>=1.13.2,<2",
+    # The per-turn history store (agent/history/): every inference turn,
+    # trace event and workspace change is a parquet row under
+    # .agent/history/, and the workspace itself is versioned as git trees
+    # in a bare dulwich object store there. Both were reachable only through
+    # the swe/tb extras (pyarrow) or not at all (dulwich); the store runs on
+    # every mission, so they are CORE. dulwich is pure Python and builds no
+    # index or worktree — brownfield repos keep their own .git untouched.
+    "pyarrow>=21",
+    "dulwich>=1.2",
     "jsonpath-ng>=1.6",
     "markdown-it-py>=3.0.0",
     "mcp>=1.0.0",

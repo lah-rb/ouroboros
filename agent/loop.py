@@ -551,6 +551,24 @@ async def run_agent(
                 )
             )
             await effects.flush_traces()
+            # Boundary snapshot of the workspace tree — catches what PTY
+            # shells and formatters changed since the last step_end.
+            ckpt = getattr(effects, "history_checkpoint", None)
+            if ckpt is not None:
+                try:
+                    await ckpt(
+                        "cycle_end",
+                        current_flow,
+                        {
+                            "mission_id": mission_id,
+                            "cycle": cycle,
+                            "flow": current_flow,
+                        },
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.warning(
+                        "history checkpoint (cycle_end) failed", exc_info=True
+                    )
 
         if isinstance(outcome, FlowTermination):
             logger.info(

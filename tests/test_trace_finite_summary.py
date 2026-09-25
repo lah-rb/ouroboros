@@ -12,7 +12,6 @@ with no LLMVP / no effects — the summary math is deterministic.
 
 from __future__ import annotations
 
-import json
 
 from agent.trace import (
     TIME_CATEGORIES,
@@ -183,20 +182,31 @@ def test_old_trace_without_new_fields_folds_to_zeros():
     assert s["cache"]["hit_rate"] is None and s["io_ratio"]["fresh"] is None
 
 
-def test_render_head_from_events_and_companion_json(tmp_path):
-    from agent.trace_cli import render_summary, load_events, _load_summary_json
+def test_render_head_from_events_and_recorded_summary(tmp_path):
+    """The head renders from the store's events, and prefers the run's
+    recorded summary (the live ledger, which carries flush time) when the
+    run closed with one."""
+    import asyncio
 
-    trace = tmp_path / "m1_20260619T000000.jsonl"
-    trace.write_text("\n".join(json.dumps(e) for e in _events()) + "\n")
-    out = render_summary(load_events(str(trace)), str(trace))
+    from agent.history import reader
+    from agent.history.store import HistoryStore
+    from agent.trace_cli import load_events, render_summary
+
+    (tmp_path / ".agent").mkdir()
+    agent_dir = str(tmp_path / ".agent")
+    store = HistoryStore(str(tmp_path), "m1", "full")
+    for e in _events():
+        store.ingest(e)
+    loop = asyncio.new_event_loop()
+    loop.run_until_complete(store.flush("test"))
+    out = render_summary(load_events(agent_dir), "run x")
     assert "Time Breakdown" in out and "Tokens (cache-aware)" in out
     assert "residual" in out
 
-    # companion summary.json is preferred when present
+    # the recorded summary is preferred when present
     summary = summarize_events(_events(), total_wall_ms=2500.0)
-    (tmp_path / "m1_20260619T000000.summary.json").write_text(
-        json.dumps({"summary": summary})
-    )
-    assert _load_summary_json(str(trace)) is not None
-    out2 = render_summary(load_events(str(trace)), str(trace))
+    loop.run_until_complete(store.close(final_status="completed", summary=summary))
+    head = reader.load_summary(agent_dir)
+    assert head is not None and head["summary"] == summary
+    out2 = render_summary(load_events(agent_dir), "run x", head["summary"])
     assert "Time Breakdown" in out2

@@ -990,7 +990,6 @@ class TierRun:
                     str(work),
                     "--max-wall-clock",
                     str(int(remaining)),
-                    "--trace-thinking",
                 ]
                 + (
                     ["--max-cycles", str(remaining_cycles)]

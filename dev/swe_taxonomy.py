@@ -35,12 +35,9 @@ def _load(path: str):
 
 
 def _latest_summary(agent_logs: str):
-    paths = sorted(
-        glob.glob(
-            os.path.join(agent_logs, "ouroboros-mission", "traces", "*.summary.json")
-        )
-    )
-    return _load(paths[-1]) if paths else None
+    from agent.history.reader import load_summary_any  # store, else legacy head
+
+    return load_summary_any(os.path.join(agent_logs, "ouroboros-mission"))
 
 
 def _clobber_signals(task_dir: str, mission: dict | None) -> dict:

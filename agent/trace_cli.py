@@ -1,18 +1,19 @@
-"""Trace CLI — render trace summaries from JSONL trace files.
+"""Trace CLI — render a run's trace summary from the history store.
 
-Reads .agent/traces/*.jsonl files and produces human-readable summaries
-with flow breakdown, token counts, resolver decisions, and audit warnings.
+Reads ``.agent/history/`` (agent/history/reader) and produces human-readable
+summaries with flow breakdown, token counts, resolver decisions, and audit
+warnings. The finite-time head comes from the run's recorded summary when
+present, else it is recomputed from the events.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import os
-import glob
 from collections import defaultdict
 from typing import Any
 
+from agent.history import reader as history_reader
 from agent.trace import summarize_events
 
 
@@ -24,22 +25,6 @@ def _fmt_ms(ms: float) -> str:
     if secs >= 1:
         return f"{secs:.2f}s"
     return f"{ms:.0f}ms"
-
-
-def _load_summary_json(trace_path: str) -> dict | None:
-    """Load the companion <trace>.summary.json (the canonical finite head),
-    returning its inner ``summary`` dict — or None if absent/unreadable."""
-    if not trace_path.endswith(".jsonl"):
-        return None
-    path = trace_path[:-6] + ".summary.json"
-    if not os.path.isfile(path):
-        return None
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            record = json.load(f)
-        return record.get("summary") or None
-    except Exception:
-        return None
 
 
 def render_finite_breakdown(summary: dict) -> list[str]:
@@ -123,41 +108,16 @@ def render_finite_breakdown(summary: dict) -> list[str]:
     return lines
 
 
-def find_trace_files(
-    working_dir: str = ".", mission_id: str | None = None
-) -> list[str]:
-    """Find trace JSONL files in .agent/traces/, newest first."""
-    traces_dir = os.path.join(working_dir, ".agent", "traces")
-    if not os.path.isdir(traces_dir):
-        return []
-
-    pattern = os.path.join(traces_dir, "*.jsonl")
-    files = glob.glob(pattern)
-
-    if mission_id:
-        files = [f for f in files if mission_id in os.path.basename(f)]
-
-    # Sort by modification time, newest first
-    files.sort(key=os.path.getmtime, reverse=True)
-    return files
+def load_events(agent_dir: str, run_id: str | None = None) -> list[dict]:
+    """Every event of a run (latest run when unspecified), in order —
+    the history store's old-JSONL-shaped dicts."""
+    return history_reader.load_events(agent_dir, run_id)
 
 
-def load_events(trace_path: str) -> list[dict]:
-    """Load events from a JSONL trace file, line by line (lazy-friendly)."""
-    events = []
-    with open(trace_path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                try:
-                    events.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
-    return events
-
-
-def render_summary(events: list[dict], trace_path: str) -> str:
-    """Render a summary report from trace events."""
+def render_summary(events: list[dict], label: str, summary: dict | None = None) -> str:
+    """Render a summary report from trace events. ``summary`` is the run's
+    recorded finite-time head (authoritative — it carries flush/persistence
+    time the events don't); absent, it is recomputed from the events."""
     if not events:
         return "No trace events found."
 
@@ -166,7 +126,7 @@ def render_summary(events: list[dict], trace_path: str) -> str:
     # Extract mission info
     mission_id = events[0].get("mission_id", "unknown")
     lines.append(f"Mission: {mission_id}")
-    lines.append(f"Trace: {os.path.basename(trace_path)}")
+    lines.append(f"Trace: {label}")
     lines.append("")
 
     # Cycle stats
@@ -191,10 +151,9 @@ def render_summary(events: list[dict], trace_path: str) -> str:
     lines.append("")
 
     # ── The head: finite time breakdown + cache-aware token panel ──────
-    # Prefer the companion summary.json (authoritative — it has flush/
+    # Prefer the run's recorded summary (authoritative — it has flush/
     # persistence time the events don't carry); else recompute from events,
     # using the legacy Σ cycle_duration_ms as the wall-clock denominator.
-    summary = _load_summary_json(trace_path)
     if summary is None:
         summary = summarize_events(events, total_wall_ms=total_duration_ms)
     lines.extend(render_finite_breakdown(summary))
@@ -329,10 +288,10 @@ def render_summary(events: list[dict], trace_path: str) -> str:
     return "\n".join(lines)
 
 
-def render_detail(events: list[dict], trace_path: str) -> str:
+def render_detail(events: list[dict], label: str, summary: dict | None = None) -> str:
     """Render a detailed per-step breakdown from trace events."""
     lines: list[str] = []
-    lines.append(render_summary(events, trace_path))
+    lines.append(render_summary(events, label, summary))
     lines.append("=" * 60)
     lines.append("DETAILED EVENT LOG")
     lines.append("=" * 60)
@@ -523,29 +482,39 @@ def cmd_trace(args: argparse.Namespace) -> None:
     """Handle the `ouroboros.py trace` CLI command."""
     working_dir = getattr(args, "working_dir", None) or "."
     mission_id = getattr(args, "mission", None)
+    run_id = getattr(args, "run", None)
     fmt = getattr(args, "format", "summary") or "summary"
     output_override = getattr(args, "output", None)
 
-    files = find_trace_files(working_dir, mission_id)
-
-    if not files:
-        print("No trace files found in .agent/traces/")
+    agent_dir = os.path.join(working_dir, ".agent")
+    runs = history_reader.list_runs(agent_dir)
+    if mission_id:
+        runs = [r for r in runs if mission_id in str(r.get("mission_id") or "")]
+    if run_id:
+        runs = [r for r in runs if r["run_id"] == run_id]
+    if not runs:
+        print("No history found in .agent/history/")
         if mission_id:
             print(f"  (filtered for mission: {mission_id})")
+        if run_id:
+            print(f"  (filtered for run: {run_id})")
         return
 
-    # Use the latest trace file
-    trace_path = files[0]
-    events = load_events(trace_path)
+    # Use the latest run
+    run = runs[-1]["run_id"]
+    events = history_reader.load_events(agent_dir, run)
 
     if not events:
-        print(f"Trace file is empty: {trace_path}")
+        print(f"Run has no events: {run}")
         return
 
+    head = history_reader.load_summary(agent_dir, run)
+    summary = (head or {}).get("summary") or None
+    label = f"history run {run}"
     if fmt == "summary":
-        content = render_summary(events, trace_path)
+        content = render_summary(events, label, summary)
     elif fmt == "detail":
-        content = render_detail(events, trace_path)
+        content = render_detail(events, label, summary)
     else:
         print(f"Unknown format: {fmt}")
         return

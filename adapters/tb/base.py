@@ -13,8 +13,6 @@ _select_flow_set methods (callers survived — a live AttributeError).
 
 from __future__ import annotations
 
-import glob
-import json
 import os
 import re
 from pathlib import Path
@@ -42,25 +40,14 @@ def probe_container_cwd(container, exec_user: Optional[str] = None) -> str:
 
 
 def token_totals(host_tmp: str) -> tuple[int, int]:
-    """Sum inference token usage from the flushed trace JSONL (reporting
+    """Sum inference token usage from the mission's history store (reporting
     only — never affects pass/fail). Best-effort; zeros on any issue."""
-    tin = tout = 0
     try:
-        for path in glob.glob(os.path.join(host_tmp, ".agent", "traces", "*.jsonl")):
-            with open(path) as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        row = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    tin += int(row.get("tokens_in") or 0)
-                    tout += int(row.get("tokens_out") or 0)
+        from agent.history import reader
+
+        return reader.token_totals(os.path.join(host_tmp, ".agent"))
     except Exception:
         return 0, 0
-    return tin, tout
 
 
 def extract_deps(script_files: Iterable[Path]) -> list[str]:

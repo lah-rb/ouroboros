@@ -824,10 +824,11 @@ async def test_turn_inference_does_not_double_emit_trace_on_session_path() -> No
 
 @pytest.mark.asyncio
 async def test_turn_inference_still_emits_trace_on_stateless_path() -> None:
-    """Complement to the above: for the stateless run_inference path
-    (no session_id), runtime MUST emit the trace event because
-    run_inference doesn't emit its own."""
-    from agent.trace import InferenceCall
+    """Complement to the above: on the stateless run_inference path the
+    EFFECT records the turn (exactly one row), carrying the runtime's
+    annotation — purpose ``step_inference`` and the retry index — and the
+    runtime adds no row of its own."""
+    from agent.trace import InferenceCall, build_inference_call
 
     turn = TurnDefinition.model_validate(
         {
@@ -864,14 +865,26 @@ async def test_turn_inference_still_emits_trace_on_stateless_path() -> None:
 
     class CountingEffects:
         def __init__(self) -> None:
-            self.emit_count = 0
+            self.events: list = []
 
         async def run_inference(self, prompt, config_overrides=None):
-            return InferenceResult(text="some prose", tokens_generated=2)
+            result = InferenceResult(text="some prose", tokens_generated=2)
+            await self.emit_trace(
+                build_inference_call(
+                    result,
+                    prompt=prompt,
+                    response_text=result.text,
+                    thinking="",
+                    wall_ms=0.0,
+                    config_overrides=config_overrides,
+                    purpose="action_inference",
+                )
+            )
+            return result
 
         async def emit_trace(self, ev):
             if isinstance(ev, InferenceCall):
-                self.emit_count += 1
+                self.events.append(ev)
 
     effects = CountingEffects()
     await _execute_turn_inference(
@@ -882,10 +895,13 @@ async def test_turn_inference_still_emits_trace_on_stateless_path() -> None:
         effects=effects,
     )
 
-    assert effects.emit_count == 1, (
-        f"Runtime must emit InferenceCall on stateless path "
-        f"(run_inference doesn't emit). Got {effects.emit_count}."
+    assert len(effects.events) == 1, (
+        f"the stateless turn must be recorded exactly once, by the effect "
+        f"(the runtime only annotates). Got {len(effects.events)}."
     )
+    ev = effects.events[0]
+    assert ev.purpose == "step_inference" and ev.call_attempt == 1
+    assert ev.prompt_content and "Describe." in ev.prompt_content
 
 
 def _make_meta():

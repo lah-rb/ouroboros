@@ -78,9 +78,9 @@ try:
 except ValueError:
     _TIMEOUT_MULTIPLIER = 1.0
 _LLMVP = llmvp_endpoint()
-# Detailed tracing on by default (capture judge CoT + full prompts/responses);
-# set OURO_TRACE=0 to disable.
-_TRACE = os.environ.get("OURO_TRACE", "1") != "0"
+# Full prompt/response recording is the default; OURO_TRACE=0 keeps the
+# metrics but drops the text (the content opt-out).
+_HISTORY_MODE = "metrics" if os.environ.get("OURO_TRACE") == "0" else "full"
 
 
 class OuroborosAgent(BaseAgent):
@@ -162,8 +162,7 @@ class OuroborosAgent(BaseAgent):
             host_pty_scratch=pty_scratch,
             llmvp_endpoint=_LLMVP,
             exec_user="",
-            trace_thinking=_TRACE,
-            trace_prompts=_TRACE,
+            history_mode=_HISTORY_MODE,
         )
 
         # Shared isolated harness (agent/mission_runner.py): dedicated

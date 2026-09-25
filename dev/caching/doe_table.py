@@ -24,7 +24,6 @@ nothing per-run.
 
 from __future__ import annotations
 
-import json
 import re
 import sys
 from collections import defaultdict
@@ -96,10 +95,11 @@ def factors(cfg: dict) -> dict:
 
 def responses(agent_dir: Path) -> dict:
     """Newest trace summary for an arm, flattened to the response variables."""
-    summaries = sorted((agent_dir / "traces").glob("*.summary.json"))
-    if not summaries:
+    from agent.history.reader import load_summary_any  # store, else legacy head
+
+    s = load_summary_any(str(agent_dir))
+    if not s:
         return {}
-    s = json.loads(summaries[-1].read_text())
     body = s.get("summary") or s
     tok = body.get("tokens") or {}
     srv = body.get("server") or {}
