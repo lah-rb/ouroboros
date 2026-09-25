@@ -3287,3 +3287,124 @@ native-rendered pair probe still reads bands → name 0.00 (a digit-specific map
 - **Next, per the decision rule: the representation arm at this budget.** Draws that drop and
   re-rank peaks, more than four bands, position-sorted lists. Keep the formula-target
   exposure the budget arm removed.
+
+### 22k. Representation arm: real-like band variation, position-sorted lists of 4–8 bands — pre-registration (2026-09-25 03:00Z)
+
+**Question.** §22j named the remaining gap. At the §22j budget the model identifies fresh
+position-jittered draws at 78 % of the matcher ceiling, but real re-measurements only at
+0.12–0.14 (ceiling 0.33). By band-set overlap with the reference:
+- the same four-band set: 0.46–0.54;
+- only the top band shared: 0.16;
+- nothing shared: 0.00.
+
+The draws never lost, added or re-ranked a band; real re-measurements do all three. This
+arm changes how a draw is made and written, at the §22j budget. Operator ruling
+(2026-09-25): proceed per the §22j decision rule.
+
+**What real re-measurements do** (the 664 outside the probe set, each against its canonical
+spectrum; export_spectra.py, the same sample and laser as §22h). A canonical top-4 band is
+missing 29 % of the time and pushed out of the top four 12 %. 27 % of a real top four has no
+canonical counterpart. Same strongest band 0.630; same four-band set 0.173. The spread is
+over-dispersed ("all four kept" 0.36, "one or none" 0.14), so some re-measurements are
+near-copies and others diverge.
+
+**Design.** `export_spectra.py` → `v6/stage2k/docs/spectra_full.json` (full canonical and
+real spectra), then `corpus_xml_variation.py` → `v6/stage2k`. Against §22j:
+- **Draw model.** Draws come from the full canonical spectrum through
+  `synth_variance.vary_spectrum`:
+  - each draw gets a severity u ~ Beta(0.9, 2.1);
+  - a canonical band is lost with probability u;
+  - Poisson(14 u) extra bands come in at other species' band positions, intensity U(0, 0.4);
+  - intensities take exp(N(0, 0.1));
+  - then the instrument class's position error and cutoff, as §22h.
+
+  The fit is a grid over 6 statistics and 15 histogram bins, with lab position error.
+  Simulated vs real: top 0.64 / 0.63, set 0.19 / 0.17, present 0.72 / 0.71, extras
+  0.29 / 0.27. Two misfits are known: present at ±10 is 0.75 against 0.80 (real spectra have
+  a longer shift tail), and top-8 overlap is 0.64 against 0.57.
+- **Band list.** The strongest k of the draw, k ~ U{4..8} (mean shown 5.9), rounded to the
+  class grid, de-duplicated and written position-sorted as `<band>` elements:
+  `<raman resolution_cm1="5"><band>2 0 5</band>…</raman>`. Digits, jittered lines and the
+  resolution field are as §22i/§22j.
+- **Pairs.**
+  - bands → name 64, bands + lines → name 16, formula → name 8 (as §22j).
+  - New: name → formula 8, stripped, no spectra, to recover §22j's formula loss.
+  - The spectra → formula pairs stay out: they were present in every arm with held-out-order
+    slot confusion (v3r −20, v3d −37 on raman) and absent from v3b, which had none.
+
+The arm has 159,936 new rows = 14.61 M tokens (§22j: 146,608 = 11.63 M). About 64 distinct
+band lists per species. Pack: 11,222 blocks = 44.38 M tokens, 1,403 steps. Mix: xml_fim 62.9 /
+xml_plain 2.1 / paper 20.0 / other 7.0 / replay 8.0. Init `v3_stage1/final_fp32`, `--stage 2`,
+lr 2e-5 linear, accum 8, one epoch.
+
+Known differences from §22j: the draw model, the list format and length, and the name → formula
+rows. The arm tests the representation as a whole; it does not ablate its parts.
+
+**Instrument.** `probe_resolution.py --variation --tag variation` uses the §22j groups (the same
+60 T, 100 R and 19 V; items hash unchanged). Conditions:
+- **T exact·k4/6/8:** the canonical strongest K.
+- **T synthetic:** fresh variation draws in a probe-only namespace, forced per class, K = 6,
+  4 per class.
+- **R real·k4/6/8:** the held-out re-measurement's own strongest K; plus K = 6 at grids 5 and
+  10.
+- **V exact·k6.**
+
+The matcher ceiling is keyed on the canonical strongest K. Masks, the hundreds-boundary split
+and the field renderings are as §22j. Also on the endpoint:
+- the §22j budget probe (transfer back to intensity-ranked four-band lists);
+- `probe_pairs`, `probe_xml_fill`, `probe_recall`.
+
+**Measured before.**
+
+| condition | v3b on this probe | ceiling, bands → name | ceiling, bands + lines → name |
+|---|---|---|---|
+| T exact·k4 / k6 / k8 | 0.03 / 0.00 / 0.01 | 0.98 / 1.00 / 1.00 | 1.00 |
+| T synthetic, pooled (lab / portable / handheld) | 0.01 | 0.39 (0.57 / 0.33 / 0.28) | 0.80 |
+| R real·k4 / k6 / k8 | 0.01 / 0.00 / 0.00 | 0.33 / 0.45 / 0.46 | 0.77 / 0.80 / 0.83 |
+| R real·k6 grid 5 / grid 10 | 0.00 / 0.00 | 0.40 / 0.31 | — |
+| R real·k6, set-match / neither | — | 0.89 / 0.26 | — |
+
+v3b never saw the format. The contrast of record is v3b on its own §22j probe: real
+0.12 / 0.14 / 0.14 (native / grid 5 / grid 10; ceiling 0.33 / 0.33 / 0.25).
+
+Forward (v3b):
+- held-out-order fill raman 0.911, formula 0.807;
+- pair probe name → formula 0.68 trained order, 0.57 held-out;
+- recall probe frame formula 0.820, bands 0.625.
+
+**Noise.** R holds 100 species. Near 0.2 the species-level standard error is about ±0.04.
+
+**Predictions (v3k, this probe, correct field, bands → name unless stated).**
+
+| # | prediction | falsified if |
+|---|---|---|
+| K1 | THE TEST: real re-measurements, K = 6, ≥ 0.25 (v3b's best real 0.14; ceiling 0.45) | < 0.18 |
+| K2 | same information as v3b's real test: real·k4 ≥ 0.20 (v3b 0.12 on the same four bands, intensity-ranked) | < 0.14 |
+| K3 | more bands help: real·k6 ≥ real·k4 + 0.05 (ceiling 0.33 → 0.45) | real·k6 ≤ real·k4 |
+| K4 | fresh variation draws: pooled synthetic ≥ 0.25 (ceiling 0.39), lab ≥ 0.35 (0.57) | pooled < 0.15 |
+| K5 | exact canonical lists: exact·k6 ≥ 0.60 | < 0.40 |
+| K6 | no shortcut: with the bands masked, both pairs ≤ 0.02 | either > 0.05 |
+| K7 | no slot confusion: held-out-order raman fill ≥ 0.85 (v3b 0.911) | < 0.80 |
+| K8 | formula recovers: held-out-order formula fill ≥ 0.85 and pair-probe name → formula (trained order) ≥ 0.75 (v3b 0.807 / 0.68) | formula fill ≤ 0.807 |
+| K9 | prose bounds: paper ≤ +2 %, replay ≤ +3 % of step 0 | either exceeded |
+| K10 | V ≤ 0.05 | > 0.05 |
+
+Read, not barred:
+- R "neither" at K = 6 (v3b 0.00; ceiling 0.26);
+- the hundreds-boundary split and the field renderings;
+- v3k on the §22j budget probe (transfer to intensity-ranked four-band lists);
+- recall probe frame formula and bands against v3b.
+
+**Decision rule.**
+- **K1 met:** the representation was the gap. The re-rank recipe is done; per the operator's
+  roadmap, next are model scale and the chemistry-physics data gap.
+- **0.18 ≤ K1 < 0.25:** partial. More draws on this representation before scaling.
+- **K1 < 0.18:** the variation model does not carry to real spectra. Compare the synthetic
+  and real gaps, then revisit the model (the 5–10 cm⁻¹ shift tail, laser-dependent
+  intensities) or the retrieval route.
+
+**Freeze (sha256, first 16).**
+- `stage2k/docs_manifest.json` b6e2cb749eb0e998
+- `stage2k/manifest.json` d6e4f0e0675daecb
+- `stage2k/docs/spectra_full.json` b2c46f89a63a47a6
+- `resolution_variation_items_frozen.json` 7f430318a213af2a

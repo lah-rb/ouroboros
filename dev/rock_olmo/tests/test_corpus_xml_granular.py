@@ -128,3 +128,48 @@ def test_budget_arm_exposures_spec():
         raise AssertionError("an untrained pair must be refused")
     except SystemExit:
         pass
+
+
+def _spectrum():
+    return [(1008.0, 1.0), (493.0, 0.6), (414.0, 0.5), (1140.0, 0.45), (620.0, 0.3), (670.0, 0.25), (1135.0, 0.2), (180.0, 0.1)]
+
+
+def test_representation_arm_rows():
+    import corpus_xml_variation as cv
+
+    r = _rec()
+    pool = [300.0, 850.0, 1320.0]
+    rows = cv.rows_for(r, _spectrum(), pool, val=False)
+    assert collections.Counter(x["kind"] for x in rows) == {"g:bands>name": 64, "g:bands+lines>name": 16, "g:formula>name": 8, "g:name>formula": 8}
+    drawn = [x for x in rows if x.get("k")]
+    assert len(drawn) == 80
+    for x in drawn:
+        b = x["bands_shown"]
+        assert b == sorted(set(b)) and 1 <= len(b) <= x["k"] <= 8 and all(v % x["grid"] == 0 for v in b)
+        assert "<band>" in x["prompt"] and "<top>" not in x["prompt"] and f'resolution_cm1="{x["grid"]}"' in x["prompt"]
+        assert x["prompt"].count("<band>") == len(b)
+    assert len({tuple(x["bands_shown"]) for x in drawn if x["kind"] == "g:bands>name"}) > 40  # draws differ
+    assert any(len(x["bands_shown"]) > 4 for x in drawn) and {x["k"] for x in drawn} <= set(range(4, 9))
+    lines = [x for x in drawn if x["kind"] == "g:bands+lines>name"]
+    assert all(x["lines_shown"] != r.libs for x in lines) and all("<libs>" in x["prompt"] for x in lines)
+    nf = [x for x in rows if x["kind"] == "g:name>formula"]
+    assert all("<raman" not in x["prompt"] and x["completion"] == r.formula for x in nf)
+    assert rows == cv.rows_for(r, _spectrum(), pool, val=False)  # deterministic
+    v = cv.rows_for(r, _spectrum(), pool, val=True)
+    assert collections.Counter(x["kind"] for x in v) == {"g:bands>name": 2, "g:bands+lines>name": 2, "g:formula>name": 2, "g:name>formula": 2}
+
+
+def test_representation_draws_reproduce_the_real_statistics():
+    import os
+
+    import pytest
+
+    import corpus_xml_variation as cv
+
+    if not os.path.exists(cv.SPECTRA):
+        pytest.skip("spectra_full.json not built")
+    rep = cv.calibration_check(draws=2)
+    real, sim = rep["real"], rep["simulated"]
+    assert rep["species"] >= 600
+    assert abs(sim["top1"] - real["top1"]) < 0.06 and abs(sim["set4"] - real["set4"]) < 0.06
+    assert abs(sim["present"] - real["present"]) < 0.03 and abs(sim["extra4"] - real["extra4"]) < 0.04

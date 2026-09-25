@@ -155,3 +155,30 @@ def test_determinism_and_records():
     lrec = instrument_record(sample_libs(random.Random(9)))
     assert isinstance(lrec["window_nm"], list) and len(lrec["window_nm"]) == 2
     assert FLIP_P == 0.29
+
+
+def test_vary_spectrum_severity_controls_loss_and_extras():
+    import synth_variance as sv
+
+    peaks = list(zip(BANDS, REL))
+    lab = sv.RamanInstrument("lab", 532, 3.0, 50.0, "±1 cm-1", "a neon lamp", 0.0)
+    pool = [900.0, 1100.0]
+    calm = sv.vary_spectrum(random.Random(1), peaks, lab, pool, severity=0.0, sigma=0.0)
+    assert len(calm) == len(peaks) and all(abs(a[0] - b) < 6 for a, b in zip(calm, BANDS))
+    assert [r for _, r in calm] == REL  # sigma 0: intensities untouched
+    wild = sv.vary_spectrum(random.Random(2), peaks, lab, pool, severity=1.0, extra_per_severity=6.0)
+    assert all(min(abs(p - x) for x in pool) < 6 for p, _ in wild)  # every canonical band lost; extras only
+    lone = sv.vary_spectrum(random.Random(3), peaks, lab, [], severity=1.0)
+    assert len(lone) == 1 and abs(lone[0][0] - 464.8) < 6  # nothing survives -> the strongest band is kept
+    high_cut = sv.RamanInstrument("handheld", 785, 12.0, 250.0, "±5 cm-1", "a neon lamp", 0.0)
+    assert all(p >= 250.0 for p, _ in sv.vary_spectrum(random.Random(4), peaks, high_cut, pool, severity=0.0))
+    a = sv.vary_spectrum(sv.rng_for("x", 1), peaks, lab, pool)
+    assert a == sv.vary_spectrum(sv.rng_for("x", 1), peaks, lab, pool)  # seeded draws reproduce
+
+
+def test_strongest_keeps_the_k_most_intense_position_sorted():
+    import synth_variance as sv
+
+    pairs = list(zip(BANDS, REL))
+    assert sv.strongest(pairs, 3) == [(128.0, 0.31), (206.3, 0.55), (464.8, 1.0)]
+    assert sv.strongest(pairs, 10) == sorted(pairs)

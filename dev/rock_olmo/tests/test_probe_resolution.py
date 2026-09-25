@@ -1,6 +1,8 @@
 """The §22j probe instruments: the peak-matcher ceiling, field masks, the hundreds-boundary flag."""
 
 import json
+
+import numpy as np
 import os
 import sys
 
@@ -59,3 +61,29 @@ def test_keys_for_pools_synthetic_and_splits_carry():
     assert pr.keys_for({"group": "T", "condition": "exact", "carry": False}) == [("T", "exact")]
     r = pr.keys_for({"group": "R", "condition": "real·grid5", "carry": False, "set_match": True})
     assert ("R:set-match", "real·grid5") in r and ("R:same-100", "real·grid5") in r
+
+
+def test_library_keyed_on_strongest_k_with_short_spectra_padded(tmp_path):
+    spectra = {
+        "A": [(1008.0, 1.0), (493.0, 0.6), (415.0, 0.5), (1140.0, 0.4), (620.0, 0.3), (670.0, 0.2)],
+        "B": [(1085.0, 1.0), (282.0, 0.5), (712.0, 0.4), (156.0, 0.3)],  # only four bands: k6/k8 rows NaN-padded
+        "C": [(1086.0, 1.0), (283.0, 0.5), (713.0, 0.4), (157.0, 0.3), (1436.0, 0.2), (1749.0, 0.1)],
+    }
+    p = tmp_path / "xml_records.json"
+    p.write_text(json.dumps({"trained": RECS[:2], "untouched": RECS[2:]}))
+    lib = pr.Library(str(p), spectra=spectra)
+    assert lib.bands_k[6].shape == (3, 6) and np.isnan(lib.bands_k[6][1]).sum() == 2
+    assert lib.top1("A", [415, 493, 620, 670, 1008, 1140], k=6) == 1.0
+    assert lib.top1("B", [156, 282, 712, 1085], k=6) == 1.0  # B's four bands all matched: F1 1 against its own 4
+    assert lib.top1("C", [157, 283, 713, 1086, 1436, 1749], k=6) == 1.0  # C's extra two bands break the B/C tie
+    assert len(lib.const_bands_k[6]) <= 6 and lib.const_bands_k[6] == sorted(lib.const_bands_k[6])
+
+
+def test_forced_variation_draw_is_sorted_grid_rounded_and_seeded():
+    peaks = [(1008.0, 1.0), (493.0, 0.6), (415.0, 0.5), (1140.0, 0.4), (620.0, 0.3), (670.0, 0.2), (1135.0, 0.15)]
+    pool = [300.0, 850.0]
+    for klass, grid in (("lab", 1), ("portable", 5), ("handheld", 10)):
+        bands, g = pr.forced_variation_draw("A", peaks, pool, klass, 0)
+        assert g == grid and bands == sorted(set(bands)) and 1 <= len(bands) <= pr.SYNTH_K and all(b % grid == 0 for b in bands)
+        assert (bands, g) == pr.forced_variation_draw("A", peaks, pool, klass, 0)
+    assert pr.forced_variation_draw("A", peaks, pool, "lab", 0) != pr.forced_variation_draw("A", peaks, pool, "lab", 1)

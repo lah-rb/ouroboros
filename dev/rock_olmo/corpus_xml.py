@@ -262,6 +262,7 @@ def stripped_record(
     libs_first: bool = False,
     raman_resolution: int | None = None,
     digits: bool = False,
+    sorted_bands: bool = False,
 ) -> str:
     """The §22 schema holding ONLY the known fields plus one BLANK (§22g; shared by the
     granular stage 2 and probe_chains so train and probe records are byte-identical).
@@ -272,7 +273,10 @@ def stripped_record(
     system and no laser are ever shown: absent fields are omitted, never blanked.
     `raman_resolution` (§22h) writes `<raman resolution_cm1="G">`: the grid the band values
     were rounded to, so the model can read how far a value may sit from the reference.
-    `digits` (§22i) writes band and line values digit by digit (digit_str)."""
+    `digits` (§22i) writes band and line values digit by digit (digit_str).
+    `sorted_bands` (§22k) writes EVERY band in rec.bands as a <band> element in
+    ascending position; no band is marked strongest:
+        <raman resolution_cm1="5"><band>1 5 5</band><band>2 8 0</band>...</raman>"""
     fmt_b = digit_str if digits else str
     fmt_l = (lambda x: digit_str(f"{x:.2f}")) if digits else (lambda x: f"{x:.2f}")
     attrs = []
@@ -287,7 +291,9 @@ def stripped_record(
     k = 4 if "bands" in known else next((int(x[-1]) for x in ("bands1", "bands2", "bands3") if x in known), 0)
     rhead = f'<raman resolution_cm1="{raman_resolution}">' if raman_resolution else "<raman>"
     raman = ""
-    if k:
+    if sorted_bands and "bands" in known:
+        raman = rhead + "".join(f"<band>{fmt_b(x)}</band>" for x in sorted(b)) + "</raman>"
+    elif k:
         raman = rhead + f"<top>{fmt_b(b[0])}</top>" + "".join(f"<next>{fmt_b(x)}</next>" for x in b[1:k]) + "</raman>"
     elif target == "top":
         raman = f"{rhead}<top>{BLANK}</top></raman>"
