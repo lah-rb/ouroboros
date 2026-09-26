@@ -25,6 +25,7 @@ import logging
 from agent.llm_json import parse_llm_json
 from agent.models import StepInput, StepOutput
 from agent.session_injections import queue as queue_injection
+from agent.session_loop import correction, observe, tool_budget
 from agent.loader import load_prompt_text
 
 logger = logging.getLogger(__name__)
@@ -32,8 +33,10 @@ logger = logging.getLogger(__name__)
 # ONE budget number — kept in agreement with classify.cue's check_budget rule
 # and the explore instruction template. The router SCOUTS (a few reads/commands
 # to understand the shape), it does not fully diagnose.
-MAX_ROUTER_EXPLORE_TURNS = 5
-MAX_ROUTER_CORRECTIONS = 4
+# The scout loop's limits live in flows/shared/classify.cue
+# (_classify_budget, _classify_correction_limit), enforced by its
+# tool_loop_gate step; the seed states the budget from params.tool_budget
+# (agent/session_loop.py).
 
 VALID_FLOW_SETS = ("ops", "code_core")
 VALID_PROFILES = (
@@ -67,28 +70,15 @@ async def _session_used(step_input: StepInput) -> int:
 
 
 def _correction(step_input: StepInput, msg: str) -> StepOutput:
-    """Queue a correction, bump the corrections counter (NOT the turn budget).
-    Signals exhausted once the model oscillates past the cap."""
-    corrections = int(step_input.context.get("router_corrections", 0) or 0) + 1
-    updates: dict = {"router_corrections": corrections}
-    queue_injection(updates, step_input.context, f"Action failed — {msg}")
-    return StepOutput(
-        result={"action_ok": False, "exhausted": corrections >= MAX_ROUTER_CORRECTIONS},
-        observations=f"router correction ({corrections}): {msg[:120]}",
-        context_updates=updates,
+    """A failed scout action (agent/session_loop.py)."""
+    return correction(
+        step_input, msg, corrections_key="router_corrections", label="router"
     )
 
 
 def _observe(step_input: StepInput, message: str) -> StepOutput:
-    """Queue an observation and bump the turn budget."""
-    turn = int(step_input.context.get("router_turn", 0) or 0) + 1
-    updates: dict = {"router_turn": turn}
-    queue_injection(updates, step_input.context, message)
-    return StepOutput(
-        result={"action_ok": True},
-        observations=f"router scout {turn}/{MAX_ROUTER_EXPLORE_TURNS}",
-        context_updates=updates,
-    )
+    """A scout action that ran (agent/session_loop.py)."""
+    return observe(step_input, message, turn_key="router_turn", label="router scout")
 
 
 async def action_open_router_session(step_input: StepInput) -> StepOutput:
@@ -140,9 +130,10 @@ async def action_open_router_session(step_input: StepInput) -> StepOutput:
             label="the objective",
         ),
         "",
-        f"Investigate the workspace (up to {MAX_ROUTER_EXPLORE_TURNS} actions), then "
-        "conclude with the flow_set, profile, and findings. Start by seeing what is "
-        "here and where the task points.",
+        "Investigate the workspace"
+        + (f" (up to {budget} actions)" if (budget := tool_budget(step_input)) else "")
+        + ", then conclude with the flow_set, profile, and findings. Start by "
+        "seeing what is here and where the task points.",
     ]
     updates: dict = {
         "inference_session_id": session_id,

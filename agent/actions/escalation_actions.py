@@ -38,6 +38,7 @@ import logging
 from agent.llm_json import parse_llm_json
 from agent.models import StepInput, StepOutput
 from agent.session_injections import queue as queue_injection
+from agent.session_loop import correction, observe, tool_budget
 from agent.loader import load_prompt_text
 
 logger = logging.getLogger(__name__)
@@ -45,8 +46,9 @@ logger = logging.getLogger(__name__)
 # ONE budget number, kept in agreement across the constant, the instruction
 # template, and escalate.cue's check_budget rule (the diagnose template's
 # 8-vs-10 drift is the cautionary tale).
-MAX_ESCALATION_TURNS = 6
-MAX_ESCALATION_CORRECTIONS = 4
+# The loop's limits live in flows/shared/escalate.cue (_escalate_budget,
+# _escalate_correction_limit), enforced by its tool_loop_gate step; the
+# seed states the budget from params.tool_budget (agent/session_loop.py).
 
 # Static session head (the flow-fork pattern: invariant persona pinned once
 # per instance; key changes iff the text changes).
@@ -164,7 +166,9 @@ async def action_open_escalation_session(step_input: StepInput) -> StepOutput:
     else:
         parts.append("`web_search` is unavailable in this mission — rely on the repo.")
     parts.append("")
-    parts.append(f"You have up to {MAX_ESCALATION_TURNS} tool actions.")
+    budget = tool_budget(step_input)
+    if budget:
+        parts.append(f"You have up to {budget} tool actions.")
 
     updates: dict = {
         "inference_session_id": session_id,
@@ -203,33 +207,18 @@ async def action_open_escalation_session(step_input: StepInput) -> StepOutput:
 
 
 def _correction(step_input: StepInput, msg: str) -> StepOutput:
-    """Queue a correction and bump the corrections counter — NOT the turn
-    budget (honest mistakes recover without pressure). Signals exhausted once
-    the model oscillates past the correction cap."""
-    corrections = int(step_input.context.get("escalation_corrections", 0) or 0) + 1
-    updates: dict = {"escalation_corrections": corrections}
-    queue_injection(updates, step_input.context, f"Action failed — {msg}")
-    exhausted = corrections >= MAX_ESCALATION_CORRECTIONS
-    return StepOutput(
-        result={"action_ok": False, "exhausted": exhausted},
-        observations=f"escalation correction ({corrections}): {msg[:120]}",
-        context_updates=updates,
+    """A failed action (agent/session_loop.py)."""
+    return correction(
+        step_input, msg, corrections_key="escalation_corrections", label="escalation"
     )
 
 
 def _observe(
     step_input: StepInput, message: str, extra: dict | None = None
 ) -> StepOutput:
-    """Queue an observation and bump the turn budget."""
-    turn = int(step_input.context.get("escalation_turn", 0) or 0) + 1
-    updates: dict = {"escalation_turn": turn}
-    if extra:
-        updates.update(extra)
-    queue_injection(updates, step_input.context, message)
-    return StepOutput(
-        result={"action_ok": True},
-        observations=f"escalation turn {turn}/{MAX_ESCALATION_TURNS}",
-        context_updates=updates,
+    """An action that ran (agent/session_loop.py)."""
+    return observe(
+        step_input, message, turn_key="escalation_turn", label="escalation", extra=extra
     )
 
 

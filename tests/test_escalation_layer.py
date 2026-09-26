@@ -17,8 +17,6 @@ import os
 import pytest
 
 from agent.actions.escalation_actions import (
-    MAX_ESCALATION_CORRECTIONS,
-    MAX_ESCALATION_TURNS,
     action_conclude_escalation,
     action_escalation_fold_search,
     action_escalation_read,
@@ -115,15 +113,14 @@ async def test_run_observes_exit_and_output():
 
 
 @pytest.mark.asyncio
-async def test_corrections_cap_signals_exhausted():
+async def test_a_correction_bumps_the_counter_the_gate_reads():
+    # The limit lives in the flow's tool_loop_gate now; the action only
+    # counts (agent/session_loop.py).
     out = await action_escalation_read(
-        _si(
-            MockEffects(),
-            escalation_choice_arg="nope.py",
-            escalation_corrections=MAX_ESCALATION_CORRECTIONS - 1,
-        )
+        _si(MockEffects(), escalation_choice_arg="nope.py", escalation_corrections=3)
     )
-    assert out.result["exhausted"] is True
+    assert out.result["action_ok"] is False and "exhausted" not in out.result
+    assert out.context_updates["escalation_corrections"] == 4
 
 
 # ── write: fenced body through the guarded path ───────────────────────
@@ -262,14 +259,16 @@ def test_escalate_flow_wiring():
         "conclude": "conclude",
     }
     assert steps["work"]["turn"]["transitions"]["no_answer"] == "conclude"
-    # budget rule number agrees with the Python constant (no 8-vs-10 drift)
+    # ONE gate holds both limits, and it is the number the seed states
+    # (no 8-vs-10 drift): tool_loop_gate in templates.cue.
+    budget = steps["start_session"]["params"]["tool_budget"]
     budget_cond = steps["check_budget"]["resolver"]["rules"][0]["condition"]
-    assert f">= {MAX_ESCALATION_TURNS}" in budget_cond
-    # executors loop through the budget gate; exhausted corrections conclude
-    for s in ("do_read", "do_run", "do_propose"):
-        rules = {r["condition"]: r["transition"] for r in steps[s]["resolver"]["rules"]}
-        assert rules["result.exhausted == true"] == "conclude"
-        assert rules["true"] == "check_budget"
+    assert f"context.get('escalation_turn', 0) >= {budget}" in budget_cond
+    assert "context.get('escalation_corrections', 0) >= " in budget_cond
+    # every lap — action or correction — passes the gate
+    for s in ("do_read", "do_run", "do_propose", "fold_search", "fold_consult"):
+        rules = steps[s]["resolver"]["rules"]
+        assert rules == [{"condition": "true", "transition": "check_budget"}]
     # typed terminals
     assert steps["resolved"]["status"] == "resolved"
     assert steps["deferred"]["status"] == "deferred"

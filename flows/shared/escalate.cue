@@ -69,6 +69,12 @@ escalate: #FlowDefinition & {
 
 	defaults: config: temperature: "t*0.3"
 
+	// The loop's two limits, declared once (templates.cue tool_loop_gate):
+	// tool actions, and failed actions (corrections) before the model is
+	// oscillating rather than recovering.
+	_escalate_budget:           6
+	_escalate_correction_limit: 4
+
 	steps: {
 
 		start_session: #StepDefinition & {
@@ -80,6 +86,8 @@ escalate: #FlowDefinition & {
 			}
 			params: {
 				force_consult: {$ref: "input.force_consult", default: false}
+				// Stated in the seed so the model knows its budget.
+				tool_budget: _escalate_budget
 			}
 			resolver: {
 				type: "rule"
@@ -197,7 +205,8 @@ escalate: #FlowDefinition & {
 
 		// Tool executors: observations queue into the session (next work turn
 		// sees them); corrections (missing file, rejected write) do NOT eat
-		// the turn budget — the corrections counter caps oscillation instead.
+		// the turn budget — they count against the correction limit, which
+		// check_budget enforces with the turn budget.
 		do_read: #StepDefinition & {
 			action:      "escalation_read"
 			description: "Read the named file; inject a bounded view"
@@ -211,7 +220,6 @@ escalate: #FlowDefinition & {
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "result.exhausted == true", transition: "conclude"},
 					{condition: "true", transition: "check_budget"},
 				]
 			}
@@ -231,7 +239,6 @@ escalate: #FlowDefinition & {
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "result.exhausted == true", transition: "conclude"},
 					{condition: "true", transition: "check_budget"},
 				]
 			}
@@ -254,7 +261,6 @@ escalate: #FlowDefinition & {
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "result.exhausted == true", transition: "conclude"},
 					{condition: "true", transition: "check_budget"},
 				]
 			}
@@ -291,7 +297,6 @@ escalate: #FlowDefinition & {
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "result.exhausted == true", transition: "conclude"},
 					{condition: "true", transition: "check_budget"},
 				]
 			}
@@ -339,27 +344,20 @@ escalate: #FlowDefinition & {
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "result.exhausted == true", transition: "conclude"},
 					{condition: "true", transition: "check_budget"},
 				]
 			}
 			publishes: ["escalation_turn", "escalation_corrections"]
 		}
 
-		// Budget: MAX_ESCALATION_TURNS = 6 (keep this rule, the Python
-		// constant, and the instruction template in agreement — the diagnose
-		// template's 8-vs-10 drift is the cautionary tale).
-		check_budget: #StepDefinition & {
-			action:      "noop"
-			description: "Turn budget gate (6 tool actions)"
-			context: optional: ["escalation_turn"]
-			resolver: {
-				type: "rule"
-				rules: [
-					{condition: "context.escalation_turn >= 6", transition: "conclude"},
-					{condition: "true", transition: "work"},
-				]
-			}
+		// Every lap — an action or a correction — passes this one gate.
+		check_budget: #StepDefinition & _templates.tool_loop_gate & {
+			_turn_key:         "escalation_turn"
+			_corrections_key:  "escalation_corrections"
+			_budget:           _escalate_budget
+			_correction_limit: _escalate_correction_limit
+			_conclude:         "conclude"
+			_continue:         "work"
 		}
 
 		conclude: #StepDefinition & {

@@ -214,8 +214,8 @@ async def _history_checkpoint(
 
 
 # Sub-flow step ceilings. 200 is the infinite-loop backstop for ordinary
-# sub-flows, whose real bounds are internal (diagnose's check_budget,
-# escalate's MAX_ESCALATION_TURNS). run_session is different in kind: its
+# sub-flows, whose real bounds are internal (diagnose's check_budget, the
+# escalate/classify tool_loop_gate). run_session is different in kind: its
 # step count scales with how much PRODUCT there is to explore, at ~2 steps
 # per turn, so 200 silently capped exploration at ~95 turns.
 #

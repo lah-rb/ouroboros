@@ -1219,7 +1219,9 @@
             "mission"
           ]
         },
-        "params": {},
+        "params": {
+          "tool_budget": 5
+        },
         "config": {},
         "resolver": {
           "type": "rule",
@@ -1340,10 +1342,6 @@
           "type": "rule",
           "rules": [
             {
-              "condition": "result.exhausted == true",
-              "transition": "conclude_route"
-            },
-            {
               "condition": "true",
               "transition": "check_budget"
             }
@@ -1375,10 +1373,6 @@
           "type": "rule",
           "rules": [
             {
-              "condition": "result.exhausted == true",
-              "transition": "conclude_route"
-            },
-            {
               "condition": "true",
               "transition": "check_budget"
             }
@@ -1393,11 +1387,12 @@
       },
       "check_budget": {
         "action": "noop",
-        "description": "Scout budget gate (5 actions)",
+        "description": "Tool-loop gate (5 actions, 4 corrections)",
         "context": {
           "required": [],
           "optional": [
-            "router_turn"
+            "router_turn",
+            "router_corrections"
           ]
         },
         "params": {},
@@ -1406,7 +1401,7 @@
           "type": "rule",
           "rules": [
             {
-              "condition": "context.router_turn >= 5",
+              "condition": "context.get('router_turn', 0) >= 5 or context.get('router_corrections', 0) >= 4",
               "transition": "conclude_route"
             },
             {
@@ -4842,7 +4837,8 @@
           "force_consult": {
             "$ref": "input.force_consult",
             "default": false
-          }
+          },
+          "tool_budget": 6
         },
         "config": {},
         "resolver": {
@@ -5004,10 +5000,6 @@
           "type": "rule",
           "rules": [
             {
-              "condition": "result.exhausted == true",
-              "transition": "conclude"
-            },
-            {
               "condition": "true",
               "transition": "check_budget"
             }
@@ -5038,10 +5030,6 @@
         "resolver": {
           "type": "rule",
           "rules": [
-            {
-              "condition": "result.exhausted == true",
-              "transition": "conclude"
-            },
             {
               "condition": "true",
               "transition": "check_budget"
@@ -5076,10 +5064,6 @@
         "resolver": {
           "type": "rule",
           "rules": [
-            {
-              "condition": "result.exhausted == true",
-              "transition": "conclude"
-            },
             {
               "condition": "true",
               "transition": "check_budget"
@@ -5144,10 +5128,6 @@
         "resolver": {
           "type": "rule",
           "rules": [
-            {
-              "condition": "result.exhausted == true",
-              "transition": "conclude"
-            },
             {
               "condition": "true",
               "transition": "check_budget"
@@ -5221,10 +5201,6 @@
           "type": "rule",
           "rules": [
             {
-              "condition": "result.exhausted == true",
-              "transition": "conclude"
-            },
-            {
               "condition": "true",
               "transition": "check_budget"
             }
@@ -5239,11 +5215,12 @@
       },
       "check_budget": {
         "action": "noop",
-        "description": "Turn budget gate (6 tool actions)",
+        "description": "Tool-loop gate (6 actions, 4 corrections)",
         "context": {
           "required": [],
           "optional": [
-            "escalation_turn"
+            "escalation_turn",
+            "escalation_corrections"
           ]
         },
         "params": {},
@@ -5252,7 +5229,7 @@
           "type": "rule",
           "rules": [
             {
-              "condition": "context.escalation_turn >= 6",
+              "condition": "context.get('escalation_turn', 0) >= 6 or context.get('escalation_corrections', 0) >= 4",
               "transition": "conclude"
             },
             {

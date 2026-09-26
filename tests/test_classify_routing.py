@@ -288,12 +288,28 @@ def test_classify_releases_the_router_session_before_handoff():
 
 
 def test_classify_budget_gate_bounds_the_scout():
+    from agent.resolvers.rule import resolve_rule
+
     s = _classify()
-    rules = {
-        r["condition"]: r["transition"] for r in s["check_budget"]["resolver"]["rules"]
-    }
-    assert rules["context.router_turn >= 5"] == "conclude_route"
-    assert rules["true"] == "explore"
+    budget = s["open_router_session"]["params"]["tool_budget"]
+
+    class _Out:
+        result: dict = {}
+
+    def _route(ctx):
+        return resolve_rule(
+            s["check_budget"]["resolver"], step_output=_Out(), context=ctx, meta={}
+        )
+
+    assert _route({"router_turn": budget - 1}) == "explore"
+    assert _route({"router_turn": budget}) == "conclude_route"
+    assert _route({"router_turn": 0, "router_corrections": 4}) == "conclude_route"
+    assert _route({}) == "explore"  # a fresh loop
+    # every scout lap passes the gate
+    for step in ("do_run", "do_read"):
+        assert s[step]["resolver"]["rules"] == [
+            {"condition": "true", "transition": "check_budget"}
+        ]
 
 
 def test_classify_handoffs_tail_call_the_right_controllers():

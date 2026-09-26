@@ -42,6 +42,11 @@ classify: #FlowDefinition & {
 	}
 	defaults: config: temperature: "t*0.3"
 
+	// The scout loop's two limits, declared once (templates.cue
+	// tool_loop_gate): scout actions, and failed actions (corrections).
+	_classify_budget:           5
+	_classify_correction_limit: 4
+
 	steps: {
 
 		load_mission: #StepDefinition & _templates.load_mission & {
@@ -61,6 +66,8 @@ classify: #FlowDefinition & {
 			action:      "open_router_session"
 			description: "Open the read-only exploration session, seeded with the task"
 			context: optional: ["mission"]
+			// Stated in the seed so the model knows its budget.
+			params: tool_budget: _classify_budget
 			resolver: {
 				type: "rule"
 				rules: [
@@ -136,7 +143,6 @@ classify: #FlowDefinition & {
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "result.exhausted == true", transition: "conclude_route"},
 					{condition: "true", transition: "check_budget"},
 				]
 			}
@@ -153,26 +159,20 @@ classify: #FlowDefinition & {
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "result.exhausted == true", transition: "conclude_route"},
 					{condition: "true", transition: "check_budget"},
 				]
 			}
 			publishes: ["router_turn", "router_corrections"]
 		}
 
-		// Budget: MAX_ROUTER_EXPLORE_TURNS = 5 (keep this rule, the Python
-		// constant, and the explore instruction template in agreement).
-		check_budget: #StepDefinition & {
-			action:      "noop"
-			description: "Scout budget gate (5 actions)"
-			context: optional: ["router_turn"]
-			resolver: {
-				type: "rule"
-				rules: [
-					{condition: "context.router_turn >= 5", transition: "conclude_route"},
-					{condition: "true", transition: "explore"},
-				]
-			}
+		// Every lap — an action or a correction — passes this one gate.
+		check_budget: #StepDefinition & _templates.tool_loop_gate & {
+			_turn_key:         "router_turn"
+			_corrections_key:  "router_corrections"
+			_budget:           _classify_budget
+			_correction_limit: _classify_correction_limit
+			_conclude:         "conclude_route"
+			_continue:         "explore"
 		}
 
 		// One conclude turn on the session → {flow_set, profile, findings},
