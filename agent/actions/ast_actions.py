@@ -2449,12 +2449,8 @@ async def action_fetch_symbol_body(step_input: StepInput) -> StepOutput:
     def _correct(feedback: str) -> StepOutput:
         n = corrections + 1
         return StepOutput(
-            result={
-                "fetched": False,
-                "exhausted": n >= 3,
-                "budget_exhausted": False,
-            },
-            observations=f"Drill-down correction {n}/3: {feedback[:120]}",
+            result={"fetched": False},
+            observations=f"Drill-down correction {n}: {feedback[:120]}",
             context_updates={
                 "drilldown_bodies": bodies,
                 "drilldown_picks": picks,
@@ -2495,23 +2491,32 @@ async def action_fetch_symbol_body(step_input: StepInput) -> StepOutput:
     table = _build_symbol_table(file_part, content)
     sym = _lookup_symbol(table, symbol_part)
     if sym is None or not sym.get("body"):
-        available = ", ".join(
-            s.get("name", "?") for s in table[:20] if isinstance(s, dict)
-        )
+        available = ", ".join(s.get("name", "?") for s in table if isinstance(s, dict))
         return _correct(
             f"No symbol '{symbol_part}' in {file_part}. Available: "
             f"{available or '(none — file has no extractable symbols)'}"
         )
 
+    # Sized by the whole-if-it-fits rule against what the drill-down has
+    # already pulled into the rewrite prompt (agent/context_fit.py).
+    from agent import context_fit as cf
+
+    (pulled,), _how = await cf.measure(
+        effects, ["\n\n".join(str(b.get("body", "")) for b in bodies)]
+    )
+    f = await cf.fit(effects, sym["body"], used=pulled)
+    if not f.whole:
+        return _correct(
+            f"{ref} is too large to pull whole here ({f.describe()}). Pull a "
+            f"smaller symbol it calls instead — the file's outline:\n"
+            f"{cf.code_index(file_part, content)}"
+        )
+
     bodies.append({"ref": ref, "body": sym["body"]})
     picks += 1
     return StepOutput(
-        result={
-            "fetched": True,
-            "exhausted": False,
-            "budget_exhausted": picks >= 3,
-        },
-        observations=f"Drill-down pick {picks}/3: {ref}",
+        result={"fetched": True},
+        observations=f"Drill-down pick {picks}: {ref}",
         context_updates={
             "drilldown_bodies": bodies,
             "drilldown_picks": picks,

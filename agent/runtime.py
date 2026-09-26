@@ -53,6 +53,7 @@ from agent.loader import (
     assemble_returns,
     PromptRenderer,
 )
+from agent.context_fit import OUTPUT_RESERVE as _FIT_OUTPUT_RESERVE
 from agent.turn_renderer import TurnRenderer, TurnRenderError
 
 logger = logging.getLogger(__name__)
@@ -1358,14 +1359,11 @@ async def _rewind_failed_attempt(
 # fixed 16k-char tail it replaces was sized for a 32k window and threw away
 # evidence on a 262k one (2026-09-25).
 
-# Output reserve when the turn sets no max_tokens. The largest verdict of the
-# 2026-09-25 run was 3,366 tokens (reasoning high; p90 1,546); 8k leaves a
-# longer thinker room without starving the evidence.
-_FIT_OUTPUT_RESERVE = 8192
-# The window assumed when the server does not report nCtxSeq: the smallest
-# any configured text model serves (hy3, muse). Too small costs evidence; too
-# large loses the verdict.
-_FIT_UNKNOWN_WINDOW = 32768
+# The output reserve and the assumed window are the whole-if-it-fits rule's
+# (agent/context_fit.py) — one definition for every read. The tail fit keeps
+# its own shape: a judge's transcript is the evidence itself, so it is fitted
+# whole beside the rest of the prompt (not held to the per-read share) and its
+# fallback is the most recent stretch, not an index.
 _FIT_MARKER = (
     "[… the first {omitted:,} characters of this transcript are not shown — "
     "it was fitted to the model's {window:,}-token window; the most recent "
@@ -1404,36 +1402,18 @@ async def _fit_tail_sections(
 ) -> None:
     """Fit every `fit: "tail"` section of ``turn`` into the serving window,
     writing the fitted text back into ``namespaces`` for the render."""
-    from agent.scheduler.capacity_model import TOKENIZE_MARGIN
+    from agent.context_fit import measure, serving_window
 
     sections = [s for s in turn.sections if getattr(s, "fit", None) == "tail"]
     if not sections:
         return
 
-    window = 0
-    health = getattr(effects, "cache_health", None)
-    if health is not None:
-        try:
-            window = int((await health()).get("nCtxSeq") or 0)
-        except Exception:  # noqa: BLE001 — sizing never fails a step
-            window = 0
-    window_how = "reported" if window else "assumed"
-    window = window or _FIT_UNKNOWN_WINDOW
+    window, reported = await serving_window(effects)
+    window_how = "reported" if reported else "assumed"
     reserve = int(config.get("max_tokens") or 0) or _FIT_OUTPUT_RESERVE
-    counter = getattr(effects, "token_count", None)
 
     async def _tokens(texts: list[str]) -> tuple[list[int], str]:
-        """Exact counts (with the chat-template margin) from the serving
-        tokenizer, or the chars x 13/40 estimate when the server won't say."""
-        counts: list[int] = []
-        if counter is not None:
-            try:
-                counts = await counter(texts)
-            except Exception:  # noqa: BLE001
-                counts = []
-        if len(counts) == len(texts):
-            return [int(c * TOKENIZE_MARGIN) for c in counts], "exact"
-        return [(len(t) * 13) // 40 for t in texts], "estimated"
+        return await measure(effects, texts)
 
     renderer = _get_turn_renderer()
     for section in sections:

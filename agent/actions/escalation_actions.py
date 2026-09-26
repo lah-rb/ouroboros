@@ -61,9 +61,32 @@ def _flow_key() -> str:
     )
 
 
-def _bounded(s: str, n: int) -> str:
-    s = (s or "").strip()
-    return s if len(s) <= n else s[:n] + " …[truncated]"
+async def _session_used(step_input: StepInput) -> int:
+    """What the escalation session holds — the "used" side of the
+    whole-if-it-fits rule (agent/context_fit.py) for everything it reads."""
+    from agent.context_fit import session_used
+
+    return await session_used(
+        step_input.effects, str(step_input.context.get("escalation_session_id", ""))
+    )
+
+
+async def _sized(step_input: StepInput, text: str, kind: str, label: str) -> str:
+    """Output, evidence or findings WHOLE when they fit the session; else
+    saved under .agent/outputs and shown as a line index to read from. It
+    replaces 4,000-char head cuts that kept the start and lost the error at
+    the end."""
+    from agent.context_fit import output_view
+
+    sid = str(step_input.context.get("escalation_session_id", "") or "session")
+    turn = int(step_input.context.get("escalation_turn", 0) or 0)
+    return await output_view(
+        step_input.effects,
+        (text or "").strip(),
+        used=await _session_used(step_input),
+        save_path=f".agent/outputs/escalation-{sid}-{turn}-{kind}.txt",
+        label=label,
+    )
 
 
 async def action_open_escalation_session(step_input: StepInput) -> StepOutput:
@@ -98,9 +121,15 @@ async def action_open_escalation_session(step_input: StepInput) -> StepOutput:
     parts.append("## What failed")
     parts.append(f"The `{invoking}` step hit a deterministic failure:")
     parts.append("```")
+    from agent.context_fit import estimate_tokens, output_view
+
     parts.append(
-        _bounded(
-            str(inputs.get("failure_evidence", "") or "(no evidence provided)"), 4000
+        await output_view(
+            effects,
+            str(inputs.get("failure_evidence", "") or "(no evidence provided)").strip(),
+            used=estimate_tokens(SYSTEM_PROMPT),
+            save_path=f".agent/outputs/escalation-{session_id}-evidence.txt",
+            label="the failure evidence",
         )
     )
     parts.append("```")
@@ -205,25 +234,21 @@ def _observe(
 
 
 async def action_escalation_read(step_input: StepInput) -> StepOutput:
-    """read_file tool: inject a bounded view of the named file.
+    """read_file tool: the named file — or one part of it, `path:<Symbol>`,
+    `path:/pointer`, `path:<first>-<last>` — WHOLE when it fits the session,
+    else the file's index to read a part from (agent/context_fit.py).
 
     Context: escalation_choice_arg (the path), counters.
     """
-    effects = step_input.effects
-    path = str(step_input.context.get("escalation_choice_arg", "") or "").strip()
-    if not path:
-        return _correction(step_input, "read_file needs a path argument.")
-    try:
-        fc = await effects.read_file(path)
-    except Exception as e:  # noqa: BLE001
-        return _correction(step_input, f"could not read {path}: {e}")
-    if not getattr(fc, "exists", False):
-        return _correction(step_input, f"{path} does not exist.")
-    content = _bounded(getattr(fc, "content", "") or "", 6000)
-    return _observe(
-        step_input,
-        f"Observation (read {path}):\n```\n{content}\n```",
+    from agent.context_fit import read_file_view
+
+    ref = str(step_input.context.get("escalation_choice_arg", "") or "").strip()
+    view, error = await read_file_view(
+        step_input.effects, ref, used=await _session_used(step_input)
     )
+    if error:
+        return _correction(step_input, error)
+    return _observe(step_input, view)
 
 
 async def action_escalation_run(step_input: StepInput) -> StepOutput:
@@ -241,10 +266,8 @@ async def action_escalation_run(step_input: StepInput) -> StepOutput:
         return _correction(step_input, f"command failed to run: {e}")
     out = (getattr(res, "stdout", "") or "") + (getattr(res, "stderr", "") or "")
     rc = getattr(res, "return_code", None)
-    return _observe(
-        step_input,
-        f"Observation:\n$ {cmd}\n[exit {rc}]\n{_bounded(out, 4000)}",
-    )
+    shown = await _sized(step_input, out, "run", "the command output")
+    return _observe(step_input, f"Observation:\n$ {cmd}\n[exit {rc}]\n{shown}")
 
 
 # Abbreviation markers. A body carrying any of these is not a file, it is a
@@ -477,7 +500,8 @@ async def action_escalation_fold_search(step_input: StepInput) -> StepOutput:
         )
     return _observe(
         step_input,
-        f"Observation (web_search findings):\n{_bounded(summary, 4000)}",
+        "Observation (web_search findings):\n"
+        + await _sized(step_input, summary, "web", "the findings"),
     )
 
 
@@ -502,5 +526,6 @@ async def action_escalation_fold_consult(step_input: StepInput) -> StepOutput:
         )
     return _observe(
         step_input,
-        f"Observation (supervisor direction):\n{_bounded(guidance, 4000)}",
+        "Observation (supervisor direction):\n"
+        + await _sized(step_input, guidance, "consult", "the direction"),
     )

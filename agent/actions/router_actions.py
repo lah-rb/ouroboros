@@ -56,9 +56,14 @@ def _flow_key() -> str:
     )
 
 
-def _bounded(s: str, n: int) -> str:
-    s = (s or "").strip()
-    return s if len(s) <= n else s[:n] + " …[truncated]"
+async def _session_used(step_input: StepInput) -> int:
+    """What the router session holds — the "used" side of the
+    whole-if-it-fits rule (agent/context_fit.py)."""
+    from agent.context_fit import session_used
+
+    return await session_used(
+        step_input.effects, str(step_input.context.get("router_session_id", ""))
+    )
 
 
 def _correction(step_input: StepInput, msg: str) -> StepOutput:
@@ -119,13 +124,21 @@ async def action_open_router_session(step_input: StepInput) -> StepOutput:
             observations=f"Failed to start router session: {e}",
         )
 
+    from agent.context_fit import estimate_tokens, output_view
+
     mission = step_input.context.get("mission")
     objective = str(getattr(mission, "objective", "") or "").strip() or "(no objective)"
     parts = [
         SYSTEM_PROMPT,
         "",
         "## The task to route",
-        _bounded(objective, 4000),
+        await output_view(
+            effects,
+            objective,
+            used=estimate_tokens(SYSTEM_PROMPT),
+            save_path=f".agent/outputs/router-{session_id}-objective.txt",
+            label="the objective",
+        ),
         "",
         f"Investigate the workspace (up to {MAX_ROUTER_EXPLORE_TURNS} actions), then "
         "conclude with the flow_set, profile, and findings. Start by seeing what is "
@@ -147,19 +160,18 @@ async def action_open_router_session(step_input: StepInput) -> StepOutput:
 
 
 async def action_router_read(step_input: StepInput) -> StepOutput:
-    """read_file tool: inject a bounded view of the named file (read-only)."""
-    effects = step_input.effects
-    path = str(step_input.context.get("router_choice_arg", "") or "").strip()
-    if not path:
-        return _correction(step_input, "read_file needs a path argument.")
-    try:
-        fc = await effects.read_file(path)
-    except Exception as e:  # noqa: BLE001
-        return _correction(step_input, f"could not read {path}: {e}")
-    if not getattr(fc, "exists", False):
-        return _correction(step_input, f"{path} does not exist.")
-    content = _bounded(getattr(fc, "content", "") or "", 6000)
-    return _observe(step_input, f"Observation (read {path}):\n```\n{content}\n```")
+    """read_file tool (read-only): the named file, or one part of it
+    (`path:<Symbol>`, `path:/pointer`, `path:<first>-<last>`), WHOLE when it
+    fits the session, else the file's index to read a part from."""
+    from agent.context_fit import read_file_view
+
+    ref = str(step_input.context.get("router_choice_arg", "") or "").strip()
+    view, error = await read_file_view(
+        step_input.effects, ref, used=await _session_used(step_input)
+    )
+    if error:
+        return _correction(step_input, error)
+    return _observe(step_input, view)
 
 
 async def action_router_run(step_input: StepInput) -> StepOutput:
@@ -177,9 +189,18 @@ async def action_router_run(step_input: StepInput) -> StepOutput:
         return _correction(step_input, f"command failed to run: {e}")
     out = (getattr(res, "stdout", "") or "") + (getattr(res, "stderr", "") or "")
     rc = getattr(res, "return_code", None)
-    return _observe(
-        step_input, f"Observation:\n$ {cmd}\n[exit {rc}]\n{_bounded(out, 4000)}"
+    from agent.context_fit import output_view
+
+    sid = str(step_input.context.get("router_session_id", "") or "session")
+    turn = int(step_input.context.get("router_turn", 0) or 0)
+    shown = await output_view(
+        step_input.effects,
+        out.strip(),
+        used=await _session_used(step_input),
+        save_path=f".agent/outputs/router-{sid}-{turn}-run.txt",
+        label="the command output",
     )
+    return _observe(step_input, f"Observation:\n$ {cmd}\n[exit {rc}]\n{shown}")
 
 
 async def action_conclude_route(step_input: StepInput) -> StepOutput:

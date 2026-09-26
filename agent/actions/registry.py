@@ -105,15 +105,22 @@ async def action_read_files(step_input: StepInput) -> StepOutput:
         fc = await step_input.effects.read_file(target)
         if fc.exists:
             content = fc.content or ""
+            result: dict = {"file_found": True, "content_bytes": len(content)}
+            if step_input.params.get("size_for_rewrite"):
+                # Rewrite's size gate (2026-09-26): a whole-file regeneration
+                # reads the file AND writes it back, so it is sized by the
+                # whole-if-it-fits rule (agent/context_fit.py) with the file's
+                # own regeneration counted as used. It replaces a fixed
+                # 24,000-char gate sized for one 32k window (engine.py at
+                # 40KB built a 39k-token prompt against it, 2026-08-07).
+                from agent.context_fit import fit, measure
+
+                (file_tokens,), _how = await measure(step_input.effects, [content])
+                f = await fit(step_input.effects, content, used=file_tokens)
+                result["whole_rewrite_fits"] = f.whole
+                result["rewrite_fit"] = f.describe()
             return StepOutput(
-                result={
-                    "file_found": True,
-                    # Size gate input (2026-08-07): rewrite's read_target
-                    # routes oversized files away from the doomed whole-file
-                    # regeneration (engine.py at 40KB built a 39k-token
-                    # prompt against the 32k window).
-                    "content_bytes": len(content),
-                },
+                result=result,
                 observations=f"Read {fc.size} characters from {target}",
                 context_updates={
                     "target_file": {"path": fc.path, "content": fc.content},
@@ -165,9 +172,9 @@ async def action_flag_rewrite_too_large(step_input: StepInput) -> StepOutput:
     path = tf.get("path", "the target") if isinstance(tf, dict) else "the target"
     size = len(tf.get("content", "") or "") if isinstance(tf, dict) else 0
     headline = (
-        f"{path} is too large ({size // 1024}KB) for a whole-file rewrite — "
-        f"a symbol-scoped fix is required: name the specific function/method "
-        f"in target_symbol"
+        f"{path} is too large ({size // 1024}KB) for a whole-file rewrite on "
+        f"this model's window — a symbol-scoped fix is required: name the "
+        f"specific function/method in target_symbol"
     )
     logger.warning("rewrite size gate: %s", headline)
     return StepOutput(
@@ -261,6 +268,8 @@ def build_action_registry() -> ActionRegistry:
         action_close_interactive_session,
         action_flush_transient_files,
         action_probe_eval_context,
+        action_size_world_view,
+        action_fetch_world_entry,
         action_snapshot_workspace,
         action_confirm_close_gate,
         action_execute_commands_batch_mcp,
@@ -609,6 +618,8 @@ def build_action_registry() -> ActionRegistry:
     registry.register("flush_transient_files", action_flush_transient_files)
     registry.register("snapshot_workspace", action_snapshot_workspace)
     registry.register("probe_eval_context", action_probe_eval_context)
+    registry.register("size_world_view", action_size_world_view)
+    registry.register("fetch_world_entry", action_fetch_world_entry)
     # Pre-close confirmation: the first model-chosen close draws a
     # brief-check notice (injected into the next plan turn — no second
     # menu; the 779 lesson) and returns to the plan menu; later closes

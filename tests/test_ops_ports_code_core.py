@@ -883,10 +883,16 @@ class TestRewriteSizeGate:
     fast with a headline that steers the next diagnosis to a symbol-scoped
     target — patch works at any file size."""
 
-    def test_read_target_gates_on_size(self):
+    def test_read_target_gates_on_the_window(self):
+        """The fixed 24,000-char gate became the whole-if-it-fits rule
+        (2026-09-26): read_target asks read_files to size the file for a
+        whole-file regeneration, and routes on that."""
         rw = _compiled()["rewrite"]["steps"]
+        assert rw["read_target"]["params"]["size_for_rewrite"] is True
         rules = rw["read_target"]["resolver"]["rules"]
-        assert rules[0]["condition"] == "result.get('content_bytes', 0) > 24000"
+        assert (
+            rules[0]["condition"] == "result.get('whole_rewrite_fits', True) == False"
+        )
         assert rules[0]["transition"] == "too_large"
         tl = rw["too_large"]
         assert tl["terminal"] is True and tl["status"] == "failed"
@@ -914,6 +920,29 @@ class TestRewriteSizeGate:
             )
         )
         assert out.result["content_bytes"] == 30000
+        assert "whole_rewrite_fits" not in out.result  # only when asked
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("n_ctx,fits", [(262144, True), (32768, False)])
+    async def test_a_rewrite_is_sized_against_the_serving_window(self, n_ctx, fits):
+        """A 40KB file (~13k tokens) fits a whole-file rewrite on a 262k
+        window, not on a 32k one: it must fit the share AND leave room for
+        its own regeneration."""
+        from agent.actions.registry import action_read_files
+
+        class _Fx(MockEffects):
+            async def cache_health(self):
+                return {"nCtxSeq": n_ctx}
+
+        out = await action_read_files(
+            StepInput(
+                context={},
+                params={"target": "engine.py", "size_for_rewrite": True},
+                meta=FlowMeta(flow_name="rewrite", step_id="read_target"),
+                effects=_Fx(files={"engine.py": "x = 1\n" * 6700}),
+            )
+        )
+        assert out.result["whole_rewrite_fits"] is fits
 
     @pytest.mark.asyncio
     async def test_the_flag_action_writes_the_steering_headline(self):
@@ -935,8 +964,10 @@ class TestRewriteSizeGate:
 class TestEvaluationModeRouter:
     """Operator (2026-08-07): 'the original behavior should be the default
     with bigger context models.' In-session evaluation (full transcript in
-    KV) runs when health.nCtxSeq >= 64k; the stateless bounded tail — which
-    cannot lose a verdict to depth — runs below that or when unknown."""
+    KV) runs when the verdict FITS in the tester's session — occupancy +
+    evaluation prompt + reserve within the real window (2026-09-26; it was
+    nCtxSeq >= 64k). The stateless fallback runs otherwise, and whenever the
+    occupancy or the window is unknown."""
 
     @pytest.mark.asyncio
     async def test_probe_defaults_to_stateless_when_unknown(self):
@@ -950,25 +981,49 @@ class TestEvaluationModeRouter:
                 effects=MockEffects(),  # no cache_health
             )
         )
-        assert out.result["big_context"] is False
+        assert out.result["in_session_fits"] is False
 
-    @pytest.mark.asyncio
-    async def test_probe_picks_in_session_on_big_windows(self):
-        from agent.actions.interactive_actions import action_probe_eval_context
-
+    @staticmethod
+    def _tracking(n_ctx: int, held: int):
         class _Fx(MockEffects):
             async def cache_health(self):
-                return {"nCtxSeq": 131072}
+                return {"nCtxSeq": n_ctx}
+
+            def session_tokens(self, session_id):
+                return held
+
+        return _Fx()
+
+    @pytest.mark.asyncio
+    async def test_probe_picks_in_session_when_the_verdict_fits(self):
+        from agent.actions.interactive_actions import action_probe_eval_context
 
         out = await action_probe_eval_context(
             StepInput(
-                context={},
+                context={"inference_session_id": "tester-1"},
                 params={},
                 meta=FlowMeta(flow_name="interact", step_id="choose_eval_mode"),
-                effects=_Fx(),
+                effects=self._tracking(131072, 20000),
             )
         )
-        assert out.result["big_context"] is True
+        assert out.result["in_session_fits"] is True
+
+    @pytest.mark.asyncio
+    async def test_a_session_that_filled_the_window_evaluates_stateless(self):
+        """tier_20260924-191710: a 124-turn tester session reached 262,715
+        tokens of a 262,144 window, and the in-session evaluation (265,673)
+        lost its verdict. The window alone said "big — go in-session"."""
+        from agent.actions.interactive_actions import action_probe_eval_context
+
+        out = await action_probe_eval_context(
+            StepInput(
+                context={"inference_session_id": "tester-1"},
+                params={},
+                meta=FlowMeta(flow_name="interact", step_id="choose_eval_mode"),
+                effects=self._tracking(262144, 259000),
+            )
+        )
+        assert out.result["in_session_fits"] is False
 
     def test_router_wiring(self):
         steps = _compiled()["interact"]["steps"]
@@ -976,7 +1031,7 @@ class TestEvaluationModeRouter:
             r["condition"]: r["transition"]
             for r in steps["choose_eval_mode"]["resolver"]["rules"]
         }
-        assert cm["result.big_context == true"] == "evaluate_in_session"
+        assert cm["result.in_session_fits == true"] == "evaluate_in_session"
         assert cm["true"] == "release_session_for_eval"
         # both acceptance paths enter through the router
         for entry in ("load_stored_checks", "acceptance_verdict"):
@@ -1008,15 +1063,17 @@ class TestEvaluationModeRouter:
         (tmp_path / ".agent").mkdir()
         fx = LocalEffects(str(tmp_path), history_mode="off")
         fx._get_inference = lambda domain="": _Inference()  # type: ignore[method-assign]
+        fx._session_tokens["tester-1"] = 30000
         out = await action_probe_eval_context(
             StepInput(
-                context={},
+                context={"inference_session_id": "tester-1"},
                 params={},
                 meta=FlowMeta(flow_name="interact", step_id="choose_eval_mode"),
                 effects=fx,
             )
         )
-        assert out.result == {"big_context": True, "n_ctx": 262144}
+        assert out.result["in_session_fits"] is True
+        assert out.result["n_ctx"] == 262144 and out.result["session_tokens"] == 30000
 
 
 class TestEvaluationRoutesTheCallItClaims:
@@ -1053,13 +1110,16 @@ class TestEvaluationRoutesTheCallItClaims:
             {"flow": "interact", "entry": "choose_eval_mode", "steps": steps}
         )
 
-    async def _run(self, n_ctx: int):
+    async def _run(self, n_ctx: int, held: int):
         from agent.actions.registry import build_action_registry
         from agent.runtime import execute_flow
 
         class _Fx(MockEffects):
             async def cache_health(self):
                 return {"nCtxSeq": n_ctx}
+
+            def session_tokens(self, session_id):
+                return held  # what the tester session holds
 
         fx = _Fx(inference_responses=[self._VERDICT])
         await execute_flow(
@@ -1075,16 +1135,27 @@ class TestEvaluationRoutesTheCallItClaims:
         return [c.method for c in fx.calls], fx
 
     @pytest.mark.asyncio
-    async def test_a_small_window_ends_the_session_then_evaluates_stateless(self):
-        calls, fx = await self._run(32768)
+    @pytest.mark.parametrize("n_ctx,held", [(32768, 30000), (262144, 259000)])
+    async def test_a_session_that_cannot_hold_the_verdict_ends_then_goes_stateless(
+        self, n_ctx, held
+    ):
+        """Whatever the window: a tester session too full for the verdict is
+        released and the evaluation runs stateless over the fitted transcript
+        (the 262k case is the 124-turn session that lost its verdict)."""
+        calls, fx = await self._run(n_ctx, held)
         assert "session_inference" not in calls
         assert calls.index("end_inference_session") < calls.index("run_inference")
         (ended,) = fx.calls_to("end_inference_session")
         assert ended.args == {"session_id": "tester-1"}
 
     @pytest.mark.asyncio
-    async def test_a_big_window_evaluates_in_the_testers_session(self):
-        calls, fx = await self._run(262144)
+    @pytest.mark.parametrize("n_ctx,held", [(32768, 4000), (262144, 30000)])
+    async def test_a_session_with_room_evaluates_in_the_testers_session(
+        self, n_ctx, held
+    ):
+        """In-session whenever the verdict fits — on a 32k window too, now
+        that the decision reads the session rather than a 64k threshold."""
+        calls, fx = await self._run(n_ctx, held)
         assert "run_inference" not in calls and "end_inference_session" not in calls
         (turn,) = fx.calls_to("session_inference")
         assert turn.args["session_id"] == "tester-1"

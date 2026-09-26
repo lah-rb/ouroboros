@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import re
+from typing import Any
 
 from agent.models import StepInput, StepOutput
 
@@ -35,22 +36,27 @@ logger = logging.getLogger(__name__)
 SMALL_SYMBOL_MAX_LINES = 20
 
 # Full-file fallback budget for symbol-less / unmatched trace targets. Matches the
-# repo-map formatter + dependency-file display cap (4000 chars) and the canonical
-# `_load_file_content` truncation marker, so a file with no symbols (a linear
-# shell script, config/data, or ANY non-Python file — the diagnose symbol table
-# is .py-only) is shown the same way an unparseable-grammar file is, instead of
-# returning "not found" and letting the model invent symbols (the
-# processing-pipeline trace-spin).
-FULLFILE_FALLBACK_MAX_CHARS = 4000
+# A file with no symbols (a linear shell script, config/data, or ANY non-Python
+# file — the diagnose symbol table is .py-only), or a named symbol that is not
+# in the file, is shown instead of returning "not found" and letting the model
+# invent symbols (the processing-pipeline trace-spin). Sized by the
+# whole-if-it-fits rule (agent/context_fit.py): the file WHOLE when it fits the
+# session, else its index — the symbol outline, or line ranges — to pick from.
+# It replaces a 4,000-char head cut.
 
 
-def _full_file_fallback(
-    file_path: str, file_content: str, symbol_name: str, had_table: bool
+async def _full_file_fallback(
+    file_path: str,
+    file_content: str,
+    symbol_name: str,
+    had_table: bool,
+    *,
+    effects: Any = None,
+    used: int = 0,
 ) -> StepOutput:
     """Surface the target file's own content as the traced context when there is
     no symbol to trace — the read-side analogue of the patch frame fallback, but
-    language-agnostic (plain text, no AST). Bounded + truncated like the
-    repo-map / dependency-file display."""
+    language-agnostic (plain text, no AST)."""
     reason = (
         f"symbol {symbol_name!r} is not in the symbol table"
         if had_table
@@ -62,13 +68,23 @@ def _full_file_fallback(
             observations=f"{reason} — and no file content to fall back to",
             context_updates={"traced_context": ""},
         )
-    body = file_content
-    if len(body) > FULLFILE_FALLBACK_MAX_CHARS:
-        body = body[:FULLFILE_FALLBACK_MAX_CHARS] + "\n# ... truncated ...\n"
-    view = f"{file_path or 'target file'} ({reason} — showing the full file):\n\n{body}"
+    from agent import context_fit as cf
+
+    f = await cf.fit(effects, file_content, used=used)
+    name = file_path or "target file"
+    if f.whole:
+        view = f"{name} ({reason} — showing the full file):\n\n{file_content}"
+        how = "the full file"
+    else:
+        view = (
+            f"{name} ({reason}; the file is too large to show whole here: "
+            f"{f.describe()}). Its index — trace one of these:\n\n"
+            f"{cf.index_for(name, file_content)}"
+        )
+        how = "the file's index"
     return StepOutput(
         result={"traced": True, "symbol_count": 0},
-        observations=f"{reason} — fell back to the full file ({len(body)} chars)",
+        observations=f"{reason} — fell back to {how} ({len(file_content)} chars)",
         context_updates={"traced_context": view},
     )
 
@@ -114,8 +130,13 @@ async def trace_function(step_input: StepInput) -> StepOutput:
         # symbol table is .py-only) or the requested name isn't one of them.
         # Show the file's own content (the frame) so the model reads the actual
         # code instead of inventing symbols.
-        return _full_file_fallback(
-            file_path, file_content, symbol_name, bool(symbol_table)
+        return await _full_file_fallback(
+            file_path,
+            file_content,
+            symbol_name,
+            bool(symbol_table),
+            effects=step_input.effects,
+            used=int(step_input.context.get("trace_used_tokens", 0) or 0),
         )
 
     target_body = target_sym.get("body", "")

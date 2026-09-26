@@ -21,9 +21,9 @@ import pytest
 
 from agent.effects.mock import MockEffects
 from agent.models import Section, TurnDefinition
+from agent.context_fit import UNKNOWN_WINDOW as _FIT_UNKNOWN_WINDOW
 from agent.runtime import (
     _FIT_OUTPUT_RESERVE,
-    _FIT_UNKNOWN_WINDOW,
     _fit_tail_sections,
     _get_turn_renderer,
 )

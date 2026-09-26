@@ -265,7 +265,7 @@ async def test_bare_data_file_traces_full_content():
     assert out.context_updates.get("investigation_turn") == 3
     injected = out.context_updates.get(INJECTION_KEY, [])
     joined = " ".join(injected) if isinstance(injected, list) else str(injected)
-    assert "world/rooms.yaml" in joined and "data file" in joined
+    assert "=== world/rooms.yaml (data) ===" in joined
     assert "exits" in joined  # actual content surfaced
 
 
@@ -286,3 +286,85 @@ async def test_bare_code_file_without_colon_still_corrected():
     injected = out.context_updates.get(INJECTION_KEY, [])
     joined = " ".join(injected) if isinstance(injected, list) else str(injected)
     assert "file:symbol" in joined
+
+
+# ── Data files: trace one entry by pointer (2026-09-26) ──────────────
+#
+# The seed advertised data files as "valid trace targets", but a bare name or
+# any `file:x` returned the whole file — the diagnosis could not read one
+# entry. A data file's "symbol" is now an RFC 6901 pointer, and a file too big
+# for the session comes back as an index of its entries.
+
+_WORLD = json.dumps(
+    {
+        "starting_room": "room_a",
+        "rooms": [
+            {"id": "room_a", "name": "Hall", "exits": [{"direction": "north"}]},
+            {"id": "room_b", "name": "Crypt", "items": ["item_vial"]},
+        ],
+    },
+    indent=2,
+)
+
+
+def _joined(out) -> str:
+    injected = out.context_updates.get(INJECTION_KEY, [])
+    return " ".join(injected) if isinstance(injected, list) else str(injected)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ref", ["world.json:/rooms/1", "world.json:rooms/1"])
+async def test_a_data_entry_is_traced_by_pointer(ref):
+    effects = MockEffects(files={"world.json": _WORLD})
+    out = await action_execute_symbol_trace(
+        _step_input(
+            effects,
+            diagnosis_session_id="s1",
+            investigation_choice_arg=ref,
+            investigation_turn=2,
+        )
+    )
+    assert out.result.get("trace_ok") is True
+    joined = _joined(out)
+    assert "=== world.json:/rooms/1 (data) ===" in joined
+    assert "Crypt" in joined and "item_vial" in joined and "Hall" not in joined
+    assert out.context_updates["traced_symbols"] == ["world.json:/rooms/1"]
+
+
+@pytest.mark.asyncio
+async def test_a_wrong_pointer_is_corrected_with_the_nearest_map():
+    effects = MockEffects(files={"world.json": _WORLD})
+    out = await action_execute_symbol_trace(
+        _step_input(
+            effects,
+            diagnosis_session_id="s1",
+            investigation_choice_arg="world.json:/rooms/7",
+            investigation_turn=2,
+        )
+    )
+    assert out.result.get("trace_ok") is False
+    joined = _joined(out)
+    assert "no data at /rooms/7" in joined
+    assert "/rooms/1" in joined and "room_b" in joined  # a way forward
+
+
+@pytest.mark.asyncio
+async def test_a_data_file_too_big_for_the_session_comes_back_as_an_index():
+    class _Small(MockEffects):
+        async def cache_health(self):
+            return {"nCtxSeq": 16384}
+
+    rooms = [{"id": f"room_{i}", "desc": "x" * 300} for i in range(60)]
+    effects = _Small(files={"world.json": json.dumps({"rooms": rooms})})
+    out = await action_execute_symbol_trace(
+        _step_input(
+            effects,
+            diagnosis_session_id="s1",
+            investigation_choice_arg="world.json",
+            investigation_turn=2,
+        )
+    )
+    assert out.result.get("trace_ok") is True
+    joined = _joined(out)
+    assert "too large to show whole here" in joined
+    assert "/rooms" in joined and "x" * 300 not in joined

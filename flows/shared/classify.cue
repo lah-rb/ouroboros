@@ -103,7 +103,7 @@ classify: #FlowDefinition & {
 						read_file: #MenuOption & {
 							key:         "read_file"
 							description: "Read a file to see what is actually there"
-							arg: {name: "path", description: "workspace-relative file path"}
+							arg: {name: "path", description: "workspace-relative file path, or one part of it: path:Symbol (code), path:/pointer (data), path:first-last (lines)"}
 						}
 						conclude: #MenuOption & {
 							key:         "conclude"

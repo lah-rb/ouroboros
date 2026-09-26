@@ -41,8 +41,6 @@ from agent.schema_extract import (
 
 logger = logging.getLogger(__name__)
 
-_MAX_DATA_FILES = 2  # cap connected files per trace (common case: 1)
-_WHOLE_FILE_MAX = 600  # show a keyless small data file whole below this size
 _MAX_MODEL_FILES = 6  # cap sibling code files read to build the model index
 
 
@@ -53,9 +51,45 @@ async def build_data_trace_evidence(
     file_content: str,
     file_context: dict | None,
     effects: Any,
-    token_cap: int = 1200,
+    used: int = 0,
 ) -> str:
     """Produce the ``## Connected data`` evidence block, or ``""`` for no-op.
+
+    Sized by the whole-if-it-fits rule (agent/context_fit.py) against the
+    session reading it (``used`` = what it already holds): every connected
+    subtree WHOLE when the block fits, otherwise an index of each file's
+    entries by pointer, which the diagnosis traces one at a time. It replaces
+    a 1,200-char budget, a 2-file and 12-match cap and a 600-char "whole file"
+    threshold, which cut the evidence silently.
+    """
+    text, sources = await _connected_evidence(
+        target_sym=target_sym,
+        symbol_table=symbol_table,
+        file_content=file_content,
+        file_context=file_context,
+        effects=effects,
+    )
+    if not text:
+        return ""
+    from agent.context_fit import fit
+
+    f = await fit(effects, text, used=used)
+    if f.whole:
+        return text
+    logger.info("connected data indexed, not shown whole: %s", f.describe())
+    return _connected_index(sources, f.describe())
+
+
+async def _connected_evidence(
+    *,
+    target_sym: dict,
+    symbol_table: list[dict],
+    file_content: str,
+    file_context: dict | None,
+    effects: Any,
+) -> tuple[str, list[tuple[str, str, list[str], str]]]:
+    """(block, sources) — the whole connected-data block and, per file,
+    (path, via, keys, content) for the index fallback.
 
     Algorithm: detect the data file(s) the traced symbol loads (direct, then
     multi-hop via ``self.X``), read + parse them, scope to the keys the code
@@ -64,7 +98,7 @@ async def build_data_trace_evidence(
     """
     body = target_sym.get("body", "") or ""
     if not body:
-        return ""
+        return "", []
 
     module_constants = extract_module_constants(file_content)
     via_name = target_sym.get("name", "this symbol")
@@ -87,7 +121,7 @@ async def build_data_trace_evidence(
     #    literal lives at the call site, not the body (the most common loader
     #    shape). Surface the project's data files so the connection still fires.
     if not resolved and parses_data(body):
-        for path in _project_data_files(file_context)[:_MAX_DATA_FILES]:
+        for path in _project_data_files(file_context):
             resolved.append((path, "loaded here (path resolved at runtime)"))
 
     # Model-layer hop: the dict-key bridge found no data file. When the loader
@@ -101,11 +135,10 @@ async def build_data_trace_evidence(
                 file_content=file_content,
                 file_context=file_context,
                 effects=effects,
-                token_cap=token_cap,
             )
         except Exception:  # noqa: BLE001 - additive; never break the code trace
             logger.debug("model-layer trace hop failed", exc_info=True)
-            return ""
+            return "", []
 
     # 3. Keys the traced function reads — the scoping signal.
     target_func = (target_sym.get("name", "") or "").rsplit(".", 1)[-1]
@@ -115,11 +148,12 @@ async def build_data_trace_evidence(
         if k not in keys:
             keys.append(k)
 
-    # 4. One evidence block per connected file (capped).
+    # 4. One evidence block per connected file.
     blocks: list[str] = []
+    sources: list[tuple[str, str, list[str], str]] = []
     seen: set[str] = set()
     for path, via in resolved:
-        if len(blocks) >= _MAX_DATA_FILES or path in seen:
+        if path in seen:
             continue
         seen.add(path)
         content = await _read_data_content(path, file_context, effects)
@@ -135,10 +169,43 @@ async def build_data_trace_evidence(
                 )
             )
             continue
-        scoped = _scope_to_keys(obj, keys, content, path, token_cap)
+        scoped = _scope_to_keys(obj, keys, content, path)
         blocks.append(_format_data_evidence(path, via, keys, scoped))
+        sources.append((path, via, keys, content))
 
-    return "\n\n".join(b for b in blocks if b)
+    return "\n\n".join(b for b in blocks if b), sources
+
+
+def _connected_index(sources: list[tuple[str, str, list[str], str]], why: str) -> str:
+    """The connected data as an index: per file, the entries the traced code
+    reads (by pointer) and the file's top level, each traceable as
+    ``file:/pointer``."""
+    from agent.context_fit import data_index
+
+    out = [
+        f"## Connected data — too large to show whole here ({why}).",
+        "Trace an entry to read it whole: `<file>:/pointer` (pointers below).",
+    ]
+    for path, via, keys, content in sources:
+        out.append("")
+        out.append(
+            f"### {path} ({via}) — keys accessed: "
+            f"{', '.join(keys) if keys else '(whole file)'}"
+        )
+        if keys:
+            try:
+                doc = Document.read(content, detect_fmt(path, content))
+                chosen = _chosen_subtrees(doc, keys)
+            except DataOpsError:
+                chosen = []
+            for ptr, _label, val in chosen:
+                if isinstance(val, (dict, list)):
+                    out.append(data_index(path, content, ptr))
+                else:
+                    out.append(f"{path}:{ptr} = {val!r}")
+        out.append("Top level:")
+        out.append(data_index(path, content, ""))
+    return "\n".join(out)
 
 
 # ── Path resolution ───────────────────────────────────────────────────
@@ -304,8 +371,7 @@ async def _build_model_trace_evidence(
     file_content: str,
     file_context: dict | None,
     effects: Any,
-    token_cap: int,
-) -> str:
+) -> tuple[str, list[tuple[str, str, list[str], str]]]:
     """Connect a symbol that reads MODEL ATTRIBUTES to the data file its models
     are loaded from, and surface the connected subtree.
 
@@ -316,7 +382,7 @@ async def _build_model_trace_evidence(
     """
     body = target_sym.get("body", "") or ""
     if not body:
-        return ""
+        return "", []
 
     # 1. Attributes this symbol reads.
     func = (target_sym.get("name", "") or "").rsplit(".", 1)[-1]
@@ -326,13 +392,13 @@ async def _build_model_trace_evidence(
         for vals in attr_map.values():
             attrs.update(vals)
     if not attrs:
-        return ""
+        return "", []
 
     # 2. Project model definitions (traced file + sibling code files).
     model_defs = await _collect_model_defs(file_content, file_context, effects)
     data_models = {c for c, d in model_defs.items() if _is_data_model(d)}
     if not data_models:
-        return ""
+        return "", []
 
     # 3. Distinctive accessed fields → owning model (a field owned by exactly
     #    ONE data model is a precise connection; shared names like id/name are
@@ -347,7 +413,7 @@ async def _build_model_trace_evidence(
         if own and len(own) == 1:
             connected |= own
     if not connected:
-        return ""
+        return "", []
 
     # 4. Parse the available data files.
     parsed: dict[str, tuple[Any, str]] = {}
@@ -357,7 +423,7 @@ async def _build_model_trace_evidence(
         if obj is not None:
             parsed[path] = (obj, content)
     if not parsed:
-        return ""
+        return "", []
 
     # 5. Origin key per connected model — the loader's instantiation key, else a
     #    pluralized class-name guess, validated against the actual data.
@@ -378,7 +444,7 @@ async def _build_model_trace_evidence(
                 model_origin[cls] = (hit, key)
                 break
     if not model_origin:
-        return ""
+        return "", []
 
     # 6. Per file: keep the most specific keys (drop ancestors), surface their
     #    connected subtrees.
@@ -387,6 +453,7 @@ async def _build_model_trace_evidence(
         by_file.setdefault(path, set()).add(key)
 
     blocks: list[str] = []
+    sources: list[tuple[str, str, list[str], str]] = []
     for path, keys in by_file.items():
         obj, _content = parsed[path]
         chosen = _drop_ancestor_keys(obj, keys)
@@ -401,10 +468,13 @@ async def _build_model_trace_evidence(
         if not subtrees:
             continue
         value = subtrees[0] if len(subtrees) == 1 else subtrees
-        scoped = _dump_value(value, token_cap)
+        scoped = _dump_value(value)
         models_here = sorted(c for c, (p, _k) in model_origin.items() if p == path)
         blocks.append(_format_model_evidence(path, sorted(chosen), models_here, scoped))
-    return "\n\n".join(b for b in blocks if b)
+        sources.append(
+            (path, f"models {', '.join(models_here)}", sorted(chosen), _content)
+        )
+    return "\n\n".join(b for b in blocks if b), sources
 
 
 async def _collect_model_defs(
@@ -536,37 +606,42 @@ def _format_model_evidence(
 # Because a shown entry IS the real node, it can never lack its identifier — the
 # id-drop bug class is structurally impossible, no special-casing required.
 
-_MAX_KEY_MATCHES = 12  # cap recursive-descent matches per accessed key
 
-
-def _scope_to_keys(
-    data: Any, keys: list[str], content: str, path: str, max_chars: int
-) -> str:
-    """Slice the real subtree(s) the traced code reads, rendered as-is; keyless →
-    whole file if small, else compact skeleton."""
+def _scope_to_keys(data: Any, keys: list[str], content: str, path: str) -> str:
+    """The real subtree(s) the traced code reads, rendered whole; keyless → the
+    whole file. Sizing happens once, on the finished block
+    (build_data_trace_evidence)."""
     if not keys:
-        if content and len(content) < _WHOLE_FILE_MAX:
-            return content.strip()
-        return extract_data_skeleton(content, path) or _dump_value(data, max_chars)
+        return (content or "").strip() or _dump_value(data)
 
     try:
         doc = Document.read(content, detect_fmt(path, content))
     except DataOpsError:
         # A ruamel-vs-PyYAML parse divergence must never drop evidence.
-        return extract_data_skeleton(content, path) or _dump_value(data, max_chars)
+        return (content or "").strip() or _dump_value(data)
 
-    rendered = _slice_keys(doc, keys, max_chars)
+    rendered = _slice_keys(doc, keys)
     if not rendered:
         # Accessed keys don't appear in this file — show its shape instead.
-        return extract_data_skeleton(content, path) or _dump_value(data, max_chars)
+        return extract_data_skeleton(content, path) or _dump_value(data)
     return rendered
 
 
-def _slice_keys(doc: Document, keys: list[str], budget: int) -> str:
-    """Gather the real subtree at each accessed key — top-level ``/key`` first,
-    else the enclosing entry of each recursive-descent match — dedup by
-    containment, and render within budget. A nested leaf (e.g. ``items``) renders
-    inside its enclosing entry so the value shows with its id/context."""
+def _slice_keys(doc: Document, keys: list[str]) -> str:
+    """Render, whole, the real subtree at each accessed key (see
+    _chosen_subtrees). A nested leaf (e.g. ``items``) renders inside its
+    enclosing entry so the value shows with its id/context."""
+    return "\n".join(
+        _render_subtree(label, val) for _ptr, label, val in _chosen_subtrees(doc, keys)
+    )
+
+
+def _chosen_subtrees(
+    doc: Document, keys: list[str]
+) -> list[tuple[str, str | None, Any]]:
+    """(pointer, label, value) for the subtree at each accessed key — top-level
+    ``/key`` first, else the enclosing entry of EVERY recursive-descent match —
+    deduplicated by containment."""
     chosen: list[tuple[str, str | None, Any]] = []  # (pointer, label, value)
     included: list[str] = []
     for key in keys:
@@ -576,7 +651,7 @@ def _slice_keys(doc: Document, keys: list[str], budget: int) -> str:
             candidates = [(top, key, sl.value)]
         else:
             try:
-                matches = doc.query(f"$..{key}")[:_MAX_KEY_MATCHES]
+                matches = doc.query(f"$..{key}")
             except DataOpsError:
                 matches = []
             candidates = []
@@ -595,17 +670,7 @@ def _slice_keys(doc: Document, keys: list[str], budget: int) -> str:
                 continue
             included.append(ptr)
             chosen.append((ptr, label, val))
-
-    out: list[str] = []
-    remaining = budget
-    for _ptr, label, val in chosen:
-        if remaining <= 0:
-            break
-        block = _render_within_budget(label, val, remaining)
-        if block:
-            out.append(block)
-            remaining -= len(block) + 1
-    return "\n".join(out)
+    return chosen
 
 
 _NOTE_RESERVE = 24  # headroom kept for the "… (N more items)" note
@@ -742,8 +807,10 @@ def _within(child: str, ancestor: str) -> bool:
     return bool(ancestor) and (child == ancestor or child.startswith(ancestor + "/"))
 
 
-def _dump_value(value: Any, max_chars: int) -> str:
-    """Render a Python object as compact, readable block text, truncated."""
+def _dump_value(value: Any, max_chars: int | None = None) -> str:
+    """Render a Python object as compact, readable block text — whole unless a
+    caller passes ``max_chars`` (only the dormant render_data_file ladder
+    does)."""
     try:
         import yaml
 
@@ -752,7 +819,7 @@ def _dump_value(value: Any, max_chars: int) -> str:
         ).rstrip()
     except Exception:  # noqa: BLE001 - PyYAML missing → JSON
         s = json.dumps(value, indent=2, default=str)
-    if len(s) > max_chars:
+    if max_chars is not None and len(s) > max_chars:
         s = s[:max_chars].rstrip() + "\n… (truncated)"
     return s
 

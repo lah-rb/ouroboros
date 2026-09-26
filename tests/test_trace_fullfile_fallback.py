@@ -81,9 +81,10 @@ async def test_no_content_is_graceful_empty():
 
 
 @pytest.mark.asyncio
-async def test_oversize_file_truncated_with_canonical_marker():
-    """Oversize content is bounded with the canonical '# ... truncated ...' marker."""
-    big = "echo line\n" * 1000  # ~10k chars >> 4000 cap
+async def test_a_file_that_fits_is_shown_whole():
+    """No 4,000-char head cut any more (2026-09-26): a file within the share
+    of the window and the free context comes back WHOLE."""
+    big = "echo line\n" * 1000  # ~10k chars, far under a quarter of 32k tokens
     out = await trace_function(
         _step(
             selected_symbol_name="big.sh:main",
@@ -92,5 +93,32 @@ async def test_oversize_file_truncated_with_canonical_marker():
         )
     )
     tc = out.context_updates["traced_context"]
-    assert "# ... truncated ..." in tc
-    assert len(tc) < len(big)  # bounded
+    assert big in tc and "truncated" not in tc
+
+
+@pytest.mark.asyncio
+async def test_a_file_too_large_for_the_session_comes_back_as_its_index():
+    """Over the share (or the free context) the trace gets the file's INDEX —
+    line ranges for a script — never a cut copy."""
+
+    class _Small(MockEffects):
+        async def cache_health(self):
+            return {"nCtxSeq": 16384}
+
+    big = "".join(f"echo line {i}\n" for i in range(3000))  # ~40k chars
+    out = await trace_function(
+        StepInput(
+            context={
+                "selected_symbol_name": "big.sh:main",
+                "symbol_table": [],
+                "target_file": {"path": "big.sh", "content": big},
+            },
+            params={},
+            meta=FlowMeta(flow_name="diagnose_issue", step_id="investigate", attempt=1),
+            effects=_Small(),
+        )
+    )
+    tc = out.context_updates["traced_context"]
+    assert "too large to show whole here" in tc
+    assert "3000 lines." in tc and "1-200" in tc
+    assert "echo line 2999" not in tc and "truncated" not in tc

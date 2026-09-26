@@ -5,6 +5,9 @@ content: |
   Pick ONE action to understand the task well enough to route it:
       {"choice": "run_command", "command": "<exact shell command>"}
       {"choice": "read_file", "path": "<workspace-relative path>"}
+      {"choice": "read_file", "path": "<path>:<Symbol>"}      (one symbol)
+      {"choice": "read_file", "path": "<path>:/<pointer>"}    (one data entry)
+      {"choice": "read_file", "path": "<path>:<first>-<last>"} (a line range)
       {"choice": "conclude"}
 
   Good moves: list the workspace, grep for the symbol/behavior the task names,

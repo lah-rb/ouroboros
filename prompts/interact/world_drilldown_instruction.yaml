@@ -1,0 +1,25 @@
+# Prompt template: interact/world_drilldown_instruction
+#
+# Instruction for the world drill-down menu. It appears only when a world data
+# file was too large to show the charter author whole (the whole-if-it-fits
+# rule, agent/context_fit.py): the file is shown as an index of its entries by
+# pointer, and the author pulls the entries the test needs before writing the
+# charter. Static text — the index, the pulled entries and any feedback ride
+# the evidence sections, so this stays byte-identical every turn.
+
+id: interact/world_drilldown_instruction
+content: |
+  Before you write the test charter, read the parts of the world the test
+  needs. A world data file above is too large to show whole, so it is listed
+  as an index of its entries by pointer.
+
+  - pull_entry: name one entry as file:/pointer (e.g. data.json:/entries/3).
+    You will see it whole and may then pull another or proceed. An entry
+    that is itself too large comes back as its own index — pull one of its
+    entries.
+  - proceed: you have what the test needs — go write the charter.
+
+  Pull what the test's steps depend on: where the program starts, every
+  entry the steps pass through or act on, each entity the objective names,
+  and how those entries connect. Never plan a step on an entry you have not
+  seen.

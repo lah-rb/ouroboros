@@ -391,7 +391,12 @@ async def action_start_diagnosis_session(step_input: StepInput) -> StepOutput:
         parts.append("## Data files")
         parts.append(
             "Loaded at runtime — valid trace targets (a bug may live in the "
-            "data, not the code): " + ", ".join(sorted(set(data_file_names)))
+            "data, not the code): "
+            + ", ".join(sorted(set(data_file_names)))
+            + ". Trace a data file whole by its name, or ONE entry by an RFC "
+            f"6901 pointer, e.g. `{sorted(set(data_file_names))[0]}:/<key>/0` "
+            "(JSON, YAML or TOML; a large file comes back as an index of its "
+            "entries to pick from)."
         )
         parts.append("")
 
@@ -620,6 +625,36 @@ async def action_start_diagnosis_session(step_input: StepInput) -> StepOutput:
 _MAX_TRACE_CORRECTIONS = 8
 
 
+async def _trace_data_view(
+    effects: Any, path: str, content: str, pointer: str, used: int
+) -> tuple[str, bool]:
+    """(view, found) for a data-file trace target: the file (``pointer`` "")
+    or one entry (an RFC 6901 pointer, JSON/YAML/TOML) WHOLE when it fits the
+    session, else an index of its children by pointer to trace next. A pointer
+    that does not resolve returns the nearest existing level as a map
+    (found=False) so the correction is also a way forward.
+
+    Replaces the silent whole-file dump the seed's "valid trace targets"
+    promise used to lead to — the diagnosis could not read one entry."""
+    from agent import context_fit as cf
+
+    if pointer in ("", "/"):
+        text, found = content, True
+    else:
+        text, found = cf.read_data(path, content, pointer)
+    if not found:
+        return text, False
+    label = f"{path}:{pointer}" if pointer not in ("", "/") else path
+    f = await cf.fit(effects, text, used=used)
+    if f.whole:
+        return f"=== {label} (data) ===\n{text}", True
+    return (
+        f"=== {label} (data — too large to show whole here: {f.describe()}) ===\n"
+        f"{cf.data_index(path, content, '' if pointer == '/' else pointer)}\n"
+        f"Trace one entry to read it whole: `{path}:/pointer`."
+    ), True
+
+
 async def action_execute_symbol_trace(step_input: StepInput) -> StepOutput:
     """Trace one symbol named as ``file:symbol`` from the investigate
     compound menu, inject the trace evidence, route back for another
@@ -715,6 +750,12 @@ async def action_execute_symbol_trace(step_input: StepInput) -> StepOutput:
             observations="No effects interface — cannot trace",
         )
 
+    # What the diagnosis session already holds — the "used" side of the
+    # whole-if-it-fits rule for everything this trace injects.
+    from agent.context_fit import session_used
+
+    trace_used = await session_used(effects, str(ctx.get("diagnosis_session_id", "")))
+
     # ── 1. Validate the reference format ────────────────────────
     if not symbol_ref:
         return _correction(
@@ -737,17 +778,14 @@ async def action_execute_symbol_trace(step_input: StepInput) -> StepOutput:
                 fc = None
             content = getattr(fc, "content", "") if getattr(fc, "exists", False) else ""
             if content:
-                pending: dict[str, Any] = {}
-                queue_injection(
-                    pending,
-                    ctx,
-                    f"=== {symbol_ref} (data file — showing full content) ===\n{content}",
+                view, _found = await _trace_data_view(
+                    effects, symbol_ref, content, "", trace_used
                 )
+                pending: dict[str, Any] = {}
+                queue_injection(pending, ctx, view)
                 return StepOutput(
                     result={"trace_ok": True},
-                    observations=(
-                        f"Turn {turn + 1}: traced {symbol_ref} as full-file data target"
-                    ),
+                    observations=f"Turn {turn + 1}: traced {symbol_ref} as a data target",
                     context_updates={**pending, "investigation_turn": turn + 1},
                 )
         return _correction(
@@ -759,6 +797,48 @@ async def action_execute_symbol_trace(step_input: StepInput) -> StepOutput:
     file_part, _, symbol_part = symbol_ref.partition(":")
     file_part = file_part.strip()
     symbol_part = symbol_part.strip()
+
+    # A DATA file's "symbol" is a pointer to one entry (`world.json:/rooms/3`;
+    # `world.json:` or a missing leading slash are accepted).
+    from agent import languages as _languages
+
+    _ext = file_part.rsplit(".", 1)[-1].lower() if "." in file_part else ""
+    if file_part and _languages.is_data(_ext):
+        pointer = (
+            symbol_part
+            if symbol_part.startswith("/") or not symbol_part
+            else ("/" + symbol_part)
+        )
+        canonical = f"{file_part}:{pointer}" if pointer else file_part
+        if canonical in (ctx.get("traced_symbols") or []):
+            return _correction(
+                f"`{canonical}` was already traced in this session — see the "
+                f"earlier observation above. Trace a different entry or pick "
+                f"`conclude` if you have enough evidence."
+            )
+        try:
+            fc = await effects.read_file(file_part)
+        except Exception:  # noqa: BLE001
+            fc = None
+        content = getattr(fc, "content", "") if getattr(fc, "exists", False) else ""
+        if not content:
+            return _correction(f"data file `{file_part}` not found.")
+        view, found = await _trace_data_view(
+            effects, file_part, content, pointer, trace_used
+        )
+        if not found:
+            return _correction(view)
+        pending = {}
+        queue_injection(pending, ctx, view)
+        return StepOutput(
+            result={"trace_ok": True},
+            observations=f"Turn {turn + 1}: traced {canonical} as a data target",
+            context_updates={
+                **pending,
+                "investigation_turn": turn + 1,
+                "traced_symbols": list(ctx.get("traced_symbols") or []) + [canonical],
+            },
+        )
 
     if not file_part or not symbol_part:
         return _correction(
@@ -835,12 +915,18 @@ async def action_execute_symbol_trace(step_input: StepInput) -> StepOutput:
         # tree-sitter couldn't extract. Inject the full file content
         # as evidence so the investigation still gets something.
         content = target_file.get("content", "")
+        from agent import context_fit as _cf
+
+        _f = await _cf.fit(effects, content, used=trace_used)
+        if _f.whole:
+            view = f"=== {file_part} (no parseable symbols — showing full content) ===\n{content}"
+        else:
+            view = (
+                f"=== {file_part} (no parseable symbols; too large to show whole "
+                f"here: {_f.describe()}) ===\n{_cf.text_index(content)}"
+            )
         pending: dict[str, Any] = {}
-        queue_injection(
-            pending,
-            ctx,
-            f"=== {file_part} (no parseable symbols — showing full content) ===\n{content}",
-        )
+        queue_injection(pending, ctx, view)
         return StepOutput(
             result={"trace_ok": True},
             observations=(
@@ -857,8 +943,10 @@ async def action_execute_symbol_trace(step_input: StepInput) -> StepOutput:
             "symbol_table": symbol_table,
             "target_file": target_file,
             "file_context": ctx.get("file_context"),
+            "trace_used_tokens": trace_used,
         },
         meta=FlowMeta(flow_name="diagnose_issue", step_id="execute_trace"),
+        effects=effects,
     )
     trace_output = await trace_function(trace_input)
     traced = trace_output.context_updates.get("traced_context", "")
@@ -882,7 +970,7 @@ async def action_execute_symbol_trace(step_input: StepInput) -> StepOutput:
                 if parent and name:
                     available.append(f"{parent}.{name}")
 
-        available_str = ", ".join(sorted(set(available))[:30]) or "(none detected)"
+        available_str = ", ".join(sorted(set(available))) or "(none detected)"
         return _correction(
             f"symbol `{symbol_part}` not found in `{file_part}`. "
             f"Symbols defined in that file: {available_str}. "
@@ -907,6 +995,7 @@ async def action_execute_symbol_trace(step_input: StepInput) -> StepOutput:
                 file_content=target_file.get("content", ""),
                 file_context=ctx.get("file_context"),
                 effects=effects,
+                used=trace_used,
             )
             if data_evidence:
                 traced = f"{traced}\n\n{data_evidence}"

@@ -11,6 +11,8 @@ via ``self.X``), scope to the keys the code accesses, render so a nested
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from agent.actions.diagnosis_session_actions import action_start_diagnosis_session
@@ -112,9 +114,7 @@ def test_slice_retains_entry_id():
             {"id": "entrance", "name": "Hall", "items": [], "exits": {"n": "library"}},
         ]
     }
-    scoped = _scope_to_keys(
-        data, ["rooms", "items", "exits"], content, "world.yaml", 1200
-    )
+    scoped = _scope_to_keys(data, ["rooms", "items", "exits"], content, "world.yaml")
     assert "id: entrance" in scoped  # identifier always present — the real node
     assert "items: []" in scoped and "library" in scoped
     assert "name: Hall" in scoped  # real subtree: sibling content is shown, not pruned
@@ -269,24 +269,55 @@ async def test_key_scoping_limits_output():
     assert "secrets" not in ev and "flags" not in ev  # scoped out
 
 
-def test_head_sample_on_overflow_keeps_ids():
-    """Overflow head-samples COMPLETE entries: shown rooms keep their ids and a
-    '… (N more items)' note appears — never a mid-entry char-truncation that could
-    sever an identifier (the failure the retired _prune/_IDENTITY_FIELDS guarded)."""
+def test_scoped_subtrees_are_whole():
+    """No budget inside the scoping any more (2026-09-26): every accessed
+    subtree renders WHOLE, and sizing happens once on the finished block. The
+    1,200-char budget head-sampled 30 rooms down to a few with a "more items"
+    note."""
     rooms = [{"id": f"room_{i}", "name": f"Room {i}", "items": []} for i in range(30)]
     lines = ["rooms:"]
     for r in rooms:
         lines += [f"  - id: {r['id']}", f"    name: {r['name']}", "    items: []"]
     content = "\n".join(lines) + "\n"
 
-    scoped = _scope_to_keys({"rooms": rooms}, ["rooms"], content, "world.yaml", 200)
+    scoped = _scope_to_keys({"rooms": rooms}, ["rooms"], content, "world.yaml")
 
-    assert "id: room_0" in scoped  # the head entry's id is present
-    assert "more items" in scoped  # overflow is announced, entry-wise
-    # Every shown room is COMPLETE (carries both id and name) — no partial entry.
-    n_ids = scoped.count("id: room_")
-    n_names = scoped.count("name: Room")
-    assert n_ids >= 1 and n_ids == n_names
+    assert "id: room_0" in scoped and "id: room_29" in scoped
+    assert "more items" not in scoped
+    assert scoped.count("id: room_") == scoped.count("name: Room") == 30
+
+
+@pytest.mark.asyncio
+async def test_a_block_too_big_for_the_session_becomes_an_index():
+    """When the whole block does not fit the session reading it, the trace gets
+    an INDEX of the connected entries by pointer — each traceable as
+    `file:/pointer` — never a cut."""
+    body = (
+        "def load():\n"
+        "    data = json.load(open('world.json'))\n"
+        "    return data['rooms']\n"
+    )
+    rooms = [
+        {"id": f"room_{i}", "name": f"Room {i}", "description": "x" * 400}
+        for i in range(40)
+    ]
+    conf = json.dumps({"rooms": rooms, "items": []})
+    target = _sym("load", body)
+
+    class _Tight(MockEffects):
+        async def cache_health(self):
+            return {"nCtxSeq": 16384}
+
+    ev = await build_data_trace_evidence(
+        target_sym=target,
+        symbol_table=[target],
+        file_content="import json\n\n\n" + body,
+        file_context=_fc(conf, "world.json"),
+        effects=_Tight(files={}),
+    )
+    assert "too large to show whole here" in ev
+    assert "/rooms/39" in ev and "room_39" in ev  # every entry addressable
+    assert "x" * 400 not in ev  # the bodies wait for a trace
 
 
 def test_toml_read_surfaces_scoped_data():
@@ -297,7 +328,7 @@ def test_toml_read_surfaces_scoped_data():
     content = '[server]\nhost = "h"\nport = 8080\n\n[db]\nname = "main"\n'
     data = tomllib.loads(content)
 
-    scoped = _scope_to_keys(data, ["server"], content, "config.toml", 1200)
+    scoped = _scope_to_keys(data, ["server"], content, "config.toml")
 
     assert "host: h" in scoped and "port: 8080" in scoped
     assert "name: main" not in scoped  # unrelated [db] table not sliced in

@@ -135,6 +135,8 @@ class LocalEffects:
         # same host must share a client or they double the watchdog polling.
         self._inference_by_endpoint: dict[str, InferenceEffect] = {}
         self._model_default_temperature = model_default_temperature
+        # session_id -> tokens the session holds after its last turn.
+        self._session_tokens: dict[str, int] = {}
         # HTTP client — lazy; http_transport lets tests inject
         # httpx.MockTransport without monkeypatching.
         self._http_client = None
@@ -1527,6 +1529,13 @@ class LocalEffects:
             logger.info("inference domain %r -> %s (model=%s)", domain, endpoint, model)
         return client
 
+    def session_tokens(self, session_id: str) -> int:
+        """What a memoryful session holds after its last turn (prompt +
+        generated, as the server counted them); 0 before its first turn.
+        The "used" side of the whole-if-it-fits rule (agent/context_fit.py)
+        for reads that land in a session."""
+        return int(self._session_tokens.get(session_id, 0) or 0)
+
     async def cache_health(self) -> dict:
         """The serving model's cache/feature register (``health``: nCtxSeq,
         decodeMode, …), or {} when the server will not say.
@@ -1858,6 +1867,10 @@ class LocalEffects:
         prompt_preview = prompt[:80] + "..." if len(prompt) > 80 else prompt
         inference = self._get_inference()
         result = await inference.session_turn(session_id, prompt, config_overrides)
+        if not result.error:
+            self._session_tokens[session_id] = int(result.prompt_tokens or 0) + int(
+                result.generated_tokens or 0
+            )
 
         if result.error:
             self._log_entry(
@@ -1917,6 +1930,7 @@ class LocalEffects:
         start = time.monotonic()
         inference = self._get_inference()
         success = await inference.end_session(session_id)
+        self._session_tokens.pop(session_id, None)
         self._log_entry(
             "end_inference_session",
             f"session={session_id}",

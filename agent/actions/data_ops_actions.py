@@ -27,8 +27,6 @@ from agent.loader import load_prompt_text
 
 logger = logging.getLogger(__name__)
 
-_MAX_INLINE = 8000  # include the whole current file when under this; else skeleton-only
-
 DATA_OPS_PROMPT = load_prompt_text("data_patch/translate")
 
 
@@ -99,18 +97,34 @@ async def action_translate_data_ops_turn(step_input: StepInput) -> StepOutput:
         return _defer("no effects available")
 
     skeleton = extract_data_skeleton(content, path) or "(shape unavailable)"
+
+    def _render(current: str) -> str:
+        return DATA_OPS_PROMPT.format(
+            fmt=fmt.value,
+            change_spec=change_spec or "(none given)",
+            skeleton=skeleton,
+            path=path,
+            current=current,
+        )
+
+    # The current file WHOLE when it fits beside the rest of this prompt (the
+    # whole-if-it-fits rule, agent/context_fit.py); else its entries by
+    # pointer, two levels deep, so the ops can still name precise paths. It
+    # replaces an 8,000-char threshold that dropped the file to the skeleton.
+    from agent import context_fit as cf
+
+    (rest,), _how = await cf.measure(effects, [_render("")])
+    f = await cf.fit(effects, content, used=rest)
     current = (
         content
-        if len(content) <= _MAX_INLINE
-        else "(file too large to inline — use the shape above and name precise paths)"
+        if f.whole
+        else (
+            f"(the file is too large to show whole here: {f.describe()}. Its "
+            f"entries by pointer — name precise paths from these:)\n"
+            + cf.data_overview(path, content)
+        )
     )
-    prompt = DATA_OPS_PROMPT.format(
-        fmt=fmt.value,
-        change_spec=change_spec or "(none given)",
-        skeleton=skeleton,
-        path=path,
-        current=current,
-    )
+    prompt = _render(current)
 
     try:
         res = await effects.run_inference(prompt)

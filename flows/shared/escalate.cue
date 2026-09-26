@@ -125,7 +125,7 @@ escalate: #FlowDefinition & {
 							description: "Read a file to see what is actually there"
 							arg: {
 								name:        "path"
-								description: "workspace-relative file path"
+								description: "workspace-relative file path, or one part of it: path:Symbol (code), path:/pointer (data), path:first-last (lines)"
 							}
 						}
 						run_command: #MenuOption & {

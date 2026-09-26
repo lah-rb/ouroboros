@@ -1276,7 +1276,7 @@
                 "description": "Read a file to see what is actually there",
                 "arg": {
                   "name": "path",
-                  "description": "workspace-relative file path"
+                  "description": "workspace-relative file path, or one part of it: path:Symbol (code), path:/pointer (data), path:first-last (lines)"
                 },
                 "terminal": false
               },
@@ -4304,7 +4304,7 @@
                 "description": "Read a symbol's body and every place it's called from",
                 "arg": {
                   "name": "symbol_ref",
-                  "description": "file:symbol \u2014 e.g. engine.py:GameEngine._handle_move"
+                  "description": "file:symbol \u2014 e.g. engine.py:GameEngine._handle_move; for a data file, file:/pointer \u2014 e.g. data.json:/entries/3"
                 },
                 "terminal": false
               },
@@ -4916,7 +4916,7 @@
                 "description": "Read a file to see what is actually there",
                 "arg": {
                   "name": "path",
-                  "description": "workspace-relative file path"
+                  "description": "workspace-relative file path, or one part of it: path:Symbol (code), path:/pointer (data), path:first-last (lines)"
                 },
                 "terminal": false
               },
@@ -7426,10 +7426,186 @@
           "rules": [
             {
               "condition": "true",
+              "transition": "size_world"
+            }
+          ]
+        },
+        "terminal": false
+      },
+      "size_world": {
+        "action": "size_world_view",
+        "description": "Show the world's data files whole when they fit, else as an index to pull from",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.world_indexed == true",
+              "transition": "offer_world_menu"
+            },
+            {
+              "condition": "true",
               "transition": "choose_charter"
             }
           ]
         },
+        "publishes": [
+          "interaction_context_view",
+          "world_base_tokens",
+          "world_pulls",
+          "world_pulls_block",
+          "world_feedback"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "offer_world_menu": {
+        "action": "inference",
+        "description": "Pull the world entries the test needs before writing the charter",
+        "context": {
+          "required": [],
+          "optional": [
+            "interaction_context_view",
+            "world_pulls_block",
+            "world_feedback",
+            "world_pulls"
+          ]
+        },
+        "params": {},
+        "turn": {
+          "response_shape": "menu_compound",
+          "sections": [
+            {
+              "type": "role",
+              "template": "personas/charter_author",
+              "required": false
+            },
+            {
+              "type": "problem",
+              "template": "interact/test_objective_bounded",
+              "required": false
+            },
+            {
+              "type": "evidence",
+              "ref": {
+                "$ref": "context.world_brief"
+              },
+              "title": "The project and its world (large files as an index of entries)",
+              "required": false
+            },
+            {
+              "type": "evidence",
+              "ref": {
+                "$ref": "context.world_pulls_block"
+              },
+              "title": "Entries you pulled",
+              "required": false
+            },
+            {
+              "type": "evidence",
+              "ref": {
+                "$ref": "context.world_feedback"
+              },
+              "title": "Previous request",
+              "required": false
+            },
+            {
+              "type": "instruction",
+              "template": "interact/world_drilldown_instruction",
+              "required": false
+            },
+            {
+              "type": "options",
+              "required": false
+            },
+            {
+              "type": "envelope",
+              "required": false
+            }
+          ],
+          "response": {
+            "options": {
+              "pull_entry": {
+                "key": "pull_entry",
+                "description": "Read one world entry whole before writing the charter",
+                "arg": {
+                  "name": "entry_ref",
+                  "description": "file:/pointer \u2014 e.g. data.json:/entries/3"
+                },
+                "terminal": false
+              },
+              "proceed": {
+                "key": "proceed",
+                "description": "I have what the test needs \u2014 write the charter now",
+                "terminal": false
+              }
+            },
+            "publish_selection": "world_request"
+          },
+          "transitions": {
+            "default": "choose_charter",
+            "no_answer": "choose_charter",
+            "options": {
+              "pull_entry": "fetch_world_entry",
+              "proceed": "choose_charter"
+            }
+          },
+          "config": {
+            "temperature": "t*0.3",
+            "reasoning": "low"
+          },
+          "retries": 2,
+          "rewind_on_retry": false
+        },
+        "pre_compute": [
+          {
+            "formatter": "render_interaction_context",
+            "output_key": "world_brief",
+            "params": {
+              "source": {
+                "$ref": "context.interaction_context_view"
+              }
+            }
+          }
+        ],
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "fetch_world_entry": {
+        "action": "fetch_world_entry",
+        "description": "Read one world entry by pointer from the whole data file",
+        "context": {
+          "required": [],
+          "optional": [
+            "world_request_arg",
+            "world_pulls",
+            "world_base_tokens"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "offer_world_menu"
+            }
+          ]
+        },
+        "publishes": [
+          "world_pulls",
+          "world_pulls_block",
+          "world_feedback"
+        ],
+        "effects": [],
         "terminal": false
       },
       "choose_charter": {
@@ -7465,7 +7641,9 @@
           "required": [],
           "optional": [
             "project_manifest",
-            "repo_map_formatted"
+            "repo_map_formatted",
+            "interaction_context_view",
+            "world_pulls_block"
           ]
         },
         "params": {},
@@ -7500,6 +7678,14 @@
               "required": false
             },
             {
+              "type": "evidence",
+              "ref": {
+                "$ref": "context.world_pulls_block"
+              },
+              "title": "World entries you pulled",
+              "required": false
+            },
+            {
               "type": "instruction",
               "template": "interact/charter_function",
               "required": false
@@ -7522,7 +7708,7 @@
             "output_key": "interaction_brief",
             "params": {
               "source": {
-                "$ref": "input.interaction_context"
+                "$ref": "context.interaction_context_view"
               }
             }
           },
@@ -7550,7 +7736,9 @@
           "required": [],
           "optional": [
             "project_manifest",
-            "repo_map_formatted"
+            "repo_map_formatted",
+            "interaction_context_view",
+            "world_pulls_block"
           ]
         },
         "params": {},
@@ -7585,6 +7773,14 @@
               "required": false
             },
             {
+              "type": "evidence",
+              "ref": {
+                "$ref": "context.world_pulls_block"
+              },
+              "title": "World entries you pulled",
+              "required": false
+            },
+            {
               "type": "instruction",
               "template": "interact/charter_explore",
               "required": false
@@ -7607,7 +7803,7 @@
             "output_key": "interaction_brief",
             "params": {
               "source": {
-                "$ref": "input.interaction_context"
+                "$ref": "context.interaction_context_view"
               }
             }
           },
@@ -7738,10 +7934,12 @@
       },
       "choose_eval_mode": {
         "action": "probe_eval_context",
-        "description": "Pick in-session vs stateless evaluation from the model's real context window",
+        "description": "Evaluate in the tester's session when the verdict fits there, else stateless",
         "context": {
           "required": [],
-          "optional": []
+          "optional": [
+            "inference_session_id"
+          ]
         },
         "params": {},
         "config": {},
@@ -7749,7 +7947,7 @@
           "type": "rule",
           "rules": [
             {
-              "condition": "result.big_context == true",
+              "condition": "result.in_session_fits == true",
               "transition": "evaluate_in_session"
             },
             {
@@ -14296,7 +14494,8 @@
           "target": {
             "$ref": "input.target_file_path"
           },
-          "discover_imports": false
+          "discover_imports": false,
+          "size_for_rewrite": true
         },
         "publishes": [
           "target_file"
@@ -14305,7 +14504,7 @@
           "type": "rule",
           "rules": [
             {
-              "condition": "result.get('content_bytes', 0) > 24000",
+              "condition": "result.get('whole_rewrite_fits', True) == False",
               "transition": "too_large"
             },
             {
@@ -14388,7 +14587,7 @@
       },
       "offer_context_menu": {
         "action": "inference",
-        "description": "Optionally pull full symbol bodies from related files before rewriting (max 3)",
+        "description": "Optionally pull full symbol bodies from related files before rewriting",
         "context": {
           "required": [],
           "optional": [
@@ -14540,14 +14739,6 @@
         "resolver": {
           "type": "rule",
           "rules": [
-            {
-              "condition": "result.budget_exhausted == true",
-              "transition": "generate_rewrite"
-            },
-            {
-              "condition": "result.exhausted == true",
-              "transition": "generate_rewrite"
-            },
             {
               "condition": "true",
               "transition": "offer_context_menu"

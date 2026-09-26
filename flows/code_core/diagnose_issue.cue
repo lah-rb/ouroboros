@@ -251,7 +251,7 @@ diagnose_issue: #FlowDefinition & {
 							description: "Read a symbol's body and every place it's called from"
 							arg: {
 								name:        "symbol_ref"
-								description: "file:symbol — e.g. engine.py:GameEngine._handle_move"
+								description: "file:symbol — e.g. engine.py:GameEngine._handle_move; for a data file, file:/pointer — e.g. data.json:/entries/3"
 							}
 						}
 						conclude: #MenuOption & {
