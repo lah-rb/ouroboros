@@ -165,6 +165,11 @@ run_session: #FlowDefinition & {
 					params: source: {$ref: "context.session_history"}
 				},
 			]
+			// The terminal view is bounded to a share of the window by its
+			// formatters; this sizes both blocks against the prompt actually
+			// rendered (agent/context_fit.py) — the most recent part when the
+			// whole would not fit what is free.
+			fit: {last_turn: "tail", session_history: "tail"}
 			publishes: ["inference_response"]
 		}
 

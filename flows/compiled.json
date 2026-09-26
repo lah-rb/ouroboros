@@ -1674,6 +1674,30 @@
           ]
         },
         "params": {},
+        "fit": {
+          "last_turn": "tail",
+          "session_history": "tail"
+        },
+        "pre_compute": [
+          {
+            "formatter": "format_last_turn",
+            "output_key": "last_turn",
+            "params": {
+              "source": {
+                "$ref": "context.session_history"
+              }
+            }
+          },
+          {
+            "formatter": "format_session_history",
+            "output_key": "session_history",
+            "params": {
+              "source": {
+                "$ref": "context.session_history"
+              }
+            }
+          }
+        ],
         "turn": {
           "response_shape": "menu_compound",
           "sections": [
@@ -1734,26 +1758,6 @@
           "retries": 3,
           "rewind_on_retry": false
         },
-        "pre_compute": [
-          {
-            "formatter": "format_last_turn",
-            "output_key": "last_turn",
-            "params": {
-              "source": {
-                "$ref": "context.session_history"
-              }
-            }
-          },
-          {
-            "formatter": "format_session_history",
-            "output_key": "session_history",
-            "params": {
-              "source": {
-                "$ref": "context.session_history"
-              }
-            }
-          }
-        ],
         "config": {},
         "publishes": [
           "inference_response"
@@ -8296,12 +8300,15 @@
       },
       "derive_acceptance": {
         "action": "inference",
-        "description": "Derive the regression check grounded in the passing session",
         "context": {
           "required": [],
           "optional": [
             "terminal_output"
           ]
+        },
+        "description": "Derive the regression check grounded in the passing session",
+        "fit": {
+          "session_tail": "tail"
         },
         "params": {},
         "prompt_template": {
@@ -13094,13 +13101,16 @@
       },
       "evaluate_ux_session": {
         "action": "inference",
-        "description": "Assess UX session \u2014 the model already has full context in KV cache",
         "context": {
           "required": [],
           "optional": [
             "inference_session_id",
             "terminal_output"
           ]
+        },
+        "description": "Assess UX session \u2014 the model already has full context in KV cache",
+        "fit": {
+          "terminal_output": "tail"
         },
         "params": {},
         "prompt_template": {
@@ -13178,7 +13188,6 @@
       },
       "summarize": {
         "action": "inference",
-        "description": "Summarize all quality results into actionable findings",
         "context": {
           "required": [],
           "optional": [
@@ -13188,6 +13197,11 @@
             "terminal_output",
             "ux_session_assessment"
           ]
+        },
+        "description": "Summarize all quality results into actionable findings",
+        "fit": {
+          "validation_summary": "tail",
+          "terminal_output": "tail"
         },
         "params": {},
         "prompt_template": {
@@ -13407,7 +13421,6 @@
       },
       "judge_finding": {
         "action": "inference",
-        "description": "Judge whether the probe transcript confirms the claimed defect",
         "context": {
           "required": [],
           "optional": [
@@ -13417,6 +13430,10 @@
             "probe_launch",
             "terminal_output"
           ]
+        },
+        "description": "Judge whether the probe transcript confirms the claimed defect",
+        "fit": {
+          "terminal_output": "tail"
         },
         "params": {},
         "prompt_template": {
@@ -14587,7 +14604,6 @@
       },
       "offer_context_menu": {
         "action": "inference",
-        "description": "Optionally pull full symbol bodies from related files before rewriting",
         "context": {
           "required": [],
           "optional": [
@@ -14599,6 +14615,10 @@
             "drilldown_picks",
             "drilldown_corrections"
           ]
+        },
+        "description": "Optionally pull full symbol bodies from related files before rewriting",
+        "fit": {
+          "input.validation_errors": "tail"
         },
         "params": {},
         "turn": {
@@ -14756,7 +14776,6 @@
       },
       "generate_rewrite": {
         "action": "inference",
-        "description": "Generate complete file replacement",
         "context": {
           "required": [],
           "optional": [
@@ -14765,6 +14784,10 @@
             "target_file",
             "drilldown_bodies"
           ]
+        },
+        "description": "Generate complete file replacement",
+        "fit": {
+          "input.validation_errors": "tail"
         },
         "params": {},
         "turn": {
@@ -15213,6 +15236,30 @@
           ]
         },
         "params": {},
+        "fit": {
+          "last_turn": "tail",
+          "session_history": "tail"
+        },
+        "pre_compute": [
+          {
+            "formatter": "format_last_turn",
+            "output_key": "last_turn",
+            "params": {
+              "source": {
+                "$ref": "context.session_history"
+              }
+            }
+          },
+          {
+            "formatter": "format_session_history",
+            "output_key": "session_history",
+            "params": {
+              "source": {
+                "$ref": "context.session_history"
+              }
+            }
+          }
+        ],
         "turn": {
           "response_shape": "menu_compound",
           "sections": [
@@ -15283,26 +15330,6 @@
           "retries": 3,
           "rewind_on_retry": false
         },
-        "pre_compute": [
-          {
-            "formatter": "format_last_turn",
-            "output_key": "last_turn",
-            "params": {
-              "source": {
-                "$ref": "context.session_history"
-              }
-            }
-          },
-          {
-            "formatter": "format_session_history",
-            "output_key": "session_history",
-            "params": {
-              "source": {
-                "$ref": "context.session_history"
-              }
-            }
-          }
-        ],
         "config": {},
         "publishes": [
           "inference_response"
@@ -24595,7 +24622,6 @@
       },
       "reground_criteria": {
         "action": "inference",
-        "description": "Derive the definition-of-done grounded in the explored workspace",
         "context": {
           "required": [
             "mission"
@@ -24604,6 +24630,10 @@
             "project_manifest",
             "terminal_output"
           ]
+        },
+        "description": "Derive the definition-of-done grounded in the explored workspace",
+        "fit": {
+          "session_tail": "tail"
         },
         "params": {},
         "prompt_template": {
@@ -24778,7 +24808,6 @@
       },
       "reground_output_format": {
         "action": "inference",
-        "description": "Re-derive the output-format spec grounded in the scanned workspace",
         "context": {
           "required": [
             "mission"
@@ -24787,6 +24816,10 @@
             "project_manifest",
             "terminal_output"
           ]
+        },
+        "description": "Re-derive the output-format spec grounded in the scanned workspace",
+        "fit": {
+          "session_tail": "tail"
         },
         "params": {},
         "prompt_template": {
@@ -24925,13 +24958,16 @@
       },
       "sanity_plausibility": {
         "action": "inference",
-        "description": "Judge whether the produced answer is plausible (type/magnitude)",
         "context": {
           "required": [
             "mission",
             "sanity_artifact_excerpt"
           ],
           "optional": []
+        },
+        "description": "Judge whether the produced answer is plausible (type/magnitude)",
+        "fit": {
+          "sanity_artifact_excerpt": "tail"
         },
         "params": {},
         "prompt_template": {
@@ -25118,7 +25154,6 @@
       },
       "judge_step": {
         "action": "inference",
-        "description": "Judge whether the task is complete",
         "context": {
           "required": [
             "mission"
@@ -25127,6 +25162,11 @@
             "validation_results",
             "terminal_output"
           ]
+        },
+        "description": "Judge whether the task is complete",
+        "fit": {
+          "validation_summary": "tail",
+          "session_tail": "tail"
         },
         "params": {},
         "prompt_template": {
@@ -25222,13 +25262,16 @@
       },
       "verify_completion": {
         "action": "inference",
-        "description": "Confirm genuine completion from the fresh re-probe",
         "context": {
           "required": [
             "mission",
             "vbh_transcript"
           ],
           "optional": []
+        },
+        "description": "Confirm genuine completion from the fresh re-probe",
+        "fit": {
+          "vbh_transcript": "tail"
         },
         "params": {},
         "prompt_template": {

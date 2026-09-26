@@ -31,8 +31,8 @@ logger = logging.getLogger(__name__)
 MAX_VERIFY_FINDINGS = 8
 # Repro lines beyond this are truncated (mirrors _normalize_repro's cap).
 MAX_REPRO_COMMANDS = 10
-# Transcript tail preserved as evidence on each finding.
-_EVIDENCE_TAIL_CHARS = 500
+# The probe transcript rides WHOLE on each finding as its evidence
+# (2026-09-26; a 500-char tail lost the line that showed the defect).
 
 
 def _finding_text(task: Any) -> str:
@@ -261,7 +261,7 @@ async def action_record_finding_verification(step_input: StepInput) -> StepOutpu
         )
 
     task = queue.pop(0)
-    evidence_tail = transcript[-_EVIDENCE_TAIL_CHARS:] if transcript else ""
+    evidence_tail = transcript or ""
     confirmed: bool | None = None
 
     if probe_failed:
@@ -276,9 +276,7 @@ async def action_record_finding_verification(step_input: StepInput) -> StepOutpu
     else:
         parsed = parse_llm_json(str(step_input.context.get("inference_response", "")))
         verdict = parsed.get("confirmed") if isinstance(parsed, dict) else None
-        reason = (str(parsed.get("reason") or "") if isinstance(parsed, dict) else "")[
-            :300
-        ]
+        reason = str(parsed.get("reason") or "") if isinstance(parsed, dict) else ""
         if not isinstance(verdict, bool):
             verified.append(
                 {
@@ -295,7 +293,7 @@ async def action_record_finding_verification(step_input: StepInput) -> StepOutpu
                     **task,
                     "verification": "confirmed",
                     "verification_evidence": (
-                        f"{reason}\n--- probe transcript tail ---\n{evidence_tail}"
+                        f"{reason}\n--- probe transcript ---\n{evidence_tail}"
                     ).strip(),
                 }
             )
@@ -307,7 +305,7 @@ async def action_record_finding_verification(step_input: StepInput) -> StepOutpu
                     **task,
                     "verification": "refuted",
                     "verification_evidence": (
-                        f"{reason}\n--- probe transcript tail ---\n{evidence_tail}"
+                        f"{reason}\n--- probe transcript ---\n{evidence_tail}"
                     ).strip(),
                 }
             )

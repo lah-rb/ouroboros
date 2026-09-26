@@ -704,6 +704,8 @@ interact: #FlowDefinition & {
 		// Derived AFTER a pass — the session is already closed, so this is a
 		// fresh stateless inference grounded purely in the passing transcript.
 		derive_acceptance: #StepDefinition & {
+			// Evidence sized to the serving window at render (agent/context_fit.py): whole beside the prompt, else the most recent part.
+			fit: {session_tail: "tail"}
 			action:      "inference"
 			description: "Derive the regression check grounded in the passing session"
 			context: optional: ["terminal_output"]

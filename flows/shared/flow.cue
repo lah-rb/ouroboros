@@ -236,6 +236,14 @@ import "list"
 	// Required when action == "inference" and `turn` is not set.
 	prompt_template?: #PromptTemplate
 
+	// Size context keys a prompt_template renders against the serving
+	// model's window before rendering (agent/context_fit.py). "tail":
+	// whole if it fits beside the rest of the prompt, else the most recent
+	// part with a marker (one-shot judges have no tool to drill with).
+	// "index": whole within the per-read share, else saved under
+	// .agent/outputs and shown as a line index. Unset keys render whole.
+	fit?: {[string]: "tail" | "index"}
+
 	// Turn declaration — the turn-based inference-step format (rendered
 	// by agent/turn_renderer.py). When present, replaces prompt_template
 	// + config + resolver for inference steps. See turn.cue for #Turn.

@@ -151,7 +151,7 @@ package ouroboros
 	// output, keeps the most recent part of this content that fits, and
 	// marks what it left out. Only for a ref to a top-level key: the
 	// runtime writes the fitted text back into that slot.
-	fit?: "tail"
+	fit?: "tail" | "index"
 
 	// Renderer-produced sections must not declare content sources.
 	if type == "options" || type == "envelope" {

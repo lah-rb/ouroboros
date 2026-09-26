@@ -39,7 +39,6 @@ from agent.actions.batch_structural_actions import (
     _normalize_path,
 )
 from agent.actions.file_ops_actions import guarded_write_file
-from agent.actions.pipeline_actions import _cap_diagnostic
 from agent.actions.frame_actions import build_frame, splice_frame
 from agent.actions.refinement_actions import extract_code_from_response
 from agent.llm_json import parse_llm_json
@@ -2060,7 +2059,7 @@ async def action_generate_content_batch(step_input: StepInput) -> StepOutput:
                 headline=f"Content batch: {path}" + ("" if passed else " (failed)"),
                 files_affected=[path],
                 checks_failed=[] if passed else [f"syntax: {path}"],
-                terminal_output=_cap_diagnostic(detail, 1000),
+                terminal_output=(detail),
             )
         )
         if passed:
@@ -2282,7 +2281,7 @@ async def action_swarm_diagnose_batch(step_input: StepInput) -> StepOutput:
             directive=(goal.description or "")[:1500],
             path=path,
             checks=", ".join(getattr(last, "checks_failed", []) or []) or "?",
-            output=_cap_diagnostic(gate_output, 1200),
+            output=(gate_output),
             content=content or "(unreadable)",
         )
 

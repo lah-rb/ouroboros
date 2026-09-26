@@ -579,15 +579,31 @@ def format_validation_results(params: dict, namespaces: dict) -> str:
 
 
 # Per-turn terminal-output bounds for the rendered session view (Guard G3). The
-# full output stays in mission state (history); only the PROMPT view is bounded,
-# so a single chatty command (a build, a data dump) can't balloon the next prompt
-# past the context window — the llama_decode overflow crash. Beyond the limit we
-# show head+tail and TEACH the agent to re-query via its own shell: it drives a
-# real terminal, so `| grep` / `| tail` / a redirect IS the search tool (nothing
-# is lost; it re-fetches what it needs). Prior turns are bounded tighter than the
-# current turn, which the agent needs in full to act on.
-_HISTORY_TURN_MAX = 2500
-_LAST_TURN_MAX = 8000
+# full output stays in mission state (history) and, past a threshold, in a file
+# the agent's own shell can grep; only the PROMPT view is bounded, so a single
+# chatty command (a build, a data dump) can't balloon the next prompt past the
+# context window — the llama_decode overflow crash. Beyond the bound we show
+# head+tail and TEACH the agent to re-query: it drives a real terminal, so
+# `| grep` / `| tail` / a redirect IS the search tool (nothing is lost).
+#
+# The bounds follow the serving window (2026-09-26, agent/context_fit.py) in
+# place of the fixed 8,000 / 2,500 chars: the current turn — which the agent
+# needs whole to act on — may take the quarter-window share every other read
+# gets; the recent prior turns that render in full divide that share between
+# them. Formatters are synchronous, so they size against the window LLMVP
+# last reported to a fit in this process.
+
+
+def _last_turn_max() -> int:
+    from agent.context_fit import share_chars
+
+    return share_chars()
+
+
+def _history_turn_max() -> int:
+    return max(1, _last_turn_max() // _RECENT_TURNS_FULL)
+
+
 _REQUERY_HINT = (
     "re-run with a filter to inspect fully — append `| grep PATTERN`, "
     "`| tail -100`, or redirect `> /tmp/out.txt 2>&1` then `grep PATTERN /tmp/out.txt`"
@@ -663,7 +679,7 @@ def format_session_history(params: dict, namespaces: dict) -> str:
         if entry.get("output"):
             lines.append(
                 _bound_output(
-                    entry["output"], _HISTORY_TURN_MAX, entry.get("output_file")
+                    entry["output"], _history_turn_max(), entry.get("output_file")
                 )
             )
         if entry.get("return_code", 0) != 0:
@@ -723,7 +739,7 @@ def format_last_turn(params: dict, namespaces: dict) -> str:
 
     lines = [header, ""]
     if output:
-        lines.append(_bound_output(output, _LAST_TURN_MAX, last.get("output_file")))
+        lines.append(_bound_output(output, _last_turn_max(), last.get("output_file")))
     if last.get("return_code", 0) != 0:
         lines.append(f"(exit code: {last['return_code']})")
     lines.append("")

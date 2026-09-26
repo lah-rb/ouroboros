@@ -418,7 +418,7 @@ async def action_escalation_write(step_input: StepInput) -> StepOutput:
             rejections.append(err or f"write failed for {path}")
 
     if not written:
-        return _correction(step_input, " / ".join(rejections)[:400])
+        return _correction(step_input, " / ".join(rejections))
 
     files = list(step_input.context.get("escalation_files", []) or [])
     for p in written:
@@ -426,7 +426,7 @@ async def action_escalation_write(step_input: StepInput) -> StepOutput:
             files.append(p)
     msg = f"Observation: wrote {', '.join(written)}."
     if rejections:
-        msg += f" Rejected: {' / '.join(rejections)[:300]}"
+        msg += f" Rejected: {' / '.join(rejections)}"
     return _observe(step_input, msg, extra={"escalation_files": files})
 
 
@@ -457,7 +457,7 @@ async def action_conclude_escalation(step_input: StepInput) -> StepOutput:
             "deferred",
         ):
             outcome = parsed["outcome"]
-            summary = str(parsed.get("summary", "") or "")[:400]
+            summary = str(parsed.get("summary", "") or "")
         else:
             summary = "conclusion unparseable — deferred (fail-safe)"
     except Exception as e:  # noqa: BLE001

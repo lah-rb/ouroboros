@@ -435,7 +435,7 @@ async def action_validate_cross_file_consistency(step_input: StepInput) -> StepO
     infos = [i for i in issues if i["severity"] == "info"]
     if warnings:
         summary_lines.append(f"{len(warnings)} structural warnings:")
-        for w in warnings[:10]:
+        for w in warnings:
             summary_lines.append(f"  - {w['message']}")
     if infos:
         summary_lines.append(f"{len(infos)} unresolved references (informational)")

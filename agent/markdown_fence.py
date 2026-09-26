@@ -624,7 +624,7 @@ def parse_file_blocks(text: str, fallback_path: str = "") -> list[tuple[str, str
 # ── Text content extraction ──────────────────────────────────────
 
 
-def extract_first_text_content(text: str, max_length: int = 200) -> str:
+def extract_first_text_content(text: str, max_length: int | None = None) -> str:
     """Extract the first substantive text content from markdown.
 
     Uses markdown-it-py to parse the token stream and find the first
@@ -634,7 +634,8 @@ def extract_first_text_content(text: str, max_length: int = 200) -> str:
 
     Args:
         text: Raw markdown text (e.g. from an LLM response).
-        max_length: Truncate result to this many characters.
+        max_length: Truncate result to this many characters; None (the
+            default) keeps the whole first block.
 
     Returns:
         The first substantive text found, or the first line of the
@@ -688,7 +689,7 @@ def _extract_text_with_markdown_it(text: str) -> str:
     return ""
 
 
-def _extract_text_with_fallback(text: str, max_length: int) -> str:
+def _extract_text_with_fallback(text: str, max_length: int | None) -> str:
     """Regex fallback: skip markdown headers, take first content line."""
     for line in text.strip().splitlines():
         stripped = line.strip()

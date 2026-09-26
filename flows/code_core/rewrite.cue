@@ -108,6 +108,10 @@ rewrite: #FlowDefinition & {
 		// pulled body is sized by the whole-if-it-fits rule, and degeneration
 		// monitoring is the backstop for a model that will not proceed.
 		offer_context_menu: #StepDefinition & {
+			// The validation errors (whole check output since 2026-09-26) are
+			// sized to the window at render: whole beside the prompt, else
+			// the most recent part — where a traceback's fault line sits.
+			fit: {"input.validation_errors": "tail"}
 			action:      "inference"
 			description: "Optionally pull full symbol bodies from related files before rewriting"
 			context: optional: [
@@ -206,6 +210,10 @@ rewrite: #FlowDefinition & {
 		}
 
 		generate_rewrite: #StepDefinition & {
+			// The validation errors (whole check output since 2026-09-26) are
+			// sized to the window at render: whole beside the prompt, else
+			// the most recent part — where a traceback's fault line sits.
+			fit: {"input.validation_errors": "tail"}
 			action:      "inference"
 			description: "Generate complete file replacement"
 			context: optional: ["project_manifest", "repo_map_formatted", "target_file", "drilldown_bodies"]

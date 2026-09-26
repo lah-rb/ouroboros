@@ -261,7 +261,7 @@ _ASR_SIDECAR_TIMEOUT_S = 1800
 def _sidecar_prompt(objective: str) -> str:
     """The AB-winning conditioned-digest prompt (dev/predigest_ab)."""
     return (
-        f'You are pre-reading an image for this task: "{(objective or "")[:400]}"\n'
+        f'You are pre-reading an image for this task: "{objective or ""}"\n'
         "Describe everything in the image relevant to answering it — transcribe "
         "exact text/numbers where visible. Do NOT answer the task; report what you see."
     )
@@ -351,7 +351,7 @@ async def _digest_modality_sidecars(
                     )
                     notes.append(f"digested {path} -> {sidecar}")
                 else:
-                    err = (result.stderr or "")[-200:] or f"exit {result.return_code}"
+                    err = (result.stderr or "").strip() or f"exit {result.return_code}"
                     manifest[f"[{path}]"] = f"({kind} digestion failed: {err})"
                     notes.append(f"{kind} digestion FAILED for {path}: {err}")
             except (
@@ -1047,9 +1047,9 @@ async def action_log_validation_notes(step_input: StepInput) -> StepOutput:
             stdout = check.get("stdout", "").strip()
             stderr = check.get("stderr", "").strip()
             if stdout:
-                warning_text += f"stdout: {stdout[:300]}\n"
+                warning_text += f"stdout: {stdout}\n"
             if stderr:
-                warning_text += f"stderr: {stderr[:300]}\n"
+                warning_text += f"stderr: {stderr}\n"
             warnings.append(warning_text)
 
     if not warnings or not effects:
@@ -1148,8 +1148,8 @@ async def action_execute_project_setup(step_input: StepInput) -> StepOutput:
                     "name": name,
                     "passed": passed,
                     "required": required,
-                    "stdout": cmd_result.stdout[:300],
-                    "stderr": cmd_result.stderr[:300],
+                    "stdout": cmd_result.stdout,
+                    "stderr": cmd_result.stderr,
                 }
             )
             if not passed and required:
@@ -1460,7 +1460,7 @@ def _parse_quality_summary(raw: str) -> dict:
                 task.setdefault("issue", text)
                 task["class"] = cls
                 task["repro"] = _normalize_repro(issue.get("repro"))
-                task["expected"] = str(issue.get("expected") or "")[:300]
+                task["expected"] = str(issue.get("expected") or "")
                 fix_tasks.append(task)
         parsed["fix_tasks"] = fix_tasks
 

@@ -168,7 +168,8 @@ async def action_check_output_sanity(step_input: StepInput) -> StepOutput:
         return _skip(f"{path} absent — left to the existence check")
 
     content = getattr(fc, "content", "") or ""
-    updates["sanity_artifact_excerpt"] = f"{path}:\n{content.strip()[:1500]}"
+    # Whole (2026-09-26): the sanity_plausibility step sizes it at render.
+    updates["sanity_artifact_excerpt"] = f"{path}:\n{content.strip()}"
 
     reason = _degenerate_reason(content, criteria)
     if reason:
@@ -219,7 +220,7 @@ async def action_record_output_sanity(step_input: StepInput) -> StepOutput:
             context_updates={},
         )
     plausible = bool(parsed.get("plausible"))
-    reason = str(parsed.get("reason", ""))[:300]
+    reason = str(parsed.get("reason", ""))
     if plausible:
         return StepOutput(
             result={"sanity_passed": True},
@@ -491,15 +492,10 @@ async def action_gate_reground_criteria(step_input: StepInput) -> StepOutput:
 # command, so the repro IS the completion criteria, not launch+repro).
 
 
-def _bounded(s: str, n: int) -> str:
-    s = (s or "").strip()
-    return s if len(s) <= n else s[:n] + " …[truncated]"
-
-
 async def action_reprobe_completion(step_input: StepInput) -> StepOutput:
     """Gate + re-probe. If the judge claimed done, re-run the completion criteria
-    and re-read the produced artifact into a FRESH, context-bounded transcript for
-    the verify turn, and publish the judge's raw verdict as judge_response — the
+    and re-read the produced artifact into a FRESH transcript for the verify
+    turn (whole — the verify_completion step sizes it at render), and publish the judge's raw verdict as judge_response — the
     dedicated key decide reads (the verify turn overwrites inference_response).
     Skips straight to decide when the judge didn't claim done, there are no
     criteria, or effects are unavailable (never blocks on infra).
@@ -532,7 +528,7 @@ async def action_reprobe_completion(step_input: StepInput) -> StepOutput:
 
     lines: list[str] = []
     try:
-        for c in criteria[:8]:
+        for c in criteria:
             cmd = c.get("command") if isinstance(c, dict) else None
             if not isinstance(cmd, str) or not cmd.strip():
                 continue
@@ -541,13 +537,13 @@ async def action_reprobe_completion(step_input: StepInput) -> StepOutput:
             out = (getattr(res, "stdout", "") or "") + (
                 getattr(res, "stderr", "") or ""
             )
-            lines.append(f"$ {cmd}\n[exit {rc}] {_bounded(out, 400)}")
+            lines.append(f"$ {cmd}\n[exit {rc}] {out.strip()}")
         path = _extract_artifact_path(criteria)
         if path:
             fc = await effects.read_file(path)
             if getattr(fc, "exists", False):
                 lines.append(
-                    f"$ cat {path}\n{_bounded(getattr(fc, 'content', '') or '', 800)}"
+                    f"$ cat {path}\n{(getattr(fc, 'content', '') or '').strip()}"
                 )
     except Exception as exc:  # FAIL-SAFE: re-probe infra error → don't block
         return _skip(f"re-probe error: {exc}")
@@ -592,7 +588,7 @@ async def action_record_completion_verify(step_input: StepInput) -> StepOutput:
             observations="completion verified genuinely done",
             context_updates=updates,
         )
-    reason = str(parsed.get("reason", ""))[:400]
+    reason = str(parsed.get("reason", ""))
     results.append(
         check_result(
             "completion_verify",

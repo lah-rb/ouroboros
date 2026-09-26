@@ -299,24 +299,11 @@ async def action_derive_repair_tests(step_input: StepInput) -> StepOutput:
     )
 
 
-def _cap_diagnostic(text: str, limit: int = 1200) -> str:
-    """Cap check/smoke output for storage, preserving a Python traceback's TAIL.
-
-    Tracebacks print "most recent call last" — the exception line and the
-    deepest frame (the actual fault site) are at the END. A plain head-cap
-    (``text[:500]``) therefore drops exactly the part the diagnose needs to
-    pick a fix target, leaving only the entry frames (e.g. ``main.py``), which
-    sends repair off chasing the wrong file. When a traceback is present, keep
-    the head (the marker + entry frames) AND the tail (deepest frames +
-    exception); otherwise fall back to a plain head-cap.
-    """
-    text = text or ""
-    if len(text) <= limit:
-        return text
-    if "Traceback (most recent call last):" in text:
-        head = limit // 3
-        return text[:head] + "\n…[frames truncated]…\n" + text[-(limit - head) :]
-    return text[:limit]
+# Check and smoke output is kept WHOLE (2026-09-26). _cap_diagnostic cut it
+# to 800-1,200 chars (a traceback kept head + tail); every prompt that
+# renders it now sizes it to the serving window at render time
+# (agent/context_fit.py) — the diagnosis seed, the escalation seed, and the
+# patch/rewrite validation-error sections.
 
 
 # Extensions that skip validation (non-code files)
@@ -775,12 +762,8 @@ async def action_run_validation_checks_from_env(
                 "passed": passed,
                 "tier": tier,
                 "required": tier == "syntax",
-                "stdout": (
-                    _cap_diagnostic(result.stdout) if hasattr(result, "stdout") else ""
-                ),
-                "stderr": (
-                    _cap_diagnostic(result.stderr) if hasattr(result, "stderr") else ""
-                ),
+                "stdout": ((result.stdout) if hasattr(result, "stdout") else ""),
+                "stderr": ((result.stderr) if hasattr(result, "stderr") else ""),
             }
             results.append(check)
 
@@ -856,15 +839,15 @@ async def action_run_validation_checks_from_env(
                     "passed": passed,
                     "tier": "smoke",
                     "required": True,
-                    "stdout": _cap_diagnostic(getattr(smoke, "stdout", "")),
-                    "stderr": _cap_diagnostic(getattr(smoke, "stderr", "")),
+                    "stdout": (getattr(smoke, "stdout", "")),
+                    "stderr": (getattr(smoke, "stderr", "")),
                 }
             )
             if not passed:
                 smoke_failed = True
                 output_lines.append(f"[FAIL] smoke_boot: {smoke_cmd}")
                 if getattr(smoke, "stderr", ""):
-                    output_lines.append(f"  stderr: {_cap_diagnostic(smoke.stderr)}")
+                    output_lines.append(f"  stderr: {(smoke.stderr)}")
                 output_lines.append(
                     "  The program no longer starts after this edit — the edit "
                     "must be corrected."
@@ -989,7 +972,7 @@ async def action_check_data_file(step_input: StepInput) -> StepOutput:
         "tier": "syntax",
         "required": True,
         "stdout": "",
-        "stderr": "" if ok else detail[:500],
+        "stderr": "" if ok else detail,
     }
     status = "PASS" if ok else "FAIL"
     validation_output = f"[{status}] {check['name']}"
@@ -1165,7 +1148,7 @@ async def action_log_validation_notes(step_input: StepInput) -> StepOutput:
     # Format issues into a note
     lines = ["Validation issues (non-blocking):"]
     for issue in issues:
-        lines.append(f"  - {issue.get('name', '?')}: {issue.get('stderr', '')[:100]}")
+        lines.append(f"  - {issue.get('name', '?')}: {issue.get('stderr', '')}")
 
     note_content = "\n".join(lines)
 
@@ -1657,7 +1640,7 @@ async def action_check_declared_dependencies(step_input: StepInput) -> StepOutpu
         if not already:
             mission.notes.append(
                 NoteRecord(
-                    content=summary[:600],
+                    content=summary,
                     category="failure_analysis",
                     tags=["dependency_claim"],
                     source_flow="project_ops",
@@ -1769,7 +1752,7 @@ async def action_parse_dep_check_result(step_input: StepInput) -> StepOutput:
             f"(e.g. [dependency-groups] dev / uv add --dev), NOT in the "
             f"runtime dependencies list"
         )
-    for d in details[:10]:
+    for d in details:
         issue_lines.append(
             f"  {d.get('file', '?')}: imports '{d.get('import', '?')}' "
             f"→ package '{d.get('package', '?')}'"
@@ -1796,8 +1779,7 @@ async def action_parse_dep_check_result(step_input: StepInput) -> StepOutput:
             "gate_failure_reason": (
                 "undeclared dependencies — "
                 + ", ".join(
-                    [*missing[:6]]
-                    + [f"{m} (dev group — test-only)" for m in missing_dev[:6]]
+                    [*missing] + [f"{m} (dev group — test-only)" for m in missing_dev]
                 )
                 + (" are" if len(missing) + len(missing_dev) != 1 else " is")
                 + " imported but not in the manifest"

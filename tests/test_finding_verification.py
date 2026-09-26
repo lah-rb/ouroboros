@@ -265,8 +265,8 @@ async def test_record_confirmed_keeps_claim_with_evidence():
     kept = out.context_updates["verified_findings"][0]
     assert kept["verification"] == "confirmed"
     assert "use printed an error" in kept["verification_evidence"]
-    # Evidence carries the transcript tail, bounded.
-    assert "probe transcript tail" in kept["verification_evidence"]
+    # Evidence carries the probe transcript, whole.
+    assert "probe transcript" in kept["verification_evidence"]
 
 
 @pytest.mark.asyncio
@@ -369,7 +369,7 @@ async def test_apply_pushes_notes_for_survivors_and_refuted_telemetry():
             {
                 **_task("save broken"),
                 "verification": "refuted",
-                "verification_evidence": "save worked\n--- probe transcript tail ---\n...",
+                "verification_evidence": "save worked\n--- probe transcript ---\n...",
             }
         ],
     )

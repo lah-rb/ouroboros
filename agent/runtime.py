@@ -1159,7 +1159,19 @@ async def _execute_inference_action(
     # inert otherwise). static_prefix + dynamic == the full render exactly, so
     # output is unchanged whether or not caching is active.
     _render_start = time.monotonic()
+    # Size any context keys the step declares under `fit` to the serving
+    # window first (its time counts as render time).
     renderer = _get_prompt_renderer()
+    await _fit_step_keys(
+        step_def,
+        namespaces,
+        effects,
+        dict(step_input.config),
+        step_input.meta.step_id,
+        lambda ns: "".join(
+            renderer.render_with_cache_split(step_def.prompt_template.template, ns)
+        ),
+    )
     flow_static_prefix, flow_dynamic = renderer.render_with_cache_split(
         step_def.prompt_template.template, namespaces
     )
@@ -1351,7 +1363,9 @@ async def _rewind_failed_attempt(
 
 # ── Fitting a section to the serving window ──────────────────────────
 #
-# A `fit: "tail"` section (the stateless evaluator's transcript) is sized
+# A section (turn steps) or context key (template steps, `fit:` map) that
+# declares `fit` is sized at render time. "tail" — e.g. the stateless
+# evaluator's transcript — is sized
 # against the model's REAL per-sequence window at render time instead of a
 # fixed character cut: the rest of the prompt is MEASURED with the serving
 # model's own tokenizer, the output is reserved, and the most recent part of
@@ -1376,9 +1390,7 @@ def _fit_slot(section: Any) -> tuple[str, str]:
     path = section.ref.ref if section.ref is not None else ""
     ns, _, key = path.partition(".")
     if not ns or not key or "." in key:
-        raise TurnRenderError(
-            f"fit: 'tail' needs a ref to a top-level key, got {path!r}"
-        )
+        raise TurnRenderError(f"fit needs a ref to a top-level key, got {path!r}")
     return ns, key
 
 
@@ -1393,6 +1405,96 @@ def _tail_on_a_line(text: str, keep_chars: int) -> str:
     return tail[nl + 1 :] if 0 <= nl < len(tail) - 1 else tail
 
 
+async def _fit_value(
+    effects: Any,
+    content: str,
+    *,
+    mode: str,
+    prompt_tok: int,
+    window: int,
+    window_how: str,
+    reserve: int,
+    label: str,
+    save_path: str,
+    step_name: str,
+) -> str | None:
+    """Size one value a prompt renders, beside ``prompt_tok`` tokens of the
+    rest of that prompt. Returns the text to render in its place, or None to
+    render it whole.
+
+    "tail" — a one-shot judge's evidence: whole if it fits beside the prompt
+    and the reserve (not held to the per-read share — it IS the evidence),
+    else the most recent part, from a line boundary, with a marker.
+    "index" — the whole-if-it-fits rule (agent/context_fit.py): whole within
+    the per-read share and the free context, else saved at ``save_path`` and
+    shown as its line index, for a model that can read the file back."""
+    from agent import context_fit as cf
+
+    if mode == "index":
+        f = await cf.fit(
+            effects, content, used=prompt_tok, reserve=reserve, window=window
+        )
+        if f.whole:
+            return None
+        logger.info("fit %s: %s indexed — %s", step_name, label, f.describe())
+        return await cf.output_view(
+            effects,
+            content,
+            used=prompt_tok,
+            save_path=save_path,
+            label=label,
+        )
+
+    (content_tok,), how = await cf.measure(effects, [content])
+    marker_tok = (len(_FIT_MARKER) * 13) // 40 + 16
+    budget = window - prompt_tok - reserve
+    if content_tok <= budget:
+        logger.info(
+            "fit %s: %s whole — %d tok beside a %d-tok prompt and %d "
+            "reserve in a %d window (%s, %s counts)",
+            step_name,
+            label,
+            content_tok,
+            prompt_tok,
+            reserve,
+            window,
+            window_how,
+            how,
+        )
+        return None
+    budget -= marker_tok
+    kept = content
+    for _ in range(3):
+        keep_chars = int(len(kept) * max(budget, 0) / max(content_tok, 1))
+        kept = _tail_on_a_line(kept, keep_chars)
+        if not kept:
+            break
+        (content_tok,), how = await cf.measure(effects, [kept])
+        if content_tok <= budget:
+            break
+    marker = _FIT_MARKER.format(omitted=len(content) - len(kept), window=window)
+    (logger.info if kept else logger.warning)(
+        "fit %s: kept the last %d of %d chars of %s — a %d-tok prompt and "
+        "%d reserve in a %d window (%s, %s counts)",
+        step_name,
+        len(kept),
+        len(content),
+        label,
+        prompt_tok,
+        reserve,
+        window,
+        window_how,
+        how,
+    )
+    return f"{marker}\n{kept}" if kept else marker
+
+
+def _fit_save_path(flow: str, step: str, key: str) -> str:
+    import uuid
+
+    return f".agent/outputs/{flow}-{step}-{key}-{uuid.uuid4().hex[:6]}.txt"
+
+
 async def _fit_tail_sections(
     turn: Any,
     namespaces: dict[str, Any],
@@ -1400,22 +1502,20 @@ async def _fit_tail_sections(
     config: dict[str, Any],
     step_name: str,
 ) -> None:
-    """Fit every `fit: "tail"` section of ``turn`` into the serving window,
-    writing the fitted text back into ``namespaces`` for the render."""
+    """Fit every section declaring ``fit`` ("tail" or "index") into the
+    serving window, writing the fitted text back into ``namespaces`` for the
+    render. The rest of the prompt is the turn rendered without the section."""
     from agent.context_fit import measure, serving_window
 
-    sections = [s for s in turn.sections if getattr(s, "fit", None) == "tail"]
+    sections = [s for s in turn.sections if getattr(s, "fit", None)]
     if not sections:
         return
 
     window, reported = await serving_window(effects)
     window_how = "reported" if reported else "assumed"
     reserve = int(config.get("max_tokens") or 0) or _FIT_OUTPUT_RESERVE
-
-    async def _tokens(texts: list[str]) -> tuple[list[int], str]:
-        return await measure(effects, texts)
-
     renderer = _get_turn_renderer()
+    flow = str((namespaces.get("meta") or {}).get("flow_name", "") or "flow")
     for section in sections:
         ns, key = _fit_slot(section)
         slot = namespaces.get(ns)
@@ -1423,50 +1523,70 @@ async def _fit_tail_sections(
         if not isinstance(content, str) or not content:
             continue
         without = {**namespaces, ns: {**slot, key: ""}}
-        (prompt_tok, content_tok), how = await _tokens(
-            [renderer.render(turn, without), content]
+        (prompt_tok,), _how = await measure(effects, [renderer.render(turn, without)])
+        fitted = await _fit_value(
+            effects,
+            content,
+            mode=str(section.fit),
+            prompt_tok=prompt_tok,
+            window=window,
+            window_how=window_how,
+            reserve=reserve,
+            label=key,
+            save_path=_fit_save_path(flow, step_name, key),
+            step_name=step_name,
         )
-        marker_tok = (len(_FIT_MARKER) * 13) // 40 + 16
-        budget = window - prompt_tok - reserve
-        if content_tok <= budget:
-            logger.info(
-                "fit %s: %s whole — %d tok beside a %d-tok prompt and %d "
-                "reserve in a %d window (%s, %s counts)",
-                step_name,
-                key,
-                content_tok,
-                prompt_tok,
-                reserve,
-                window,
-                window_how,
-                how,
-            )
+        if fitted is not None:
+            namespaces[ns] = {**slot, key: fitted}
+
+
+async def _fit_step_keys(
+    step_def: Any,
+    namespaces: dict[str, Any],
+    effects: Any,
+    config: dict[str, Any],
+    step_name: str,
+    render: Any,
+) -> None:
+    """Size each value named in the step's ``fit`` map against the prompt
+    rendered without it (``render(namespaces) -> str``). Keys are
+    ``input.<k>``, ``context.<k>`` or a bare context key — for values a
+    template interpolates, which no section can declare ``fit`` on (a
+    prompt_template step, or ``{input.validation_errors}`` inside a turn's
+    problem template). The fitted value is written to a copy of the
+    namespace, never into the flow's own input dict."""
+    from agent.context_fit import measure, serving_window
+
+    fit_map = dict(getattr(step_def, "fit", None) or {})
+    if not fit_map:
+        return
+    window, reported = await serving_window(effects)
+    window_how = "reported" if reported else "assumed"
+    reserve = int(config.get("max_tokens") or 0) or _FIT_OUTPUT_RESERVE
+    flow = str((namespaces.get("meta") or {}).get("flow_name", "") or "flow")
+    for ref, mode in fit_map.items():
+        ns, _, key = ref.partition(".") if "." in ref else ("context", "", ref)
+        slot = namespaces.get(ns)
+        content = slot.get(key) if isinstance(slot, dict) else None
+        if not isinstance(content, str) or not content:
             continue
-        budget -= marker_tok
-        kept = content
-        for _ in range(3):
-            keep_chars = int(len(kept) * max(budget, 0) / max(content_tok, 1))
-            kept = _tail_on_a_line(kept, keep_chars)
-            if not kept:
-                break
-            (content_tok,), how = await _tokens([kept])
-            if content_tok <= budget:
-                break
-        marker = _FIT_MARKER.format(omitted=len(content) - len(kept), window=window)
-        slot[key] = f"{marker}\n{kept}" if kept else marker
-        (logger.info if kept else logger.warning)(
-            "fit %s: kept the last %d of %d chars of %s — a %d-tok prompt and "
-            "%d reserve in a %d window (%s, %s counts)",
-            step_name,
-            len(kept),
-            len(content),
-            key,
-            prompt_tok,
-            reserve,
-            window,
-            window_how,
-            how,
+        (prompt_tok,), _how = await measure(
+            effects, [render({**namespaces, ns: {**slot, key: ""}})]
         )
+        fitted = await _fit_value(
+            effects,
+            content,
+            mode=str(mode),
+            prompt_tok=prompt_tok,
+            window=window,
+            window_how=window_how,
+            reserve=reserve,
+            label=key,
+            save_path=_fit_save_path(flow, step_name, key),
+            step_name=step_name,
+        )
+        if fitted is not None:
+            namespaces[ns] = {**slot, key: fitted}
 
 
 async def _execute_turn_inference(
@@ -1528,6 +1648,14 @@ async def _execute_turn_inference(
     _render_start = time.monotonic()
     turn_renderer = _get_turn_renderer()
     await _fit_tail_sections(turn, namespaces, effects, merged_config, _step_name)
+    await _fit_step_keys(
+        step_def,
+        namespaces,
+        effects,
+        merged_config,
+        _step_name,
+        lambda ns: turn_renderer.render(turn, ns),
+    )
     rendered_prompt = turn_renderer.render(turn, namespaces)
     prompt_render_ms = (time.monotonic() - _render_start) * 1000
     config_overrides: dict[str, Any] = {}

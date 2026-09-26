@@ -62,11 +62,13 @@ def test_repro_truncated_to_cap():
     assert repro[0] == "cmd0" and repro[-1] == "cmd9"
 
 
-def test_expected_bounded_to_300_chars():
+def test_expected_is_kept_whole():
+    """The judge's statement of expected behaviour rides into the probe prompt
+    whole (2026-09-26); the 300-char cut before it could end mid-sentence."""
     raw = _summary_json(
         f'{{"issue": "x", "class": "functional", "expected": "{"e" * 400}"}}'
     )
-    assert len(_parse_quality_summary(raw)["fix_tasks"][0]["expected"]) == 300
+    assert _parse_quality_summary(raw)["fix_tasks"][0]["expected"] == "e" * 400
 
 
 def test_legacy_string_issue_gets_empty_repro_fields():

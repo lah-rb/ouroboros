@@ -121,7 +121,7 @@ class Section(BaseModel):
     # model's window before rendering — keeps the most recent part that fits
     # beside the rest of the prompt (measured) and the output reserve, and
     # says what it left out. Unset: the section renders whole.
-    fit: Literal["tail"] | None = None
+    fit: Literal["tail", "index"] | None = None
 
 
 class OptionArg(BaseModel):
@@ -308,6 +308,10 @@ class StepDefinition(BaseModel):
     params: dict[str, Any] = Field(default_factory=dict)
     param_schema: dict[str, Any] = Field(default_factory=dict)
     prompt_template: PromptTemplateRef | None = None
+    # Context keys a prompt_template sizes to the serving window before
+    # rendering: "tail" (whole beside the prompt, else the most recent
+    # part) or "index" (whole within the share, else saved + line index).
+    fit: dict[str, Literal["tail", "index"]] = Field(default_factory=dict)
     turn: TurnDefinition | None = None
     pre_compute: list[PreComputeStep] = Field(default_factory=list)
     config: dict[str, Any] = Field(default_factory=dict)

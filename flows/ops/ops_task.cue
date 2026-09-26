@@ -246,6 +246,8 @@ ops_task: #FlowDefinition & {
 		}
 
 		reground_criteria: #StepDefinition & {
+			// Evidence sized to the serving window at render (agent/context_fit.py): whole beside the prompt, else the most recent part.
+			fit: {session_tail: "tail"}
 			action:      "inference"
 			description: "Derive the definition-of-done grounded in the explored workspace"
 			context: {
@@ -336,6 +338,8 @@ ops_task: #FlowDefinition & {
 		}
 
 		reground_output_format: #StepDefinition & {
+			// Evidence sized to the serving window at render (agent/context_fit.py): whole beside the prompt, else the most recent part.
+			fit: {session_tail: "tail"}
 			action:      "inference"
 			description: "Re-derive the output-format spec grounded in the scanned workspace"
 			context: {
@@ -409,6 +413,8 @@ ops_task: #FlowDefinition & {
 		}
 
 		sanity_plausibility: #StepDefinition & {
+			// Evidence sized to the serving window at render (agent/context_fit.py): whole beside the prompt, else the most recent part.
+			fit: {sanity_artifact_excerpt: "tail"}
 			action:      "inference"
 			description: "Judge whether the produced answer is plausible (type/magnitude)"
 			context: required: ["mission", "sanity_artifact_excerpt"]
@@ -511,6 +517,8 @@ ops_task: #FlowDefinition & {
 		// Judge: confirm genuinely done (backstop on the checks) or produce
 		// feedback for the next attempt.
 		judge_step: #StepDefinition & {
+			// Evidence sized to the serving window at render (agent/context_fit.py): whole beside the prompt, else the most recent part.
+			fit: {validation_summary: "tail", session_tail: "tail"}
 			action:      "inference"
 			description: "Judge whether the task is complete"
 			context: {
@@ -565,6 +573,8 @@ ops_task: #FlowDefinition & {
 		}
 
 		verify_completion: #StepDefinition & {
+			// Evidence sized to the serving window at render (agent/context_fit.py): whole beside the prompt, else the most recent part.
+			fit: {vbh_transcript: "tail"}
 			action:      "inference"
 			description: "Confirm genuine completion from the fresh re-probe"
 			context: required: ["mission", "vbh_transcript"]

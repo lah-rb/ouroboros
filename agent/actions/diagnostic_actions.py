@@ -171,11 +171,11 @@ async def action_create_fix_task_from_diagnosis(step_input: StepInput) -> StepOu
     # Build note content from diagnosis
     note_parts = []
     if root_cause:
-        cause_summary = extract_first_text_content(root_cause, max_length=200)
+        cause_summary = extract_first_text_content(root_cause)
         if cause_summary:
             note_parts.append(f"Root cause: {cause_summary}")
     if selected_fix:
-        fix_summary = extract_first_text_content(selected_fix, max_length=300)
+        fix_summary = extract_first_text_content(selected_fix)
         if fix_summary:
             note_parts.append(f"Recommended fix: {fix_summary}")
     if target_file:

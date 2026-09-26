@@ -152,7 +152,7 @@ _FAILED_NODE_RE = re.compile(r"(?m)^(?:FAILED|ERROR) (\S+?\.py)::(\S+)")
 
 
 async def _failing_test_block(effects, error_output: str) -> str:
-    """Extract the body of up to 2 failing tests named in a pytest transcript,
+    """Extract the body of every failing test named in a pytest transcript,
     so the diagnose seed shows how the code under test is actually called.
     Best-effort: returns '' on any miss (no effects, no node ids, unreadable
     file, symbol not found)."""
@@ -163,8 +163,6 @@ async def _failing_test_block(effects, error_output: str) -> str:
         key = (path, node)
         if key not in seen:
             seen.append(key)
-        if len(seen) >= 2:
-            break
     if not seen:
         return ""
 
@@ -193,7 +191,7 @@ async def _failing_test_block(effects, error_output: str) -> str:
             lines = content.splitlines()
             start = max(0, match.line - 1)
             end = match.end_line if match.end_line else match.line
-            body = "\n".join(lines[start:end])[:1500]
+            body = "\n".join(lines[start:end])
             blocks.append(f"# {path}::{node}\n{body}")
         except Exception:  # noqa: BLE001 — seed enrichment is best-effort
             continue
@@ -318,10 +316,14 @@ async def action_start_diagnosis_session(step_input: StepInput) -> StepOutput:
         parts.append("")
 
     # ── ## Transcript ───────────────────────────────────────────
+    # Whole when it fits the session beside the rest of the seed; else
+    # saved in full and shown as a line index the model traces into
+    # (`<saved>:<first>-<last>`). Sized once the other sections are built,
+    # since they are the `used` side of the rule — see the slot fill below.
     if error_output:
         parts.append("## Transcript")
         parts.append("```")
-        parts.append(error_output)
+        parts.append("\x00transcript\x00")
         parts.append("```")
         parts.append("")
 
@@ -355,7 +357,7 @@ async def action_start_diagnosis_session(step_input: StepInput) -> StepOutput:
                 r = dep.get("responsibility", "")
                 defines = dep.get("defines", [])
                 if f:
-                    defines_str = ", ".join(defines[:5]) if defines else ""
+                    defines_str = ", ".join(defines) if defines else ""
                     arch_lines.append(
                         f"  {f}: {r}"
                         + (f" [exports: {defines_str}]" if defines_str else "")
@@ -456,16 +458,14 @@ async def action_start_diagnosis_session(step_input: StepInput) -> StepOutput:
         )
         parts.append("")
 
-        # Cap at 6 — enough to see a repeat pattern, short enough to
-        # keep the seed prompt from bloating. Show most recent last
-        # so the "## Prior attempts" section reads chronologically.
-        recent = failed_attempts[-6:]
+        # Every attempt (2026-09-26): the last-6 cap hid the earliest
+        # targets of a long goal — exactly the repeat pattern this section
+        # exists to show. Most recent last, so it reads chronologically.
+        recent = failed_attempts
         for idx, att in enumerate(recent):
             if not isinstance(att, dict):
                 continue
-            # 1-based display number relative to the full list, so
-            # "attempt 4 of 6" stays accurate even when we truncate.
-            display_n = n - len(recent) + idx + 1
+            display_n = idx + 1
             target = att.get("target_file", "") or "?"
             symbol = att.get("target_symbol", "") or ""
             pre = att.get("pre_headline", "") or ""
@@ -571,6 +571,25 @@ async def action_start_diagnosis_session(step_input: StepInput) -> StepOutput:
     # than once — the earlier _as_text() coercion handles the known
     # fields but can't cover every append site. Cheap, robust.
     seed_prompt = "\n".join(_as_text(p) if not isinstance(p, str) else p for p in parts)
+
+    # Fill the transcript slot: whole if it fits beside the rest of the seed
+    # (a fresh session holds nothing else yet), otherwise saved in full and
+    # indexed — the model traces a range of the saved file.
+    if error_output:
+        from agent.context_fit import measure, output_view
+
+        (rest_tok,), _how = await measure(
+            effects, [seed_prompt.replace("\x00transcript\x00", "")]
+        )
+        transcript = await output_view(
+            effects,
+            error_output,
+            used=rest_tok,
+            save_path=f".agent/outputs/diagnose-{session_id}-transcript.txt",
+            label="the transcript",
+            how="trace",
+        )
+        seed_prompt = seed_prompt.replace("\x00transcript\x00", transcript)
 
     # NOTE: we deliberately do NOT send the seed to the model here.
     # The old pattern was: send seed + "Acknowledge with 'ready'",
@@ -902,6 +921,41 @@ async def action_execute_symbol_trace(step_input: StepInput) -> StepOutput:
         )
         return _correction(f"file `{file_part}` not found. {files_hint}")
 
+    # ── 2b. A line range reads one part of ANY file ─────────────
+    # `path:<first>-<last>` — the way back into text the seed could not
+    # show whole (a transcript saved under .agent/outputs/) or a file shown
+    # as an index. Sized like every other read: whole when it fits.
+    if re.fullmatch(r"\d+\s*-\s*\d+", symbol_part):
+        from agent import context_fit as _cf
+
+        text, found = _cf.read_part(
+            file_part, target_file.get("content", ""), symbol_part
+        )
+        if not found:
+            return _correction(text)
+        _f = await _cf.fit(effects, text, used=trace_used)
+        if _f.whole:
+            view = f"=== {canonical_ref} ===\n{text}"
+        else:
+            a, b = (int(x) for x in re.findall(r"\d+", symbol_part))
+            mid = (a + b) // 2
+            view = (
+                f"=== {canonical_ref} — too large to show whole here: "
+                f"{_f.describe()}. Trace a narrower range, e.g. "
+                f"`{file_part}:{a}-{mid}` then `{file_part}:{mid + 1}-{b}`. ==="
+            )
+        pending = {}
+        queue_injection(pending, ctx, view)
+        return StepOutput(
+            result={"trace_ok": True},
+            observations=f"Turn {turn + 1}: traced {canonical_ref} (lines)",
+            context_updates={
+                **pending,
+                "investigation_turn": turn + 1,
+                "traced_symbols": [*traced_symbols, canonical_ref],
+            },
+        )
+
     # ── 3. Extract symbols from the file ────────────────────────
     extract_input = StepInput(
         context={"target_file": target_file},
@@ -974,7 +1028,7 @@ async def action_execute_symbol_trace(step_input: StepInput) -> StepOutput:
         return _correction(
             f"symbol `{symbol_part}` not found in `{file_part}`. "
             f"Symbols defined in that file: {available_str}. "
-            f"Pick one and try again."
+            f"Pick one, or trace a line range `{file_part}:<first>-<last>`."
         )
 
     # ── 4b. Data-aware trace: surface connected data file content ──
@@ -1502,7 +1556,7 @@ async def _find_systemic_access_sites(
             f"  `{root}.{attr}` — {len(sites)} access site(s) "
             f"across {loc_count} function(s):"
         )
-        for s in sites[:12]:
+        for s in sites:
             lines.append(f"    - {s.file_path}:{s.line} in {s.function}")
 
     if not lines:
@@ -1718,7 +1772,7 @@ async def action_goal_search_gate(step_input: StepInput) -> StepOutput:
             except Exception:  # noqa: BLE001 - gate must not die on a save
                 logger.debug("goal-escalation: save failed", exc_info=True)
         check_cmds = [
-            str(c.get("command"))[:140]
+            str(c.get("command"))
             for c in (getattr(goal, "acceptance_checks", None) or [])
             if c.get("required", True)
         ]
@@ -1732,7 +1786,7 @@ async def action_goal_search_gate(step_input: StepInput) -> StepOutput:
                 and note_tag in (getattr(n, "tags", None) or [])
                 and "stderr=" in str(getattr(n, "content", ""))
             ):
-                last_failure = str(n.content)[:400]
+                last_failure = str(n.content)
                 break
         evidence = (
             f"Goal (functional): {goal.description.strip()}\n\n"
@@ -1768,8 +1822,8 @@ async def action_goal_search_gate(step_input: StepInput) -> StepOutput:
             ),
             context_updates={
                 "mission": mission,
-                "search_brief": evidence[:4000],
-                "expected_outcome": expected[:1000],
+                "search_brief": evidence,
+                "expected_outcome": expected,
                 "force_consult": goal.escalation_count >= 3,
             },
         )
@@ -1797,8 +1851,8 @@ async def action_goal_search_gate(step_input: StepInput) -> StepOutput:
     attempt_lines = [
         f"- {getattr(a, 'flow', '?')} on "
         f"{getattr(a, 'target_file', '?')}:{getattr(a, 'target_symbol', '') or ''}"
-        f" — {getattr(a, 'reason', '') or getattr(a, 'diagnosis_summary', '')}"[:160]
-        for a in (getattr(goal, "failed_attempts", None) or [])[-6:]
+        f" — {getattr(a, 'reason', '') or getattr(a, 'diagnosis_summary', '')}"
+        for a in (getattr(goal, "failed_attempts", None) or [])
     ]
     evidence = (
         f"Goal (functional): {goal.description.strip()}\n"
@@ -1808,7 +1862,7 @@ async def action_goal_search_gate(step_input: StepInput) -> StepOutput:
     if headline:
         evidence += f"Latest observed failure: {headline}\n"
     if attempt_lines:
-        evidence += "Prior fix attempts (most recent):\n" + "\n".join(attempt_lines)
+        evidence += "Prior fix attempts:\n" + "\n".join(attempt_lines)
     expected = (
         f"A behavioural test session can observe this working: "
         f"{goal.description.strip()}"
@@ -1822,8 +1876,8 @@ async def action_goal_search_gate(step_input: StepInput) -> StepOutput:
         ),
         context_updates={
             "mission": mission,
-            "search_brief": evidence[:4000],
-            "expected_outcome": expected[:1000],
+            "search_brief": evidence,
+            "expected_outcome": expected,
             "force_consult": force_consult,
         },
     )
@@ -1902,7 +1956,7 @@ async def _input_data_files(effects, transients: list[str]) -> list[str]:
         ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
         if languages.is_data(ext) and path not in transient_set:
             out.append(path)
-    return sorted(out)[:12]
+    return sorted(out)
 
 
 async def action_gate_author_test(step_input: StepInput) -> StepOutput:
@@ -2165,7 +2219,7 @@ async def action_store_goal_search_findings(step_input: StepInput) -> StepOutput
         or step_input.context.get("research_summary", "")
         or ""
     ).strip()
-    goal.search_findings = summary[:4000] or "(escalation produced no summary)"
+    goal.search_findings = summary or "(escalation produced no summary)"
     if effects:
         await effects.save_mission(mission)
     stored = bool(summary)

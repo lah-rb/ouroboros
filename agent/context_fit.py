@@ -88,9 +88,16 @@ def decide(tokens: int, *, window: int, used: int) -> bool:
     return tokens <= int(window * SHARE) and tokens <= window - used
 
 
+# The window LLMVP last reported to any fit in this process — for the
+# synchronous callers (prompt formatters) that have no effects handle and
+# cannot ask. It changes only when the served model does.
+_last_window: int | None = None
+
+
 async def serving_window(effects: Any) -> tuple[int, bool]:
     """(window, reported). The per-sequence window LLMVP reports, else the
     smallest window any configured text model serves."""
+    global _last_window
     health = getattr(effects, "cache_health", None)
     if health is not None:
         try:
@@ -98,8 +105,22 @@ async def serving_window(effects: Any) -> tuple[int, bool]:
         except Exception:  # noqa: BLE001 — sizing never fails a step
             n = 0
         if n > 0:
+            _last_window = n
             return n, True
     return UNKNOWN_WINDOW, False
+
+
+def known_window() -> int:
+    """The window last reported in this process, else the assumed one."""
+    return _last_window or UNKNOWN_WINDOW
+
+
+def share_chars(window: int | None = None) -> int:
+    """One read's share of the window in CHARS (tokens x 40/13) — for a
+    synchronous caller that cannot measure. It applies the share half of
+    the rule; the free-context half is the step's ``fit`` map, which
+    measures the rendered prompt."""
+    return int(SHARE * (window or known_window()) * 40 / 13)
 
 
 def estimate_tokens(text: str) -> int:
@@ -392,12 +413,19 @@ async def read_file_view(effects: Any, ref: str, *, used: int) -> tuple[str, str
 
 
 async def output_view(
-    effects: Any, text: str, *, used: int, save_path: str, label: str
+    effects: Any,
+    text: str,
+    *,
+    used: int,
+    save_path: str,
+    label: str,
+    how: str = "read_file",
 ) -> str:
     """Tool output or evidence WHOLE when it fits; otherwise saved in full at
     ``save_path`` and shown as its line index, each range readable with
-    ``read_file <save_path>:<first>-<last>``. Replaces fixed head cuts that
-    kept the first 4,000 chars and lost the error at the end."""
+    ``<how> <save_path>:<first>-<last>`` (``how`` names the reader's verb:
+    ``read_file`` for a tool loop, ``trace`` in a diagnosis). Replaces fixed
+    head cuts that kept the first 4,000 chars and lost the error at the end."""
     text = text or ""
     f = await fit(effects, text, used=used)
     if f.whole:
@@ -411,7 +439,7 @@ async def output_view(
         except Exception:  # noqa: BLE001 — the index still stands without it
             logger.debug("could not save %s to %s", label, save_path, exc_info=True)
     where = (
-        f" The full text is saved: read a range with read_file "
+        f" The full text is saved: read a range with {how} "
         f"`{save_path}:<first>-<last>`."
         if saved
         else ""

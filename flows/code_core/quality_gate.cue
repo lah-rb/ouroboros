@@ -429,6 +429,8 @@ quality_gate: #FlowDefinition & {
 		// Evaluate UX session inside the same memoryful session that
 		// drove the terminal interaction. The model has full context.
 		evaluate_ux_session: #StepDefinition & {
+			// Evidence sized to the serving window at render (agent/context_fit.py): whole beside the prompt, else the most recent part.
+			fit: {terminal_output: "tail"}
 			action:      "inference"
 			description: "Assess UX session — the model already has full context in KV cache"
 			context: optional: ["inference_session_id", "terminal_output"]
@@ -463,6 +465,8 @@ quality_gate: #FlowDefinition & {
 		// ── Phase 3: Summary and verdict ───────────────────────────
 
 		summarize: #StepDefinition & {
+			// Evidence sized to the serving window at render (agent/context_fit.py): whole beside the prompt, else the most recent part.
+			fit: {validation_summary: "tail", terminal_output: "tail"}
 			action:      "inference"
 			description: "Summarize all quality results into actionable findings"
 			context: optional: [
@@ -639,6 +643,8 @@ quality_gate: #FlowDefinition & {
 		}
 
 		judge_finding: #StepDefinition & {
+			// Evidence sized to the serving window at render (agent/context_fit.py): whole beside the prompt, else the most recent part.
+			fit: {terminal_output: "tail"}
 			action:      "inference"
 			description: "Judge whether the probe transcript confirms the claimed defect"
 			context: optional: [
