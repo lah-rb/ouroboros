@@ -123,7 +123,7 @@ async def test_the_turns_own_max_tokens_is_the_reserve():
 async def test_an_unreported_window_assumes_the_smallest_served(caplog):
     turn, text = _evaluator_turn(), _transcript(20000)
     ns = _namespaces(text)
-    with caplog.at_level(logging.INFO, logger="agent.runtime"):
+    with caplog.at_level(logging.INFO, logger="agent.context_fit"):
         await _fit_tail_sections(turn, ns, _Server(None), {}, "evaluate_outcome")
     assert f"{_FIT_UNKNOWN_WINDOW:,}-token window" in ns["context"]["eval_session_tail"]
     assert "assumed" in caplog.text
@@ -138,7 +138,7 @@ async def test_without_token_counts_it_sizes_by_the_estimate(caplog):
 
     turn, text = _evaluator_turn(), _transcript(4000)
     ns = _namespaces(text)
-    with caplog.at_level(logging.INFO, logger="agent.runtime"):
+    with caplog.at_level(logging.INFO, logger="agent.context_fit"):
         await _fit_tail_sections(turn, ns, _NoCount(16384), {}, "evaluate_outcome")
     assert "estimated counts" in caplog.text
     prompt = _get_turn_renderer().render(turn, ns)

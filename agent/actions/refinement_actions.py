@@ -225,11 +225,24 @@ _EXCLUDED_DIRS = frozenset(
 )
 _MAX_FILE_SIZE = 256 * 1024  # skip files larger than this (data/binary, not source)
 _MAX_SCAN_FILES = 300  # cap the manifest; the rest is reachable via trace/grep
-_SIGNATURE_MAX_CHARS = (
-    1500  # byte-cap a per-file snippet (defeats minified one-liners).
-)
-# 1500 keeps a full docstring+imports+~20 defs for AST
-# files while trimming the plan_charter projection (was 2000)
+# Byte-cap for one LINE of a per-file signature — it defeats minified
+# one-liners, which is all it ever needed to do. Structured signatures (one
+# import or def per line) pass whole since 2026-09-26: applied to the whole
+# signature it silently re-imposed the entry caps the index had just lost,
+# and the listing that renders the manifest is sized to the window anyway.
+_SIGNATURE_MAX_CHARS = 1500
+
+
+def _bound_minified_lines(signature: str) -> str:
+    """Cap each LINE of a signature at _SIGNATURE_MAX_CHARS, with a marker.
+    A minified one-liner is the only shape this exists for; a structured
+    signature has no line near the cap and passes whole."""
+    out = []
+    for line in signature.splitlines():
+        if len(line) > _SIGNATURE_MAX_CHARS:
+            line = line[:_SIGNATURE_MAX_CHARS] + " …(line truncated)"
+        out.append(line)
+    return "\n".join(out)
 
 
 def _excluded(filepath: str) -> bool:
@@ -344,11 +357,7 @@ async def _digest_modality_sidecars(
                 text = (result.stdout or "").strip()
                 if result.return_code == 0 and text:
                     await effects.write_file(sidecar, text)
-                    manifest[sidecar] = text[:_SIGNATURE_MAX_CHARS] + (
-                        "\n    # …(truncated)"
-                        if len(text) > _SIGNATURE_MAX_CHARS
-                        else ""
-                    )
+                    manifest[sidecar] = text  # whole: bounded by its own generation
                     notes.append(f"digested {path} -> {sidecar}")
                 else:
                     err = (result.stderr or "").strip() or f"exit {result.return_code}"
@@ -415,12 +424,7 @@ async def action_scan_project(step_input: StepInput) -> StepOutput:
                 signature = _extract_signature(
                     filepath, content.content, signature_depth
                 )
-                if len(signature) > _SIGNATURE_MAX_CHARS:
-                    signature = (
-                        signature[:_SIGNATURE_MAX_CHARS]
-                        + "\n    # …(signature truncated)"
-                    )
-                manifest[filepath] = signature
+                manifest[filepath] = _bound_minified_lines(signature)
             else:
                 manifest[filepath] = "(file not readable)"
         except Exception as e:
@@ -486,17 +490,23 @@ def _extract_python_signature(lines: list[str], depth: str) -> str:
     """Extract Python file signature: docstring + imports + definitions."""
     parts = []
 
-    # Module docstring
+    # Module docstring — whole (2026-09-26; a 30-line scan cut a long one
+    # silently). Only a string that OPENS the module is one: the first
+    # non-blank, non-comment line must start it.
     in_docstring = False
     docstring_lines = []
-    for line in lines[:30]:
+    for line in lines:
         stripped = line.strip()
-        if not in_docstring and stripped.startswith('"""'):
+        if not in_docstring:
+            if not stripped or stripped.startswith("#"):
+                continue
+            if not stripped.startswith('"""'):
+                break
             in_docstring = True
             docstring_lines.append(stripped)
             if stripped.endswith('"""') and len(stripped) > 3:
                 break
-        elif in_docstring:
+        else:
             docstring_lines.append(stripped)
             if '"""' in stripped:
                 break
@@ -508,7 +518,7 @@ def _extract_python_signature(lines: list[str], depth: str) -> str:
         line.strip() for line in lines if line.strip().startswith(("import ", "from "))
     ]
     if imports:
-        parts.append("\n".join(imports[:15]))
+        parts.append("\n".join(imports))
 
     # Module-level string constants that name a FILE.
     #
@@ -544,7 +554,7 @@ def _extract_python_signature(lines: list[str], depth: str) -> str:
             ):
                 paths.append(f"{name} = {value}")
         if paths:
-            parts.append("\n".join(paths[:10]))
+            parts.append("\n".join(paths))
 
     # Class and function definitions
     if depth in ("imports_and_exports", "full"):
@@ -554,7 +564,7 @@ def _extract_python_signature(lines: list[str], depth: str) -> str:
             if stripped.startswith("class ") or stripped.startswith("def "):
                 defs.append(stripped.split(":", 1)[0] + ":")
         if defs:
-            parts.append("\n".join(defs[:20]))
+            parts.append("\n".join(defs))
 
     return "\n\n".join(parts) if parts else "(empty file)"
 
@@ -567,7 +577,7 @@ def _extract_yaml_signature(lines: list[str]) -> str:
             key = line.split(":")[0].strip()
             if key:
                 top_keys.append(key)
-    return "Top-level keys: " + ", ".join(top_keys[:10]) if top_keys else "(empty)"
+    return "Top-level keys: " + ", ".join(top_keys) if top_keys else "(empty)"
 
 
 def _extract_markdown_signature(lines: list[str]) -> str:
@@ -576,7 +586,7 @@ def _extract_markdown_signature(lines: list[str]) -> str:
     for line in lines:
         if line.startswith("#"):
             headings.append(line.strip())
-    return "\n".join(headings[:10]) if headings else "(empty)"
+    return "\n".join(headings) if headings else "(empty)"
 
 
 # ── extract_search_queries ────────────────────────────────────────────

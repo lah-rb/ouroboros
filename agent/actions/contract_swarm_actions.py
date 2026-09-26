@@ -1407,7 +1407,7 @@ async def action_run_contract_doctests(step_input: StepInput) -> StepOutput:
                 f"doctest: {f}"
             ]
             entry["output"] = (
-                (entry.get("output") or "") + f"\n[FAIL] doctest: {f}\n" + output[:800]
+                (entry.get("output") or "") + f"\n[FAIL] doctest: {f}\n" + output
             )
         lines.append(f"[{'PASS' if passed else 'FAIL'}] doctest: {f}")
 
@@ -1761,7 +1761,7 @@ async def action_run_contract_typecheck(step_input: StepInput) -> StepOutput:
             entry["checks_failed"] = list(entry.get("checks_failed") or []) + [
                 f"typecheck: {f}"
             ]
-            detail = "\n".join(f"  - {p}" for p in probs[:12])
+            detail = "\n".join(f"  - {p}" for p in probs)
             entry["output"] = (
                 entry.get("output") or ""
             ) + f"\n[FAIL] typecheck: {f}\n{detail}"
@@ -2174,19 +2174,26 @@ def _diagnose_batch_candidates(mission: Any, working_directory: str) -> list[tup
     return out
 
 
-def _scope_worker_content(path: str, raw: str, gate_output: str) -> str:
-    """Symbol-scoped file view for a stateless diagnose worker (§21).
+async def _scope_worker_content(
+    effects: Any, path: str, raw: str, gate_output: str, *, used: int = 0
+) -> str:
+    """The file a stateless diagnose worker reads (§21, and the whole-if-it-fits
+    rule of agent/context_fit.py since 2026-09-26).
 
-    Line numbers in the gate output (ruff `file:line:col`, traceback
-    `line N`) are mapped to their enclosing symbols via the rich symbol
-    table; the worker gets those FULL bodies plus a signature listing for
-    everything else. When no line maps (or tree-sitter is unavailable),
-    fall back to head+tail — for a too-long file the ERROR region is as
-    likely at the bottom as the top.
-    """
+    WHOLE when it fits the window beside the rest of the worker's prompt
+    (``used`` tokens). Otherwise the symbols the gate output's line numbers
+    (ruff `file:line:col`, traceback `line N`) map to, in FULL, plus a
+    signature listing for everything else. When nothing maps, the file's
+    index — signatures with line ranges — so the worker can still name the
+    symbol to change. Never a head or head+tail cut: the old `raw[:6000]`
+    had workers diagnosing files they could only see the top of, and the
+    3,000+3,000 that replaced it showed arbitrary code."""
     if not raw:
         return ""
-    if len(raw) <= 6000:
+    from agent import context_fit as cf
+
+    f = await cf.fit(effects, raw, used=used)
+    if f.whole:
         return raw
 
     from agent.actions.ast_actions import _build_symbol_table
@@ -2219,10 +2226,15 @@ def _scope_worker_content(path: str, raw: str, gate_output: str) -> str:
                 f"{sym.get('end_line', '?')}): {sym.get('signature', sym.get('name'))}"
                 for sym in table
             )
-            return "\n".join(parts)[:12000]
+            return "\n".join(parts)
 
-    # No mappable lines / no table: head+tail beats head-only.
-    return raw[:3000] + "\n… [middle elided] …\n" + raw[-3000:]
+    return (
+        f"(index of {path} — too large to show whole here: {f.describe()}; "
+        f"name the symbol to change from it)\n" + cf.index_for(path, raw)
+    )
+
+
+from agent.context_fit import measure as _cf_measure  # noqa: E402
 
 
 async def action_swarm_diagnose_batch(step_input: StepInput) -> StepOutput:
@@ -2265,25 +2277,31 @@ async def action_swarm_diagnose_batch(step_input: StepInput) -> StepOutput:
     prompts: dict[str, str] = {}
     for goal, path, last in targets:
         gate_output = getattr(last, "terminal_output", "") or ""
+
+        def _prompt(content: str, _goal=goal, _path=path, _last=last) -> str:
+            return _DIAGNOSE_WORKER_PROMPT.format(
+                directive=_goal.description or "",
+                path=_path,
+                checks=", ".join(getattr(_last, "checks_failed", []) or []) or "?",
+                output=gate_output,
+                content=content,
+            )
+
         content = ""
         try:
             fc = await effects.read_file(os.path.join(working_directory, path))
             raw = getattr(fc, "content", "") or ""
-            # Scope, don't truncate (OPEN_TASKS §21): the old head-cut
-            # `raw[:6000]` had workers diagnosing files they could only see
-            # the TOP of. Symbol-scope instead: map the gate output's line
-            # numbers to enclosing symbols and give those FULL bodies plus
-            # every signature; head+tail only when nothing maps.
-            content = _scope_worker_content(path, raw, gate_output)
+            # Whole when it fits beside the rest of the prompt; else scoped
+            # to the implicated symbols; else the file's index (see
+            # _scope_worker_content). The prompt's other parts are the
+            # `used` side of the rule.
+            (rest_tok,), _how = await _cf_measure(effects, [_prompt("")])
+            content = await _scope_worker_content(
+                effects, path, raw, gate_output, used=rest_tok
+            )
         except Exception:  # noqa: BLE001 — diagnose from gate output alone
             pass
-        prompts[goal.id] = _DIAGNOSE_WORKER_PROMPT.format(
-            directive=(goal.description or "")[:1500],
-            path=path,
-            checks=", ".join(getattr(last, "checks_failed", []) or []) or "?",
-            output=(gate_output),
-            content=content or "(unreadable)",
-        )
+        prompts[goal.id] = _prompt(content or "(unreadable)")
 
     decision = await pool_fit_width(
         effects,
@@ -2354,9 +2372,9 @@ async def action_swarm_diagnose_batch(step_input: StepInput) -> StepOutput:
             DirectiveReport(
                 flow="diagnose_batch",
                 status="success",
-                summary=str(parsed.get("root_cause", "") or "")[:800]
+                summary=str(parsed.get("root_cause", "") or "")
                 + "\nChange: "
-                + str(parsed.get("change_spec", "") or "")[:500],
+                + str(parsed.get("change_spec", "") or ""),
                 headline=f"Batch triage: {path}",
                 files_affected=[path],
                 recommended_flow="file_ops",

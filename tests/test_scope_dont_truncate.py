@@ -9,6 +9,8 @@ is W1b).
 from __future__ import annotations
 
 
+import pytest
+
 import agent.projections as pj
 from agent.data_trace import render_data_file
 from agent.renderers import render_dependency_excerpts
@@ -222,29 +224,41 @@ class TestInteractionMapIsWhole:
 
 
 class TestWorkerScoping:
-    def test_line_mapped_symbols_full_bodies(self):
-        from agent.actions.contract_swarm_actions import _scope_worker_content
+    # MockEffects reports no window, so the rule assumes 32,768 tokens and a
+    # 8,192-token share; a file over ~25k chars is not whole.
 
-        big = UI_PY + "\n# pad\n" * 2000
+    @pytest.mark.asyncio
+    async def test_line_mapped_symbols_full_bodies(self):
+        from agent.actions.contract_swarm_actions import _scope_worker_content
+        from agent.effects.mock import MockEffects
+
+        big = UI_PY + "\n# pad\n" * 20000
         gate = "ui.py:{}:1: F821 whatever".format(UI_PY.count("\n"))  # prompt's line
-        out = _scope_worker_content("ui.py", big, gate)
+        out = await _scope_worker_content(MockEffects(), "ui.py", big, gate)
         assert "symbol-scoped view" in out
         assert "def prompt(self, text: str)" in out
         assert "all definitions in the file" in out
 
-    def test_no_mappable_lines_head_plus_tail(self):
+    @pytest.mark.asyncio
+    async def test_no_mappable_lines_gets_the_index(self):
+        # Not a head+tail cut of arbitrary code any more: the file's index,
+        # so the worker can still name the symbol to change (2026-09-26).
         from agent.actions.contract_swarm_actions import _scope_worker_content
+        from agent.effects.mock import MockEffects
 
-        raw = "HEAD\n" + ("x" * 9000) + "\nTAIL"
-        out = _scope_worker_content("m.py", raw, "no line info here")
-        assert out.startswith("HEAD")
-        assert out.rstrip().endswith("TAIL")
-        assert "[middle elided]" in out
+        raw = "HEAD = 1\n" + "x = 2\n" * 40000 + "TAIL = 3\n"
+        out = await _scope_worker_content(
+            MockEffects(), "m.py", raw, "no line info here"
+        )
+        assert out.startswith("(index of m.py — too large to show whole here")
+        assert "[middle elided]" not in out
 
-    def test_small_file_untouched(self):
+    @pytest.mark.asyncio
+    async def test_small_file_whole(self):
         from agent.actions.contract_swarm_actions import _scope_worker_content
+        from agent.effects.mock import MockEffects
 
-        assert _scope_worker_content("m.py", "tiny", "x") == "tiny"
+        assert await _scope_worker_content(MockEffects(), "m.py", "tiny", "x") == "tiny"
 
 
 class TestSeamEvidenceCaps:

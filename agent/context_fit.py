@@ -450,6 +450,90 @@ async def output_view(
     )
 
 
+# ── The tail fit: evidence for a one-shot reader ───────────────────────
+
+FIT_MARKER = (
+    "[… the first {omitted:,} characters of this text are not shown — "
+    "it was fitted to the model's {window:,}-token window; the most recent "
+    "part follows …]"
+)
+
+
+def tail_on_a_line(text: str, keep_chars: int) -> str:
+    """The last ``keep_chars`` of ``text``, starting at a line boundary."""
+    if keep_chars <= 0:
+        return ""
+    if keep_chars >= len(text):
+        return text
+    tail = text[-keep_chars:]
+    nl = tail.find("\n")
+    return tail[nl + 1 :] if 0 <= nl < len(tail) - 1 else tail
+
+
+async def tail_view(
+    effects: Any,
+    content: str,
+    *,
+    used: int,
+    reserve: int = OUTPUT_RESERVE,
+    window: int | None = None,
+    label: str = "text",
+    step_name: str = "",
+    window_how: str = "",
+) -> str:
+    """Evidence for a reader that cannot read more (a one-shot judge, a
+    localizer): the content itself when it fits beside ``used`` tokens of
+    prompt and the output reserve — not held to the per-read share, it IS
+    the evidence — else its most recent part from a line boundary under a
+    marker saying how much is not shown. Returns ``content`` (the same
+    object) when whole, so a caller can tell."""
+    if window is None:
+        window, reported = await serving_window(effects)
+        window_how = window_how or ("reported" if reported else "assumed")
+    (content_tok,), how = await measure(effects, [content])
+    marker_tok = (len(FIT_MARKER) * 13) // 40 + 16
+    budget = window - used - reserve
+    if content_tok <= budget:
+        logger.info(
+            "fit %s: %s whole — %d tok beside a %d-tok prompt and %d "
+            "reserve in a %d window (%s, %s counts)",
+            step_name,
+            label,
+            content_tok,
+            used,
+            reserve,
+            window,
+            window_how,
+            how,
+        )
+        return content
+    budget -= marker_tok
+    kept = content
+    for _ in range(3):
+        keep_chars = int(len(kept) * max(budget, 0) / max(content_tok, 1))
+        kept = tail_on_a_line(kept, keep_chars)
+        if not kept:
+            break
+        (content_tok,), how = await measure(effects, [kept])
+        if content_tok <= budget:
+            break
+    marker = FIT_MARKER.format(omitted=len(content) - len(kept), window=window)
+    (logger.info if kept else logger.warning)(
+        "fit %s: kept the last %d of %d chars of %s — a %d-tok prompt and "
+        "%d reserve in a %d window (%s, %s counts)",
+        step_name,
+        len(kept),
+        len(content),
+        label,
+        used,
+        reserve,
+        window,
+        window_how,
+        how,
+    )
+    return f"{marker}\n{kept}" if kept else marker
+
+
 def data_overview(path: str, content: str) -> str:
     """Two levels of a data file's index: the top level, then the members of
     each top-level collection (each with its pointer and id/name) — enough to

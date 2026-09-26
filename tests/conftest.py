@@ -175,3 +175,15 @@ def compiled_rewrite_flow() -> FlowDefinition:
 @pytest.fixture
 def compiled_set_env_flow() -> FlowDefinition:
     return load_compiled_flow("set_env")
+
+
+@pytest.fixture(autouse=True)
+def _forget_the_last_reported_window():
+    """agent.context_fit remembers the window LLMVP last reported, for the
+    synchronous prompt formatters that cannot ask; one test's 262k server must
+    not size the next test's terminal view."""
+    import agent.context_fit as cf
+
+    cf._last_window = None
+    yield
+    cf._last_window = None

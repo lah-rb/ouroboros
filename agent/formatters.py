@@ -329,10 +329,16 @@ def format_project_file_list(params: dict, namespaces: dict) -> str:
     return str(manifest)
 
 
-# Total rendered project-listing budget (Guard G2 backstop). Even after the scan
-# caps the count + size + per-file signature, render no more than this — beyond it
-# the agent traces/greps a path rather than reading a wall of skeletons.
-_LISTING_MAX_CHARS = 40000
+# Total rendered project-listing budget (Guard G2 backstop): one read's share of
+# the serving window (agent/context_fit.py; was a fixed 40,000 chars). Beyond it
+# the remaining files are listed by NAME — never dropped — and the agent traces
+# or greps a path rather than reading a wall of skeletons.
+
+
+def _listing_max_chars() -> int:
+    from agent.context_fit import share_chars
+
+    return share_chars()
 
 
 # Sidecar suffixes mirror refinement_actions._VL_SIDECAR_SUFFIX /
@@ -425,7 +431,7 @@ def format_verified_behaviours(params: dict, namespaces: dict) -> str:
         if status == "complete" and gtype in ("functional", "quality"):
             text = str(desc or "").strip()
             if text:
-                lines.append(f"- {text[:160]}")
+                lines.append(f"- {text}")
     return "\n".join(lines) if lines else "(none verified yet)"
 
 
@@ -436,6 +442,7 @@ def format_project_listing(params: dict, namespaces: dict) -> str:
     items = list(manifest.items())
     lines: list[str] = []
     total = 0
+    budget = _listing_max_chars()
     for i, (filepath, sig) in enumerate(items):
         block = [f"- {filepath}"]
         if sig:
@@ -443,9 +450,11 @@ def format_project_listing(params: dict, namespaces: dict) -> str:
             # each file's block reads cleanly.
             block += [f"    {sig_line}" for sig_line in str(sig).splitlines()]
         block_text = "\n".join(block)
-        if lines and total + len(block_text) > _LISTING_MAX_CHARS:
+        if lines and total + len(block_text) > budget:
+            rest = [str(p) for p, _ in items[i:]]
             lines.append(
-                f"… ({len(items) - i} more files omitted — trace or grep a path to inspect)"
+                f"… {len(rest)} more files, names only (trace or grep a path "
+                f"to inspect): " + ", ".join(rest)
             )
             break
         lines.append(block_text)
@@ -471,8 +480,7 @@ def format_project_docs(params: dict, namespaces: dict) -> str:
     failure instead.
     """
     manifest = params.get("source") or {}
-    blocks: list[str] = []
-    total = 0
+    docs: list[tuple[str, str]] = []
     for filepath, content in manifest.items():
         low = str(filepath).lower()
         name = low.rsplit("/", 1)[-1]
@@ -480,11 +488,20 @@ def format_project_docs(params: dict, namespaces: dict) -> str:
         if not (low.endswith(_DOC_SUFFIXES) and stem in _DOC_STEMS):
             continue
         body = str(content or "").strip()
-        if not body:
-            continue
+        if body:
+            docs.append((str(filepath), body))
+    blocks: list[str] = []
+    total = 0
+    budget = _listing_max_chars()
+    for i, (filepath, body) in enumerate(docs):
         block = f"--- {filepath} ---\n{body}"
-        if blocks and total + len(block) > _LISTING_MAX_CHARS:
-            blocks.append("… (further documentation omitted)")
+        if blocks and total + len(block) > budget:
+            # Never dropped silently: the rest by name and size, so the
+            # reader knows what shipped and can read it directly.
+            blocks.append(
+                "… not shown here (read them directly): "
+                + ", ".join(f"{p} ({len(b):,} chars)" for p, b in docs[i:])
+            )
             break
         blocks.append(block)
         total += len(block)
@@ -1214,8 +1231,8 @@ def _format_call_graph(params: dict, namespaces: dict) -> str:
         if key not in seen:
             seen.add(key)
             uniq_callers.append(c)
-    # Limit: 10 call sites is plenty; more becomes noise
-    uniq_callers = uniq_callers[:10]
+    # Every call site (2026-09-26): the one that matters is as likely the
+    # eleventh as the first, and a dropped site is invisible to the model.
 
     # ── Extract callees from target body ────────────────────────
     # Heuristic: look for `self.<name>(` and `<namespace>.<name>(` patterns.
@@ -1249,9 +1266,6 @@ def _format_call_graph(params: dict, namespaces: dict) -> str:
                 if snippet not in seen_callees:
                     seen_callees.add(snippet)
                     callees.append(snippet)
-
-    # Keep the callee list focused — 15 is plenty
-    callees = callees[:15]
 
     # ── Format the output block ─────────────────────────────────
     if not uniq_callers and not callees:
@@ -1315,17 +1329,10 @@ def _format_already_rewritten(params: dict, namespaces: dict) -> str:
     for qname, body in already.items():
         if not body:
             continue
-        # Normalize: show just the signature plus the first few body
-        # lines if the body is long. Full body is sometimes big (large
-        # class), and the purpose here is contract visibility, not
-        # redundant re-authoring.
-        body_str = body.rstrip()
-        body_lines = body_str.splitlines()
-        if len(body_lines) <= 20:
-            display = body_str
-        else:
-            # Show first 18 lines + tail marker
-            display = "\n".join(body_lines[:18]) + "\n    # ... (truncated)"
+        # Whole (2026-09-26): the 18-line cut hid exactly the method
+        # signatures a later rewrite has to match. The rewrite turn sizes
+        # this block to the window (`fit` on already_rewritten_block).
+        display = body.rstrip()
         lines.append(f"### {qname}")
         lines.append("")
         lines.append("```python")

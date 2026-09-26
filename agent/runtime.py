@@ -1373,18 +1373,12 @@ async def _rewind_failed_attempt(
 # fixed 16k-char tail it replaces was sized for a 32k window and threw away
 # evidence on a 262k one (2026-09-25).
 
+
 # The output reserve and the assumed window are the whole-if-it-fits rule's
 # (agent/context_fit.py) — one definition for every read. The tail fit keeps
 # its own shape: a judge's transcript is the evidence itself, so it is fitted
 # whole beside the rest of the prompt (not held to the per-read share) and its
 # fallback is the most recent stretch, not an index.
-_FIT_MARKER = (
-    "[… the first {omitted:,} characters of this transcript are not shown — "
-    "it was fitted to the model's {window:,}-token window; the most recent "
-    "part follows …]"
-)
-
-
 def _fit_slot(section: Any) -> tuple[str, str]:
     """(namespace, key) a fitted section reads — and the fit writes back."""
     path = section.ref.ref if section.ref is not None else ""
@@ -1392,17 +1386,6 @@ def _fit_slot(section: Any) -> tuple[str, str]:
     if not ns or not key or "." in key:
         raise TurnRenderError(f"fit needs a ref to a top-level key, got {path!r}")
     return ns, key
-
-
-def _tail_on_a_line(text: str, keep_chars: int) -> str:
-    """The last ``keep_chars`` of ``text``, starting at a line boundary."""
-    if keep_chars <= 0:
-        return ""
-    if keep_chars >= len(text):
-        return text
-    tail = text[-keep_chars:]
-    nl = tail.find("\n")
-    return tail[nl + 1 :] if 0 <= nl < len(tail) - 1 else tail
 
 
 async def _fit_value(
@@ -1445,48 +1428,17 @@ async def _fit_value(
             label=label,
         )
 
-    (content_tok,), how = await cf.measure(effects, [content])
-    marker_tok = (len(_FIT_MARKER) * 13) // 40 + 16
-    budget = window - prompt_tok - reserve
-    if content_tok <= budget:
-        logger.info(
-            "fit %s: %s whole — %d tok beside a %d-tok prompt and %d "
-            "reserve in a %d window (%s, %s counts)",
-            step_name,
-            label,
-            content_tok,
-            prompt_tok,
-            reserve,
-            window,
-            window_how,
-            how,
-        )
-        return None
-    budget -= marker_tok
-    kept = content
-    for _ in range(3):
-        keep_chars = int(len(kept) * max(budget, 0) / max(content_tok, 1))
-        kept = _tail_on_a_line(kept, keep_chars)
-        if not kept:
-            break
-        (content_tok,), how = await cf.measure(effects, [kept])
-        if content_tok <= budget:
-            break
-    marker = _FIT_MARKER.format(omitted=len(content) - len(kept), window=window)
-    (logger.info if kept else logger.warning)(
-        "fit %s: kept the last %d of %d chars of %s — a %d-tok prompt and "
-        "%d reserve in a %d window (%s, %s counts)",
-        step_name,
-        len(kept),
-        len(content),
-        label,
-        prompt_tok,
-        reserve,
-        window,
-        window_how,
-        how,
+    fitted = await cf.tail_view(
+        effects,
+        content,
+        used=prompt_tok,
+        reserve=reserve,
+        window=window,
+        label=label,
+        step_name=step_name,
+        window_how=window_how,
     )
-    return f"{marker}\n{kept}" if kept else marker
+    return None if fitted is content else fitted
 
 
 def _fit_save_path(flow: str, step: str, key: str) -> str:

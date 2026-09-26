@@ -18,7 +18,7 @@ from agent.actions.refinement_actions import (
     action_scan_project,
 )
 from agent.effects.mock import MockEffects
-from agent.formatters import _LISTING_MAX_CHARS, format_project_listing
+from agent.formatters import _listing_max_chars, format_project_listing
 from agent.models import FlowMeta, StepInput
 
 
@@ -88,11 +88,15 @@ async def test_scan_byte_caps_minified_signature():
     assert len(sig) <= _SIGNATURE_MAX_CHARS + 80
 
 
-def test_listing_total_budget_and_omit_note():
+def test_listing_total_budget_names_the_rest():
+    # The budget is one read's share of the window; what it cannot hold is
+    # listed by NAME, so no file is invisible to the model (2026-09-26).
     big = {f"f{i}.py": "x" * 200 for i in range(1000)}
     out = format_project_listing({"source": big}, {})
-    assert len(out) < _LISTING_MAX_CHARS + 500
-    assert "more files omitted" in out
+    body, _, rest = out.partition("… ")
+    assert len(body) < _listing_max_chars() + 500
+    assert "more files, names only" in rest and "f999.py" in rest
+    assert "x" * 200 not in rest  # names, not signatures
 
 
 def test_listing_small_manifest_unchanged():

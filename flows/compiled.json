@@ -10453,6 +10453,25 @@
           ]
         },
         "params": {},
+        "fit": {
+          "already_rewritten_block": "tail"
+        },
+        "pre_compute": [
+          {
+            "formatter": "select_rewrite_instruction_template",
+            "output_key": "kind_instruction_template",
+            "params": {
+              "source": {
+                "$ref": "context.current_symbol"
+              }
+            }
+          },
+          {
+            "formatter": "format_already_rewritten",
+            "output_key": "already_rewritten_block",
+            "params": {}
+          }
+        ],
         "turn": {
           "config": {
             "temperature": "t*0.4",
@@ -10502,22 +10521,6 @@
           "retries": 3,
           "rewind_on_retry": false
         },
-        "pre_compute": [
-          {
-            "formatter": "select_rewrite_instruction_template",
-            "output_key": "kind_instruction_template",
-            "params": {
-              "source": {
-                "$ref": "context.current_symbol"
-              }
-            }
-          },
-          {
-            "formatter": "format_already_rewritten",
-            "output_key": "already_rewritten_block",
-            "params": {}
-          }
-        ],
         "config": {},
         "resolver": {
           "type": "rule",

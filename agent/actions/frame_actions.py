@@ -368,16 +368,16 @@ def _frame_evidence(root_cause: str, change_spec: str) -> str:
     file_ops.run_module_frame_edit has always passed `change_spec` and
     `root_cause` into patch_module, and patch_module read NEITHER — the
     frame editor worked from `module_directive` alone, which names the
-    literal line to write but not why. Caps mirror the ones LOCALIZE_PROMPT
-    applies to the same fields (:517-520); an empty return leaves the
+    literal line to write but not why. Both fields whole (2026-09-26; the
+    600-char caps cut a diagnosis mid-sentence); an empty return leaves the
     prompt byte-identical to the pre-wiring version for any fix that
     carried no diagnosis.
     """
     lines = []
     if root_cause.strip():
-        lines.append(f"  Root cause: {root_cause.strip()[:600]}")
+        lines.append(f"  Root cause: {root_cause.strip()}")
     if change_spec.strip():
-        lines.append(f"  Required change: {change_spec.strip()[:600]}")
+        lines.append(f"  Required change: {change_spec.strip()}")
     if not lines:
         return ""
     return "\nThe diagnosis that led here:\n" + "\n".join(lines) + "\n"
@@ -535,16 +535,34 @@ async def action_localize_fix_target(step_input: StepInput) -> StepOutput:
         return fallthrough
 
     sigs = "\n".join(
-        f"  - {s['name']}  ({s.get('kind', '')})  "
-        f"{str(s.get('signature', ''))[:90]}"
-        for s in symbol_table[:60]
+        f"  - {s['name']}  ({s.get('kind', '')})  {s.get('signature', '')}"
+        for s in symbol_table
         if s.get("name")
     )
-    prompt = LOCALIZE_PROMPT.format(
-        file=file_path,
-        directive=directive[:600] or "(none)",
-        evidence=error_output[:1600],
-        symbols=sigs,
+    # Every symbol and the whole directive; the evidence is sized to the
+    # window beside the rest of the prompt (agent/context_fit.py) — whole
+    # when it fits, else its most recent part, where a traceback's fault
+    # line sits. The fixed 60 symbols / 90-char signatures / 1,600 chars of
+    # evidence (to 2026-09-26) hid the very lines the localizer needed.
+    from agent.context_fit import measure, tail_view
+
+    def _prompt(evidence: str) -> str:
+        return LOCALIZE_PROMPT.format(
+            file=file_path,
+            directive=directive or "(none)",
+            evidence=evidence,
+            symbols=sigs,
+        )
+
+    (rest_tok,), _how = await measure(effects, [_prompt("")])
+    prompt = _prompt(
+        await tail_view(
+            effects,
+            error_output,
+            used=rest_tok,
+            label="the error evidence",
+            step_name="localize",
+        )
     )
     parsed: dict = {}
     for attempt in (1, 2):
@@ -561,7 +579,7 @@ async def action_localize_fix_target(step_input: StepInput) -> StepOutput:
 
     scope = str(parsed.get("scope") or "").strip().lower()
     symbol = str(parsed.get("target_symbol") or "").strip()
-    change_spec = str(parsed.get("change_spec") or "")[:600]
+    change_spec = str(parsed.get("change_spec") or "")
     module_statement = str(parsed.get("module_statement") or "").strip()
 
     if scope == "module" and module_statement:
@@ -578,7 +596,7 @@ async def action_localize_fix_target(step_input: StepInput) -> StepOutput:
             observations=f"Localized to module frame: {module_statement[:60]}",
             context_updates={
                 "module_statement": module_statement,
-                "module_directive": change_spec or directive[:300],
+                "module_directive": change_spec or directive,
                 "localized_change_spec": change_spec,
             },
         )

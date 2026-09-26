@@ -234,7 +234,7 @@ async def action_conclude_route(step_input: StepInput) -> StepOutput:
                 flow_set, method = parsed["flow_set"], "llm"
                 pr = parsed.get("profile")
                 profile = pr if pr in VALID_PROFILES else "plain"
-                findings = str(parsed.get("findings", "") or "")[:1200]
+                findings = str(parsed.get("findings", "") or "")
                 break
             logger.warning(
                 "Router conclude attempt %d/3: no valid flow_set in response",
@@ -254,7 +254,7 @@ async def action_conclude_route(step_input: StepInput) -> StepOutput:
         findings = (
             "[router override: answer-profile task routed ops — produce the "
             "required artifact; write code in the terminal as needed] " + findings
-        )[:1200]
+        )
         logger.warning(
             "Router: answer-profile task downgraded code_core → ops "
             "(the deliverable is an answer, not software)"
