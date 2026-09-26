@@ -88,7 +88,7 @@ def _repo(n_files: int) -> RepoMap:
 
 
 def test_repo_map_names_every_file_its_budget_cannot_hold():
-    out = _repo(60).format_for_prompt(max_chars=600)
+    out = _repo(60).format_for_prompt(max_chars=1200)
     assert (
         "pkg/mod000.py:" in out and "def f0_0(a, b) -> int:" in out
     )  # top-ranked, whole
@@ -96,6 +96,21 @@ def test_repo_map_names_every_file_its_budget_cannot_hold():
     for i in range(60):
         assert f"pkg/mod{i:03d}.py" in out, i
     assert "more files with definitions, names only:" in out
+
+
+def test_names_past_the_budget_roll_up_by_directory():
+    out = _repo(60).format_for_prompt(max_chars=300)
+    tail = out.split("names only: ")[1]
+    assert tail.startswith("by directory: pkg/ (")  # accounted for, not a wall
+    total = int(tail.split("(")[1].split(" ")[0])
+    assert total + out.count("⋮...") + out.count("definitions)") == 60
+
+
+def test_name_list_rolls_up_coarser_until_it_fits():
+    paths = [f"data/raw/part{i:05d}.json" for i in range(5000)] + ["main.py"]
+    assert cf.name_list(["a.py", "b.py"], 100) == "a.py, b.py"
+    rolled = cf.name_list(paths, 200)
+    assert rolled == "by directory: ./ (1 file), data/raw/ (5,000 files)"
 
 
 def test_repo_map_default_budget_is_the_windows_share(monkeypatch):

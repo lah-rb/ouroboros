@@ -1466,7 +1466,42 @@ async def _existence_check_siblings(effects: Any, siblings: list[str]) -> list[s
 _ACCESS_RE = re.compile(r"\b([a-z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)\b")
 # Roots that are never useful defect carriers (module refs, dunder noise).
 _ACCESS_STOPWORDS = {"self", "cls", "py", "os", "sys", "re", "json"}
-_MAX_SCAN_FILES = 200
+
+
+async def _files_mentioning(effects: Any, attrs: list[str]) -> list[str] | None:
+    """Project .py files whose text contains ``.attr`` for any of ``attrs`` —
+    one grep over the workspace, vendor/cache dirs excluded (the shared
+    history excludes). Over-inclusive by design (`.name` also finds
+    `.names`); the tree-sitter pass decides. None when grep is unavailable,
+    and the caller reads every file instead."""
+    if not attrs:
+        return []
+    from agent.history.excludes import EXCLUDED_DIR_PATTERNS
+
+    pattern = r"\.(" + "|".join(re.escape(a) for a in attrs) + ")"
+    cmd = [
+        "grep",
+        "-rlE",
+        "--include=*.py",
+        *(f"--exclude-dir={d}" for d in EXCLUDED_DIR_PATTERNS),
+        "-e",
+        pattern,
+        ".",
+    ]
+    try:
+        res = await effects.run_command(cmd, timeout=60)
+    except Exception:  # noqa: BLE001 — fall back to reading every file
+        return None
+    rc = getattr(res, "return_code", 2)
+    if rc == 1:
+        return []  # grep ran and found nothing
+    if rc != 0:
+        return None
+    return [
+        ln[2:] if ln.startswith("./") else ln
+        for ln in (getattr(res, "stdout", "") or "").splitlines()
+        if ln.strip()
+    ]
 
 
 async def _find_systemic_access_sites(
@@ -1505,26 +1540,34 @@ async def _find_systemic_access_sites(
     if not candidates:
         return "", []
 
-    # 2. Read project Python files (best-effort). Effects are already bound to
-    #    the mission workspace, so list "." rather than an absolute
-    #    working_directory (which would resolve relative to the bound root).
+    # 2. Read every project Python file that can hold a site — one whose text
+    #    mentions `.attr` for a candidate attr. No file-count cap (2026-09-26;
+    #    was the first 200 listed, so bigger repos were silently half
+    #    scanned): one grep narrows the reads, and without grep every file is
+    #    read and filtered by the same test. Effects are bound to the mission
+    #    workspace, so paths are relative to ".".
+    attrs = sorted({attr for _root, attr in candidates})
+    paths = await _files_mentioning(effects, attrs)
+    if paths is None:
+        try:
+            listing = await effects.list_directory(".", recursive=True)
+        except Exception:  # noqa: BLE001 - no listing → no structural scan
+            return "", []
+        paths = [
+            getattr(e, "path", "")
+            for e in getattr(listing, "entries", []) or []
+            if not getattr(e, "is_dir", False)
+            and getattr(e, "path", "").endswith(".py")
+        ]
     files: dict[str, str] = {}
-    try:
-        listing = await effects.list_directory(".", recursive=True)
-    except Exception:  # noqa: BLE001 - no listing → no structural scan
-        return "", []
-    for entry in getattr(listing, "entries", []) or []:
-        path = getattr(entry, "path", "")
-        if getattr(entry, "is_dir", False) or not path.endswith(".py"):
-            continue
-        if len(files) >= _MAX_SCAN_FILES:
-            break
+    for path in paths:
         try:
             fc = await effects.read_file(path)
         except Exception:  # noqa: BLE001 - skip unreadable, keep scanning
             continue
-        if getattr(fc, "exists", False) and getattr(fc, "content", ""):
-            files[path] = fc.content
+        content = getattr(fc, "content", "") if getattr(fc, "exists", False) else ""
+        if content and any(f".{a}" in content for a in attrs):
+            files[path] = content
     if not files:
         return "", []
 

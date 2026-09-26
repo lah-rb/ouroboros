@@ -14,7 +14,6 @@ from __future__ import annotations
 import pytest
 
 from agent.actions.verification_actions import (
-    MAX_VERIFY_FINDINGS,
     action_apply_verification_results,
     action_prepare_finding_verification,
     action_record_finding_verification,
@@ -223,16 +222,35 @@ async def test_prepare_falls_back_to_run_command_without_ux_launch():
 
 
 @pytest.mark.asyncio
-async def test_prepare_queue_cap_overflows_to_tagged_passthrough():
-    tasks = [_task(f"bug {i}", repro=["poke"]) for i in range(MAX_VERIFY_FINDINGS + 2)]
+async def test_every_finding_with_a_repro_is_queued():
+    # The old judgment cap was 8; a probe costs less than a false finding.
+    tasks = [_task(f"bug {i}", repro=["poke"]) for i in range(20)]
     out = await action_prepare_finding_verification(_prepare_si(*tasks))
-    assert out.result["queued"] == MAX_VERIFY_FINDINGS
+    assert out.result["queued"] == 20
+
+
+@pytest.mark.asyncio
+async def test_the_step_ceiling_overflows_to_tagged_passthrough(monkeypatch):
+    import agent.actions.verification_actions as va
+
+    monkeypatch.setattr(va, "probe_capacity", lambda: 3)
+    tasks = [_task(f"bug {i}", repro=["poke"]) for i in range(5)]
+    out = await action_prepare_finding_verification(_prepare_si(*tasks))
+    assert out.result["queued"] == 3
     overflow = [
         t
         for t in out.context_updates["passthrough_tasks"]
-        if t["verification"] == "unverified-cap"
+        if t["verification"] == "unverified-ceiling"
     ]
     assert len(overflow) == 2
+
+
+def test_probe_capacity_follows_the_gate_ceiling():
+    from agent.actions.verification_actions import probe_capacity
+    from agent.runtime import _subflow_max_steps
+
+    assert _subflow_max_steps("quality_gate") == 1000
+    assert probe_capacity() == (1000 - 80) // 4
 
 
 # ── record ────────────────────────────────────────────────────────────

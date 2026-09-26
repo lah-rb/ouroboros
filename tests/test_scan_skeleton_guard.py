@@ -13,6 +13,7 @@ import pytest
 from agent.actions.refinement_actions import (
     _MAX_FILE_SIZE,
     _MAX_SCAN_FILES,
+    _NOT_SCANNED,
     _SIGNATURE_MAX_CHARS,
     _excluded,
     action_scan_project,
@@ -71,10 +72,14 @@ async def test_scan_excludes_vendor_and_skips_large_files():
 
 
 @pytest.mark.asyncio
-async def test_scan_caps_file_count():
-    files = {f"f{i}.py": "x = 1" for i in range(_MAX_SCAN_FILES + 50)}
+async def test_scan_names_files_past_the_read_limit():
+    # Past the read limit a file is listed by NAME, never dropped: the
+    # model sees it and trace can read it (2026-09-26).
+    files = {f"f{i:03d}.py": "x = 1" for i in range(_MAX_SCAN_FILES + 50)}
     out = await action_scan_project(_si(files))
-    assert len(out.context_updates["project_manifest"]) == _MAX_SCAN_FILES
+    m = out.context_updates["project_manifest"]
+    assert len(m) == _MAX_SCAN_FILES + 50
+    assert sum(v == _NOT_SCANNED for v in m.values()) == 50
     assert out.result["scan_omitted"] == 50
 
 

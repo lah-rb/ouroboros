@@ -450,6 +450,31 @@ async def output_view(
     )
 
 
+def name_list(paths: list[str], budget_chars: int) -> str:
+    """Every path by name when the names fit ``budget_chars``; otherwise a
+    directory rollup ("data/raw/ (98,000 files)"), coarser until it fits —
+    so a 100k-file tree is still accounted for, never dropped and never a
+    wall of names in the prompt."""
+    joined = ", ".join(paths)
+    if len(joined) <= budget_chars:
+        return joined
+    rolled = ""
+    for depth in (2, 1):
+        counts: dict[str, int] = {}
+        for p in paths:
+            parts = str(p).split("/")
+            keep = min(depth, len(parts) - 1)
+            key = "/".join(parts[:keep]) + "/" if keep else "./"
+            counts[key] = counts.get(key, 0) + 1
+        rolled = ", ".join(
+            f"{d} ({n:,} file{'s' if n != 1 else ''})"
+            for d, n in sorted(counts.items())
+        )
+        if len(rolled) <= budget_chars:
+            break
+    return "by directory: " + rolled
+
+
 # ── The tail fit: evidence for a one-shot reader ───────────────────────
 
 FIT_MARKER = (

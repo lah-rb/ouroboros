@@ -224,7 +224,12 @@ _EXCLUDED_DIRS = frozenset(
     }
 )
 _MAX_FILE_SIZE = 256 * 1024  # skip files larger than this (data/binary, not source)
-_MAX_SCAN_FILES = 300  # cap the manifest; the rest is reachable via trace/grep
+# Files whose signatures the scan READS. Past it a file still enters the
+# manifest, by name only (_NOT_SCANNED), so the listing names it and every
+# consumer of the manifest's keys sees it (2026-09-26; before, files past
+# the cap were absent and the model was expected to grep for them).
+_MAX_SCAN_FILES = 300
+_NOT_SCANNED = "(not scanned — trace it to read)"
 # Byte-cap for one LINE of a per-file signature — it defeats minified
 # one-liners, which is all it ever needed to do. Structured signatures (one
 # import or def per line) pass whole since 2026-09-26: applied to the whole
@@ -413,6 +418,7 @@ async def action_scan_project(step_input: StepInput) -> StepOutput:
         if any(fnmatch.fnmatch(filepath, pat) for pat in include_patterns):
             matched_files.append(filepath)
     scan_omitted = max(0, len(matched_files) - _MAX_SCAN_FILES)
+    name_only = matched_files[_MAX_SCAN_FILES:]
     matched_files = matched_files[:_MAX_SCAN_FILES]
 
     # Extract signatures (each byte-capped so a minified one-liner can't blow up)
@@ -429,6 +435,8 @@ async def action_scan_project(step_input: StepInput) -> StepOutput:
                 manifest[filepath] = "(file not readable)"
         except Exception as e:
             manifest[filepath] = f"(error reading: {e})"
+    for filepath in name_only:
+        manifest[filepath] = _NOT_SCANNED
 
     # Modality sidecars: deterministic digestion at the scan position (never
     # model-elected). Local-effects only; gated on mission config + count caps.
@@ -446,9 +454,9 @@ async def action_scan_project(step_input: StepInput) -> StepOutput:
                 effects, listing.entries, mission, manifest
             )
 
-    obs = f"Scanned {len(manifest)} files in {root}"
+    obs = f"Scanned {len(matched_files)} files in {root}"
     if scan_omitted:
-        obs += f" ({scan_omitted} more matched, omitted past the {_MAX_SCAN_FILES}-file cap)"
+        obs += f" ({scan_omitted} more listed by name only, past {_MAX_SCAN_FILES})"
     if sidecar_notes:
         obs += " | sidecars: " + "; ".join(sidecar_notes[:4])
     return StepOutput(

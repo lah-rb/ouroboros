@@ -139,9 +139,11 @@ class RepoMap:
             chars_used += len(section)
 
         if names_only:
+            from agent.context_fit import name_list
+
             lines.append(
                 f"… {len(names_only)} more files with definitions, names only: "
-                + ", ".join(names_only)
+                + name_list(names_only, max_chars)
                 + "\n"
             )
         return "".join(lines)

@@ -451,10 +451,12 @@ def format_project_listing(params: dict, namespaces: dict) -> str:
             block += [f"    {sig_line}" for sig_line in str(sig).splitlines()]
         block_text = "\n".join(block)
         if lines and total + len(block_text) > budget:
+            from agent.context_fit import name_list
+
             rest = [str(p) for p, _ in items[i:]]
             lines.append(
-                f"… {len(rest)} more files, names only (trace or grep a path "
-                f"to inspect): " + ", ".join(rest)
+                f"… {len(rest)} more files, names only (trace a path to "
+                f"inspect it): " + name_list(rest, budget)
             )
             break
         lines.append(block_text)

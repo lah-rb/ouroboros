@@ -241,7 +241,14 @@ _OBSERVATIONS_PREVIEW_CAP = 600
 # consumer_session shares run_session's shape and therefore its scaling: ~2
 # steps per turn, bounded by how much product there is to use rather than by
 # a task list. Same ceiling for the same reason.
-_SUBFLOW_MAX_STEPS = {"run_session": 4000, "consumer_session": 4000}
+# quality_gate: 1000 (2026-09-26) — it probes EVERY functional finding with
+# a repro, 4 steps each (verification_actions.probe_capacity sizes its queue
+# from this); the default 200 held about 30.
+_SUBFLOW_MAX_STEPS = {
+    "run_session": 4000,
+    "consumer_session": 4000,
+    "quality_gate": 1000,
+}
 
 
 def _subflow_max_steps(flow_name: str) -> int:
