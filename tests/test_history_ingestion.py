@@ -61,7 +61,9 @@ class _FakeInference:
             end_reason="stop",
         )
 
-    async def session_turn(self, session_id, prompt, config_overrides=None):
+    async def session_turn(
+        self, session_id, prompt, config_overrides=None, *, session_used=0
+    ):
         self.calls.append({"session": session_id, "prompt": prompt})
         return InferenceResult(
             text=self.text,

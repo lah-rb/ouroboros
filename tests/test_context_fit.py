@@ -195,7 +195,7 @@ async def test_local_effects_track_what_a_session_holds(tmp_path):
     from agent.effects.local import LocalEffects
 
     class _Inf:
-        async def session_turn(self, sid, prompt, cfg=None):
+        async def session_turn(self, sid, prompt, cfg=None, *, session_used=0):
             return InferenceResult(
                 text="ok", tokens_generated=10, prompt_tokens=900, generated_tokens=100
             )

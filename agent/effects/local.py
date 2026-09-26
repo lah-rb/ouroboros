@@ -31,6 +31,7 @@ from agent.trace import (
     CommandRun,
     McpToolCall,
     NotePushed,
+    PromptBackstop,
     RunSummary,
     SessionEnd,
     SessionSnapshot,
@@ -1513,6 +1514,7 @@ class LocalEffects:
                     endpoint=self._llmvp_endpoint,
                     model_default_temperature=self._model_default_temperature,
                 )
+                self._inference.on_backstop = self._record_backstop
             return self._inference
 
         endpoint = str(route.get("endpoint") or self._llmvp_endpoint)
@@ -1525,9 +1527,26 @@ class LocalEffects:
                 model_default_temperature=self._model_default_temperature,
                 model=model,
             )
+            client.on_backstop = self._record_backstop
             self._inference_by_endpoint[key] = client
             logger.info("inference domain %r -> %s (model=%s)", domain, endpoint, model)
         return client
+
+    async def _record_backstop(self, fields: dict) -> None:
+        """A PromptBackstop row: the last-resort prompt guard fired, so an
+        upstream fit missed. Attributed to the step it fired in."""
+        from agent.trace import get_step_context
+
+        ctx = get_step_context() or {}
+        await self.emit_trace(
+            PromptBackstop(
+                mission_id=ctx.get("mission_id") or self._traced_mission_id,
+                cycle=int(ctx.get("cycle") or 0),
+                flow=str(ctx.get("flow") or ""),
+                step=str(ctx.get("step") or ""),
+                **fields,
+            )
+        )
 
     def session_tokens(self, session_id: str) -> int:
         """What a memoryful session holds after its last turn (prompt +
@@ -1866,7 +1885,12 @@ class LocalEffects:
         start = time.monotonic()
         prompt_preview = prompt[:80] + "..." if len(prompt) > 80 else prompt
         inference = self._get_inference()
-        result = await inference.session_turn(session_id, prompt, config_overrides)
+        result = await inference.session_turn(
+            session_id,
+            prompt,
+            config_overrides,
+            session_used=self.session_tokens(session_id),
+        )
         if not result.error:
             self._session_tokens[session_id] = int(result.prompt_tokens or 0) + int(
                 result.generated_tokens or 0

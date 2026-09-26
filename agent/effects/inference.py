@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import logging
 import asyncio
+import inspect
+import time
 import os
 import re
 import uuid
@@ -484,13 +486,19 @@ def _degenerate_tokens(error_msg: str) -> int | None:
 # never touches the tracker — which is the case they were written for anyway.
 SESSION_RUNAWAY_TOKEN_CEILING = 32768
 COMPLETION_RUNAWAY_TOKEN_CEILING = 49152
-# Guard G1 — last-resort prompt-size backstop (~120k tokens). The per-source
-# guards (scan skeleton G2, terminal/session bounds G3/G4) should keep every
-# prompt far under this; if one slips through, the dynamic prompt is bounded and
-# a LOUD warning is logged rather than crashing the server (the llama_decode
-# code -1 / 29M-token overflow). Conservative so it protects the smallest context
-# window (gpt-oss 131k); legitimate prompts never approach it after the guards.
+# Guard G1 — last-resort prompt-size backstop. The per-source fits
+# (agent/context_fit.py) keep every prompt inside the window; if one slips
+# through, the dynamic prompt is bounded, a LOUD warning is logged and a
+# PromptBackstop row is recorded, rather than crashing the server (the
+# llama_decode code -1 / 29M-token overflow). Since 2026-09-26 it is sized to
+# the SERVING window (health.nCtxSeq) less what the context already holds and
+# the turn's output reserve, and it covers session turns. This fixed character
+# ceiling is only the fallback when the server does not report a window, or
+# the call targets a named registry model the local health does not describe.
 PROMPT_CHAR_CEILING = 480_000
+# The serving window is re-read at most this often — it changes only when
+# the served model does.
+_WINDOW_TTL_S = 60.0
 
 
 class InferenceEffect:
@@ -518,6 +526,12 @@ class InferenceEffect:
         self._model_default_temperature = model_default_temperature
         self._model = model
         self._client: httpx.AsyncClient | None = None
+        # Serving window cache for the prompt backstop (see fit_prompt).
+        self._window: int = 0
+        self._window_at: float = 0.0
+        # Called with the PromptBackstop fields when the backstop fires;
+        # LocalEffects records it as a history event.
+        self.on_backstop: Any = None
         # Session ids this client currently holds open. A memoryful session
         # CHECKS OUT its backend instance and keeps it across turns (seq 0
         # stays resident so the next turn skips prefill) — see the checkout
@@ -812,6 +826,141 @@ class InferenceEffect:
             "this; re-query a narrower slice] …\n\n" + prompt[-tail:]
         )
 
+    async def _serving_window(self) -> int:
+        """The per-sequence window LLMVP reports (``health.nCtxSeq``), cached
+        for _WINDOW_TTL_S. 0 when the server does not say, or when this
+        effect targets a named registry model — the local health does not
+        describe a remote model's window."""
+        if self._model:
+            return 0
+        now = time.monotonic()
+        if self._window and now - self._window_at < _WINDOW_TTL_S:
+            return self._window
+        try:
+            n = int((await self.cache_health()).get("nCtxSeq") or 0)
+        except Exception:  # noqa: BLE001 — the guard never fails a call
+            n = 0
+        self._window, self._window_at = n, now
+        return n
+
+    async def fit_prompt(
+        self,
+        prompt: str,
+        static_prefix: str | None = None,
+        *,
+        used: int = 0,
+        config_overrides: dict | None = None,
+        session_id: str = "",
+    ) -> str:
+        """Guard G1 against the serving window. The prompt unchanged when it
+        fits beside ``used`` (what the context already holds — a session's
+        occupancy) and the output reserve (the turn's max_tokens, else
+        context_fit.OUTPUT_RESERVE); otherwise its dynamic part bounded
+        head + tail with an in-band marker, a loud warning, and a
+        PromptBackstop report. The static prefix is never cut (it is the
+        cacheable part). Unknown window → the fixed character ceiling.
+
+        Cheap on the common path: a token covers at least one character for
+        the tokenizers served, so a prompt with fewer characters (x the
+        chat-template margin) than free tokens fits without asking the
+        server to count."""
+        from agent.context_fit import (
+            OUTPUT_RESERVE,
+            UNKNOWN_WINDOW,
+            estimate_tokens,
+        )
+        from agent.scheduler.capacity_model import TOKENIZE_MARGIN
+
+        overrides = config_overrides or {}
+        mt = overrides.get("max_tokens")
+        reserve = int(mt) if mt else OUTPUT_RESERVE
+        static = static_prefix or ""
+        upper = (len(prompt) + len(static)) * TOKENIZE_MARGIN
+        # Fits even the smallest window any configured model serves: no need
+        # to ask the server which window this one is.
+        if upper + int(used or 0) + reserve <= UNKNOWN_WINDOW:
+            return prompt
+        window = 0 if overrides.get("model") else await self._serving_window()
+        if window <= 0:
+            return self._guard_prompt_size(prompt, static_prefix)
+        free = window - int(used or 0) - reserve
+        if upper <= free:
+            return prompt
+        counts = await self.token_count([static, prompt])
+        if len(counts) == 2:
+            static_tok = int(counts[0] * TOKENIZE_MARGIN)
+            prompt_tok = int(counts[1] * TOKENIZE_MARGIN)
+            how = "exact"
+        else:
+            static_tok, prompt_tok = estimate_tokens(static), estimate_tokens(prompt)
+            how = "estimated"
+        if static_tok + prompt_tok <= free:
+            return prompt
+        report = {
+            "session_id": session_id,
+            "window": window,
+            "used": int(used or 0),
+            "reserve": reserve,
+            "static_tokens": static_tok,
+            "prompt_tokens": prompt_tok,
+            "prompt_chars": len(prompt),
+            "how": how,
+        }
+        budget_tok = free - static_tok
+        if budget_tok <= 0:
+            logger.warning(
+                "PROMPT-SIZE BACKSTOP: the context is already full — %d used + "
+                "%d reserve + %d static of a %d window. Sending the %d-token "
+                "prompt as it is; the server will refuse it. An upstream fit "
+                "missed: investigate the source.",
+                int(used or 0),
+                reserve,
+                static_tok,
+                window,
+                prompt_tok,
+            )
+            await self._report_backstop(
+                {**report, "kept_chars": len(prompt), "bounded": False}
+            )
+            return prompt
+        marker_chars = 200
+        keep = max(0, int(len(prompt) * budget_tok / max(prompt_tok, 1)) - marker_chars)
+        head = int(keep * 0.6)
+        tail = keep - head
+        omitted = len(prompt) - head - tail
+        logger.warning(
+            "PROMPT-SIZE BACKSTOP fired: a %d-token prompt (%s) beside %d used, "
+            "%d static and %d reserve in a %d window — bounding %d chars of the "
+            "dynamic part. An upstream fit missed: investigate the source.",
+            prompt_tok,
+            how,
+            int(used or 0),
+            static_tok,
+            reserve,
+            window,
+            omitted,
+        )
+        bounded = prompt[
+            :head
+        ] + f"\n\n… [BACKSTOP: {omitted} chars bounded to fit the {window:,}-token " "window — an upstream fit missed this; re-query a narrower slice] …\n\n" + (
+            prompt[-tail:] if tail else ""
+        )
+        await self._report_backstop(
+            {**report, "kept_chars": head + tail, "bounded": True}
+        )
+        return bounded
+
+    async def _report_backstop(self, fields: dict) -> None:
+        cb = self.on_backstop
+        if cb is None:
+            return
+        try:
+            r = cb(fields)
+            if inspect.isawaitable(r):
+                await r
+        except Exception:  # noqa: BLE001 — a report never fails the call
+            logger.debug("backstop report failed", exc_info=True)
+
     async def run_inference(
         self,
         prompt: str,
@@ -837,9 +986,12 @@ class InferenceEffect:
         """
         client = await self._get_client()
 
-        # Last-resort prompt-size backstop (Guard G1) — keep the static prefix
-        # intact, bound only the dynamic tail if an upstream guard missed.
-        prompt = self._guard_prompt_size(prompt, static_prefix)
+        # Last-resort prompt-size backstop (Guard G1), sized to the serving
+        # window — keep the static prefix intact, bound only the dynamic part
+        # if an upstream fit missed.
+        prompt = await self.fit_prompt(
+            prompt, static_prefix, config_overrides=config_overrides
+        )
 
         # Build the request variables
         request_vars: dict[str, Any] = {"prompt": prompt}
@@ -1549,13 +1701,27 @@ class InferenceEffect:
         session_id: str,
         prompt: str,
         config_overrides: dict | None = None,
+        *,
+        session_used: int = 0,
     ) -> InferenceResult:
         """Run a turn within a memoryful session via GraphQL query.
+
+        ``session_used`` is what the session already holds (prompt +
+        generated after its last turn); the prompt backstop sizes the new
+        turn against what is left of the window. Session turns had no
+        backstop before 2026-09-26 — and the overflow that lost a verdict
+        (262,715 of a 262,144 window) was a session turn.
 
         Returns:
             InferenceResult with the model's response.
         """
         client = await self._get_client()
+        prompt = await self.fit_prompt(
+            prompt,
+            used=session_used,
+            config_overrides=config_overrides,
+            session_id=session_id,
+        )
 
         request_vars: dict[str, Any] = {
             "sessionId": session_id,

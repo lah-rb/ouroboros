@@ -655,6 +655,28 @@ class HealthSample(TraceEvent):
 
 
 @dataclass
+class PromptBackstop(TraceEvent):
+    """The last-resort prompt guard fired (Guard G1): a prompt reached
+    inference too large for what the serving window had free. Every
+    firing means an upstream fit missed, so it is recorded as a row, not
+    only a log line. ``bounded`` False: nothing could be done (the context
+    was already full) and the prompt was sent as it was."""
+
+    event_type: str = "prompt_backstop"
+    step: str = ""
+    session_id: str = ""
+    window: int = 0
+    used: int = 0
+    reserve: int = 0
+    static_tokens: int = 0
+    prompt_tokens: int = 0
+    prompt_chars: int = 0
+    kept_chars: int = 0
+    bounded: bool = True
+    how: str = ""  # "exact" (server tokenizer) | "estimated"
+
+
+@dataclass
 class CapacitySample(TraceEvent):
     """Pool-level capacity at one lane-report tick.
 
