@@ -3,7 +3,7 @@
 Verify-before-harvest treats gate findings as claims: each functional
 blocking issue carries a ``repro`` (stdin lines to demonstrate it) and an
 ``expected`` sentence. ``_parse_quality_summary`` normalizes whatever the
-model emitted into ``list[str]`` repro / bounded ``expected`` so the
+model emitted into ``list[str]`` repro / whole ``expected`` so the
 verification loop never sees a malformed shape, and
 ``action_apply_quality_gate_results`` publishes ``has_findings`` (the
 verification-loop routing signal) and defers note-pushing to
@@ -54,12 +54,12 @@ def test_repro_non_list_non_string_drops_to_empty():
     assert task["expected"] == ""
 
 
-def test_repro_truncated_to_cap():
+def test_repro_is_kept_whole():
     lines = ", ".join(f'"cmd{i}"' for i in range(15))
     raw = _summary_json(f'{{"issue": "x", "class": "functional", "repro": [{lines}]}}')
     repro = _parse_quality_summary(raw)["fix_tasks"][0]["repro"]
-    assert len(repro) == 10
-    assert repro[0] == "cmd0" and repro[-1] == "cmd9"
+    # Whole (2026-09-26): a deep defect needs a long repro to reach.
+    assert repro == [f"cmd{i}" for i in range(15)]
 
 
 def test_expected_is_kept_whole():

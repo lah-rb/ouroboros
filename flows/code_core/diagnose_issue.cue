@@ -341,12 +341,11 @@ diagnose_issue: #FlowDefinition & {
 					// past one entry, degrading the conclude recap too).
 					"traced_symbols",
 					// SAME contract for the failed-trace counter: the action
-					// increments it on every correction and uses it to signal
-					// `exhausted` (→ conclude) once the model is oscillating on
-					// invalid/already-traced targets. Without this declaration
-					// the action reads 0 every turn, the cap never fires, and
-					// the loop runs to the max-step crash (the exact failure
-					// this counter exists to prevent).
+					// increments it on every correction and check_budget's
+					// crash guard counts it. Without this declaration the
+					// action reads 0 every turn, the guard never sees the
+					// correction laps, and an invalid-target loop runs to the
+					// max-step crash.
 					"trace_corrections",
 					"file_context",
 					"working_directory",
@@ -355,15 +354,10 @@ diagnose_issue: #FlowDefinition & {
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "result.trace_ok == true", transition: "check_budget"},
-					// Too many invalid trace targets — the model is
-					// oscillating, not converging. Conclude with what we
-					// have instead of looping on corrections until the
-					// flow's max-step safety crashes the agent.
-					{condition: "result.exhausted == true", transition: "conclude"},
-					// Correction injected — retry without counting
-					// against the budget.
-					{condition: "true", transition: "investigate"},
+					// Every lap — a trace or a correction — passes the
+					// crash guard. A correction spends no investigation
+					// (investigation_turn is unchanged) but is counted there.
+					{condition: "true", transition: "check_budget"},
 				]
 			}
 			publishes: ["investigation_turn", "traced_symbols", "trace_corrections"]
@@ -373,20 +367,19 @@ diagnose_issue: #FlowDefinition & {
 		// Budget check — noop with rule resolver
 		// ══════════════════════════════════════════════════════════
 		//
-		// Cheap deterministic gate: have we hit the turn cap? The
-		// max is 8 traces per the v10 design (see the 7e7
-		// walkthrough: a clean investigation needs 3-4 traces, and
-		// going beyond 8 doesn't typically help — the model is either
-		// oscillating or hasn't found the right layer).
-		//
-		// This runs AFTER execute_trace has incremented
-		// investigation_turn, so by the time we check, the counter
-		// reflects the trace that just completed.
+		// Cheap deterministic gate after every trace lap. Not a
+		// judgment cap (see the rule below): an engine-crash guard
+		// that counts successful traces (investigation_turn) and
+		// corrections (trace_corrections) together, since both are
+		// laps against the 200-step sub-flow ceiling.
 
 		check_budget: #StepDefinition & {
 			action:      "noop"
 			description: "Route back to investigate or auto-conclude if budget exhausted"
-			context: required: ["investigation_turn"]
+			context: {
+				required: ["investigation_turn"]
+				optional: ["trace_corrections"]
+			}
 			resolver: {
 				type: "rule"
 				rules: [
@@ -399,8 +392,10 @@ diagnose_issue: #FlowDefinition & {
 					// 200-step sub-flow ceiling (~3 steps per trace lap;
 					// see d48de69 for the run_session version of this
 					// lesson) so a pathological loop parks with a report
-					// instead of dying as a failed sub-flow.
-					{condition: "context.investigation_turn >= 55", transition: "conclude"},
+					// instead of dying as a failed sub-flow. Corrections
+					// count here too (2026-09-26, replacing their own cap
+					// of 8): a lap is a lap.
+					{condition: "context.investigation_turn + context.get('trace_corrections', 0) >= 55", transition: "conclude"},
 					{condition: "true", transition:                  "investigate"},
 				]
 			}

@@ -85,10 +85,9 @@ async def action_compile_diagnosis(step_input: StepInput) -> StepOutput:
         ]
     else:
         related_symbols = []
-    # Cap at 6 per CONCLUDE_PROMPT's guidance; if more came back,
-    # something is off and a smaller batch is safer than a giant
-    # one.
-    related_symbols = related_symbols[:6]
+    # No count cap (2026-09-26): the conclude prompt states no number, and
+    # a cut made a diagnosis naming 9 co-dependent symbols patch 6 of them
+    # and report the batch done. Each rewrite is its own turn.
     # Dedupe while preserving order, and drop the primary target
     # if the model helpfully re-listed it.
     seen = {target_symbol} if target_symbol else set()

@@ -1326,18 +1326,46 @@ def _format_already_rewritten(params: dict, namespaces: dict) -> str:
     )
     lines.append("")
 
-    for qname, body in already.items():
-        if not body:
-            continue
-        # Whole (2026-09-26): the 18-line cut hid exactly the method
-        # signatures a later rewrite has to match. The rewrite turn sizes
-        # this block to the window (`fit` on already_rewritten_block).
-        display = body.rstrip()
+    # Whole when they fit one read's share of the window; otherwise a
+    # SKELETON (2026-09-26): every changed symbol is always named with its
+    # signatures, and bodies are shown whole newest-first while they fit —
+    # the rest as their outline. The 18-line cut hid exactly the method
+    # signatures a later rewrite has to match, and a tail cut would drop the
+    # EARLIEST rewrites; either is the patch silently disagreeing with the
+    # diagnosis.
+    from agent.context_fit import code_index, share_chars
+
+    entries = [(q, b.rstrip()) for q, b in already.items() if b]
+    budget = share_chars()
+    whole: set[str] = set()
+    used = 0
+    for qname, body in reversed(entries):  # newest first
+        if used + len(body) > budget and whole:
+            break
+        if used + len(body) <= budget:
+            whole.add(qname)
+            used += len(body)
+    for qname, body in entries:
         lines.append(f"### {qname}")
         lines.append("")
-        lines.append("```python")
-        lines.append(display)
-        lines.append("```")
+        if qname in whole:
+            lines.append("```python")
+            lines.append(body)
+            lines.append("```")
+        else:
+            path = qname.rpartition(":")[0] or "rewritten.py"
+            outline = code_index(path, body) or "\n".join(
+                ln
+                for ln in body.splitlines()
+                if ln.lstrip().startswith(("def ", "async def ", "class "))
+            )
+            lines.append(
+                "(outline only — the whole body does not fit beside the newer "
+                "rewrites; its signatures are what this rewrite must match)"
+            )
+            lines.append("```")
+            lines.append(outline or body.splitlines()[0])
+            lines.append("```")
         lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"

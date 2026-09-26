@@ -29,8 +29,6 @@ logger = logging.getLogger(__name__)
 # Probe budget: findings beyond this pass through unverified (tagged) —
 # spending dispatches on an unverified claim beats dropping it silently.
 MAX_VERIFY_FINDINGS = 8
-# Repro lines beyond this are truncated (mirrors _normalize_repro's cap).
-MAX_REPRO_COMMANDS = 10
 # The probe transcript rides WHOLE on each finding as its evidence
 # (2026-09-26; a 500-char tail lost the line that showed the defect).
 
@@ -45,7 +43,8 @@ def _usable_repro(task: Any, *launch_commands: str) -> list[str]:
     """Extract the probe-ready repro from a finding, or [] if unusable.
 
     Strips a leading line that duplicates a launch command (the prompt
-    forbids it, but models include it anyway) and re-applies the length cap.
+    forbids it, but models include it anyway). Every other line is kept:
+    a repro cut short stops before the defect and refutes a real finding.
     """
     if not isinstance(task, dict):
         return []
@@ -56,11 +55,6 @@ def _usable_repro(task: Any, *launch_commands: str) -> list[str]:
     launches = {lc.strip() for lc in launch_commands if lc and lc.strip()}
     if lines and lines[0] in launches:
         lines = lines[1:]
-    if len(lines) > MAX_REPRO_COMMANDS:
-        logger.warning(
-            "Probe repro truncated from %d to %d lines", len(lines), MAX_REPRO_COMMANDS
-        )
-        lines = lines[:MAX_REPRO_COMMANDS]
     return lines
 
 

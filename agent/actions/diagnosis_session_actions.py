@@ -637,11 +637,12 @@ async def action_start_diagnosis_session(step_input: StepInput) -> StepOutput:
 # v10: single-symbol trace with correction injection
 # ══════════════════════════════════════════════════════════════════════
 
-# Cap on FAILED trace targets before forcing conclude. Successful traces are
-# bounded by investigation_turn (check_budget, cap 10); corrections were
-# unbounded — a model naming only invalid targets looped to the flow's max-step
-# crash. 8 invalid targets = clearly oscillating, not converging.
-_MAX_TRACE_CORRECTIONS = 8
+# No separate cap on FAILED trace targets (2026-09-26). Each correction bumps
+# `trace_corrections`, and check_budget's ONE engine-crash guard counts every
+# lap — traces and corrections alike — under the 200-step sub-flow ceiling.
+# The old 8-correction cap (from before diagnose was uncapped on 08-19)
+# forced a conclusion the model had not reached; a looping model is the
+# degeneration monitor's to catch.
 
 
 async def _trace_data_view(
@@ -725,9 +726,9 @@ async def action_execute_symbol_trace(step_input: StepInput) -> StepOutput:
     ctx = step_input.context
     turn = int(ctx.get("investigation_turn", 0))
     # Total FAILED traces so far. investigation_turn only counts SUCCESSFUL
-    # traces, so a model that keeps naming invalid targets loops on corrections
-    # forever (the 10-trace cap never advances) until the flow's max-step safety
-    # raises and crashes the whole agent. Bound the corrections too.
+    # traces; check_budget's crash guard adds these so a model that keeps
+    # naming invalid targets parks with a report instead of reaching the
+    # flow's max-step ceiling.
     corrections = int(ctx.get("trace_corrections", 0))
 
     # Pull the compound-option arg. The runtime publishes every
@@ -742,19 +743,16 @@ async def action_execute_symbol_trace(step_input: StepInput) -> StepOutput:
     def _correction(msg: str, trace_ok: bool = False) -> StepOutput:
         """Queue a correction injection, return without incrementing turn.
 
-        Bounds total failed traces: after _MAX_TRACE_CORRECTIONS invalid
-        targets the model is oscillating, not converging — signal ``exhausted``
-        so the loop routes to conclude instead of spinning until the flow's
-        max-step safety crashes the agent."""
+        A correction does not spend the investigation, but it is a lap:
+        ``trace_corrections`` feeds check_budget's engine-crash guard, which
+        counts traces and corrections together."""
         pending: dict[str, Any] = {}
         queue_injection(pending, ctx, f"Trace failed — {msg}")
         result: dict[str, Any] = {"trace_ok": trace_ok}
         if not trace_ok:
             new_corr = corrections + 1
             pending["trace_corrections"] = new_corr
-            if new_corr >= _MAX_TRACE_CORRECTIONS:
-                result["exhausted"] = True
-            note = f" ({new_corr}/{_MAX_TRACE_CORRECTIONS})"
+            note = f" #{new_corr}"
         else:
             note = ""
         return StepOutput(
@@ -1362,9 +1360,9 @@ async def _conclude_diagnosis(
                 related_symbols = [
                     str(s).strip() for s in raw_related if str(s).strip()
                 ]
-            # Cap + dedupe + drop primary; compile_diagnosis repeats
-            # this defensively, but we do the light-weight version
-            # here so the published value is already reasonable.
+            # Dedupe + drop primary; compile_diagnosis repeats this
+            # defensively. No count cap (2026-09-26): a cut here made a
+            # 9-symbol diagnosis patch 6 and report the batch done.
             seen: set[str] = {target_symbol} if target_symbol else set()
             deduped: list[str] = []
             for s in related_symbols:
@@ -1372,7 +1370,7 @@ async def _conclude_diagnosis(
                     continue
                 seen.add(s)
                 deduped.append(s)
-            related_symbols = deduped[:6]
+            related_symbols = deduped
     except Exception:
         pass
 
@@ -1664,12 +1662,13 @@ async def action_systemic_scan(step_input: StepInput) -> StepOutput:
 
     confirmed = await _existence_check_siblings(effects, named)
 
-    # Dedupe against the primary target + existing related; cap total at 8.
+    # Dedupe against the primary target + existing related. Every confirmed
+    # sibling rides the patch — no count cap (2026-09-26).
     seen = set(related)
     if target_symbol:
         seen.add(target_symbol)
     added = [s for s in confirmed if not (s in seen or seen.add(s))]
-    related = (related + added)[:8]
+    related = related + added
 
     pattern_spec = (
         str(parsed.get("pattern_change_spec", "") or "").strip()

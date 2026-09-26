@@ -930,7 +930,14 @@ async def action_run_validation_checks(step_input: StepInput) -> StepOutput:
             context_updates={"validation_results": []},
         )
 
-    checks = _parse_validation_strategy(strategy_raw, max_checks)
+    checks, dropped = _parse_validation_strategy(strategy_raw, max_checks)
+    if dropped:
+        logger.warning(
+            "Validation: %d proposed check(s) past the limit of %d not run: %s",
+            len(dropped),
+            max_checks,
+            "; ".join(str(c.get("command", "")) for c in dropped),
+        )
 
     if not checks:
         # ZERO CHECKS IS NOT A PASS. This returned all_required_passing=True,
@@ -997,28 +1004,39 @@ async def action_run_validation_checks(step_input: StepInput) -> StepOutput:
             "all_required_passing": all_required_passing,
             "checks_run": len(results),
             "checks_passed": sum(1 for r in results if r["passed"]),
+            "checks_not_run": len(dropped),
         },
-        observations="Ran {} checks: {}".format(
+        observations="Ran {} checks: {}{}".format(
             len(results),
             ", ".join(
                 f"{r['name']}={'PASS' if r['passed'] else 'FAIL'}" for r in results
+            ),
+            (
+                f" | {len(dropped)} proposed check(s) past the limit of "
+                f"{max_checks} not run: "
+                + "; ".join(str(c.get("name") or c.get("command")) for c in dropped)
+                if dropped
+                else ""
             ),
         ),
         context_updates={"validation_results": results},
     )
 
 
-def _parse_validation_strategy(raw: str, max_checks: int) -> list[dict]:
-    """Extract validation checks from LLM response (JSON object)."""
+def _parse_validation_strategy(
+    raw: str, max_checks: int
+) -> tuple[list[dict], list[dict]]:
+    """(checks to run, checks past ``max_checks``) from the LLM's strategy
+    (a JSON object). The second list is reported by the caller — a check
+    the model proposed is never dropped silently."""
     from agent.llm_json import parse_llm_json
 
     data = parse_llm_json(raw)
     if isinstance(data, dict):
         checks = data.get("checks", [])
-        return [c for c in checks if isinstance(c, dict) and "command" in c][
-            :max_checks
-        ]
-    return []
+        valid = [c for c in checks if isinstance(c, dict) and "command" in c]
+        return valid[:max_checks], valid[max_checks:]
+    return [], []
 
 
 # ── load_file_contents ────────────────────────────────────────────────
@@ -1477,11 +1495,6 @@ def _parse_quality_summary(raw: str) -> dict:
     return parsed
 
 
-# Repro sequences longer than this are truncated — a defect that needs more
-# than 10 stdin lines to demonstrate is not a usable gate probe.
-_MAX_REPRO_COMMANDS = 10
-
-
 def _normalize_repro(raw: Any) -> list[str]:
     """Coerce a finding's repro to a clean list of stdin lines.
 
@@ -1494,15 +1507,10 @@ def _normalize_repro(raw: Any) -> list[str]:
     if not isinstance(raw, list):
         return []
     lines = [str(item).strip() for item in raw]
-    lines = [ln for ln in lines if ln]
-    if len(lines) > _MAX_REPRO_COMMANDS:
-        logger.warning(
-            "Finding repro truncated from %d to %d lines",
-            len(lines),
-            _MAX_REPRO_COMMANDS,
-        )
-        lines = lines[:_MAX_REPRO_COMMANDS]
-    return lines
+    # Whole (2026-09-26): a defect deep in play needs more than 10 inputs
+    # to reach, and a repro cut short makes the probe stop before the
+    # defect — the judge then files a real finding as a false claim.
+    return [ln for ln in lines if ln]
 
 
 # ── validate_created_files ────────────────────────────────────────────

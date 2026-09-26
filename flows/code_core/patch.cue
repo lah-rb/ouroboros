@@ -212,10 +212,6 @@ patch: #FlowDefinition & {
 				// {context.already_rewritten_block}.
 				{formatter: "format_already_rewritten", output_key: "already_rewritten_block", params: {}},
 			]
-			// The already-rewritten bodies render whole (no 18-line cut since
-			// 2026-09-26); this sizes the block to the window beside the prompt
-			// actually rendered (agent/context_fit.py).
-			fit: {already_rewritten_block: "tail"}
 			resolver: {
 				type: "rule"
 				rules: [

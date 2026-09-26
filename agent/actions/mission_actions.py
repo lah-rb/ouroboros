@@ -5443,20 +5443,30 @@ async def action_run_test_suite_gate(step_input: StepInput) -> StepOutput:
     # Resolve the suite command: union of goals' already-derived repair tests
     # (their test files), else derive from the objective (reuses the repair-test
     # selection). A repair mission's functional goals already carry repair_tests.
-    test_files: list[str] = []
+    #
+    # One BATCH per goal's own selection (each ≤2 files, the pair its
+    # baseline witnessed), run one after another. Every file a goal chose
+    # runs; the 90 s bound holds per batch. The old single run of
+    # `test_files[:3]` over the union certified the suite with a fourth
+    # goal's files never run (2026-09-26).
+    batches: list[list[str]] = []
+    seen_files: set[str] = set()
     baseline_collect_ok = True
     for g in mission.goals:
         rt = getattr(g, "repair_tests", None) or {}
-        for tf in rt.get("test_files", []) or []:
-            if tf not in test_files:
-                test_files.append(tf)
+        batch = [tf for tf in rt.get("test_files", []) or [] if tf not in seen_files]
+        if batch:
+            seen_files.update(batch)
+            batches.append(batch)
         if rt.get("collect_ok") is False:
             baseline_collect_ok = False
-    if not test_files:
+    if not batches:
         derived = await derive_repair_tests(effects, getattr(mission, "objective", ""))
-        test_files = derived.get("test_files", []) or []
+        if derived.get("test_files"):
+            batches = [list(derived["test_files"])]
         if derived.get("collect_ok") is False:
             baseline_collect_ok = False
+    test_files = [tf for batch in batches for tf in batch]
 
     if not test_files:
         # No suite discoverable. auto/on both pass (nothing to run); the
@@ -5469,40 +5479,50 @@ async def action_run_test_suite_gate(step_input: StepInput) -> StepOutput:
         # flag certified a still-failing repo. Re-check collection NOW; stand
         # down only if it is STILL broken (a genuinely unbuildable checkout —
         # never loop on an environmental failure).
+        collect_ok_now = True
         try:
-            cres = await effects.run_command(
-                [
-                    "/bin/sh",
-                    "-c",
-                    "python -m pytest --collect-only -q " + " ".join(test_files[:3]),
-                ],
-                timeout=60,
-            )
-            cout = (getattr(cres, "stdout", "") or "") + (
-                getattr(cres, "stderr", "") or ""
-            )
-            _n, collect_ok_now = _parse_pytest_output(cout)
+            for batch in batches:
+                cres = await effects.run_command(
+                    [
+                        "/bin/sh",
+                        "-c",
+                        "python -m pytest --collect-only -q " + " ".join(batch),
+                    ],
+                    timeout=60,
+                )
+                cout = (getattr(cres, "stdout", "") or "") + (
+                    getattr(cres, "stderr", "") or ""
+                )
+                _n, ok = _parse_pytest_output(cout)
+                collect_ok_now = collect_ok_now and ok
         except Exception:
             collect_ok_now = False
         if not collect_ok_now:
             return _pass("suite still does not collect — standing down")
         logger.info("Test gate: stale baseline — collection now clean, proceeding")
 
-    command = "python -m pytest -q --no-header " + " ".join(test_files[:3])
-    try:
-        # 90s cap — see the b5c teardown race note in derive_repair_tests.
-        res = await effects.run_command(["/bin/sh", "-c", command], timeout=90)
-        out = (getattr(res, "stdout", "") or "") + (getattr(res, "stderr", "") or "")
-        rc = getattr(res, "return_code", 1)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("Test gate: suite run failed (%s) — standing down", e)
-        return _pass(f"suite run errored ({type(e).__name__}) — standing down")
-
-    failing_nodes, collect_ok = _parse_pytest_output(out)
-    if not collect_ok:
-        # Post-hoc collection break with a clean baseline → a fix broke imports;
-        # harvest it as a fix goal like any other failure (node = the file).
-        failing_nodes = failing_nodes or [f"{tf}::collection" for tf in test_files[:1]]
+    failing_nodes: list[str] = []
+    rc = 0
+    for batch in batches:
+        command = "python -m pytest -q --no-header " + " ".join(batch)
+        try:
+            # 90s per batch — see the b5c teardown race note in
+            # derive_repair_tests.
+            res = await effects.run_command(["/bin/sh", "-c", command], timeout=90)
+            out = (getattr(res, "stdout", "") or "") + (
+                getattr(res, "stderr", "") or ""
+            )
+            rc = rc or getattr(res, "return_code", 1)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Test gate: suite run failed (%s) — standing down", e)
+            return _pass(f"suite run errored ({type(e).__name__}) — standing down")
+        nodes, collect_ok = _parse_pytest_output(out)
+        if not collect_ok and not nodes:
+            # Post-hoc collection break with a clean baseline → a fix broke
+            # imports; harvest it as a fix goal like any other failure
+            # (node = the batch's first file).
+            nodes = [f"{batch[0]}::collection"]
+        failing_nodes += [n for n in nodes if n not in failing_nodes]
     if rc == 0 and not failing_nodes:
         return _pass(f"suite passed ({len(test_files)} file(s))")
 

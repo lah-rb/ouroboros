@@ -82,13 +82,16 @@ def extract_repair_terms_tiered(description: str) -> tuple[list[str], list[str]]
         if len(weak) >= 8:
             break
         _add(tok, weak)
-    return strong[:12], weak
+    # Every identifier (2026-09-26): the 13th can be the module name that
+    # drives the module-match ranking. The weak tier stays bounded — prose
+    # words are what polluted the grep, and they are only a fallback.
+    return strong, weak
 
 
 def extract_repair_terms(description: str) -> list[str]:
     """Flat view of the tiered extraction (strong first)."""
     strong, weak = extract_repair_terms_tiered(description)
-    return (strong + weak)[:12]
+    return strong + weak
 
 
 def _is_test_path(path: str) -> bool:
