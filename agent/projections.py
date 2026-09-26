@@ -446,16 +446,17 @@ def project_interaction_context(mission: MissionState, params: dict) -> dict:
             if ds.file:
                 content = _load_file_content(working_dir, ds.file, max_chars=0)
                 if content:
-                    # Scope, don't truncate (OPEN_TASKS §21): the old
-                    # max_chars=4000 byte-cut gave the play-tester ~29% of
-                    # arm01's world.yaml, mid-entry. Complete-entry sampling
-                    # + skeleton keeps every shown entry whole and the tail's
-                    # shape visible.
-                    from agent.data_trace import render_data_file
-
-                    data_file_contents[ds.file] = render_data_file(
-                        content, ds.file, 4000
-                    )
+                    # WHOLE (2026-09-26), like every other projection's data
+                    # files. The 4,000-char budget before it (a byte-cut, then
+                    # complete-entry sampling) kept only whole TOP-LEVEL
+                    # entries, so a world shaped {starting_room, rooms, items,
+                    # npcs, monsters} reached the charter author as
+                    # "starting_room: … (4 more items)": no room, exit, item or
+                    # NPC name. Tests went east from rooms with no east exit,
+                    # took items from rooms that never held them, and talked
+                    # to NPCs who were not there — nine goals failed on the
+                    # map, not the game (tier_20260924-191710).
+                    data_file_contents[ds.file] = content
 
         # Extract command vocabulary from parser/command modules.
         # Look for modules whose responsibility mentions "parse" or "command"
