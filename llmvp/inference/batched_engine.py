@@ -250,6 +250,8 @@ class SeqSlot:
     # for the global tracker's eval/generation durations.
     _last_prefill_s: float = 0.0
     _last_decode_s: float = 0.0
+    # The temperature the last stream actually sampled at (None until one ran).
+    _last_temperature: Optional[float] = None
     # Engine backref (set at seat creation) — lets session-layer KV surgery
     # route through the decode thread without knowing about the engine.
     _engine_ref: Any = field(default=None, repr=False)
@@ -1312,6 +1314,9 @@ class BatchedEngine:
             (s.req.flow_build or ("",))[0] if s.req.flow_build else ""
         )
         slot._last_end_reason = s.end_reason or ""
+        slot._last_temperature = float(
+            s.req.sampling_kwargs.get("temp", s.req.temperature)
+        )
         # Flow BUILD capture: on a NORMAL completion only (an errored,
         # abandoned, or pressure-truncated stream may hold a partial/poisoned
         # prefix), range-copy [0, prefix_len) — the tail and the generation

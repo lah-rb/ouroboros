@@ -196,6 +196,14 @@ class InferenceResult:
     # Why generation stopped, as the server saw it ("length" = the budget or
     # the context ceiling; "" = not reported).
     end_reason: str = ""
+    # The sampling temperature LLMVP ACTUALLY used, after its per-model floor,
+    # session-depth floor and degenerate-retry recipe. LLMVP owns the model's
+    # parameters; the client only requests one. None = not reported (an
+    # older server, a remote provider, or a failed call).
+    temperature: float | None = None
+    # What this client asked for — the resolved number it sent (a "t*0.1"
+    # spec resolved against the client's base). None = no temperature sent.
+    temperature_sent: float | None = None
 
 
 # ── Terminal output limits ────────────────────────────────────────────

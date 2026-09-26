@@ -465,6 +465,11 @@ class CompletionResponse:
     session_turn_id: Optional[int] = None
     turn_committed: bool = True
     end_reason: str = ""
+    # The sampling temperature the backend ACTUALLY used, after the global
+    # floor, the session-depth floor and any degenerate-retry recipe. LLMVP
+    # owns the model's parameters; a client only requests one, so this is the
+    # number a client should record. None when the backend did not report it.
+    temperature: Optional[float] = None
 
 
 @strawberry.type
@@ -1048,6 +1053,7 @@ class Query:
             session_turn_id=cache.get("turn_id"),
             turn_committed=not cache.get("turn_dropped", False),
             end_reason=cache.get("end_reason", ""),
+            temperature=cache.get("temperature"),
         )
 
     @strawberry.field
@@ -1120,6 +1126,7 @@ class Query:
             flow_key=outcome.flow_key,
             prefill_ms=outcome.prefill_ms,
             decode_ms=outcome.decode_ms,
+            temperature=outcome.temperature,
         )
 
     @strawberry.field
@@ -1331,6 +1338,7 @@ class Mutation:
             flow_key=outcome.flow_key,
             prefill_ms=outcome.prefill_ms,
             decode_ms=outcome.decode_ms,
+            temperature=outcome.temperature,
         )
 
     @strawberry.mutation

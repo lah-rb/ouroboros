@@ -35,10 +35,16 @@ def _reasoning_off() -> bool:
     return os.environ.get("OURO_REASONING_OFF", "") == "1"
 
 
-# GraphQL query for non-streaming completion
-COMPLETION_QUERY = """
-query Completion($request: CompletionRequest!) {
-    completion(request: $request) {
+# The sampling temperature LLMVP ACTUALLY used (llmvp 2026-09-26). LLMVP owns
+# the model's parameters — it floors, deepens and re-drives — so the number a
+# turn record should carry is the server's, not the one this client asked for.
+# A server that predates the field fails the whole query on it, so each call
+# path drops it once and remembers (InferenceEffect._temperature_field_supported),
+# independently of the session turn-id fields.
+_TEMPERATURE_FIELD = """
+        temperature"""
+
+_COMPLETION_FIELDS = """
         text
         tokensGenerated
         finished
@@ -51,10 +57,23 @@ query Completion($request: CompletionRequest!) {
         cacheHit
         flowKey
         prefillMs
-        decodeMs
-    }
-}
-"""
+        decodeMs"""
+
+
+def _completion_query(temperature: bool = True) -> str:
+    """The non-streaming completion query, with or without the temperature
+    field (an older LLMVP rejects it)."""
+    return (
+        "query Completion($request: CompletionRequest!) {\n"
+        "    completion(request: $request) {"
+        + _COMPLETION_FIELDS
+        + (_TEMPERATURE_FIELD if temperature else "")
+        + "\n    }\n}\n"
+    )
+
+
+# GraphQL query for non-streaming completion
+COMPLETION_QUERY = _completion_query()
 
 # Vision completion. A MUTATION, not a query, and a separate pipeline from
 # `completion`: the mtmd handler builds its own prompt from the model's chat
@@ -218,20 +237,7 @@ mutation PurgeSnapshot($key: String!) {
 }
 """
 
-_SESSION_COMPLETION_FIELDS = """
-        text
-        tokensGenerated
-        finished
-        truncated
-        promptTokens
-        cachedPrefixTokens
-        freshPrefillTokens
-        generatedTokens
-        reasoningTokens
-        cacheHit
-        flowKey
-        prefillMs
-        decodeMs"""
+_SESSION_COMPLETION_FIELDS = _COMPLETION_FIELDS
 # Turn identity + commit state (llmvp 2026-09-22). A server that predates them
 # fails the whole query on the unknown fields, so session_turn falls back to
 # the legacy field set once and remembers.
@@ -239,19 +245,23 @@ _SESSION_TURN_FIELDS = """
         sessionTurnId
         turnCommitted
         endReason"""
-SESSION_COMPLETION_QUERY = (
-    "query SessionCompletion($request: SessionTurnRequest!) {\n"
-    "    sessionCompletion(request: $request) {"
-    + _SESSION_COMPLETION_FIELDS
-    + _SESSION_TURN_FIELDS
-    + "\n    }\n}\n"
-)
-SESSION_COMPLETION_QUERY_LEGACY = (
-    "query SessionCompletion($request: SessionTurnRequest!) {\n"
-    "    sessionCompletion(request: $request) {"
-    + _SESSION_COMPLETION_FIELDS
-    + "\n    }\n}\n"
-)
+
+
+def _session_query(turn_fields: bool = True, temperature: bool = True) -> str:
+    """The session-turn query. The turn-id fields and the temperature field
+    are dropped independently: an LLMVP can know one and not the other."""
+    return (
+        "query SessionCompletion($request: SessionTurnRequest!) {\n"
+        "    sessionCompletion(request: $request) {"
+        + _SESSION_COMPLETION_FIELDS
+        + (_SESSION_TURN_FIELDS if turn_fields else "")
+        + (_TEMPERATURE_FIELD if temperature else "")
+        + "\n    }\n}\n"
+    )
+
+
+SESSION_COMPLETION_QUERY = _session_query()
+SESSION_COMPLETION_QUERY_LEGACY = _session_query(turn_fields=False)
 
 REWIND_SESSION_TURN_MUTATION = """
 mutation RewindSessionTurn($sessionId: String!, $turnId: Int!) {
@@ -434,6 +444,12 @@ def _unknown_turn_fields(error: str | None) -> bool:
     return any(f in error for f in ("sessionTurnId", "turnCommitted", "endReason"))
 
 
+def _unknown_temperature_field(error: str | None) -> bool:
+    """A GraphQL validation error naming the response's temperature field —
+    an LLMVP that predates reporting it."""
+    return bool(error) and "Cannot query field 'temperature'" in error
+
+
 def _degenerate_tokens(error_msg: str) -> int | None:
     m = _DEGENERATE_TOKENS.search(error_msg or "")
     return int(m.group(1)) if m else None
@@ -513,6 +529,9 @@ class InferenceEffect:
         # (sessionTurnId/turnCommitted/endReason). None = not yet known; False
         # = an older LLMVP, so session_turn sends the legacy field set.
         self._session_turn_fields_supported: bool | None = None
+        # Whether the server reports the temperature it actually used. None =
+        # not yet known; False = an older LLMVP, so both query paths omit it.
+        self._temperature_field_supported: bool | None = None
         # Health-watchdog timing. INSTANCE attributes, not function-local
         # constants, so tests can shrink them (TESTING.md: "timing knobs used
         # by drains/settles should be instance attributes"). The watchdog is
@@ -862,8 +881,9 @@ class InferenceEffect:
         if model:
             request_vars["model"] = str(model)
 
+        with_temperature = self._temperature_field_supported is not False
         request_body = {
-            "query": COMPLETION_QUERY,
+            "query": _completion_query(with_temperature),
             "variables": {"request": request_vars},
         }
 
@@ -871,11 +891,26 @@ class InferenceEffect:
         # completion ceiling is the FALLBACK bound for servers that cannot name
         # the request; where LLMVP can, its repetition and long-cycle guards
         # own runaways and the watchdog only checks liveness.
-        return await self._request_with_health_watchdog(
+        result = await self._request_with_health_watchdog(
             client,
             request_body,
             runaway_token_ceiling=COMPLETION_RUNAWAY_TOKEN_CEILING,
         )
+        if with_temperature and _unknown_temperature_field(result.error):
+            # Validation rejected the query before anything ran, so re-sending
+            # without the field is safe.
+            logger.warning(
+                "LLMVP predates reporting the temperature it used — not asking"
+            )
+            self._temperature_field_supported = False
+            request_body["query"] = _completion_query(False)
+            result = await self._request_with_health_watchdog(
+                client,
+                request_body,
+                runaway_token_ceiling=COMPLETION_RUNAWAY_TOKEN_CEILING,
+            )
+        result.temperature_sent = request_vars.get("temperature")
+        return result
 
     async def run_vision(
         self,
@@ -1129,6 +1164,7 @@ class InferenceEffect:
                     session_turn_id=completion.get("sessionTurnId"),
                     turn_committed=bool(completion.get("turnCommitted", True)),
                     end_reason=completion.get("endReason", "") or "",
+                    temperature=completion.get("temperature"),
                 )
 
             except httpx.ConnectError as e:
@@ -1550,10 +1586,9 @@ class InferenceEffect:
                 request_vars["reasoning"] = str(config_overrides["reasoning"])
 
         legacy = self._session_turn_fields_supported is False
+        with_temperature = self._temperature_field_supported is not False
         request_body = {
-            "query": (
-                SESSION_COMPLETION_QUERY_LEGACY if legacy else SESSION_COMPLETION_QUERY
-            ),
+            "query": _session_query(not legacy, with_temperature),
             "variables": {"request": request_vars},
         }
 
@@ -1572,20 +1607,32 @@ class InferenceEffect:
             response_key="sessionCompletion",
             runaway_token_ceiling=SESSION_RUNAWAY_TOKEN_CEILING,
         )
-        if not legacy and _unknown_turn_fields(result.error):
+        drop_turn = not legacy and _unknown_turn_fields(result.error)
+        drop_temperature = with_temperature and _unknown_temperature_field(result.error)
+        if drop_turn or drop_temperature:
             # An older server: GraphQL validation rejected the query before
-            # anything ran, so re-sending the legacy shape is safe.
-            logger.warning(
-                "LLMVP predates session turn ids — using the legacy session query"
+            # anything ran, so re-sending without the unknown fields is safe.
+            if drop_turn:
+                logger.warning(
+                    "LLMVP predates session turn ids — using the legacy session query"
+                )
+                self._session_turn_fields_supported = False
+            if drop_temperature:
+                logger.warning(
+                    "LLMVP predates reporting the temperature it used — not asking"
+                )
+                self._temperature_field_supported = False
+            request_body["query"] = _session_query(
+                self._session_turn_fields_supported is not False,
+                self._temperature_field_supported is not False,
             )
-            self._session_turn_fields_supported = False
-            request_body["query"] = SESSION_COMPLETION_QUERY_LEGACY
             result = await self._request_with_health_watchdog(
                 client,
                 request_body,
                 response_key="sessionCompletion",
                 runaway_token_ceiling=SESSION_RUNAWAY_TOKEN_CEILING,
             )
+        result.temperature_sent = request_vars.get("temperature")
         # STALENESS ESCAPE. A session can die server-side without anyone
         # calling end_session — expiry, an eviction, a server bounce. The seat
         # went with it, so a claim we still hold is a lie, and _is_self_deadlock

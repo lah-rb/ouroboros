@@ -290,7 +290,11 @@ class InferenceCall(TraceEvent):
     tokens_in: int = 0  # Real input tokens when available, else whitespace-split
     tokens_out: int = 0  # Real generated tokens when available, else whitespace
     wall_ms: float = 0.0  # Wall clock for the inference round-trip only
-    temperature: float = 0.0
+    # The temperature the model ACTUALLY sampled at — LLMVP's report (it owns
+    # the model's parameters), else what the client sent. None = unknown.
+    temperature: float | None = None
+    # What the step asked for, verbatim ("t*0.1", "0.3"); "" = nothing asked.
+    temperature_requested: str = ""
     max_tokens: int = 0
     purpose: str = ""  # "step_inference" | "llm_menu_resolve"
     thinking_content: str = ""  # Chain-of-thought from thinking models
@@ -369,6 +373,22 @@ def _safe_float(value) -> float:
         return 0.0
 
 
+def _turn_temperature(result, cfg: dict) -> float | None:
+    """The temperature a turn actually sampled at: LLMVP's report when it
+    gives one, else the number this client sent, else a plain number in the
+    request. A relative spec ("t*0.1") is never coerced: float() on it
+    recorded 0.0 for every such turn while the server floored them at 0.7
+    (tier_20260924-191710)."""
+    for v in (
+        getattr(result, "temperature", None),
+        getattr(result, "temperature_sent", None),
+        cfg.get("temperature"),
+    ):
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            return float(v)
+    return None
+
+
 def _safe_int(value) -> int:
     try:
         return int(value or 0)
@@ -422,7 +442,10 @@ def build_inference_call(
         tokens_in=(cp + fp) if (cp or fp) else ws_in,
         tokens_out=gen if gen else ws_out,
         wall_ms=float(wall_ms or 0.0),
-        temperature=_safe_float(cfg.get("temperature", 0)),
+        temperature=_turn_temperature(result, cfg),
+        temperature_requested=(
+            "" if cfg.get("temperature") is None else str(cfg.get("temperature"))
+        ),
         max_tokens=_safe_int(cfg.get("max_tokens", 0)),
         purpose=str(ann.get("purpose") or purpose),
         thinking_content=thinking or "",

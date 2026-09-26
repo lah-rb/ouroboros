@@ -4949,6 +4949,7 @@ class LlamaCppBackend(BaseBackend):
         instance._last_length_cause = ""
         instance._last_completion_tokens = None
         instance._last_gen_start_pos = None
+        instance._last_temperature = None
 
         # Per-request reasoning level for STATELESS completions. Only the
         # completion path ever puts "reasoning" in generate kwargs (the session
@@ -5106,6 +5107,10 @@ class LlamaCppBackend(BaseBackend):
         _sampling_overrides = kwargs.pop("sampling_overrides", None)
         if _sampling_overrides:
             gen_kwargs.update(_sampling_overrides)
+        # The temperature this generation ACTUALLY samples at — after the
+        # caller's floors and any override. LLMVP owns the model's parameters;
+        # clients only request, so this is what the response reports back.
+        instance._last_temperature = float(gen_kwargs.get("temp", temperature))
         # Think-hold processor built earlier in this call (kwargs carry it as
         # "logits_processor") — forward to Llama.generate.
         _lp = kwargs.pop("logits_processor", None)

@@ -67,6 +67,9 @@ class CompletionOutcome:
     # "tokens_generated >= max_tokens" truncation test cannot see it, and a
     # caller checking only that flag would treat a severed response as complete.
     end_reason: str = ""
+    # The sampling temperature the backend ACTUALLY used — after the global
+    # floor and any retry recipe. None when the backend did not report it.
+    temperature: Optional[float] = None
 
     @property
     def truncated_by_engine(self) -> bool:
@@ -597,6 +600,7 @@ async def run_completion(
             cache_hit=bool(getattr(gen_target, "_last_cache_hit", False)),
             flow_key=str(getattr(gen_target, "_last_flow_key", "") or ""),
             end_reason=str(getattr(gen_target, "_last_end_reason", "") or ""),
+            temperature=getattr(gen_target, "_last_temperature", None),
             # Prefer the per-stream wall spans (batched seats stash them —
             # concurrency-accurate); fall back to the global tracker's
             # single-generation timing for the pool path.

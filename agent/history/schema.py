@@ -19,7 +19,7 @@ from typing import Any
 
 import pyarrow as pa
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2  # 2: turns.temperature_requested; temperature is the served value
 
 # Columns the STORE owns on every table. A trace event field with one of these
 # names (CapacitySample has its own ``seq``) is preserved in the JSON column
@@ -92,6 +92,7 @@ TURNS_SCHEMA = pa.schema(
         pa.field("pre_compute_ms", pa.float64()),
         # Request configuration.
         pa.field("temperature", pa.float64()),
+        pa.field("temperature_requested", pa.string()),
         pa.field("max_tokens", pa.int64()),
         pa.field("reasoning", pa.string()),
         pa.field("model", pa.string()),

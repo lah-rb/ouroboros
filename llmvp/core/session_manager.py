@@ -1510,6 +1510,9 @@ class SessionManager:
             # BELOW max_tokens, so the caller's `tokens >= max_tokens` test
             # cannot see it and would read a severed turn as complete.
             "end_reason": str(getattr(_inst, "_last_end_reason", "") or ""),
+            # The temperature the turn ACTUALLY sampled at (global floor,
+            # session-depth floor and degenerate-retry recipe all applied).
+            "temperature": getattr(_inst, "_last_temperature", None),
             # The budget the ENGINE enforced (min(max_tokens, context left)) and,
             # on a budget stop, which of the two bound — "context" means the
             # session itself ran out of window, not the caller's allowance.

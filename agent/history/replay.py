@@ -114,9 +114,19 @@ def _config(
     max_tokens: Optional[int],
 ) -> dict:
     cfg: dict[str, Any] = {}
-    t = temperature if temperature is not None else turn.get("temperature")
-    if t is not None:
-        cfg["temperature"] = float(t)
+    # Re-ask what the step asked for ("t*0.1" resolves as it did live) and let
+    # the server apply its own floors again; the recorded `temperature` is
+    # what the server CHOSE, not what to send.
+    if temperature is not None:
+        cfg["temperature"] = float(temperature)
+    elif turn.get("temperature_requested"):
+        req = str(turn["temperature_requested"])
+        try:
+            cfg["temperature"] = float(req)
+        except ValueError:
+            cfg["temperature"] = req
+    elif turn.get("temperature") is not None:
+        cfg["temperature"] = float(turn["temperature"])
     m = max_tokens if max_tokens is not None else (turn.get("max_tokens") or None)
     if m:
         cfg["max_tokens"] = int(m)
