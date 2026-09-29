@@ -83,6 +83,10 @@
 # and the CUDA context are unpriced), CUDA1 at 18,851. On CUDA1
 # the pair would leave ~2 GiB under muse's vision peak, the margin that the
 # graph-realloc crash of 2026-09-09/10 ate on the 3060.
+# DO NOT LOAD THIS BESIDE TENSOR-SPLIT MUSE IN ONE PROCESS (2026-09-29): the
+# first mission run wedged muse's decode thread within a minute of this
+# loading (muse-glimmer-30b-cuda.yaml, "BUT THE FIRST MISSION RUN"). Memory
+# fits; the two models in one process do not.
 #
 # n_ctx is small ON PURPOSE — the text pool is never used, so paying KV for it
 # would be pure waste. vision_n_ctx is what OCR actually consumes, and 32768 is

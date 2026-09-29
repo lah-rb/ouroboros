@@ -606,10 +606,10 @@ def _disabled_lanes() -> set:
     operator names the lane, the pool never builds it, nothing ever asks
     for paddle. Same shape as OUROBOROS_REMOTE_CURATE_LANES.
 
-    Since the two-3090 rebuild (2026-09-28) the ocr lane needs no disabling:
-    paddle loads on CUDA0 beside a tensor-split muse, measured 2026-09-29
-    (muse-glimmer-30b-cuda.yaml). The switch stays for experiments and
-    stretches.
+    Two-3090 rig (2026-09-29): KEEP the ocr lane disabled while muse is
+    tensor-split. Paddle fits beside it on CUDA0, but the first mission run
+    with both in one LLMVP process wedged muse's decode thread within a minute
+    (muse-glimmer-30b-cuda.yaml, "BUT THE FIRST MISSION RUN").
     """
     raw = os.environ.get("OUROBOROS_DISABLE_LANES", "")
     return {s.strip() for s in raw.split(",") if s.strip()}

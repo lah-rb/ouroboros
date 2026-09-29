@@ -88,8 +88,20 @@ model:
   #   OCR             ~80 s -> ~99 s per pass (+~20 %)
   #   peak memory     CUDA0 21,008 MiB, CUDA1 18,851 MiB (of 24,576 each)
   # Paddle's real cost on CUDA0 is ~4.2 GiB against the governor's 2.5 GiB
-  # (compute buffers and the CUDA context are not priced). So the ocr lane
-  # no longer needs disabling.
+  # (compute buffers and the CUDA context are not priced).
+  # BUT THE FIRST MISSION RUN WITH IT WEDGED (v50, 2026-09-29 19:49Z). Paddle
+  # hot-loaded while 8 muse streams were decoding. Within ~40 s the batched
+  # decode thread was spinning at 100 % CPU inside a CUDA sync: no tokens for
+  # 10+ min, 8 seats held, GPU1 idle. Paddle kept serving on CUDA0 throughout,
+  # SIGTERM could not stop the server, and the keeper never fired (OCR kept
+  # GPU0 above its idle watts). The ladder had passed the same pairing three
+  # times, so it is an intermittent race between tensor-parallel muse and a
+  # second model in the same process. The same mission without the ocr lane
+  # decodes normally.
+  # So OUROBOROS_DISABLE_LANES=ocr STAYS while muse is tensor-split. Ways to
+  # bring OCR back, all untested: paddle in its own process (extract_batch
+  # --vl-backend llamacpp); muse on split_mode layer beside in-process paddle;
+  # paddle on the remote 3060 box (llmvp_domains["ocr"]).
   # n_ctx 131072 -> 262144 (the SHARED cell pool; no stream exceeds
   # model_max_context 131072). KV at 52 KB/token: 6.5 -> 13.0 GiB, spread
   # over two 24 GiB cards beside ~19.7 GB of weights.
