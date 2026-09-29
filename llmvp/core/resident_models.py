@@ -241,11 +241,47 @@ def model_device(config: Any) -> int:
     return int(dev) if dev is not None else 0
 
 
+def split_shares(config: Any) -> Optional[dict]:
+    """``{device: fraction}`` for a model spread over several cards
+    (``split_mode`` layer or tensor), else None (pinned to one device).
+
+    The fractions are ``tensor_split`` normalised. Without one, llama.cpp
+    splits in proportion to each card's free memory at load, which is not
+    knowable in advance; total capacity stands in for it (equal cards split
+    evenly either way).
+    """
+    mode = str(getattr(config.model, "split_mode", "none") or "none").lower()
+    if mode == "none":
+        return None
+    ts = getattr(config.model, "tensor_split", None)
+    if ts:
+        weights = [float(x) for x in ts]
+    else:
+        devices = gpu_devices()
+        if not devices:
+            raise ValueError(
+                f"{config.model.name} splits over GPUs this process cannot see"
+            )
+        weights = [float(d["total_bytes"]) for d in devices]
+    total = sum(weights)
+    if total <= 0:
+        raise ValueError(f"{config.model.name}: tensor_split {ts!r} sums to zero")
+    return {i: w / total for i, w in enumerate(weights) if w > 0}
+
+
 def footprint_by_device(config: Any) -> dict:
     """Bytes this config will claim, keyed by the device that actually pays.
 
-    Weights and KV follow ``main_gpu``. THE PROJECTOR DOES NOT, and that
-    split is the whole reason this returns a mapping instead of a number.
+    Weights and KV follow ``main_gpu`` — or, for a model split over several
+    cards (``split_mode`` layer / tensor), spread in ``split_shares``
+    proportions. THE PROJECTOR DOES NOT, and that split is the whole reason
+    this returns a mapping instead of a number.
+
+    THE SPLIT CASE IS HOW THE PRIMARY IS PRICED on the two-3090 host
+    (2026-09-29: muse runs tensor-split over both cards). Charging a split
+    primary to main_gpu put all ~34 GB of muse on CUDA0 and next to nothing
+    on CUDA1, so admission refused paddle on the card that had room and
+    would have admitted it on the one that was full.
 
     ``_create_vision_instance`` builds its context from the primary's model
     (placed correctly), but the mtmd handler that owns the projector takes
@@ -265,19 +301,32 @@ def footprint_by_device(config: Any) -> dict:
 
     mcfg = config.model
     dev = model_device(config)
+    shares = split_shares(config)
     by_dev: dict = {}
 
     def charge(device: int, amount: int) -> None:
         by_dev[device] = by_dev.get(device, 0) + int(amount)
 
+    def place(amount: int) -> None:
+        """Weights and KV: the pinned card, or every card of a split."""
+        if not shares:
+            charge(dev, amount)
+            return
+        items = sorted(shares.items())
+        left = int(amount)
+        for i, (d, frac) in enumerate(items):
+            part = left if i == len(items) - 1 else int(amount * frac)
+            charge(d, part)
+            left -= part
+
     # probe_verified_weights_bytes, when the config declares it, is a MEASURED
     # figure and beats the file-size upper bound.
     verified = getattr(mcfg, "probe_verified_weights_bytes", None)
     if verified:
-        charge(dev, int(verified))
+        place(int(verified))
     else:
         try:
-            charge(dev, LlamaCppBackend.weights_bytes_total(str(mcfg.path)))
+            place(LlamaCppBackend.weights_bytes_total(str(mcfg.path)))
         except OSError as exc:
             raise ValueError(f"cannot size weights at {mcfg.path}: {exc}") from exc
 
@@ -298,7 +347,7 @@ def footprint_by_device(config: Any) -> dict:
         per_tok = kv_bytes_per_token(
             str(mcfg.path), getattr(mcfg, "probe_verified_kv_bytes_per_token", None)
         )
-        charge(dev, per_tok * int(mcfg.n_ctx))
+        place(per_tok * int(mcfg.n_ctx))
         # THE VISION POOL IS REAL KV and must be priced. Each pool member is a
         # private context of its own — paddle at vision_n_ctx 32768 x 4 is
         # 2.25 GB, which is larger than its weights and projector combined.
@@ -307,15 +356,12 @@ def footprint_by_device(config: Any) -> dict:
         # has been used yet: the pool is built on first request and never
         # released, so "not yet allocated" is a timing detail, not a saving.
         #
-        # The CONTEXTS follow main_gpu even though the projector does not:
-        # they are built from the primary's model with ordinary context
-        # params, and only the mtmd projector escapes placement.
+        # The CONTEXTS follow the weights (main_gpu, or the split) even though
+        # the projector does not: they are built from the primary's model with
+        # ordinary context params, and only the mtmd projector escapes placement.
         if mmproj:
             width = max(1, int(getattr(mcfg, "vision_pool_size", 1) or 1))
-            charge(
-                dev,
-                per_tok * int(getattr(mcfg, "vision_n_ctx", 8192) or 8192) * width,
-            )
+            place(per_tok * int(getattr(mcfg, "vision_n_ctx", 8192) or 8192) * width)
     except Exception as exc:  # noqa: BLE001 — header shapes vary by arch
         raise ValueError(
             f"cannot compute KV geometry for {mcfg.name}: {exc} — "
@@ -471,10 +517,11 @@ def admission_check(config: Any) -> tuple[bool, str, dict]:
     realistic deployment, and a governor that ignored it would admit a
     second model into memory the primary already owns.
 
-    PER DEVICE, because memory is not one pool. This box has 24 GB on the
-    3090 and 12 GB on the 3060 and a model declares which it wants via
-    ``main_gpu``; summing them into a single ceiling admits a load that
-    cannot fit anywhere. On a single-GPU host — every Metal machine — there
+    PER DEVICE, because memory is not one pool. This box has two 24 GB
+    3090s (a 3090 + 12 GB 3060 until 2026-09-28); a model declares which it
+    wants via ``main_gpu``, and a split primary is priced on every card it
+    spans (split_shares). Summing the cards into a single ceiling admits a
+    load that cannot fit anywhere. On a single-GPU host — every Metal machine — there
     is one device, every term keys to 0, and the arithmetic below is
     byte-identical to what it replaced.
     """

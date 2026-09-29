@@ -652,6 +652,101 @@ def test_a_split_model_is_refused_rather_than_mischarged(monkeypatch):
     assert "split_mode" in why
 
 
+def _stub_geometry(monkeypatch, weights: int, per_tok: int, mmproj: int = 0):
+    monkeypatch.setitem(
+        sys.modules,
+        "inference.backends.llama_cpp_backend",
+        types.SimpleNamespace(
+            LlamaCppBackend=types.SimpleNamespace(
+                weights_bytes_total=staticmethod(lambda p: weights)
+            )
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "core.context_probe",
+        types.SimpleNamespace(kv_bytes_per_token=lambda p, m: per_tok),
+    )
+    monkeypatch.setattr(rm.os.path, "getsize", lambda p: mmproj)
+
+
+def _split_primary(split_mode="tensor", tensor_split=(1, 1)):
+    cfg = _cfg("muse", n_ctx=100)
+    cfg.model.split_mode = split_mode
+    cfg.model.tensor_split = list(tensor_split) if tensor_split else None
+    cfg.model.mmproj_path = "/proj.gguf"
+    cfg.model.vision_projector_device = "CUDA1"
+    cfg.model.vision_n_ctx = 40
+    cfg.model.vision_pool_size = 1
+    return cfg
+
+
+def test_a_split_primary_is_charged_across_its_cards(monkeypatch):
+    """Two 3090s, muse tensor-split [1, 1] (2026-09-29): weights, text KV and
+    vision KV land half on each card; the projector goes where it is named.
+    Charging it all to main_gpu put ~34 GB on CUDA0 and ~1 GB on CUDA1."""
+    _two_devices(monkeypatch, gb_a=24, gb_b=24)
+    _stub_geometry(monkeypatch, weights=1000, per_tok=10, mmproj=840)
+    by_dev = rm.footprint_by_device(_split_primary())
+    # weights 1000 + text KV 10*100 + vision KV 10*40, halved…
+    assert by_dev[0] == 500 + 500 + 200
+    # …and the projector on CUDA1 on top of its half.
+    assert by_dev[1] == 500 + 500 + 200 + 840
+    assert sum(by_dev.values()) == rm.estimate_footprint_bytes(_split_primary())
+
+
+def test_an_uneven_split_follows_tensor_split(monkeypatch):
+    """The 3090 + 3060 rung, [40, 12]: 40/52 of every term on CUDA0. The parts
+    add back up to the whole (the remainder goes to the last card)."""
+    _two_devices(monkeypatch, gb_a=24, gb_b=12)
+    _stub_geometry(monkeypatch, weights=5200, per_tok=0)
+    cfg = _split_primary("layer", (40, 12))
+    cfg.model.mmproj_path = None
+    by_dev = rm.footprint_by_device(cfg)
+    assert by_dev == {0: 4000, 1: 1200}
+
+
+def test_a_split_without_tensor_split_follows_card_capacity(monkeypatch):
+    """No tensor_split: llama.cpp splits by free memory at load; capacity is
+    the stand-in, so a 24 + 12 GB pair carries two thirds on the big card."""
+    _two_devices(monkeypatch, gb_a=24, gb_b=12)
+    _stub_geometry(monkeypatch, weights=3000, per_tok=0)
+    cfg = _split_primary("tensor", None)
+    cfg.model.mmproj_path = None
+    assert rm.footprint_by_device(cfg) == {0: 2000, 1: 1000}
+
+
+def test_admission_charges_a_split_primary_to_both_cards(monkeypatch):
+    """Paddle beside a tensor-split muse: it fits on the card with room and is
+    refused on the card without, instead of the reverse."""
+    gb = 1024**3
+    _two_devices(monkeypatch, gb_a=24, gb_b=24)
+    primary = _split_primary()
+    monkeypatch.setitem(
+        sys.modules,
+        "inference.backends",
+        types.SimpleNamespace(
+            factory=types.SimpleNamespace(get_backend=lambda: FakeBackend(primary))
+        ),
+    )
+    real = rm.footprint_by_device
+
+    def sizer(c):
+        if c is primary:  # ~17 GB a card, CUDA1 fuller (projector + vision)
+            return {0: 17 * gb, 1: 20 * gb}
+        return real(c)
+
+    monkeypatch.setattr(rm, "footprint_by_device", sizer)
+    _stub_geometry(monkeypatch, weights=int(3.5 * gb), per_tok=0)
+    paddle = _cfg("paddle", n_ctx=0)
+    paddle.model.main_gpu = 0
+    ok, why, facts = rm.admission_check(paddle)
+    assert ok, why
+    paddle.model.main_gpu = 1
+    ok, why, _ = rm.admission_check(paddle)
+    assert ok is False and "CUDA1" in why
+
+
 def test_a_legacy_entry_without_a_breakdown_is_charged_to_device_zero():
     """Entries predate per-device accounting; 'no breakdown' must read as
     'all of it on device 0', which is right on a single-GPU host and

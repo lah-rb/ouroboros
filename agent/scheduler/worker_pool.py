@@ -605,6 +605,11 @@ def _disabled_lanes() -> set:
     the rung was never a config-only operation. This makes it one: the
     operator names the lane, the pool never builds it, nothing ever asks
     for paddle. Same shape as OUROBOROS_REMOTE_CURATE_LANES.
+
+    Since the two-3090 rebuild (2026-09-28) the ocr lane needs no disabling:
+    paddle loads on CUDA0 beside a tensor-split muse, measured 2026-09-29
+    (muse-glimmer-30b-cuda.yaml). The switch stays for experiments and
+    stretches.
     """
     raw = os.environ.get("OUROBOROS_DISABLE_LANES", "")
     return {s.strip() for s in raw.split(",") if s.strip()}
@@ -652,8 +657,9 @@ def _ocr_lane(domains: Optional[dict]) -> Lane:
             seats=0,
             domain="ocr",
         )
-    # Paddle OCR: its own device, no text seat. One at a time — the
-    # tool is a subprocess and the 3060 serves one page batch.
+    # Paddle OCR: no text seat, its own resource. One at a time — the tool is
+    # a subprocess and paddle serves one page batch (on the 3060 until
+    # 2026-09-28, on CUDA0 beside muse since).
     return Lane(name="ocr", flow="ocr_drain", resource="paddle", est_kv=0, seats=0)
 
 

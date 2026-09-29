@@ -80,6 +80,16 @@ model:
   # numbers are what count.
   # Tensor mode is marked EXPERIMENTAL upstream. Fallback = split_mode: layer
   # (same tensor_split), the mode muse ran on for weeks.
+  # PADDLE BESIDE IT (2026-09-29). paddle-ocr-vl now loads hot on CUDA0
+  # (its config explains the card choice). The real OCR tool ran a 14-page
+  # paper twice while these canaries ran, and nothing faulted:
+  #   muse canaries   +0-10 % wall (8 seats 59.3 -> 63.5, 67k prompt 57.0 -> 59.9,
+  #                   vision+text 38.6 -> 42.4, curate 29.8 -> 32.5 / 57.0 -> 56.8)
+  #   OCR             ~80 s -> ~99 s per pass (+~20 %)
+  #   peak memory     CUDA0 21,008 MiB, CUDA1 18,851 MiB (of 24,576 each)
+  # Paddle's real cost on CUDA0 is ~4.2 GiB against the governor's 2.5 GiB
+  # (compute buffers and the CUDA context are not priced). So the ocr lane
+  # no longer needs disabling.
   # n_ctx 131072 -> 262144 (the SHARED cell pool; no stream exceeds
   # model_max_context 131072). KV at 52 KB/token: 6.5 -> 13.0 GiB, spread
   # over two 24 GiB cards beside ~19.7 GB of weights.

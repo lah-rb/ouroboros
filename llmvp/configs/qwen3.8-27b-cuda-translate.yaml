@@ -1,4 +1,4 @@
-# ── Qwen 3.8 27B on the 3090 — TRANSLATION-REGIME TEST (2026-09-18) ────
+# ── Qwen 3.8 27B on the CUDA rig — TRANSLATION-REGIME TEST (2026-09-18) ──
 # WHY THIS FILE. The v48 translation stretch on muse measured 22 banked
 # chunks/h across four lanes, with roughly 45 % of attempts lost to
 # prompt-echo loops and all-reasoning empties and ~46 % of every decoded
@@ -40,11 +40,17 @@ model:
   mmproj_path: /home/lah-rb/models/unsloth/Qwen3.8-27B-GGUF/mmproj-F16.gguf
   n_ctx: 65536
   n_gpu_layers: -1
-  # Whole model on the 3090 (CUDA0). The 3060 stays out of it: no layer split,
-  # and vision stays lazy (figtext lanes are disabled in the stretch env, so no
+  # TENSOR split over both 3090s (2026-09-29; was the whole model on CUDA0,
+  # with the 3060 kept out). Translation is decode-bound, and tensor
+  # parallelism measured +48 % single-stream decode on this exact file
+  # (llama-bench, 48 -> 71 tok/s; ~/tmp/analysis/split_probe_2x3090/llama/).
+  # A layer split would only add memory, which one card already had enough
+  # of. The model now spans both cards, so muse cannot be resident beside it:
+  # the stretch swaps the active config, as it always did.
+  # Vision stays lazy (figtext lanes are disabled in the stretch env, so no
   # request ever allocates the projector).
-  split_mode: none
-  main_gpu: 0
+  split_mode: tensor
+  tensor_split: [1, 1]
   # Translation does not need thinking at all, and on this family thinking is
   # where the damage happens: the first smoke chunk (2026-09-18 20:15Z, dial
   # `low`) spent its whole 4,749-token budget INSIDE an unclosed <think> block

@@ -45,7 +45,8 @@
 # `User: <|IMAGE_START|><|IMAGE_PLACEHOLDER|><|IMAGE_END|>{text}\nAssistant:\n`.
 #
 # PER-MACHINE DEVICE KEYS. main_gpu / split_mode / vision_projector_device /
-# vision_pool_size below describe THIS box (3090 + 3060). Another host does not
+# vision_pool_size below describe THIS box (two 3090s since 2026-09-28; a
+# 3090 + 3060 before). Another host does not
 # edit them: it adds `paddle-ocr-vl-<host>.yaml` with `extends: paddle-ocr-vl`
 # overriding only the device keys (see paddle-ocr-vl-mac.yaml), restates
 # `model.name` to its own stem, and the ocr lane's domain names that variant.
@@ -68,6 +69,20 @@
 # the projector beside the weights on the 3060 — the difference between this
 # model loading and the server dying (it OOMed CUDA0 twice before the
 # governor could see the charge, and the CPU fallback cost 2.3x wall).
+#
+# ── TWO 3090s (2026-09-29): paddle moves to CUDA0 ──────────────────
+# The 3060 is gone; both cards are 24 GB 3090s and muse is TENSOR-split
+# across them (muse-glimmer-30b-cuda.yaml). The governor now prices a split
+# primary on both cards (resident_models.split_shares):
+#   muse   CUDA0 16.3 GiB   CUDA1 17.6 GiB (its vision projector is on CUDA1)
+#   paddle 2.5 GiB (weights, projector, 2 x 32768 vision KV)
+# Measured with muse at 262,144 cells: idle 16.6 / 16.6 GiB, peak with
+# vision 16.3 / 18.3 GiB. CUDA0 is the card with room, so paddle and its
+# projector go there. Measured under full muse load plus OCR: CUDA0 peaked at
+# 21,008 MiB of 24,576 (paddle really costs ~4.2 GiB there: compute buffers
+# and the CUDA context are unpriced), CUDA1 at 18,851. On CUDA1
+# the pair would leave ~2 GiB under muse's vision peak, the margin that the
+# graph-realloc crash of 2026-09-09/10 ate on the 3060.
 #
 # n_ctx is small ON PURPOSE — the text pool is never used, so paying KV for it
 # would be pure waste. vision_n_ctx is what OCR actually consumes, and 32768 is
@@ -124,16 +139,20 @@ model:
   # backend directly, so the projector joins the weights on the 3060. The CPU
   # fallback was measured first and costs 2.3x wall (121.1 s vs 52.1 s on a
   # 10-page paper) — placement, not offload, is the fix.
+  # CUDA0 beside the weights (2026-09-29; was CUDA1, the 3060).
   vision_projector_gpu: true
-  vision_projector_device: "CUDA1"
+  vision_projector_device: "CUDA0"
   vision_image_roots:
     - "~/corpora"
     - "~/ouroboros-runs"
   n_gpu_layers: -1
-  # 3060. The OCR lane gets its own device so it never contends with the
-  # text lane — on the M1 that pair was the BEST available at 0.342; here
-  # the device split makes it ~0.00.
-  main_gpu: 1
+  # CUDA0 since 2026-09-29 (see TWO 3090s above). On the 3090 + 3060 it was
+  # CUDA1, a card of its own, so OCR never contended with the text lane — on
+  # the M1 that pair was the BEST available at 0.342; the device split made it
+  # ~0.00. Beside a tensor-split muse it shares compute with half of muse;
+  # the overlap is measured, not assumed (see the 2026-09-29 note in
+  # muse-glimmer-30b-cuda.yaml).
+  main_gpu: 0
   split_mode: none
   seed: -1
   verbose: false
