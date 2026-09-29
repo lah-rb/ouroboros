@@ -694,6 +694,27 @@ class LlamaCppBackend(BaseBackend):
             )
         return out
 
+    def _refuse_second_context_on_tensor_split(self, what: str) -> None:
+        """Raise before llama.cpp aborts the whole process.
+
+        split_mode 'tensor' holds ONE context per model: the tensor-parallel
+        ("meta") backend fails GGML_ASSERT(meta_buf_ctx->bufs[i]) building a
+        second one (measured 2026-09-29, qwen3.8-27b 2 x 131072 with ~13 GB
+        free a card — not memory). An assert is SIGABRT: no exception, the
+        server and every in-flight request die. Refusing here turns a would-be
+        crash (say, the vision pool fallback on tensor-split muse) into one
+        failed request. Rebuilds are unaffected: they close the old context
+        before creating the new one.
+        """
+        mode = str(getattr(self.config.model, "split_mode", "none") or "none")
+        if mode.lower() == "tensor":
+            raise RuntimeError(
+                f"{self.config.model.name}: cannot build {what} — split_mode "
+                f"'tensor' holds one llama context per model (llama.cpp aborts "
+                f"on a second). Serve it from the batched engine, or use "
+                f"split_mode 'layer'."
+            )
+
     def _create_shared_instance(
         self, primary: Any, n_ctx_override: Optional[int] = None
     ) -> Any:
@@ -711,6 +732,8 @@ class LlamaCppBackend(BaseBackend):
         import copy
 
         from llama_cpp import internals
+
+        self._refuse_second_context_on_tensor_split("a pool seat")
 
         # Shallow-copy the primary to inherit all config / metadata.
         inst = copy.copy(primary)
@@ -831,6 +854,7 @@ class LlamaCppBackend(BaseBackend):
         built with ``copy.copy(primary)``, which does not reset ``chat_handler``
         — it would be aliased into every slot with a single-owner ``close()``.
         """
+        self._refuse_second_context_on_tensor_split("a vision context")
         from llama_cpp import internals
 
         from inference.vision_handlers import load_handler_class

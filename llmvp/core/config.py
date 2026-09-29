@@ -782,6 +782,25 @@ class Config(BaseModel):
                 f"certainly a misconfiguration — use decode_mode 'batched' "
                 f"for high concurrency, or drop max_concurrent_requests)"
             )
+        if (
+            mode == "pool"
+            and str(self.model.split_mode or "none").lower() == "tensor"
+            and self.working_seats > 1
+        ):
+            # TENSOR SPLIT HOLDS ONE CONTEXT PER MODEL. llama.cpp's tensor-
+            # parallel ("meta") backend aborts the process building a second
+            # context on the same model — GGML_ASSERT(meta_buf_ctx->bufs[i]) in
+            # ggml-backend-meta.cpp, measured 2026-09-29 on qwen3.8-27b at
+            # 2 x 131072 with ~13 GB free a card, so it is not memory. The pool
+            # allocates a context PER SEAT; the batched engine serves every
+            # stream from one, which is why tensor-split muse runs 8 seats.
+            raise ValueError(
+                f"split_mode 'tensor' holds ONE llama context per model, and "
+                f"decode_mode 'pool' with max_concurrent_requests="
+                f"{self.working_seats} builds one per seat (llama.cpp aborts on "
+                f"the second: GGML_ASSERT in ggml-backend-meta). Use one seat, "
+                f"decode_mode 'batched', or split_mode 'layer'."
+            )
         if mode == "batched":
             missing = [
                 flag

@@ -820,6 +820,83 @@ def test_pool_mode_rejects_high_concurrency():
         p.unlink()
 
 
+def _load_variant(name: str, **edits):
+    """Load configs/<name>.yaml with dotted-key edits applied, via a temp file."""
+    from core.config import load_config
+    from pathlib import Path
+    import tempfile
+    import yaml as _yaml
+
+    base = _yaml.safe_load(
+        (Path(__file__).parent.parent / "configs" / f"{name}.yaml").read_text()
+    )
+    for key, value in edits.items():
+        section, field = key.split("__")
+        base.setdefault(section, {})[field] = value
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+        _yaml.dump(base, f)
+        p = Path(f.name)
+    try:
+        return load_config(p)
+    finally:
+        p.unlink()
+
+
+def test_tensor_split_refuses_a_multi_seat_pool():
+    """split_mode tensor holds ONE llama context per model: llama.cpp aborts
+    building a second (GGML_ASSERT in ggml-backend-meta, 2026-09-29, not
+    memory). A pool builds one per seat, so 2 seats must fail at load."""
+    import pytest as _pytest
+
+    with _pytest.raises(ValueError, match="(?i)one llama context per model"):
+        _load_variant(
+            "gpt-oss-120b-a5",
+            model__split_mode="tensor",
+            resources__decode_mode="pool",
+            resources__max_concurrent_requests=2,
+        )
+
+
+def test_tensor_split_allows_one_pool_seat_and_the_batched_engine():
+    """One pool seat is one context; the batched engine is one context for
+    every stream (tensor-split muse runs 8 seats this way)."""
+    one = _load_variant(
+        "gpt-oss-120b-a5",
+        model__split_mode="tensor",
+        resources__decode_mode="pool",
+        resources__max_concurrent_requests=1,
+    )
+    assert one.model.split_mode == "tensor"
+    many = _load_variant(
+        "gpt-oss-120b-a5",
+        model__split_mode="tensor",
+        resources__decode_mode="batched",
+        resources__max_concurrent_requests=8,
+    )
+    assert many.working_seats == 8
+
+
+def test_backend_refuses_a_second_context_on_tensor_split():
+    """The runtime guard: raise (one failed request) before llama.cpp's
+    assert aborts the server (every request dies)."""
+    import types
+
+    import pytest as _pytest
+
+    from inference.backends.llama_cpp_backend import LlamaCppBackend
+
+    be = LlamaCppBackend.__new__(LlamaCppBackend)
+    be.config = types.SimpleNamespace(
+        model=types.SimpleNamespace(name="muse", split_mode="tensor")
+    )
+    with _pytest.raises(RuntimeError, match="one llama context per model"):
+        be._create_vision_instance(object())
+    with _pytest.raises(RuntimeError, match="a pool seat"):
+        be._create_shared_instance(object())
+    be.config.model.split_mode = "layer"
+    be._refuse_second_context_on_tensor_split("anything")  # no-op off tensor
+
+
 def test_max_concurrent_requests_is_optional_and_defaults_by_mode():
     """Uncapped by default as of 2026-07-26. Seats were measured nearly free
     (128 streams = ~2.7% of a 393k pool, ladder clean 1->128), so a fixed

@@ -93,7 +93,19 @@ model:
   # n_ctx 131072 -> 262144 (the SHARED cell pool; no stream exceeds
   # model_max_context 131072). KV at 52 KB/token: 6.5 -> 13.0 GiB, spread
   # over two 24 GiB cards beside ~19.7 GB of weights.
-  n_ctx: 262144
+  # CEILING MEASURED 2026-09-29 (~/tmp/session_scratch_20260925/ctx_ladder.py;
+  # results ~/tmp/analysis/ctx_ladder_2x3090/). Each rung ran with paddle hot
+  # on CUDA0 (the real OCR tool, two passes) and the full canary set, then
+  # filled ~92 % of the pool with real papers (3 streams of 102-112k tokens)
+  # alongside 3 vision requests. Free MiB at the sampled peak:
+  #   327,680   PASS   CUDA0 1,508   CUDA1 3,660
+  #   360,448   PASS   CUDA0   620   CUDA1 2,770
+  #   393,216   not run: +0.83 GiB a card puts CUDA0 ~250 MiB over
+  # CUDA0 binds (it holds paddle, ~4.2 GiB real). muse has 2 KV heads, so the
+  # tensor split cannot shift KV to CUDA1 unevenly. 327,680 keeps 1.5 GiB of
+  # margin under peak load: 40,960 cells per seat on average, and every
+  # stream is still capped at model_max_context 131072.
+  n_ctx: 327680
   probe_verified_weights_bytes: 19653957984
   probe_verified_n_ctx: 91136
   # ── 3060 LAYER-SPLIT RE-APPLIED 20260906 by dev/expand_local_seat_on_figtext_drain.py:

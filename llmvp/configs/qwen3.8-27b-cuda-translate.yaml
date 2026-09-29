@@ -38,7 +38,13 @@ app:
 model:
   path: /home/lah-rb/models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-IQ4_XS.gguf
   mmproj_path: /home/lah-rb/models/unsloth/Qwen3.8-27B-GGUF/mmproj-F16.gguf
-  n_ctx: 65536
+  # 65536 -> 262144, the trained ceiling (2026-09-29): one seat at 262,144
+  # PASSED with a real 243k-token prompt, peak 15.8 / 16.1 GB (8.5 GB free a
+  # card), no Xid, 64 / 75 C (~/tmp/analysis/ctx_ladder_2x3090/).
+  # A first run crashed at 12:25 with CUDA "unspecified launch failure". That
+  # was an NVLink FATAL error (Xid 74, all four links) during a cooling fault,
+  # not the context: it passed after the reboot and a clean 10-minute soak.
+  n_ctx: 262144
   n_gpu_layers: -1
   # TENSOR split over both 3090s (2026-09-29; was the whole model on CUDA0,
   # with the 3060 kept out). Translation is decode-bound, and tensor
@@ -64,5 +70,11 @@ model:
 
 resources:
   decode_mode: pool
+  # ONE SEAT IS NOW A HARD LIMIT, not only the test's design. Under tensor
+  # split, llama.cpp aborts building a second context on the same model
+  # (GGML_ASSERT in ggml-backend-meta; 2 x 131072 and 2 x 229376 both died at
+  # boot with ~13 GB free, so it is not memory). The pool builds a context per
+  # seat, and config validation now refuses more than one. Two seats would
+  # need split_mode layer (and the decode speed tensor bought).
   max_concurrent_requests: 1
   cpu_threads: 15
