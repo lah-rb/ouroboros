@@ -540,9 +540,19 @@ class LlamaCppBackend(BaseBackend):
         return self._llama_module
 
     # Map the human-readable flash_attn_type config to the llama.cpp enum.
-    # llama.cpp LLAMA_SPLIT_MODE_*: 0 NONE, 1 LAYER, 2 ROW. Mapped by NAME
+    # llama.cpp LLAMA_SPLIT_MODE_*: 0 NONE, 1 LAYER, 3 TENSOR. Mapped by NAME
     # in config because a bare integer in YAML is unreviewable.
-    _SPLIT_MODES = {"none": 0, "layer": 1, "row": 2}
+    #
+    # ROW (2) is deliberately absent: the CUDA backend no longer provides split
+    # buffers, so a row-split load fails outright ("device CUDA0 does not support
+    # split buffers", measured 2026-09-28). TENSOR is llama.cpp's tensor
+    # parallelism, which replaces it. On 2x RTX 3090 with NVLink it decoded
+    # +48 % (qwen3.8-27B IQ4_XS) and +60 % (muse 30B) against one card, while
+    # LAYER only matched one card. LAYER's pipelined prefill won in
+    # llama-batched-bench, yet through this backend's unified pool TENSOR was
+    # 20-25 % faster on every muse shape (2026-09-29).
+    # ModelConfig validates the name, so an unknown mode never reaches here.
+    _SPLIT_MODES = {"none": 0, "layer": 1, "tensor": 3}
 
     _FLASH_ATTN = {"auto": -1, "off": 0, "on": 1}
 
@@ -568,15 +578,13 @@ class LlamaCppBackend(BaseBackend):
             ),
         )
 
-    def _create_primary_instance(self) -> Any:
-        """Create the primary Llama instance that owns the model weights."""
-        Llama = self._get_llama_class()
-
-        # DEVICE PLACEMENT. Passed only when the config asks for it, so a
-        # single-GPU host and every existing config keep llama.cpp's defaults
-        # byte for byte. `main_gpu` names the device; `split_mode` must ALSO be
-        # "none" or LAYER split still spreads the model over every visible card
-        # and the pin does nothing.
+    def _placement_kwargs(self) -> dict:
+        """DEVICE PLACEMENT kwargs for Llama(...). Passed only when the config
+        asks for them, so a single-GPU host and every existing config keep
+        llama.cpp's defaults byte for byte. `main_gpu` names the device; to pin
+        a model to it, `split_mode` must ALSO be "none", or a LAYER / TENSOR
+        split still spreads the model over every visible card and the pin
+        does nothing."""
         placement: dict = {}
         _main_gpu = getattr(self.config.model, "main_gpu", None)
         if _main_gpu is not None:
@@ -590,6 +598,13 @@ class LlamaCppBackend(BaseBackend):
             # free-VRAM-proportional default moves with whatever else is
             # resident at load, which makes an OOM ladder unrepeatable.
             placement["tensor_split"] = [float(x) for x in _tsplit]
+        return placement
+
+    def _create_primary_instance(self) -> Any:
+        """Create the primary Llama instance that owns the model weights."""
+        Llama = self._get_llama_class()
+
+        placement = self._placement_kwargs()
 
         return Llama(
             model_path=str(self.config.model.path),

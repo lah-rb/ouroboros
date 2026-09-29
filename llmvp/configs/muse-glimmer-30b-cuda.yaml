@@ -1,4 +1,5 @@
-# muse on the 3090/3060 rig — the CUDA-machine view of muse-glimmer-30b.
+# muse on the CUDA rig — the CUDA-machine view of muse-glimmer-30b.
+# 2x RTX 3090 + NVLink since 2026-09-28 (a 3090 + 3060 before: see the history below).
 #
 # WHY A SEPARATE FILE. Two machines share this repo and a probe LEDGER IS A
 # MEASUREMENT OF ONE MACHINE: the base config carries probe_verified_n_ctx
@@ -60,7 +61,29 @@ model:
   # the CUDA1 graph-realloc crash of 2026-09-09/10 needed live vision load.
   # Bring paddle back = the 2026-09-15 state above (65536, no split), when
   # new PDFs need OCR.
-  n_ctx: 131072
+  # ── 2x RTX 3090 + NVLINK (2026-09-29) ──────────────────────────────
+  # The 3060 is gone and a second 3090 took its slot (NV4 bridge, 52.8 GB/s,
+  # both cards Gen4 x8). TENSOR split (tensor parallelism, llama.cpp's
+  # replacement for the removed row mode) was chosen THROUGH LLMVP: this
+  # config booted both ways, same canaries, wall seconds (layer -> tensor):
+  #   8 seats, ~9k prompt + 256 gen each           78.4 -> 59.3
+  #   one 67k prompt + 64 gen                       75.1 -> 57.0
+  #   3 vision + 5 text (~9k) at once               49.3 -> 38.6
+  #   curate 37k prompt + 256 gen, 1 / 2 at once    37.5 -> 29.8 / 75.7 -> 57.0
+  # Tensor is 20-25 % faster on every shape and holds ~2 GB less per card
+  # (peaks 16.7 / 18.8 GB vs 18.5 / 20.7 GB).
+  # llama-batched-bench had called the curate shape for LAYER (23-31 % faster:
+  # pipelined prefill, ~2,800 vs ~1,650 tok/s; ~/tmp/analysis/split_probe_2x3090/
+  # llama/muse_shape_*). That bench gives each sequence its own windowed cache.
+  # LLMVP serves every stream from ONE unified pool with full-size SWA caches,
+  # and there the ranking inverts. The mechanism is not isolated; the served
+  # numbers are what count.
+  # Tensor mode is marked EXPERIMENTAL upstream. Fallback = split_mode: layer
+  # (same tensor_split), the mode muse ran on for weeks.
+  # n_ctx 131072 -> 262144 (the SHARED cell pool; no stream exceeds
+  # model_max_context 131072). KV at 52 KB/token: 6.5 -> 13.0 GiB, spread
+  # over two 24 GiB cards beside ~19.7 GB of weights.
+  n_ctx: 262144
   probe_verified_weights_bytes: 19653957984
   probe_verified_n_ctx: 91136
   # ── 3060 LAYER-SPLIT RE-APPLIED 20260906 by dev/expand_local_seat_on_figtext_drain.py:
@@ -68,8 +91,9 @@ model:
   # 5.5 h / zero faults on 2026-08-22 (LAYER_SPLIT_EXPERIMENT.md). ocr lane is
   # disabled in the mission (OUROBOROS_DISABLE_LANES=ocr) so paddle is never
   # loaded onto CUDA1 beside these layers. Revert = the .bak beside this run's log.
-  split_mode: layer
-  tensor_split: [40, 12]
+  # [40, 12] was the 3090 + 3060 rung. Two equal cards: an even split.
+  split_mode: tensor
+  tensor_split: [1, 1]
   # The base declares vision_n_ctx 131072 — an M1 sizing (7 GB of lazy KV
   # against 123 GB) that on this card is a landmine: never built, costing
   # nothing, until one stray vision request tries to allocate 6.5 GiB into
@@ -82,7 +106,9 @@ model:
   # Vision grows 8192 -> 24576 with the freed 3090 VRAM (the 8192 cap
   # existed only because the un-split 3090 could not hold more beside
   # the 65k text pool).
-  vision_n_ctx: 8192
+  # 8192 -> 24576 (2026-09-29): the grow the note above planned, now funded by
+  # the second 24 GiB card (+0.85 GiB of vision KV).
+  vision_n_ctx: 24576
   # ── BATCHED VISION LEG (2026-08-26, dev/BATCHED_VISION doc) ────────
   # Vision decodes as ordinary streams in the shared batched context;
   # the 8192x1 pool above stays resident as the automatic fallback.
@@ -110,6 +136,9 @@ model:
   # mmproj on top OOM'd at ggml_gallocr_reserve and took the process down.
   # The projector is the one piece that relocates cleanly (the paddle knob):
   # image encode runs on CUDA1 beside paddle, bursty and small.
+  # 2026-09-29: CUDA1 is now a 3090 holding half of muse's weights. It stays
+  # there: the even split leaves both cards the same slack, and the CUDA1
+  # graph-realloc crash of 2026-09-09/10 came from a 12 GiB card run to its edge.
   vision_projector_gpu: true
   vision_projector_device: "CUDA1"
 
@@ -147,4 +176,7 @@ resources:
   # 8 -> 6 with the pool back at 65,536 (2026-08-22): the 8th and 7th
   # seat were funded by the split's 131k cells; on the reverted pool the
   # proven plateau is 6 (see LAYER_SPLIT_EXPERIMENT.md close-out).
-  max_concurrent_requests: 6
+  # 6 -> 8 (2026-09-29): the 8-seat plateau was proven on the split's 131k pool
+  # (2026-08-22, seats exhausted 88 % of ticks). The doubled 262k pool gives
+  # each of 8 seats ~32k cells. Admission's QUEUE verdict remains the backstop.
+  max_concurrent_requests: 8

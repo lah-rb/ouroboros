@@ -482,7 +482,7 @@ def admission_check(config: Any) -> tuple[bool, str, dict]:
 
     name = config.model.name
     if str(getattr(config.model, "split_mode", "none") or "none").lower() != "none":
-        # A layer/row split spreads one model over every card, so there is no
+        # A layer/tensor split spreads one model over every card, so there is no
         # single device to charge and the per-device question is malformed.
         # Refused rather than guessed: no config uses it, and silently
         # charging it to main_gpu would under-count every other device.

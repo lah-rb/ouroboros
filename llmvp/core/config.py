@@ -59,8 +59,16 @@ class ModelConfig(BaseModel):
     # split still spreads across the rest, so pinning requires split_mode
     # "none" as well.
     main_gpu: Optional[int] = None
-    split_mode: Optional[str] = None  # "none" | "layer" | "row"
-    # Per-device layer proportions for split_mode=layer (llama.cpp
+    # "none" | "layer" | "tensor" (validated below).
+    # - layer: whole layers per card, run in turn (pipelined). It adds memory,
+    #   not single-stream speed, and wins BATCHED PREFILL: 1.5–1.7x tensor on
+    #   8 x 1k prompts on 2x 3090 (2026-09-28).
+    # - tensor: llama.cpp's tensor parallelism; every card works on every
+    #   layer. +48–60 % decode against one card on 2x 3090 + NVLink.
+    # "row" was removed: the CUDA backend no longer provides split buffers, and
+    # tensor replaces it.
+    split_mode: Optional[str] = None
+    # Per-device proportions for split_mode layer or tensor (llama.cpp
     # tensor_split). Deterministic placement for the 3060 layer-split
     # experiment (2026-08-22): the default free-VRAM-proportional split
     # moves with whatever else is resident at load time, which makes an
@@ -437,6 +445,25 @@ class ModelConfig(BaseModel):
     # boundary, not a convenience: without it the endpoint is an arbitrary file
     # read for anything that can reach the port.
     vision_image_roots: list[str] = Field(default_factory=list)
+
+    @field_validator("split_mode")
+    @classmethod
+    def _validate_split_mode(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        normalized = str(v).strip().lower()
+        if normalized == "row":
+            raise ValueError(
+                "split_mode 'row' is no longer supported: llama.cpp's CUDA backend "
+                "dropped split buffers ('device CUDA0 does not support split buffers'). "
+                "Use 'tensor' (tensor parallelism, its replacement) or 'layer'."
+            )
+        allowed = {"none", "layer", "tensor"}
+        if normalized not in allowed:
+            raise ValueError(
+                f"split_mode must be one of {sorted(allowed)} or null, got {v!r}"
+            )
+        return normalized
 
     @field_validator("thinking_mode")
     @classmethod

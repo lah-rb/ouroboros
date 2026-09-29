@@ -300,12 +300,22 @@ model:
   #     An env var cannot do this — LLMVP holds several models in ONE
   #     process, so CUDA_VISIBLE_DEVICES cannot differ between them.
   main_gpu: 0
-  # [O] Type: str — "none" | "layer" | "row". Pinning needs BOTH this and
+  # [O] Type: str — "none" | "layer" | "tensor". Pinning needs BOTH this and
   #     main_gpu: main_gpu alone names a primary device while LAYER split
   #     still spreads across the rest, so the pin would be inert.
+  #     layer  = whole layers per card, run in turn: more memory, not more
+  #              single-stream speed. Wins batched prefill in
+  #              llama-batched-bench (1.5-1.7x tensor), but NOT under
+  #              LLMVP's one unified swa_full pool.
+  #     tensor = llama.cpp tensor parallelism, every card on every layer:
+  #              +48-60 % decode on 2x RTX 3090 + NVLink (2026-09-28); through
+  #              LLMVP 20-25 % faster than layer on every muse shape, prefill-
+  #              heavy included (2026-09-29, muse-glimmer-30b-cuda.yaml).
+  #     "row" was removed (llama.cpp's CUDA backend dropped split buffers);
+  #     tensor replaces it, and a config naming row fails validation.
   split_mode: none
 
-  # Per-device layer proportions for split_mode: layer (llama.cpp
+  # Per-device proportions for split_mode: layer or tensor (llama.cpp
   # tensor_split), e.g. [34, 18] to place 34/52 of the layers on device 0
   # and 18/52 on device 1. Deterministic placement for multi-GPU layer
   # splits — the free-VRAM-proportional default moves with whatever else

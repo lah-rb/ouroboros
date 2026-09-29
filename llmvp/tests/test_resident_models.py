@@ -703,3 +703,40 @@ def test_an_unknown_projector_device_name_falls_back_to_device_zero(monkeypatch)
     cfg.model.mmproj_path = "/proj.gguf"
     cfg.model.vision_projector_device = "ROCm7"  # not on this host
     assert rm.projector_device(cfg) == 0
+
+
+def test_split_mode_accepts_tensor_and_refuses_row():
+    """ROW was dropped from llama.cpp's CUDA backend (no split buffers); TENSOR
+    replaces it. The config names the mode; the backend maps names to the enum."""
+    from types import SimpleNamespace
+
+    import pytest
+    from pydantic import ValidationError
+
+    from core.config import ModelConfig
+    from inference.backends.llama_cpp_backend import LlamaCppBackend
+
+    assert ModelConfig._validate_split_mode("Tensor") == "tensor"
+    assert ModelConfig._validate_split_mode(" layer ") == "layer"
+    assert ModelConfig._validate_split_mode(None) is None
+    with pytest.raises(ValueError, match="no longer supported"):
+        ModelConfig._validate_split_mode("row")
+    with pytest.raises(ValueError, match="must be one of"):
+        ModelConfig._validate_split_mode("pipeline")
+    assert issubclass(
+        ValidationError, ValueError
+    )  # pydantic surfaces the message at load
+
+    def placement(**model):
+        b = LlamaCppBackend.__new__(LlamaCppBackend)
+        b.config = SimpleNamespace(model=SimpleNamespace(**model))
+        return b._placement_kwargs()
+
+    assert placement(split_mode="tensor", tensor_split=[1, 1]) == {
+        "split_mode": 3,
+        "tensor_split": [1.0, 1.0],
+    }
+    assert placement(split_mode="layer") == {"split_mode": 1}
+    assert placement(main_gpu=1, split_mode="none") == {"main_gpu": 1, "split_mode": 0}
+    assert placement() == {}  # nothing asked for: llama.cpp defaults, byte for byte
+    assert "row" not in LlamaCppBackend._SPLIT_MODES
