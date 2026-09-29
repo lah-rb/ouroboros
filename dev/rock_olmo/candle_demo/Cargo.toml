@@ -1,0 +1,23 @@
+[package]
+name = "spectra-demo"
+version = "0.1.0"
+edition = "2021"
+description = "Live demo of OLMo 2 1B base vs the v3l spectra fine-tune, quantized, on candle"
+
+[dependencies]
+anyhow = "1"
+candle-core = "0.11.0"
+candle-nn = "0.11.0"
+candle-transformers = "0.11.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tiny_http = "0.12"
+# fancy-regex: pure Rust, so the laptop build needs no C toolchain for the tokenizer
+tokenizers = { version = "0.22", default-features = false, features = ["fancy-regex"] }
+
+[features]
+metal = ["candle-core/metal", "candle-nn/metal", "candle-transformers/metal"]
+cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
+
+[profile.release]
+opt-level = 3

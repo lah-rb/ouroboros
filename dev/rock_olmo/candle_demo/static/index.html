@@ -1,0 +1,484 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spectrum to Mineral</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+:root {
+  --paper: #f3f5f7;
+  --card: #ffffff;
+  --ink: #17202b;
+  --muted: #5a6676;
+  --line: #d8dee6;
+  --accent: #2b4c9b;          /* azurite */
+  --accent-soft: #e5ebf7;
+  --blank: #7a4fb8;           /* the one blank the model fills */
+  --blank-soft: #efe7fa;
+  --hit: #22794a; --hit-soft: #e2f3e9;
+  --near: #9a6200; --near-soft: #fbf0db;
+  --miss: #b0302f; --miss-soft: #f9e4e3;
+  --code: #f6f7f9;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #0e131a; --card: #151c26; --ink: #e5eaf1; --muted: #93a0b1; --line: #263140;
+    --accent: #8fb0ff; --accent-soft: #1b2944; --blank: #c4a3f5; --blank-soft: #2a2140;
+    --hit: #5fcf90; --hit-soft: #16301f; --near: #e8aa45; --near-soft: #33270f;
+    --miss: #f08080; --miss-soft: #3a1b1b; --code: #10161f;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #0e131a; --card: #151c26; --ink: #e5eaf1; --muted: #93a0b1; --line: #263140;
+  --accent: #8fb0ff; --accent-soft: #1b2944; --blank: #c4a3f5; --blank-soft: #2a2140;
+  --hit: #5fcf90; --hit-soft: #16301f; --near: #e8aa45; --near-soft: #33270f;
+  --miss: #f08080; --miss-soft: #3a1b1b; --code: #10161f;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--paper); color: var(--ink); font: 16px/1.5 var(--sans); }
+main { max-width: 1240px; margin: 0 auto; padding: 28px 24px 64px; display: grid; gap: 28px; }
+h1, h2, h3 { margin: 0; text-wrap: balance; font-weight: 600; }
+h1 { font-size: 30px; letter-spacing: -0.01em; }
+h2 { font-size: 20px; }
+h3 { font-size: 17px; }
+p { margin: 0; }
+.muted { color: var(--muted); }
+.mono { font-family: var(--mono); }
+
+header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 16px; }
+header .sub { color: var(--muted); max-width: 62ch; margin-top: 6px; }
+.status { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.pill { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--card); font-size: 14px; white-space: nowrap; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+.pill.live .dot { background: var(--hit); }
+.pill.offline .dot { background: var(--near); }
+button { font: inherit; cursor: pointer; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--card); color: var(--ink); padding: 7px 14px; }
+button:hover { border-color: var(--accent); }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--card); font-weight: 500; }
+button:disabled { opacity: 0.55; cursor: default; }
+
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+.stat { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; display: grid; gap: 4px; }
+.stat .label { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.stat .nums { display: flex; align-items: baseline; gap: 14px; font-variant-numeric: tabular-nums; }
+.stat .v3l { font-size: 30px; font-weight: 600; color: var(--accent); }
+.stat .base { color: var(--muted); font-size: 15px; }
+.foot { font-size: 13px; color: var(--muted); }
+
+.tabs { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.tabs .group { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 4px 0 10px; }
+.tabs .group:first-child { margin-left: 0; }
+.tab { border-radius: 999px; padding: 6px 14px; font-size: 15px; }
+.tab[aria-selected="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 500; }
+.toolbar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; }
+.lede { max-width: 72ch; }
+
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 16px; }
+.grid.wide { grid-template-columns: repeat(auto-fill, minmax(560px, 1fr)); }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; display: grid; gap: 12px; align-content: start; }
+.card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.card-head .key { font-size: 14px; color: var(--muted); }
+.record { margin: 0; background: var(--code); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px;
+  font: 13.5px/1.55 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+details .record { white-space: pre-wrap; word-break: break-all; }
+.cue { font: 14px/1.4 var(--mono); color: var(--ink); font-variant-numeric: tabular-nums; }
+.cue .unit { color: var(--muted); }
+.record .blank { background: var(--blank-soft); color: var(--blank); border-radius: 4px; padding: 0 5px; font-weight: 500; }
+.rows { display: grid; gap: 8px; }
+.row { display: grid; grid-template-columns: 64px 1fr auto; gap: 10px; align-items: center; min-height: 34px; }
+.row .who { font-size: 13px; color: var(--muted); }
+.row .who.v3l { color: var(--accent); font-weight: 500; }
+.answer { font: 14px/1.45 var(--mono); word-break: break-word; }
+.answer.pending { color: var(--muted); font-family: var(--sans); font-style: italic; }
+.answer .raw { color: var(--muted); }
+.answer.clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.chip { font-size: 12px; font-weight: 600; letter-spacing: 0.05em; padding: 3px 9px; border-radius: 999px; white-space: nowrap; }
+.chip.HIT { color: var(--hit); background: var(--hit-soft); }
+.chip.NEAR { color: var(--near); background: var(--near-soft); }
+.chip.MISS { color: var(--miss); background: var(--miss-soft); }
+.meta { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.band { display: inline-block; padding: 0 5px; margin: 1px 3px 1px 0; border-radius: 4px; }
+.band.ok { background: var(--hit-soft); color: var(--hit); }
+.band.off { background: var(--miss-soft); color: var(--miss); }
+details summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+details pre { margin: 8px 0 0; }
+
+.pair2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.pair2 > div { display: grid; gap: 8px; align-content: start; }
+.pair2 .plabel { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+
+.try { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }
+.inputs { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+input { font: 15px var(--mono); padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--code); color: var(--ink); }
+input.band-in { width: 84px; }
+input.name-in { width: 220px; }
+.hint { font-size: 13px; color: var(--muted); }
+
+@media (max-width: 640px) {
+  main { padding: 20px 16px 48px; }
+  .grid, .grid.wide { grid-template-columns: 1fr; }
+  .pair2 { grid-template-columns: 1fr; }
+  h1 { font-size: 25px; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .answer:not(.pending) { animation: fade 180ms ease-out; }
+  @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>Spectrum to Mineral</h1>
+      <p class="sub">OLMo 2 1B before and after training on spectroscopy records. Both models get the same prompt: one record with a single blank to fill.</p>
+    </div>
+    <div class="status">
+      <span class="pill" id="status"><span class="dot"></span><span id="status-text">Connecting…</span></span>
+      <button id="theme" type="button" aria-label="Toggle color theme">Theme</button>
+    </div>
+  </header>
+
+  <section class="stats" id="stats" aria-label="Measured rates"></section>
+
+  <section class="toolbar">
+    <nav class="tabs" id="tabs" role="tablist" aria-label="Probe"></nav>
+    <button class="primary" id="run-all" type="button">Run all</button>
+  </section>
+
+  <p class="lede muted" id="lede"></p>
+  <section id="view"></section>
+
+  <p class="foot" id="foot"></p>
+</main>
+
+<script src="probe_lib.js"></script>
+<script>
+const L = window.ProbeLib;
+const MODELS = [["v3l", "v3l"], ["base", "Base"]];
+const TABS = [
+  { group: "Spectrum → mineral" },
+  { id: "bands>name", label: "Raman bands → name", lede: "The four strongest Raman bands of a reference spectrum, strongest first, written digit by digit. The model names the mineral." },
+  { id: "bands+lines>name", label: "Bands + LIBS lines → name", lede: "The same four Raman bands plus the four strongest LIBS emission lines." },
+  { id: "formula>name", label: "Formula → name", lede: "Only the chemical formula. Polymorphs share a formula, so this cue alone cannot always decide." },
+  { group: "Mineral → spectrum" },
+  { id: "name>formula", label: "Name → formula", lede: "The mineral name. The model writes its formula." },
+  { id: "name>bands", label: "Name → Raman bands", lede: "Name, formula and crystal system. The model writes the four strongest Raman bands, strongest first. A hit is two of the three strongest within ±10 cm⁻¹." },
+  { group: "Stories" },
+  { id: "polymorphs", label: "Polymorphs", lede: "Calcite and aragonite are both CaCO₃; anatase and rutile are both TiO₂. The formula cannot tell them apart. The spectrum can." },
+  { id: "try", label: "Try your own", lede: "Type four band positions or a mineral name. The prompt is built in the same format as the probes." },
+];
+const POLYMORPHS = ["Calcite", "Aragonite", "Anatase", "Rutile"];
+
+let doc, live = false, device = "", quant = "", tab = "bands>name";
+const fromHash = decodeURIComponent(location.hash.slice(1));  // deep link: #polymorphs, #name>bands, ...
+if (TABS.some((t) => t.id === fromHash)) tab = fromHash;
+const results = {};      // probe id -> model -> {text, status, ms, source}
+const gold = {};
+
+const $ = (s, el = document) => el.querySelector(s);
+const h = (tag, attrs = {}, ...kids) => {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) k === "class" ? (el.className = v) : el.setAttribute(k, v);
+  for (const k of kids) el.append(k instanceof Node ? k : document.createTextNode(k));
+  return el;
+};
+
+// ── theme ────────────────────────────────────────────────────────────
+try { const t = localStorage.getItem("spectra-theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+$("#theme").onclick = () => {
+  const dark = document.documentElement.dataset.theme
+    ? document.documentElement.dataset.theme === "dark"
+    : matchMedia("(prefers-color-scheme: dark)").matches;
+  const next = dark ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem("spectra-theme", next); } catch (e) {}
+};
+
+// ── data + server ────────────────────────────────────────────────────
+async function init() {
+  doc = await (await fetch("probes.json")).json();
+  for (const s of doc.species) gold[s.name] = s;
+  try {
+    const r = await fetch("api/health");
+    const hj = await r.json();
+    live = true;
+    device = hj.device;
+    quant = Object.values(hj.models)[0]?.quant || "";
+  } catch (e) { live = false; }
+  if (!live) {  // show what the quantized build produced when it was checked (else the bf16 reference)
+    for (const p of doc.probes) {
+      for (const [m] of MODELS) {
+        const r = (p.recorded || {})[m] || p.reference[m];
+        if (r) (results[p.id] ||= {})[m] = { text: r.text, status: r.status, source: p.recorded?.[m] ? "recorded" : "bf16 reference" };
+      }
+    }
+  }
+  const pill = $("#status");
+  pill.classList.add(live ? "live" : "offline");
+  $("#status-text").textContent = live ? `Live · ${device} · ${quant}` : "Recorded results (no model server)";
+  $("#run-all").hidden = !live;
+  renderStats();
+  renderTabs();
+  render();
+  if (live && new URLSearchParams(location.search).has("autorun")) runMany(visibleProbes());
+  $("#foot").textContent = `Greedy decoding, the same prompt for both models. The base model has never seen the fill-in-the-middle markers. ` +
+    `Published rates: 60 trained species, canonical reference values. ` +
+    (live ? `Models run locally with candle (${quant}).` : `Results recorded from the quantized build.`);
+}
+
+async function generate(model, prompt, maxNew, stop) {
+  const t0 = performance.now();
+  const r = await fetch("api/generate", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model, prompt, max_new: maxNew, stop }) });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return { ...j, wall: performance.now() - t0 };
+}
+
+async function runProbe(p) {
+  for (const [m] of MODELS) {
+    (results[p.id] ||= {})[m] = { pending: true };
+    render();
+    try {
+      const g = await generate(m, p.prompt, p.max_new, p.stop);
+      results[p.id][m] = { text: g.text, status: L.score(p.target, g.text, gold[p.species]), ms: g.ms_total, source: "live" };
+    } catch (e) {
+      results[p.id][m] = { text: "error: " + e.message, status: "MISS", source: "error" };
+    }
+    render();
+  }
+}
+
+let busy = false;
+async function runMany(probes) {
+  if (busy) return;
+  busy = true;
+  $("#run-all").disabled = true;
+  for (const p of probes) await runProbe(p);
+  busy = false;
+  $("#run-all").disabled = false;
+}
+$("#run-all").onclick = () => runMany(visibleProbes());
+
+function visibleProbes() {
+  if (tab === "polymorphs") return doc.probes.filter((p) => POLYMORPHS.includes(p.species) && (p.pair === "formula>name" || p.pair === "bands>name"));
+  return doc.probes.filter((p) => p.pair === tab);
+}
+
+// ── rendering ────────────────────────────────────────────────────────
+function renderStats() {
+  const pub = doc.meta.published;
+  const tiles = [
+    ["Raman bands → name", pub["bands>name"]],
+    ["Name → formula", pub["name>formula"]],
+    ["Name → Raman bands", pub["name>bands"]],
+  ];
+  $("#stats").replaceChildren(...tiles.map(([label, v]) =>
+    h("div", { class: "stat" },
+      h("span", { class: "label" }, label),
+      h("div", { class: "nums" }, h("span", { class: "v3l" }, `${Math.round(v * 100)} %`), h("span", { class: "base" }, "base 0 %")))));
+}
+
+function renderTabs() {
+  const nav = $("#tabs");
+  nav.replaceChildren(...TABS.map((t) => t.group
+    ? h("span", { class: "group" }, t.group)
+    : h("button", { class: "tab", role: "tab", type: "button", "aria-selected": String(t.id === tab), "data-id": t.id }, t.label)));
+  nav.querySelectorAll(".tab").forEach((b) => (b.onclick = () => {
+    tab = b.dataset.id;
+    history.replaceState(null, "", "#" + encodeURIComponent(tab));
+    renderTabs();
+    render();
+  }));
+}
+
+// One element per line for reading; the exact prompt (one line per record line) is under "Exact prompt".
+function displayRecord(text) {
+  return text
+    .replace(/(<raman[^>]*>)(?=<top>)/g, "$1\n  ")
+    .replace(/<\/(top|next)><next>/g, "</$1>\n  <next>")
+    .replace(/<\/(top|next)><\/raman>/g, "</$1>\n</raman>")
+    .replace(/<libs><line>/g, "<libs>\n  <line>")
+    .replace(/<\/line><line>/g, "</line>\n  <line>")
+    .replace(/<\/line><\/libs>/g, "</line>\n</libs>");
+}
+
+function cueNode(p) {
+  const g = gold[p.species];
+  if (!g || !p.pair.startsWith("bands")) return null;
+  const el = h("div", { class: "cue" }, "Bands  " + g.bands.join(" · "), h("span", { class: "unit" }, " cm⁻¹"));
+  if (p.pair.includes("lines")) el.append(h("br"), "Lines  " + g.lines.map((x) => x.toFixed(2)).join(" · "), h("span", { class: "unit" }, " nm"));
+  return el;
+}
+
+function recordNode(text) {
+  const pre = h("pre", { class: "record" });
+  const [a, b] = displayRecord(text).split("▢");
+  pre.append(a, h("span", { class: "blank", title: "the blank the model fills" }, "▢"), b ?? "");
+  return pre;
+}
+
+function answerNode(p, r) {
+  if (!r) return h("span", { class: "answer pending" }, live ? "not run" : "no recording");
+  if (r.pending) return h("span", { class: "answer pending" }, "thinking…");
+  const el = h("span", { class: "answer" });
+  if (p.target === "bands") {
+    const bands = L.bandList(r.text);
+    if (bands.length) {
+      // one-to-one: each reference band can vouch for one written band
+      const free = [...gold[p.species].bands];
+      for (const b of bands) {
+        const i = free.findIndex((x) => Math.abs(x - b) <= 10);
+        if (i >= 0) free.splice(i, 1);
+        el.append(h("span", { class: "band " + (i >= 0 ? "ok" : "off"), title: i >= 0 ? "within ±10 cm⁻¹ of a reference band" : "no reference band within ±10 cm⁻¹" }, String(b)));
+      }
+      return el;
+    }
+  }
+  const a = L.extract(r.text, p.target);
+  el.classList.add("clamp");
+  el.title = r.text;
+  el.append(a || h("span", { class: "raw" }, JSON.stringify(r.text.slice(0, 80))));
+  return el;
+}
+
+function rowsNode(p) {
+  const res = results[p.id] || {};
+  return h("div", { class: "rows" }, ...MODELS.map(([m, label]) => {
+    const r = res[m];
+    const meta = r && !r.pending ? (r.ms ? `${(r.ms / 1000).toFixed(1)} s` : r.source) : "";
+    return h("div", { class: "row" },
+      h("span", { class: "who " + m }, label),
+      answerNode(p, r),
+      r && !r.pending && r.status ? h("span", { class: "chip " + r.status, title: meta }, r.status) : h("span", { class: "meta" }, ""));
+  }));
+}
+
+function keyText(p) {
+  const g = gold[p.species];
+  if (p.target === "name") return "";
+  if (p.target === "formula") return `key ${g.formula}`;
+  return `key ${g.bands.join(", ")} cm⁻¹`;
+}
+
+function probeCard(p, { title }) {
+  const done = results[p.id] && Object.values(results[p.id]).some((r) => !r.pending);
+  const card = h("article", { class: "card" },
+    h("div", { class: "card-head" },
+      h("h3", {}, title ?? (p.target === "name" && !done ? "Which mineral?" : p.species)),
+      h("span", { class: "key mono" }, done ? keyText(p) : "")),
+    ...[cueNode(p)].filter(Boolean),
+    recordNode(p.record),
+    rowsNode(p));
+  const actions = h("div", { class: "inputs" });
+  if (live) {
+    const b = h("button", { type: "button" }, "Run");
+    b.onclick = () => runMany([p]);
+    actions.append(b);
+  }
+  const d = h("details", {}, h("summary", {}, "Exact prompt"), h("pre", { class: "record" }, p.prompt));
+  actions.append(d);
+  card.append(actions);
+  return card;
+}
+
+function render() {
+  const t = TABS.find((x) => x.id === tab);
+  $("#lede").textContent = t.lede;
+  $("#run-all").hidden = !live || tab === "try";
+  const view = $("#view");
+  if (tab === "try") return renderTry(view);
+  if (tab === "polymorphs") {
+    view.replaceChildren(h("div", { class: "grid wide" }, ...POLYMORPHS.map((sp) => {
+      const f = doc.probes.find((p) => p.species === sp && p.pair === "formula>name");
+      const b = doc.probes.find((p) => p.species === sp && p.pair === "bands>name");
+      return h("article", { class: "card" },
+        h("div", { class: "card-head" }, h("h3", {}, sp), h("span", { class: "key mono" }, gold[sp].formula)),
+        h("div", { class: "pair2" },
+          h("div", {}, h("span", { class: "plabel" }, "From the formula"), recordNode(f.record), rowsNode(f)),
+          h("div", {}, h("span", { class: "plabel" }, "From the spectrum"), cueNode(b), recordNode(b.record), rowsNode(b))));
+    })));
+    return;
+  }
+  view.replaceChildren(h("div", { class: "grid" }, ...visibleProbes().map((p) => probeCard(p, {}))));
+}
+
+// ── try your own ─────────────────────────────────────────────────────
+const custom = { bands: { probe: null }, name: { probe: null } };
+function renderTry(view) {
+  if (!live) {
+    view.replaceChildren(h("p", { class: "muted" }, "Needs the model server: start spectra-demo serve and open this page from it."));
+    return;
+  }
+  const bandsCard = h("article", { class: "card" }, h("h3", {}, "Bands → name"),
+    h("p", { class: "hint" }, "Four Raman band positions in cm⁻¹, strongest first. Try 1086 282 155 1191 (calcite) or 1085 152 205 702 (aragonite)."));
+  const ins = [0, 1, 2, 3].map((i) => h("input", { class: "band-in", inputmode: "numeric", "aria-label": `Band ${i + 1}`, value: custom.bands.values?.[i] ?? "" }));
+  const go1 = h("button", { class: "primary", type: "button" }, "Ask both models");
+  bandsCard.append(h("div", { class: "inputs" }, ...ins, go1));
+  const out1 = h("div");
+  bandsCard.append(out1);
+
+  const nameCard = h("article", { class: "card" }, h("h3", {}, "Name → formula"),
+    h("p", { class: "hint" }, "A mineral name as mindat spells it, e.g. Malachite, Beryl or Scheelite."));
+  const nin = h("input", { class: "name-in", "aria-label": "Mineral name", value: custom.name.value ?? "" });
+  const go2 = h("button", { class: "primary", type: "button" }, "Ask both models");
+  nameCard.append(h("div", { class: "inputs" }, nin, go2));
+  const out2 = h("div");
+  nameCard.append(out2);
+
+  const show = (slot, out) => {
+    const p = custom[slot].probe;
+    if (!p) return;
+    out.replaceChildren(recordNode(p.record), rowsNode(p));
+  };
+  go1.onclick = async () => {
+    const vals = ins.map((x) => parseInt(x.value, 10)).filter((v) => Number.isFinite(v) && v > 0);
+    custom.bands.values = ins.map((x) => x.value);
+    if (vals.length !== 4) { out1.replaceChildren(h("p", { class: "hint" }, "Enter four whole numbers.")); return; }
+    const prompt = L.bandsToName(vals);
+    const inner = vals.map((b, i) => (i ? `<next>${L.digits(b)}</next>` : `<top>${L.digits(b)}</top>`)).join("");
+    const p = { id: "custom:bands:" + vals.join(","), species: "", target: "name", pair: "bands>name", prompt, max_new: 24, stop: ['"', "\n"],
+      record: `<mineral species="▢">\n<raman resolution_cm1="1">${inner}</raman>\n</mineral>` };
+    custom.bands.probe = p;
+    await runCustom(p, () => show("bands", out1));
+  };
+  go2.onclick = async () => {
+    const name = nin.value.trim();
+    custom.name.value = name;
+    if (!name) return;
+    const p = { id: "custom:name:" + name, species: "", target: "formula", pair: "name>formula", prompt: L.nameToFormula(name), max_new: 24, stop: ['"', "\n"],
+      record: `<mineral species="${name}" formula="▢">\n</mineral>` };
+    custom.name.probe = p;
+    await runCustom(p, () => show("name", out2));
+  };
+  show("bands", out1);
+  show("name", out2);
+  view.replaceChildren(h("div", { class: "try" }, bandsCard, nameCard));
+}
+
+async function runCustom(p, redraw) {
+  for (const [m] of MODELS) {
+    (results[p.id] ||= {})[m] = { pending: true };
+    redraw();
+    try {
+      const g = await generate(m, p.prompt, p.max_new, p.stop);
+      results[p.id][m] = { text: g.text, ms: g.ms_total, source: "live" };  // no key, so no verdict chip
+    } catch (e) {
+      results[p.id][m] = { text: "error: " + e.message, source: "error" };
+    }
+    redraw();
+  }
+}
+
+init().catch((e) => { $("#status-text").textContent = "Could not load probes.json: " + e.message; });
+</script>
+</body>
+</html>
