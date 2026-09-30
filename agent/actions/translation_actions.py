@@ -453,6 +453,32 @@ def _render_translate_prompt(chunk: str, script_hint: str) -> str:
 _PARTS_DIR = "databank/translations"
 
 
+#: TRANSPORT, NOT TRANSLATION (2026-09-29). A dead or unreachable server fails
+#: every chunk of every round. In run v50c LLMVP died on an NVLink fault and
+#: stayed down five hours; the lanes kept translating against it and
+#: - banked 533 connection errors in 100 parts files,
+#: - spent an attempt on ~100 papers,
+#: - retired two to translate_failed, which then failed their packs.
+#: None of it says anything about a paper. Such failures are never banked,
+#: never spend an attempt, and are ignored where already banked, so they
+#: cannot gap a chunk either. A watchdog abort for NO PROGRESS is the server
+#: stalling, not the model looping (loops abort as "cycle period" /
+#: "long-cycle", which still count).
+_TRANSPORT_MARKERS = (
+    "all connection attempts failed",
+    "cannot connect to llmvp",
+    "connection refused",
+    "server disconnected without sending a response",
+    "all inference instances are busy",
+    "aborted by watchdog (no progress)",
+)
+
+
+def _is_transport_failure(reason: str) -> bool:
+    r = str(reason or "").lower()
+    return any(m in r for m in _TRANSPORT_MARKERS)
+
+
 def _parts_path(key: str) -> str:
     return f"{_PARTS_DIR}/{key}.parts.jsonl"
 
@@ -585,7 +611,10 @@ async def _load_failures(
             idx = int(d["idx"])
         except (TypeError, ValueError, KeyError):
             continue
-        out.setdefault(idx, []).append(str(d.get("reason") or ""))
+        reason = str(d.get("reason") or "")
+        if _is_transport_failure(reason):
+            continue  # banked before 2026-09-29; says nothing about the chunk
+        out.setdefault(idx, []).append(reason)
     return out
 
 
@@ -880,7 +909,10 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
                     # round tries the untried chunks first and a repair pass
                     # knows exactly what to redo.
                     reason = str(exc)[:200]
-                    await _append_failure(effects, key, idx, reason, n, len(src), epoch)
+                    if not _is_transport_failure(reason):
+                        await _append_failure(
+                            effects, key, idx, reason, n, len(src), epoch
+                        )
                     return idx, None, reason
                 # BANK THIS CHUNK NOW, not after the round's gather.
                 # A chunk is minutes of decode; under continuous
@@ -899,8 +931,21 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
         # write here.
         done.update(fresh)
         for i, err in errs.items():
-            failed.setdefault(i, []).append(err)
+            if not _is_transport_failure(err):
+                failed.setdefault(i, []).append(err)
         tryable, gapped = _missing()
+
+        if errs and not fresh and all(_is_transport_failure(e) for e in errs.values()):
+            # The SERVER failed, not the paper: no attempt spent, nothing
+            # booked. Deferred, so the lane moves on instead of re-offering it.
+            _TRANSLATE_DEFERRED.add(key)
+            reason = str(next(iter(errs.values())))[:120]
+            summary = {"paper": key, "chunks": n, "status": "deferred", "reason": reason}
+            return StepOutput(
+                result=summary,
+                observations=f"translate drain: {key} deferred, server unreachable ({reason})",
+                context_updates={"translate_summary": summary},
+            )
 
         what = (
             f"{len(errs)} chunk failure(s) ({str(next(iter(errs.values())))[:100]}), "

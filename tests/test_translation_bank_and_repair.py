@@ -184,6 +184,54 @@ async def test_nothing_banked_at_the_cap_retires_the_paper_but_keeps_the_bank(
     _clear()
 
 
+DOWN = "Connection error: All connection attempts failed"
+
+
+class _Down(MockEffects):
+    """LLMVP unreachable: every chunk fails the way run v50c's outage did."""
+
+    async def run_inference(self, prompt, config=None, **k):  # noqa: D102
+        class _R:
+            error = DOWN
+            text = ""
+
+        return _R()
+
+
+@pytest.mark.asyncio
+async def test_a_dead_server_spends_no_attempt_and_banks_nothing(monkeypatch):
+    """Run v50c (2026-09-29): five hours against a dead server spent an attempt
+    on ~100 papers and retired two. A transport-only round must leave the
+    paper exactly as it was, one attempt short of retirement or not."""
+    _clear()
+    monkeypatch.setenv("OUROBOROS_TRANSLATE_CHUNKS", "8")
+    src = "\n\n".join([_para(0), _para(1)])
+    rec = _rec(translate_attempts=2, translate_epoch=2, pack_status="needs_repack")
+    fx = _Down(files={"databank/papers.jsonl": json.dumps(rec) + "\n", "databank/markdown/p1.md": src})
+    out = await action_translate_drain_batch(_si(fx))
+    assert out.result["status"] == "deferred"
+    assert "databank/extraction.jsonl" not in fx._files  # nothing booked
+    parts = fx._files.get(_parts_path("p1"), "")
+    assert '"failed": true' not in parts  # nothing banked
+    papers = json.loads(fx._files["databank/papers.jsonl"].strip().splitlines()[-1])
+    assert papers["pack_status"] == "needs_repack"
+    assert "p1" in _TRANSLATE_DEFERRED and not _TRANSLATE_CLAIMS
+    _clear()
+
+
+@pytest.mark.asyncio
+async def test_banked_transport_failures_do_not_gap_a_chunk():
+    """Parts files written during the outage hold connection errors; three of
+    them would gap a chunk. They are ignored; real failures still count."""
+    src = "x" * 100
+    lines = [
+        {"idx": 1, "n": 3, "src_len": 100, "attempt": 0, "failed": True, "reason": r}
+        for r in (DOWN, DOWN, "Server disconnected without sending a response.", ERR)
+    ]
+    fx = MockEffects(files={_parts_path("p1"): "".join(json.dumps(d) + "\n" for d in lines)})
+    assert await _load_failures(fx, "p1", 3, len(src), 0) == {1: [ERR]}
+
+
 @pytest.mark.asyncio
 async def test_more_than_half_gaps_retires_with_the_gap_list_recorded(monkeypatch):
     _clear()
