@@ -498,9 +498,13 @@ def build_action_registry() -> ActionRegistry:
     registry.register("synth_plan_round", action_synth_plan_round)
     registry.register("synth_generate_round", action_synth_generate_round)
     registry.register("synth_check_done", action_synth_check_done)
-    from agent.actions.curation_actions import action_curate_drain_batch
+    from agent.actions.curation_actions import (
+        action_curate_drain_batch,
+        action_repack_drain_batch,
+    )
 
     registry.register("curate_drain_batch", action_curate_drain_batch)
+    registry.register("repack_drain_batch", action_repack_drain_batch)
     registry.register("curate_sweep_next", action_curate_sweep_next)
     registry.register("curate_ingest_review", action_curate_ingest_review)
     registry.register("curate_pack_data", action_curate_pack_data)

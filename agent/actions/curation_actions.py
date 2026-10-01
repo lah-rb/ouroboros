@@ -2074,7 +2074,9 @@ async def _raw_curator_doc(effects, paper_key: str) -> str:
     return build_curator_doc(md, await _load_figtext(effects, paper_key))
 
 
-async def _pack_only_raw(effects, paper_key: str, rec: dict) -> dict:
+async def _pack_only_raw(
+    effects, paper_key: str, rec: dict, doc_form: str = "raw-oversize"
+) -> dict:
     """Pack an already-accepted paper from its UNCOMPRESSED curator doc.
 
     No review turn: the verdict on record is carried through verbatim so the
@@ -2083,7 +2085,9 @@ async def _pack_only_raw(effects, paper_key: str, rec: dict) -> dict:
     one exists) with figtext anchored -- which _pack_windowed cuts into
     section-bounded windows exactly as it does for a compressed doc. The
     form is recorded as "raw-oversize" so the artifact says which text it was
-    cut from; every other pack form is unchanged.
+    cut from; every other pack form is unchanged. The remote repack lane
+    passes doc_form="raw": its papers are not oversize, and the text is the
+    same raw doc the local pack path records as "raw".
 
     What this trades, deliberately: a compressed doc is 2-4x smaller on the
     largest theses, so raw windows cost that many more pack turns, and
@@ -2091,7 +2095,7 @@ async def _pack_only_raw(effects, paper_key: str, rec: dict) -> dict:
     guard and the grounding gate -- not compression -- have to hold the line.
     """
     doc = await _raw_curator_doc(effects, paper_key)
-    _DOC_FORMS[paper_key] = "raw-oversize"
+    _DOC_FORMS[paper_key] = doc_form
     registry = await _load_registry(effects)
     return {
         "paper_key": paper_key,
@@ -2104,7 +2108,7 @@ async def _pack_only_raw(effects, paper_key: str, rec: dict) -> dict:
             "document_form": str(rec.get("review_document_form") or ""),
         },
         "pack": await _pack_windowed(effects, doc, registry),
-        "pack_doc_form": "raw-oversize",
+        "pack_doc_form": doc_form,
     }
 
 
@@ -2550,6 +2554,162 @@ async def action_curate_drain_batch(step_input):
             }
         )
     return _summary_out(outcomes)
+
+
+# ── Remote repack lane (2026-10-01) ──────────────────────────────────
+#
+# WHY. Repacks -- accepted papers whose pack is still owed, 234 of them
+# needs_repack -- were the longest queue on muse (~3.7/h, ~60 h) while the 3060
+# OCR box sat idle once OCR drained. The pack bench (dev/bench_pack_gemma.py:
+# nine already-packed papers, a same-day muse arm) put gemma-4-12b on that box
+# at ~13 papers/h with muse's precision -- 48-value samples read in context,
+# 44 real / 3 plausible / 1 problem against muse's 35 / 9 / 4 -- and fuller
+# table coverage. Operator ruling 2026-10-01: the remote lane repacks on gemma.
+#
+# WHAT IT TAKES: only accepted papers still owed a pack, needs_repack first and
+# then the smallest raw doc, packed by _pack_only_raw -- no review turn, the
+# verdict on record carried verbatim. Never a review: gemma's verdicts were
+# not benched.
+#
+# NO-BURN. A pack that fails the gates on this lane books NOTHING. Gemma's
+# characteristic failure is filling a table the paper lacks from world
+# knowledge; the gates catch it, but a second model must never be the reason a
+# paper reaches pack_failed. The paper stays pending for the muse lanes and
+# this process's repack lanes skip it (_REPACK_DECLINED) -- as they skip a doc
+# with a window over this lane's seat, a raw doc that reads as non-English (the
+# muse path flags those for translation), and a paper that made the engine
+# refuse or degenerate.
+
+_REPACK_DECLINED: set[str] = set()
+
+
+def _repack_pending(rec: dict) -> bool:
+    """An accepted paper that still owes a pack and is ready for one."""
+    return rec.get("review_status") == "accepted" and _curation_pending(rec)
+
+
+async def _select_repack_paper(effects, databank: dict) -> str:
+    """Claim the next repack: needs_repack first, then the smallest raw doc."""
+    ranked: list[tuple[int, int, str]] = []
+    for key, rec in databank.items():
+        if (
+            key in _CURATE_CLAIMS
+            or key in _REPACK_DECLINED
+            or key in _CURATE_SKIP
+            or _recently_booked(key)
+            or not _repack_pending(rec)
+        ):
+            continue
+        raw_chars, _ = await _cached_doc_sizes(effects, key, rec)
+        if raw_chars <= 0:
+            continue
+        first = 0 if rec.get("pack_status") == "needs_repack" else 1
+        ranked.append((first, raw_chars, key))
+    # CLAIM BEFORE THE NEXT AWAIT, as select_curate_paper does: siblings were
+    # sizing the same candidates during the awaits above.
+    for _, _, key in sorted(ranked):
+        if key not in _CURATE_CLAIMS:
+            _CURATE_CLAIMS.add(key)
+            return key
+    return ""
+
+
+def _decline_repack(key: str, why: str) -> dict:
+    _REPACK_DECLINED.add(key)
+    logger.info("repack lane: %s left for the muse lanes -- %s", key, why)
+    return {"paper_key": key, "outcome": f"declined: {why[:200]}"}
+
+
+async def action_repack_drain_batch(step_input):
+    """One pack-only round on the repack lane's engine (see the block above).
+
+    Books a pack only when it PASSED the gates, through the production booking
+    path (envelope, registry fold + coinage guard, provenance naming the lane's
+    model). Everything else books nothing: a gate failure, an over-seat window,
+    a non-English raw doc, an engine refusal or degenerate abort declines the
+    paper for this process; a transport fault ends the round with the paper
+    untouched. Inputs: working_directory. Result: attempted, outcomes[].
+    """
+    from agent.actions.pack_windows import window_sections
+    from agent.actions.scholarly_actions import read_databank
+    from agent.actions.translation_actions import _output_language_problem
+    from agent.models import StepInput, StepOutput
+
+    effects = step_input.effects
+
+    def _out(outcomes: list, reason: str = "") -> StepOutput:
+        summary = {"attempted": len(outcomes), "outcomes": outcomes}
+        if reason:
+            summary["reason"] = reason
+        obs = (
+            "repack drain: "
+            + "; ".join(f"{o['paper_key']} → {o['outcome']}" for o in outcomes)
+            if outcomes
+            else f"repack drain idle ({reason})"
+        )
+        return StepOutput(
+            result=summary,
+            observations=obs,
+            context_updates={"repack_drain_summary": summary},
+        )
+
+    if effects is None:
+        return _out([], "no effects")
+    databank = await read_databank(effects)
+    key = await _select_repack_paper(effects, databank)
+    if not key:
+        return _out([], "no repack owed that this lane may take")
+    rec = databank.get(key) or {}
+    try:
+        doc = await _raw_curator_doc(effects, key)
+        why = _output_language_problem(doc)
+        if why:
+            return _out([_decline_repack(key, f"raw doc reads as non-English ({why})")])
+        target, cap = _pack_window_sizes()
+        widest = max((w.tokens for w in window_sections(doc, target, cap)), default=0)
+        seat = _lane_seat_tokens(effects)
+        if widest + _CURATE_TURN_OVERHEAD_TOKENS > seat:
+            return _out(
+                [
+                    _decline_repack(
+                        key,
+                        f"a {widest:,}-token window needs more than this lane's "
+                        f"{seat:,}-token seat",
+                    )
+                ]
+            )
+        try:
+            state = await _pack_only_raw(effects, key, rec, doc_form="raw")
+        except _CurateTransportFault as e:
+            if _is_oversize_fault(str(e)) or _is_degenerate_fault(str(e)):
+                return _out([_decline_repack(key, f"engine: {str(e)[:160]}")])
+            logger.warning("repack drain transport fault on %s: %s", key, e)
+            return _out([], f"transport fault ({str(e)[:120]})")
+        except Exception:  # noqa: BLE001 -- code faults must not burn papers
+            logger.exception("repack drain errored on %s -- not booking", key)
+            return _out([], "internal error (see log)")
+        pack = state.get("pack") or {}
+        if pack.get("status") != "packed":
+            return _out(
+                [_decline_repack(key, f"gates: {str(pack.get('reason') or '')[:160]}")]
+            )
+        out = await action_curate_book_result(
+            StepInput(effects=effects, context={"curate_state": state})
+        )
+        _CURATE_DOC_CACHE.pop(key, None)
+        if _booked_terminal(out, state):
+            _CURATE_BOOKED[key] = time.monotonic()
+        return _out(
+            [
+                {
+                    "paper_key": key,
+                    "outcome": str((out.result or {}).get("outcome") or "packed"),
+                    "doc_chars": len(doc),
+                }
+            ]
+        )
+    finally:
+        release_curate_keys([key])
 
 
 async def action_fig_review_sweep_next(step_input):

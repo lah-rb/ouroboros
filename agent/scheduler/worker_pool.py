@@ -122,6 +122,10 @@ DEFAULT_LANE_MAX_INFLIGHT: Dict[str, int] = {
     # booking or running gates, so every remote lane may run; a lane that
     # can never dispatch is dead weight.
     "remote_text_seat": 4,
+    # The repack lane's engine (llmvp_domains["repack_remote"], the 3060 box's
+    # gemma-4-12b): ONE seat (max_concurrent_requests: 1). A second stream
+    # only queues there and times out as a transport fault.
+    "remote_repack_seat": 1,
 }
 
 
@@ -600,6 +604,47 @@ def _remote_curate_lanes() -> int:
         return 4
 
 
+def _remote_repack_lanes() -> int:
+    """How many pack-only repack lanes to run on llmvp_domains["repack_remote"].
+
+    OUROBOROS_REMOTE_REPACK_LANES, default 0: the lane is opt-in, and it is
+    built only when the mission routes the domain (_repack_lanes), so a set
+    count without a route is a no-op rather than a lane that falls back to the
+    local server.
+    """
+    import os
+
+    raw = os.environ.get("OUROBOROS_REMOTE_REPACK_LANES", "").strip()
+    try:
+        return max(0, min(4, int(raw))) if raw else 0
+    except ValueError:
+        return 0
+
+
+def _repack_lanes(domains: Optional[dict]) -> List[Lane]:
+    """repack_r1.. on the repack_remote domain (2026-10-01).
+
+    Same construction as the curate_r* lanes -- est_kv=0 / seats=0 and their
+    own resource, gated on the engine that serves them -- running the
+    repack_drain flow: pack-only, no review turn, and a failed pack books
+    nothing (agent/actions/curation_actions.py, the remote repack lane block).
+    """
+    if not (isinstance(domains, dict) and "repack_remote" in domains):
+        return []
+    return [
+        Lane(
+            name=f"repack_r{i}",
+            flow="repack_drain",
+            resource="remote_repack_seat",
+            est_kv=0,
+            seats=0,
+            domain="repack_remote",
+            idle_backoff_s=60.0,
+        )
+        for i in range(1, _remote_repack_lanes() + 1)
+    ]
+
+
 def _disabled_lanes() -> set:
     """Lane names switched off for THIS run: OUROBOROS_DISABLE_LANES, a
     comma-separated list (e.g. "ocr"). Empty means every lane runs.
@@ -910,6 +955,8 @@ def _all_scraper_lanes(domains: Optional[dict] = None) -> List[Lane]:
             )
             for i in range(1, _remote_curate_lanes() + 1)
         ],
+        # Remote REPACK lanes: pack-only work on another engine (opt-in).
+        *_repack_lanes(domains),
         # OA recovery: pure network I/O (Wayback / CORE / meta-tag routes)
         # — no muse seat, no KV, paced by the shared per-host politeness
         # state. Long idle backoff: each record is walked ONCE (stamped),
