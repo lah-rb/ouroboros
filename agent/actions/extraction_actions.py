@@ -1875,6 +1875,9 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
                 "unverified_pages": rep.get("unverified_pages", 0),
                 "pages": rep.get("pages", 0),
                 "seconds": rep.get("seconds", 0),
+                # Where the layout model ran (cpu | gpu:N | remote <url>);
+                # reports before 2026-09-30 carry none, and those ran on CPU.
+                "layout": rep.get("layout", "cpu"),
             }
             if rep.get("verified_pages", 0) <= 0:
                 rec["extraction_quality"]["unverified_text_layer"] = True
@@ -1993,6 +1996,7 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
                     "unverified_pages": rep.get("unverified_pages", 0),
                     "pages": rep.get("pages", 0),
                     "seconds": rep.get("seconds", 0),
+                    "layout": rep.get("layout", "cpu"),
                 }
             # A PAPER WITH NO TEXT LAYER IS WHAT OCR IS FOR. Verification
             # compares our markdown against the PDF's own text layer; when
