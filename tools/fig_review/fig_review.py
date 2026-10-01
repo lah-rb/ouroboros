@@ -224,9 +224,13 @@ def _graphql_vision(
     max_tokens: int,
     temperature: float,
     model: str = "",
-    timeout: float = 300.0,
+    timeout: float = 1200.0,
 ) -> tuple[str, str]:
     """One `visionCompletion` over LLMVP's GraphQL. Returns (text, served).
+
+    1200 s (was 300, 2026-10-01): under tensor split the server queues a
+    vision stream for a seat for up to 900 s rather than failing it, and the
+    client must outlast that wait plus the reading itself.
 
     Fields are exactly VisionCompletionRequest's; `model` is sent only when
     given (the figtext default is the fleet's PRIMARY — muse vision — which
@@ -443,30 +447,52 @@ def review_paper(
         if max_figures > 0:
             todo = todo[:max_figures]
         described_now = 0
-        for fig in todo:
-            caption = caption_context(md, key, fig)
-            figtext, served = _chat_figure(
-                endpoint, model, os.path.join(fig_dir, fig), caption, send_model
-            )
-            banked[fig] = {
-                "fig": fig,
-                "caption": caption,
-                "figtext": figtext,
-                "numeric_overlap_rate": round(numeric_overlap(figtext, md), 4),
-            }
-            described_now += 1
-        entries = [banked[f] for f in figs if f in banked]
-        os.makedirs(out_dir, exist_ok=True)
-        with open(out_path, "w") as f:
-            json.dump(
-                # The model the SERVER reports, not the one we asked for —
-                # with LLMVP the caller does not choose it, and "which model
-                # read this figure" is per-record provenance.
-                {"paper_key": key, "model": served, "figs": entries},
-                f,
-                ensure_ascii=False,
-                indent=1,
-            )
+
+        def _save() -> list:
+            """Write the bank NOW (atomically). Called after every figure:
+            the bank used to be written only after the loop, so one failed
+            or timed-out figure discarded every reading of the run (run v50g,
+            2026-10-01: 30-40 minute rounds banked nothing)."""
+            entries = [banked[f] for f in figs if f in banked]
+            os.makedirs(out_dir, exist_ok=True)
+            tmp = out_path + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(
+                    # The model the SERVER reports, not the one we asked for —
+                    # with LLMVP the caller does not choose it, and "which model
+                    # read this figure" is per-record provenance.
+                    {"paper_key": key, "model": served, "figs": entries},
+                    f,
+                    ensure_ascii=False,
+                    indent=1,
+                )
+            os.replace(tmp, out_path)
+            return entries
+
+        try:
+            for fig in todo:
+                caption = caption_context(md, key, fig)
+                figtext, served = _chat_figure(
+                    endpoint, model, os.path.join(fig_dir, fig), caption, send_model
+                )
+                banked[fig] = {
+                    "fig": fig,
+                    "caption": caption,
+                    "figtext": figtext,
+                    "numeric_overlap_rate": round(numeric_overlap(figtext, md), 4),
+                }
+                described_now += 1
+                _save()
+        finally:
+            # Progress is reported even when a figure fails: the caller books
+            # partial work from these counts and the next round resumes.
+            if described_now:
+                report["figtext_path"] = out_path
+                report["figs"] = described_now
+                report["figs_total"] = len(figs)
+                report["described"] = len([f for f in figs if f in banked])
+                report["remaining"] = len(figs) - report["described"]
+        entries = _save()
         report["figtext_path"] = out_path
         report["figs"] = described_now
         report["figs_total"] = len(figs)

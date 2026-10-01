@@ -1266,6 +1266,46 @@ def _vision_batched_semaphore(mcfg) -> Any:
     return _VISION_BATCHED_SEM
 
 
+#: How long a vision stream waits for a batched seat when the pool fallback
+#: cannot exist (tensor split). See _acquire_vision_seat.
+_VISION_SEAT_WAIT_S = 900.0
+_VISION_SEAT_RETRY_PAUSE_S = 1.0
+
+
+async def _acquire_vision_seat(backend, mcfg):
+    """A batched seat for one vision stream.
+
+    A seat wait that timed out used to end the batched attempt, and the caller
+    then falls back to the dedicated vision pool. Under tensor split that pool
+    cannot exist: one llama context per model, and the backend refuses to
+    build a second. So the fallback only turned a busy server into a failed
+    request. On 2026-10-01, run v50g, all 8 seats held curate/translate turns
+    and figure reads failed "All inference instances are busy [vision]",
+    then "cannot build a vision context". With no pool to fall back to, keep
+    waiting for a seat: text turns release one every minute or so. The wait is
+    capped at _VISION_SEAT_WAIT_S, after which the busy error stands. Any
+    other split keeps the old one-wait-then-fallback behaviour.
+    """
+    import asyncio
+    import time as _t
+
+    split = str(getattr(mcfg, "split_mode", "none") or "none").lower()
+    if split != "tensor":
+        return await backend.acquire_instance(persona="vision")
+    deadline = _t.monotonic() + _VISION_SEAT_WAIT_S
+    while True:
+        try:
+            return await backend.acquire_instance(persona="vision")
+        except RuntimeError as exc:
+            if "busy" not in str(exc).lower() or _t.monotonic() >= deadline:
+                raise
+            log.info(
+                "batched vision: every seat busy — still waiting (tensor split "
+                "has no pool to fall back to)"
+            )
+            await asyncio.sleep(_VISION_SEAT_RETRY_PAUSE_S)
+
+
 async def _run_vision_batched(
     backend,
     mcfg,
@@ -1392,7 +1432,7 @@ async def _run_vision_batched(
                 len(images),
                 reasoning=reasoning,
             )
-            instance = await backend.acquire_instance(persona="vision")
+            instance = await _acquire_vision_seat(backend, mcfg)
             # Visible to the seat reaper for the whole install window —
             # without this the reaper reclaims the seat mid-install (19
             # double-checkouts on 2026-08-27; see _seat_reaper_sweep).
