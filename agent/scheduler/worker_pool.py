@@ -37,7 +37,7 @@ import asyncio
 import logging
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as _dc_replace
 from typing import Any, Dict, List, Optional
 
 from agent.scheduler.capacity_claim import Claim, claim_scope
@@ -162,6 +162,13 @@ class WorkerPool:
         self.action_registry = action_registry
         self.inputs = dict(inputs or {})
         self.max_inflight = dict(max_inflight or DEFAULT_LANE_MAX_INFLIGHT)
+        # Each remote OCR lane is one tool run: the remote seat cap follows
+        # the lane count (OUROBOROS_OCR_LANES), or extra lanes only queue.
+        n_remote_ocr = sum(
+            1 for ln in self.lanes if ln.resource == "remote_vision_seat"
+        )
+        if n_remote_ocr > self.max_inflight.get("remote_vision_seat", 1):
+            self.max_inflight["remote_vision_seat"] = n_remote_ocr
         self.deadline = deadline
 
         self.state: Dict[str, LaneState] = {ln.name: LaneState() for ln in lanes}
@@ -622,6 +629,10 @@ def lanes_for_scraper(domains: Optional[dict] = None) -> List[Lane]:
     lane is built against the local paddle device or as a remote lane."""
     off = _disabled_lanes()
     lanes = _all_scraper_lanes(domains)
+    if "ocr" in off:
+        # "ocr" names the FAMILY: ocr2.. are the same drain, and leaving one
+        # running would defeat the switch that keeps paddle off this host.
+        off |= {ln.name for ln in lanes if ln.flow == "ocr_drain"}
     if off:
         known = {ln.name for ln in lanes}
         for name in sorted(off - known):
@@ -636,6 +647,32 @@ def lanes_for_scraper(domains: Optional[dict] = None) -> List[Lane]:
         )
         return kept
     return lanes
+
+
+def _ocr_lane_count() -> int:
+    """OUROBOROS_OCR_LANES: OCR tool runs at once when the ocr lane is REMOTE.
+
+    Default 1, at most 4. Added 2026-09-30 for the 3060 box: one tool run left
+    its paddle idle about a third of the time (the tool renders and lays out
+    pages on this host between crops), so a second run keeps it fed. Local
+    paddle always gets ONE lane: a second in-process paddle is the pairing
+    that wedges tensor-split muse.
+    """
+    try:
+        return max(1, min(4, int(os.environ.get("OUROBOROS_OCR_LANES", "1"))))
+    except ValueError:
+        return 1
+
+
+def _ocr_lanes(domains: Optional[dict]) -> List[Lane]:
+    """[ocr, ocr2, ...] when routed remote (claims are shared, so they take
+    disjoint papers); the single local lane otherwise."""
+    first = _ocr_lane(domains)
+    if first.resource != "remote_vision_seat":
+        return [first]
+    return [first] + [
+        _dc_replace(first, name=f"ocr{i}") for i in range(2, _ocr_lane_count() + 1)
+    ]
 
 
 def _ocr_lane(domains: Optional[dict]) -> Lane:
@@ -670,7 +707,7 @@ def _all_scraper_lanes(domains: Optional[dict] = None) -> List[Lane]:
     per-call budget; they size ADMISSION, not the request itself.
     """
     return [
-        _ocr_lane(domains),
+        *_ocr_lanes(domains),
         # Figure reads run on muse's vision contexts, which are separate
         # from the batched text cell (measured vision/text serialization
         # 0.068 — effectively free against text).

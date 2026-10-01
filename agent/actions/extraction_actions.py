@@ -569,6 +569,11 @@ def _ocr_route_argv(effects) -> list[str]:
     out = ["--llmvp-url", base]
     if model:
         out += ["--model", model]
+    # The layout model can sit on the same box (layout_server.py), so a page
+    # never touches this host's CPU beyond rendering (2026-09-30).
+    layout = str(route.get("layout_endpoint") or "").strip()
+    if layout:
+        out += ["--layout-url", layout.rstrip("/")]
     return out
 
 

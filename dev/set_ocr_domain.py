@@ -75,6 +75,12 @@ def main() -> int:
     ap.add_argument("--endpoint", default=DEFAULT_ENDPOINT)
     ap.add_argument("--model", default=DEFAULT_MODEL)
     ap.add_argument("--no-preflight", action="store_true")
+    ap.add_argument(
+        "--layout-endpoint",
+        default="",
+        help="layout_server.py base URL on the same box (2026-09-30); "
+        "omit to keep the layout model on this host's CPU",
+    )
     args = ap.parse_args()
 
     if mission_is_running():
@@ -109,7 +115,18 @@ def main() -> int:
                 )
                 return 3
             print(f"preflight: {args.model!r} is {state} on {args.endpoint}")
+            if args.layout_endpoint:
+                try:
+                    with urllib.request.urlopen(
+                        args.layout_endpoint.rstrip("/") + "/health", timeout=10
+                    ) as resp:
+                        print("preflight: layout server", resp.read().decode()[:200])
+                except Exception as exc:  # noqa: BLE001
+                    print(f"REFUSING: layout server {args.layout_endpoint} — {exc}")
+                    return 3
         domains["ocr"] = {"endpoint": args.endpoint, "model": args.model}
+        if args.layout_endpoint:
+            domains["ocr"]["layout_endpoint"] = args.layout_endpoint.rstrip("/")
         print("→ ocr domain:", json.dumps(domains["ocr"]))
 
     if not args.apply:

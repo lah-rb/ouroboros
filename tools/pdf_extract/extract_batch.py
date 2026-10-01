@@ -80,6 +80,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import types
 import urllib.request
 from typing import Optional
 
@@ -743,9 +744,81 @@ class _GraphQLVisionRecognizer:
         return None
 
 
-def _build_pipe(backend: str, model: str, port: int, concurrency: int, llmvp_url: str):
+class _RemoteLayoutModel:
+    """The pipeline's layout model, served by layout_server.py on another box.
+
+    Stands in for paddlex's layout predictor at `_pipeline.layout_det_model`, the
+    same way _GraphQLVisionRecognizer stands in for the VL recognizer: the
+    pipeline calls it with page arrays and its layout options, reads
+    `.batch_sampler.batch_size`, and gets back LayoutAnalysisResult objects
+    rebuilt locally from the server's boxes (numpy polygon points included), so
+    nothing downstream can tell the difference. Pixels travel bit-exact
+    (layout_wire). Added 2026-09-30 to put the ~2 s/page layout step on the 3060
+    box beside its paddle instead of on this machine's CPU.
+    """
+
+    def __init__(self, url: str, timeout: float = 600.0):
+        self.url = url.rstrip("/")
+        self.timeout = timeout
+        with urllib.request.urlopen(f"{self.url}/health", timeout=15) as resp:
+            self.info = json.loads(resp.read())
+        self.batch_sampler = types.SimpleNamespace(
+            batch_size=int(self.info.get("batch_size") or 8)
+        )
+
+    def __call__(self, input, batch_size=None, **kwargs):  # noqa: A002 — paddlex's name
+        import layout_wire as wire
+        from paddlex.inference.models.layout_analysis.result import (
+            LayoutAnalysisResult,
+        )
+
+        images = input if isinstance(input, list) else [input]
+        body = json.dumps(
+            {
+                "images": [wire.encode_image(im) for im in images],
+                "kwargs": wire.encode_value(kwargs),
+            }
+        ).encode()
+        req = urllib.request.Request(
+            f"{self.url}/layout",
+            data=body,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            out = json.loads(resp.read())
+        if "error" in out:
+            raise RuntimeError(f"layout server: {out['error']}")
+        for im, r in zip(images, out["results"]):
+            yield LayoutAnalysisResult(
+                {
+                    "input_path": r.get("input_path"),
+                    "page_index": r.get("page_index"),
+                    "input_img": im,
+                    "boxes": wire.decode_value(r["boxes"]),
+                }
+            )
+
+    def close(self) -> None:
+        return None
+
+
+def _build_pipe(
+    backend: str,
+    model: str,
+    port: int,
+    concurrency: int,
+    llmvp_url: str,
+    layout_url: str = "",
+    layout_device: str = "",
+):
     """The PaddleOCRVL pipeline for `backend` — ONE factory, so this tool and
     pdf_extract_one.py cannot drift apart.
+
+    LAYOUT PLACEMENT (2026-09-30). The layout model ran wherever this process
+    ran, on CPU, because the venv carries the CPU paddle wheel (a holdover from
+    the M1). Two ways off the CPU, one or neither:
+      layout_device "gpu:N"  in process, on a local GPU (needs paddlepaddle-gpu)
+      layout_url             layout_server.py on another box (_RemoteLayoutModel)
 
     For `llmvp` the stock VL recognizer is swapped for _GraphQLVisionRecognizer
     on the INNER paddlex pipeline. The outer object paddlex returns is an
@@ -757,10 +830,37 @@ def _build_pipe(backend: str, model: str, port: int, concurrency: int, llmvp_url
     """
     from paddleocr import PaddleOCRVL
 
+    if layout_url and layout_device:
+        raise RuntimeError("--layout-url and --layout-device are alternatives")
+    extra: dict = {}
+    if layout_device:
+        import paddle
+
+        if (
+            layout_device.startswith("gpu")
+            and not paddle.device.is_compiled_with_cuda()
+        ):
+            raise RuntimeError(
+                f"--layout-device {layout_device}: this venv's paddle is a CPU build "
+                "(install paddlepaddle-gpu, or use --layout-url)"
+            )
+        extra["device"] = layout_device
     pipe = PaddleOCRVL(
         **_vl_pipe_kwargs(
             backend, model, port, concurrency=concurrency if backend == "llmvp" else 0
-        )
+        ),
+        **extra,
+    )
+    if layout_url:
+        inner = getattr(pipe.paddlex_pipeline, "_pipeline", None)
+        if inner is None or not hasattr(inner, "layout_det_model"):
+            raise RuntimeError(
+                "--layout-url: paddlex pipeline has no `_pipeline.layout_det_model` "
+                "seam (paddlex upgrade?) — refusing rather than running layout locally"
+            )
+        inner.layout_det_model = _RemoteLayoutModel(layout_url)
+    pipe._ouro_layout = (
+        f"remote {layout_url}" if layout_url else (layout_device or "cpu")
     )
     if backend != "llmvp":
         return pipe
@@ -1579,6 +1679,7 @@ def extract_paper(
         )
         if served:
             report["vision_model"] = str(served)
+        report["layout"] = str(getattr(pipe, "_ouro_layout", "cpu"))
     except Exception as e:  # noqa: BLE001 - report, don't crash the batch
         report["error"] = f"{type(e).__name__}: {e}"
         if os.path.isdir(fig_dir) and not os.listdir(fig_dir):
@@ -1669,6 +1770,19 @@ def main() -> int:
         "as experiment modes; OUROBOROS_OCR_TEXT_MODE overrides the "
         "default without a code change.",
     )
+    # Where the layout model (PP-DocLayoutV3) runs. Default: this process, on
+    # CPU (~2 s/page). The two are alternatives.
+    ap.add_argument(
+        "--layout-url",
+        default=os.environ.get("OUROBOROS_OCR_LAYOUT_URL", ""),
+        help="layout_server.py base URL (another box's GPU)",
+    )
+    ap.add_argument(
+        "--layout-device",
+        default=os.environ.get("OUROBOROS_OCR_LAYOUT_DEVICE", ""),
+        help="paddle device for the in-process layout model, e.g. gpu:0 "
+        "(needs paddlepaddle-gpu in this venv)",
+    )
     args = ap.parse_args()
 
     # Resolve weights together, so a half-specified pair cannot silently mix
@@ -1727,7 +1841,13 @@ def main() -> int:
         # flag here — but the CLIENT still has to fan out to use it, so the
         # crop concurrency is passed through (extra requests queue there).
         pipe = _build_pipe(
-            args.vl_backend, args.model, port, args.vl_parallel, args.llmvp_url
+            args.vl_backend,
+            args.model,
+            port,
+            args.vl_parallel,
+            args.llmvp_url,
+            layout_url=args.layout_url,
+            layout_device=args.layout_device,
         )
         for pdf, key in zip(args.pdfs, keys):
             pr = None
