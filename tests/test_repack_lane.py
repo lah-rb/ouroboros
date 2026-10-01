@@ -152,6 +152,29 @@ async def test_a_failed_pack_books_nothing_and_leaves_the_paper_for_muse():
 
 
 @pytest.mark.asyncio
+async def test_a_partial_pack_books_nothing(monkeypatch):
+    """Production books the windows that passed; this lane books whole packs
+    only (a references-only merge booked live, 2026-10-01)."""
+
+    async def partial(effects, doc, registry):
+        return {
+            "status": "packed",
+            "data": {"articles_referenced": [{"year": 2019}]},
+            "attempts": 3,
+            "quality": {"windows": 2, "windows_passed": 1, "numeric_leaves": 1},
+        }
+
+    monkeypatch.setattr(ca, "_pack_windowed", partial)
+    _, fx = _lane([_accepted("p", pack_status="needs_repack")], {"p": MD})
+    out = await action_repack_drain_batch(_si(fx))
+    assert out.result["outcomes"][0]["outcome"].startswith(
+        "declined: partial pack: 1/2"
+    )
+    assert (await read_databank(fx))["p"]["pack_status"] == "needs_repack"
+    assert "p" in _REPACK_DECLINED
+
+
+@pytest.mark.asyncio
 async def test_a_window_over_the_lane_seat_is_declined_without_a_turn():
     base, fx = _lane([_accepted("p")], {"p": MD * 400}, seat=20_000)
     out = await action_repack_drain_batch(_si(fx))

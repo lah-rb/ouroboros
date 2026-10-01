@@ -2693,6 +2693,25 @@ async def action_repack_drain_batch(step_input):
             return _out(
                 [_decline_repack(key, f"gates: {str(pack.get('reason') or '')[:160]}")]
             )
+        # WHOLE PACKS ONLY. Production books a merge of the windows that
+        # passed ("a window that fails costs that window, not the paper"),
+        # which on this lane booked a paper whose results window had
+        # fabricated (grounding 0.80, twice) on the strength of its
+        # reference-list window alone: 16 leaves of years and page numbers,
+        # pack_status packed, the real data never to be packed by muse
+        # (doi_10.7498_aps.73.20240186, 2026-10-01). Under no-burn a partial
+        # pack is a failure here: muse may pack the paper whole.
+        q = pack.get("quality") or {}
+        if (q.get("windows_passed") or 0) < (q.get("windows") or 0):
+            return _out(
+                [
+                    _decline_repack(
+                        key,
+                        f"partial pack: {q.get('windows_passed')}/{q.get('windows')} "
+                        "windows passed",
+                    )
+                ]
+            )
         out = await action_curate_book_result(
             StepInput(effects=effects, context={"curate_state": state})
         )
