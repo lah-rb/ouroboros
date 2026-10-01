@@ -94,6 +94,8 @@ def set_root(root: str) -> None:
     global ROOT, V4, DOCS
     ROOT = V4 = os.path.expanduser(root)
     DOCS = os.path.join(ROOT, "stage1", "docs")
+
+
 LICENSE = {
     "hom": "restricted-hom",
     "webmineral": "restricted-webmineral",
@@ -118,6 +120,7 @@ def record(
     provenance: dict,
     *,
     val_key: str | None = None,
+    closed: bool = False,
 ) -> dict:
     """One rendered document. `val_key` (default: the doc_id) is the string
     the val split is drawn from — a supplement passes its PARENT's doc_id so
@@ -128,9 +131,14 @@ def record(
         "text": text,
         "license": license_,
         "provenance": provenance,
-        "val": is_val(val_key or doc_id, VAL_FRACTION_BY_SOURCE.get(source, VAL_FRACTION)),
+        "val": is_val(
+            val_key or doc_id, VAL_FRACTION_BY_SOURCE.get(source, VAL_FRACTION)
+        ),
         "max_repeats": REPEATS.get(source, 1),
         "tokens_est": int(len(text) / CHARS_PER_TOKEN),
+        # From the CLOSED SHELF (tools/closed_shelf.py): owned copies of books
+        # that are not openly licensed. Never in a build without --closed-root.
+        "closed_material": closed,
     }
 
 
@@ -151,17 +159,34 @@ def _last_rows(path: str) -> dict[str, dict]:
     return out
 
 
-def merged_databank() -> dict[str, dict]:
-    papers = _last_rows(os.path.join(CORPUS, "databank", "papers.jsonl"))
-    ext = _last_rows(os.path.join(CORPUS, "databank", "extraction.jsonl"))
+def merged_databank(corpus: str | None = None) -> dict[str, dict]:
+    corpus = corpus or CORPUS
+    papers = _last_rows(os.path.join(corpus, "databank", "papers.jsonl"))
+    ext_path = os.path.join(corpus, "databank", "extraction.jsonl")
+    # A shelf that has not been OCR'd yet has no extraction sidecar.
+    ext = _last_rows(ext_path) if os.path.exists(ext_path) else {}
     return {k: {**v, **ext.get(k, {})} for k, v in papers.items()}
 
 
 # ── renderers ────────────────────────────────────────────────────────
 def render_papers(
-    db: dict[str, dict], *, cap_ratio: float = 1.0, limit: int = 0
+    db: dict[str, dict],
+    *,
+    cap_ratio: float = 1.0,
+    limit: int = 0,
+    corpus: str | None = None,
+    closed: bool = False,
 ) -> tuple[list[dict], dict]:
-    binder = emit.binder_keys()
+    """Accepted papers' markdown (figtext inlined). `corpus` defaults to the
+    open workspace; `closed=True` renders the CLOSED SHELF at `corpus`: every
+    record there is a binder book, doc ids are `closed:<key>`, and each doc is
+    marked closed_material."""
+    corpus = corpus or CORPUS
+    binder = (
+        emit.binder_keys(os.path.join(corpus, "databank", "papers.jsonl"))
+        if closed
+        else emit.binder_keys()
+    )
     stats = {
         "papers": 0,
         "supplements": 0,
@@ -178,9 +203,9 @@ def render_papers(
         path = rec.get("md_en_path") or rec.get("md_path") or ""
         if not path:
             continue
-        fp = os.path.join(CORPUS, path) if not os.path.isabs(path) else path
+        fp = os.path.join(corpus, path) if not os.path.isabs(path) else path
         if not os.path.exists(fp):
-            alt = os.path.join(CORPUS, rec.get("md_path") or "")
+            alt = os.path.join(corpus, rec.get("md_path") or "")
             if rec.get("md_path") and os.path.exists(alt):
                 fp = alt
             else:
@@ -193,7 +218,7 @@ def render_papers(
             continue
         text = emit._drop_degenerate(text)
         text, st = inline_figtext(
-            text, key, read_sidecar(CORPUS, key), cap_ratio=cap_ratio
+            text, key, read_sidecar(corpus, key), cap_ratio=cap_ratio
         )
         for k, v in st.__dict__.items():
             if isinstance(v, int):
@@ -225,14 +250,17 @@ def render_papers(
             stats["supplements"] += 1
         else:
             source = "binder_markdown" if key in binder else "paper_markdown"
+        if closed:
+            provenance["closed_shelf"] = corpus
         out.append(
             record(
-                f"paper:{key}",
+                f"closed:{key}" if closed else f"paper:{key}",
                 source,
                 text,
                 rec.get("license") or "unknown",
                 provenance,
                 val_key=val_key,
+                closed=closed,
             )
         )
         stats["papers"] += 1
@@ -243,23 +271,61 @@ def render_papers(
     return out, stats
 
 
-def render_packs() -> list[dict]:
+def render_packs(corpus: str | None = None, closed: bool = False) -> list[dict]:
     """Pack prose splits WITH its paper (§19: 12 of 13 val papers had their
-    pack in train, so the paper val loss read the pack's paraphrase)."""
+    pack in train, so the paper val loss read the pack's paraphrase).
+    `closed=True` renders the closed shelf's packs at `corpus`."""
     out = []
-    for r in emit.paper_records(set()):
+    dataset_dir = os.path.join(corpus, "databank", "dataset") if corpus else None
+    for r in emit.paper_records(set(), dataset_dir=dataset_dir):
         key = (r.get("provenance") or {}).get("paper_key", "")
         out.append(
             record(
-                f"pack:{key}",
+                f"closed-pack:{key}" if closed else f"pack:{key}",
                 "pack_prose",
                 r["text"],
                 (r.get("provenance") or {}).get("license") or "unknown",
-                {"paper_key": key},
-                val_key=f"paper:{key}",
+                {"paper_key": key, **({"closed_shelf": corpus} if closed else {})},
+                val_key=f"closed:{key}" if closed else f"paper:{key}",
+                closed=closed,
             )
         )
     return out
+
+
+CLOSED_MARKER = "CLOSED_MATERIAL"  # tools/closed_shelf.py writes it at the shelf root
+CONTAINS_CLOSED = (
+    "CONTAINS_CLOSED_MATERIAL"  # written into a training root that took any
+)
+
+
+def closed_guard(docs_dir: str, closed_root: str | None) -> None:
+    """Refuse a build that would mix closed material in by accident.
+
+    A root rendered once WITH --closed-root keeps closed_*.jsonl in its docs
+    dir, and every later build reads every *.jsonl there -- so an "open"
+    rebuild of the same root would still train on the closed shelf. An open
+    build must use a root that never took closed material. And --closed-root
+    must point at a real shelf (its marker), not at an arbitrary directory.
+    """
+    if closed_root:
+        if not os.path.isfile(os.path.join(closed_root, CLOSED_MARKER)):
+            raise SystemExit(
+                f"--closed-root {closed_root} has no {CLOSED_MARKER} marker; "
+                "it is not a closed shelf"
+            )
+        return
+    stale = sorted(
+        f
+        for f in (os.listdir(docs_dir) if os.path.isdir(docs_dir) else [])
+        if f.startswith("closed_") and f.endswith(".jsonl")
+    )
+    if stale:
+        raise SystemExit(
+            f"{docs_dir} holds closed-shelf docs ({', '.join(stale)}) from an earlier "
+            "--closed-root build: render the open corpus into a root that never took "
+            "closed material, or pass --closed-root to build the private variant"
+        )
 
 
 def render_hom() -> list[dict]:
@@ -405,8 +471,17 @@ def main() -> int:
         default=DEFAULT_ROOT,
         help="corpus root (v4 default; v6 for the v3 pass)",
     )
+    ap.add_argument(
+        "--closed-root",
+        default=None,
+        help="ALSO render the closed shelf (tools/closed_shelf.py) into this build: "
+        "owned, not-openly-licensed books. Off by default; a build that takes it "
+        "is marked CONTAINS_CLOSED_MATERIAL and must not be published",
+    )
     args = ap.parse_args()
     set_root(args.root)
+    closed_root = os.path.expanduser(args.closed_root) if args.closed_root else None
+    closed_guard(DOCS, closed_root)
     t0 = time.time()
     manifest: dict = {
         "seed": SEED,
@@ -435,6 +510,25 @@ def main() -> int:
             packs = render_packs()
             write(packs, "packs")
             print(f"[{time.time()-t0:5.0f}s] packs: {len(packs)}", flush=True)
+        if closed_root:
+            cdb = merged_databank(closed_root)
+            cpapers, cstats = render_papers(
+                cdb, cap_ratio=args.cap_ratio, corpus=closed_root, closed=True
+            )
+            write(cpapers, "closed_binder")
+            cpacks = render_packs(closed_root, closed=True)
+            write(cpacks, "closed_packs")
+            manifest["closed_root"] = closed_root
+            manifest["closed_papers"] = cstats
+            with open(os.path.join(ROOT, CONTAINS_CLOSED), "w") as fh:
+                fh.write(
+                    f"This training root includes closed-shelf material from {closed_root}.\n"
+                    "Do not publish it or anything trained on it as open.\n"
+                )
+            print(
+                f"[{time.time()-t0:5.0f}s] CLOSED shelf: {len(cpapers)} binder docs, {len(cpacks)} packs",
+                flush=True,
+            )
         if "hom" not in args.skip:
             hom = render_hom()
             write(hom, "hom")
@@ -488,6 +582,10 @@ def main() -> int:
     for d in docs:
         manifest["license_shares"][d["license"]] += d["tokens_est"] * d["max_repeats"]
     manifest["license_shares"] = dict(manifest["license_shares"])
+    manifest["closed_material_tokens"] = sum(
+        d["tokens_est"] * d["max_repeats"] for d in docs if d.get("closed_material")
+    )
+    manifest["contains_closed_material"] = manifest["closed_material_tokens"] > 0
     json.dump(manifest, open(mpath, "w"), indent=1)
     tot = sum(s["weighted_tokens_est"] for s in manifest["sources"].values())
     print(f"\nSTAGE 1 DOCS: {len(docs)} | weighted tokens (est) {tot:,}")

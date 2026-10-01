@@ -276,8 +276,11 @@ def libs_records(
 
 
 # ── paper text ───────────────────────────────────────────────────────
-def paper_records(holdout: set[str]) -> list[dict]:
+def paper_records(holdout: set[str], dataset_dir: str | None = None) -> list[dict]:
     """One record per packed paper: its canonical data as prose.
+
+    `dataset_dir` defaults to the open workspace's packs; the closed shelf
+    (tools/closed_shelf.py) passes its own, and only when asked for.
 
     A paper is dropped entirely if it names a held-out species, because
     the paper's own text would otherwise teach what the eval means to
@@ -286,7 +289,7 @@ def paper_records(holdout: set[str]) -> list[dict]:
     """
     lowered = {s.lower(): s for s in holdout}
     out: list[dict] = []
-    for path in sorted(glob.glob(os.path.join(DATASET, "*.json"))):
+    for path in sorted(glob.glob(os.path.join(dataset_dir or DATASET, "*.json"))):
         if path.endswith("key_registry.json"):
             continue
         try:

@@ -67,3 +67,8 @@ llmvp/active_config.txt
 
 # rock_olmo project venv (torch stack; see dev/rock_olmo/README.md)
 dev/rock_olmo/.venv/
+
+# Not ours to publish (2026-10-01): publisher/arXiv PDFs used for reading, and
+# the demo bundle (model weights). A `git add -A` must never sweep them in.
+dev/rock_olmo/literature/
+dev/rock_olmo/candle_demo.zip
