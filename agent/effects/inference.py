@@ -1139,6 +1139,22 @@ class InferenceEffect:
                     finished=False,
                     error=f"HTTP error: {e}",
                 )
+            except httpx.TransportError as e:
+                # The server went away MID-REQUEST (RemoteProtocolError "Server
+                # disconnected without sending a response", ReadError): the
+                # machinery failed, not the prompt. This used to escape as an
+                # exception, skipping every caller's transport-fault path — the
+                # 3060 box's LLMVP was OOM-killed under a pack turn (2026-10-01)
+                # and the caller crashed instead of declining the round. httpx's
+                # own message is kept verbatim: translation's transport markers
+                # match on it.
+                logger.error("LLMVP transport error: %s: %s", type(e).__name__, e)
+                return InferenceResult(
+                    text="",
+                    tokens_generated=0,
+                    finished=False,
+                    error=f"Transport error ({type(e).__name__}): {e}",
+                )
 
         import asyncio
 
