@@ -2232,7 +2232,9 @@ def _pack_window_sizes() -> tuple[int, int]:
     return target, cap
 
 
-async def _pack_windowed(effects, doc: str, registry: dict) -> dict:
+async def _pack_windowed(
+    effects, doc: str, registry: dict, *, resume: dict | None = None, on_window=None
+) -> dict:
     """Pack a curator doc window by window; returns the book_result pack state.
 
     Per window: the production pack prompt (registry block + the previous
@@ -2245,7 +2247,17 @@ async def _pack_windowed(effects, doc: str, registry: dict) -> dict:
     first-wins with every disagreement recorded); the merge then faces the
     production gates against the whole document. A window that fails costs
     that window, not the paper.
+
+    RESUMABLE, OPTIONALLY (2026-10-01). A book is 40-50 windows and hours of
+    turns; one interruption used to cost all of them. `on_window(index,
+    record)` is awaited after each window with everything needed to replay it
+    (the window text's sha, passed, data, attempts, outcome, repairs); a later
+    call given those records as `resume` ({index: record}) reuses every
+    window whose text is unchanged and runs only the rest. Neither argument
+    is passed by the production lanes, whose behaviour is unchanged.
     """
+    import hashlib
+
     from agent.actions.pack_windows import (
         MergeReport,
         merge_packs,
@@ -2270,7 +2282,22 @@ async def _pack_windowed(effects, doc: str, registry: dict) -> dict:
     outcomes: list[dict] = []
     repairs_all: list[dict] = []
     last_gates: dict = {"passed": False, "feedback": ""}
+    resumed = False
     for w in windows:
+        w_sha = hashlib.sha256(w.text.encode("utf-8")).hexdigest()[:16]
+        prev = (resume or {}).get(w.index)
+        if prev and prev.get("sha") == w_sha and prev.get("outcome"):
+            resumed = True
+            attempts += int(prev.get("attempts") or 0)
+            outcomes.append(prev["outcome"])
+            last_gates = {
+                "passed": bool(prev.get("passed")),
+                "feedback": str(prev["outcome"].get("feedback") or ""),
+            }
+            if prev.get("passed") and prev.get("data"):
+                passed_packs.append(prev["data"])
+                repairs_all.extend(prev.get("repairs") or [])
+            continue
         preface = (
             _PACK_PREFACE.format(
                 n=w.index + 1,
@@ -2336,6 +2363,19 @@ async def _pack_windowed(effects, doc: str, registry: dict) -> dict:
         if gates["passed"] and data:
             passed_packs.append(data)
             repairs_all.extend(repairs)
+        if on_window is not None:
+            ok = bool(gates["passed"] and data)
+            await on_window(
+                w.index,
+                {
+                    "sha": w_sha,
+                    "passed": ok,
+                    "data": data if ok else None,
+                    "attempts": w_attempts,
+                    "outcome": outcomes[-1],
+                    "repairs": repairs if ok else [],
+                },
+            )
 
     if not passed_packs:
         return {
@@ -2361,6 +2401,10 @@ async def _pack_windowed(effects, doc: str, registry: dict) -> dict:
     report = MergeReport()
     if multi:
         merged = merge_packs(passed_packs, report)
+        final = _run_pack_gates(merged, doc, registry)
+    elif resumed:
+        # A resumed single window carries no gate details: re-run them.
+        merged = passed_packs[0]
         final = _run_pack_gates(merged, doc, registry)
     else:
         merged = passed_packs[0]
