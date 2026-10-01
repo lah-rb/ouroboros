@@ -33,6 +33,8 @@ dependencies = [
     "tree-sitter-python>=0.25.0",
     "tree-sitter-language-pack>=1.8.1",
     "weasyprint>=68.1",
+    # dev/manual_intake/html_to_pdf.py: rebuild a saved full-text HTML page as a PDF
+    "beautifulsoup4>=4.15",
     "jedi>=0.20.0",
     # graphql-transport-ws client for the LLMVP capacity subscription
     # (agent/effects/capacity.py). Chosen over gql[websockets] deliberately:
