@@ -134,6 +134,21 @@ def cache_is_stale(config, persona: str = "default") -> bool:
     return False
 
 
+def tokenizer_adds_bos(metadata_add_bos: bool, spec_bos: str, template_bos) -> bool:
+    """Should the TOKENIZER prepend BOS to the rendered static prefix?
+
+    BOS OWNERSHIP (core/lifecycle.py, 2026-08-03): when the renderer already
+    emitted the family's BOS as its first framing segment — the spec declares
+    one and ``model.template_bos`` does not switch it off — the tokenizer must
+    not add another; the GGUF's add_bos governs only prefixes rendered without
+    one. This builder took add_bos from the GGUF alone until 2026-10-01, so a
+    spec-BOS family on a GGUF with add_bos=true (Google's gemma-4-12b QAT)
+    served every request on a DOUBLED <bos>.
+    """
+    rendered = bool(spec_bos) and (template_bos is None or bool(template_bos))
+    return bool(metadata_add_bos) and not rendered
+
+
 def build_static_tokens(
     config,
     *,
@@ -207,8 +222,13 @@ def build_static_tokens(
     log_metadata(metadata)
     log_metadata_vs_config(metadata)
 
-    needs_bos = metadata.add_bos
-    emit(f"🧩 Tokenizing (add_bos={needs_bos}, source=GGUF metadata) …")
+    spec_bos = getattr(renderer.s.tokens, "bos", "")
+    template_bos = getattr(config.model, "template_bos", None)
+    needs_bos = tokenizer_adds_bos(metadata.add_bos, spec_bos, template_bos)
+    emit(
+        f"🧩 Tokenizing (add_bos={needs_bos}; GGUF add_bos={metadata.add_bos}, "
+        f"spec bos={spec_bos!r}, template_bos={template_bos}) …"
+    )
     return tokenize_segments(tokenizer, static_segments, add_bos=needs_bos)
 
 
