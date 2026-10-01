@@ -111,3 +111,15 @@ def test_a_remote_server_gets_the_image_inline(tmp_path):
     assert part == {
         "url": "data:image/png;base64," + base64.b64encode(b"\x89PNG fake").decode()
     }
+
+
+def test_a_remote_paddle_restart_mid_request_is_a_toolchain_fault():
+    """The ocr lane's server restarting mid-crop must send the paper back to
+    pending, not down the quality ladder."""
+    from agent.actions.extraction_actions import is_toolchain_fault
+
+    assert is_toolchain_fault(
+        "RemoteDisconnected: Remote end closed connection without response"
+    )
+    assert is_toolchain_fault("Server disconnected without sending a response.")
+    assert not is_toolchain_fault("below quality threshold (numeric=0.73)")

@@ -481,6 +481,12 @@ _TOOLCHAIN_FAULT_MARKERS = (
     "connectionerror",
     "connection refused",
     "connection reset",
+    # urllib's wording when the server goes away mid-request (http.client
+    # RemoteDisconnected): a remote paddle restarted under the ocr lane
+    # (2026-09-30, the 3060 box) reads like this, not like a refusal.
+    "remote end closed connection",
+    "remotedisconnected",
+    "server disconnected",
     # "timed out", never the noun "timeout": the oversize verdict's own prose
     # says "a dispatch shares one timeout, so a book takes its batch down with
     # it", and a bare noun match made that 560-page book a permanent resident
