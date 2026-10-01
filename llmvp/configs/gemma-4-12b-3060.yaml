@@ -76,6 +76,13 @@ model:
   # so without this figure it refuses a load that fits the card at ~8.7 GB.
   # Same run: 46,808-token prefill at 930 tok/s, decode 32.7 tok/s at depth.
   kv_bytes_per_token_measured: 26624
+  # NO HOST-RAM CHECKPOINTS. SWA without swa_full makes the binding treat this
+  # model as "hybrid" and keep up to 16 context-state copies (~0.5 GB each) in
+  # host RAM; the box is a 10 GB VM and the first bench was OOM-killed on its
+  # third pack turn (7.7 GB peak, 2026-10-01). Pack turns are stateless over
+  # different documents, and the static head has its own snapshot, so a
+  # checkpoint is never reused.
+  ctx_checkpoints: 0
   flow_kv_cache: false
   thinking_available: true
   thinking: "per_request"

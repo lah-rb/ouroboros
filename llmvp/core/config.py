@@ -112,6 +112,16 @@ class ModelConfig(BaseModel):
     # interleaved-SWA models (gemma-4). Re-arms the preflight against real
     # geometry rather than disabling it by inflating kv_preflight_gb.
     kv_bytes_per_token_measured: Optional[int] = None
+    # HOST-RAM context checkpoints the binding keeps for "hybrid" models —
+    # recurrent/hybrid memory, AND any SWA model run without swa_full. It saves
+    # a full context-state copy every 4,096 prefill tokens (at most three per
+    # prompt) and retains up to 16 across requests, for prefix reuse past the
+    # sliding window. None = the binding's default (16); 0 disables the cache.
+    # Measured 2026-10-01: gemma-4-12b on the 3060 box (a 10 GB VM) kept ~0.5 GB
+    # per checkpoint and was OOM-killed by HOST RAM (7.7 GB peak) on its third
+    # 12-18k-token pack turn — stateless turns over different documents that
+    # can never reuse a checkpoint.
+    ctx_checkpoints: Optional[int] = None
 
     # ── PROBE-VERIFIED CEILING: a measurement outranks an estimate ─────
     # Written by `api/main.py --probe-context`, which boots this model at

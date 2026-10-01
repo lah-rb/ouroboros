@@ -346,6 +346,12 @@ model:
   # 22.59x across the fleet), so a config without this is guarded against an
   # estimate rather than a fact. Written by `--probe-context`.
   kv_bytes_per_token_measured: 71680
+  # [O] Type: int — host-RAM context checkpoints the binding keeps for
+  # "hybrid" models (recurrent/hybrid memory, or SWA without swa_full): one
+  # state copy per 4,096 prefill tokens, up to this many retained across
+  # requests. 0 disables the cache — for stateless workloads on a small-RAM
+  # host (gemma-4-12b-3060). Default: unset = the binding's 16.
+  ctx_checkpoints: 16
   # [O] Type: int — an n_ctx OBSERVED to load AND decode on this machine; the
   # preflight honours it over its own arithmetic. Bound to the weights it was
   # measured against (below) so a requant invalidates it rather than silently

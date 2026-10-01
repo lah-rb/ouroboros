@@ -645,7 +645,18 @@ class LlamaCppBackend(BaseBackend):
             # RoPE/YaRN overrides — omitted entirely unless a config sets them,
             # so the default path is byte-identical to before this existed.
             **self._rope_kwargs(),
+            **self._checkpoint_kwargs(),
         )
+
+    def _checkpoint_kwargs(self) -> dict:
+        """``ctx_checkpoints`` for the binding's hybrid checkpoint cache, only
+        when a config sets it (see core/config.py). Unset passes nothing, so
+        every config that does not ask keeps the binding's default."""
+        n = getattr(self.config.model, "ctx_checkpoints", None)
+        if n is None:
+            return {}
+        log.info("🧷 hybrid context checkpoints: %d (config)", int(n))
+        return {"ctx_checkpoints": int(n)}
 
     # RoPE/YaRN params llama.cpp accepts. Each maps a config field of the same
     # name to the Llama() kwarg; unset (None) means "don't pass it", which
