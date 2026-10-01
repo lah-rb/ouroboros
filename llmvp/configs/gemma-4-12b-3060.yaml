@@ -1,0 +1,113 @@
+# Gemma 4 12B (QAT q4_0) on the 3060 OCR box (ai-debian, 192.168.1.76) — a
+# TEXT packer candidate for the curate lane's repack queue.
+#
+# WHY (2026-09-30). Repacks (pack_status needs_repack, 234 accepted papers,
+# ~3.7/h on muse ≈ 60 h) and figure reading (~36 h) are the two longest
+# queues, both on muse. OCR on this box went idle once its queue drained
+# (the research gate stands down while the drain backlog is non-zero), so the
+# 3060 is free compute — but only for a model that fits 12 GB WITHOUT paddle:
+# this config REPLACES paddle-ocr-vl-3060 as the box's primary while it runs.
+# Swap back (active_config.txt + restart llmvp.service) before OCR resumes;
+# an OCR request that reaches this config asks for loadModel(paddle) and is
+# refused or faults as a toolchain fault, it is not served by this model.
+#
+# Trust is earned on a bench first (dev/bench_pack_gemma.py): production
+# _pack_windowed against already-packed papers, same day, same documents as
+# a muse arm. Nothing books from the bench.
+#
+# ── GEOMETRY (GGUF header, 2026-09-30) ──────────────────────────────
+# 48 layers: 40 sliding (8 KV heads x 256, window 1024) + 8 global (1 KV head
+# x 512). With swa_full the sliding layers hold the whole context:
+# ~336 KB/token, ~13 GB at 40k — impossible beside 6.5 GB of weights. With the
+# window pruned: ~0.9 GB fixed (sliding) + 16 KB/token (global) ≈ 1.7 GB at
+# 49,152. So swa_full is FALSE, which means memory_can_shift() is false and
+# the resident cache is unavailable: cache_strategy replay (S1), no flow
+# cache, no reasoning head swap. Pack turns are stateless, so replay costs
+# nothing here.
+#
+# ── CONTEXT ─────────────────────────────────────────────────────────
+# A pack turn = static head (~2k) + one window (target 18k, cap 25k) + the
+# pack prompt with the key registry (~2.6k at 12,368 keys) + 8,192 out
+# ≈ 38k. 49,152 leaves room for an oversize window's spill and registry growth.
+#
+# ── THINKING ────────────────────────────────────────────────────────
+# Mirrors muse's curate posture: per_request resting LOW. Curate turns never
+# request a level, so they run on the resting head — for gemma that is the
+# padded head with the thought channel pre-closed (thinking off), which is
+# what muse's resting low amounts to on this workload.
+#
+# Launch on the box: systemd user unit llmvp.service (the cuBLAS
+# LD_LIBRARY_PATH convention is in the unit). Weights are not in git:
+# google/gemma-4-12B-it-qat-q4_0-gguf, sha256 93567e57a8fe...
+app:
+  host: "0.0.0.0"
+  port: 8008
+  log_level: "info"
+  cors_origins: ["*"]
+  backend_timeout: 180
+
+graphql:
+  max_query_depth: 10
+  max_tokens: 32768
+  max_aliases: 50
+  introspection_enabled: true
+
+model:
+  name: "gemma-4-12b-3060"
+  family: "gemma"
+  path: /home/lah-rb/models/gemma-4-12b-it-qat/gemma-4-12b-it-qat-q4_0.gguf
+  n_ctx: 49152
+  model_max_context: 262144
+  n_gpu_layers: -1
+  main_gpu: 0
+  split_mode: none
+  seed: -1
+  verbose: false
+  flash_attn_type: auto
+  n_batch: 2048
+  swa_full: false
+  # MEASURED 2026-09-30 on the 3060 at these load parameters (llama.cpp
+  # 10355): non-SWA cache 49,152 cells = 768 MiB, SWA cache 1,536 cells =
+  # 480 MiB -> 1,248 MiB / 49,152 = 26,624 B/token (the SWA part is fixed,
+  # so this over-states larger n_ctx — the safe direction). Weights 6,638 MiB
+  # on CUDA0, compute 527 MiB. The header formula says 33 GB (it gives every
+  # layer the full context and the global layers' 512-wide heads), and the
+  # preflight holds non-swa_full configs to HOST RAM — 10.4 GB on this VM —
+  # so without this figure it refuses a load that fits the card at ~8.7 GB.
+  # Same run: 46,808-token prefill at 930 tok/s, decode 32.7 tok/s at depth.
+  kv_bytes_per_token_measured: 26624
+  flow_kv_cache: false
+  thinking_available: true
+  thinking: "per_request"
+  thinking_mode: low
+
+prompt:
+  persona_file: "./knowledge/SOUL.md"
+
+generation:
+  max_tokens_default: 16384
+  # The Gemma team's canonical sampling (see gemma-4-31b.yaml); curate turns
+  # send "t*0.4", i.e. 0.4 here, as on muse.
+  temperature_default: 1.0
+  top_p: 0.95
+  top_k: 64
+  min_p: 0.0
+  repeat_penalty: 1.0
+  streaming_default: true
+
+knowledge:
+  tokens_bin: "./data/gemma-4-12b-3060.tokens.bin"
+  token_limit: 16384
+
+cache_strategy: replay
+
+resources:
+  cpu_threads: 4
+  max_concurrent_requests: 1
+  jit_concurrency_limit: null
+
+tools: {}
+
+logging:
+  enabled: true
+  directory: "./logs"
