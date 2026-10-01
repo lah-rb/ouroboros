@@ -30,6 +30,13 @@ logger = logging.getLogger(__name__)
 _BLOCKED = ("save_mission", "push_event", "clear_events")
 
 
+#: Names the mission's DEFAULT endpoint explicitly. A lane's domain is stamped
+#: only on calls that name none, so a call inside a routed lane that must stay
+#: on the default server passes this (the pre-OCR triage's text step: its page
+#: read goes to the ocr lane's paddle, its verdict to the local text model).
+DEFAULT_DOMAIN = "default"
+
+
 class ChildEffects:
     """Delegating proxy around the parent effects for one parallel branch."""
 
@@ -80,6 +87,29 @@ class ChildEffects:
             static_prefix=static_prefix,
             flow_key=flow_key,
         )
+
+    async def run_vision(
+        self,
+        prompt: str,
+        image_path: str,
+        model: str | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        domain: str = "",
+    ):
+        """Delegate, stamping this branch's domain like run_inference does.
+
+        Without this a routed lane's vision calls fell through __getattr__ to
+        the default server (2026-09-29: the ocr lane routed to the 3060 box
+        would have hot-loaded paddle on THIS box, the in-process pairing that
+        wedges tensor-split muse). An explicit `domain` wins; absent both, the
+        parent call is byte-for-byte unchanged.
+        """
+        kw = dict(model=model, max_tokens=max_tokens, temperature=temperature)
+        domain = domain or self._inference_domain
+        if domain:
+            kw["domain"] = domain
+        return await self._parent.run_vision(prompt, image_path, **kw)
 
     async def push_note(
         self,

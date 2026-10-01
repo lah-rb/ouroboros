@@ -443,6 +443,29 @@ COMPLETION_RUNAWAY_TOKEN_CEILING = 49152
 PROMPT_CHAR_CEILING = 480_000
 
 
+_LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1", "[::1]")
+
+
+def _image_part(endpoint: str, image_path: str) -> dict:
+    """The visionCompletion image part for `image_path` on `endpoint`.
+
+    A path for a server on this host; a base64 data URL for any other host
+    (2026-09-29: the ocr lane routed to the 3060 box at 192.168.1.76, which
+    cannot open /home/... paths on this machine).
+    """
+    import base64
+    import mimetypes
+    from urllib.parse import urlparse
+
+    host = (urlparse(endpoint).hostname or "localhost").lower()
+    if host in _LOCAL_HOSTS:
+        return {"path": image_path}
+    mime = mimetypes.guess_type(image_path)[0] or "image/png"
+    with open(image_path, "rb") as fh:
+        data = base64.b64encode(fh.read()).decode("ascii")
+    return {"url": f"data:{mime};base64,{data}"}
+
+
 class InferenceEffect:
     """GraphQL client for LLMVP inference.
 
@@ -849,10 +872,12 @@ class InferenceEffect:
     ) -> InferenceResult:
         """One image + text in, completion out, over the SAME transport.
 
-        `image_path` is sent as a PATH, not base64: the server reads it only
-        when it resolves under model.vision_image_roots, so the workspace has
-        to live under one of those roots — and when it does, a page render
-        costs no encode/decode round-trip.
+        `image_path` is sent as a PATH to a server on this host: it reads the
+        file only when it resolves under model.vision_image_roots, so the
+        workspace has to live under one of those roots — and when it does, a
+        page render costs no encode/decode round-trip. A server on ANOTHER
+        host cannot read this host's paths, so it gets the image inline as a
+        data URL (_image_part), the form the OCR tool already sends remotely.
 
         `model` routes to a hot secondary (e.g. "paddle-ocr-vl" for OCR).
 
@@ -863,7 +888,7 @@ class InferenceEffect:
         client = await self._get_client()
         request_vars: dict[str, Any] = {
             "prompt": prompt,
-            "images": [{"path": image_path}],
+            "images": [_image_part(self._endpoint, image_path)],
         }
         if max_tokens is not None:
             request_vars["maxTokens"] = int(max_tokens)

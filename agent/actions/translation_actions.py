@@ -940,7 +940,12 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
             # booked. Deferred, so the lane moves on instead of re-offering it.
             _TRANSLATE_DEFERRED.add(key)
             reason = str(next(iter(errs.values())))[:120]
-            summary = {"paper": key, "chunks": n, "status": "deferred", "reason": reason}
+            summary = {
+                "paper": key,
+                "chunks": n,
+                "status": "deferred",
+                "reason": reason,
+            }
             return StepOutput(
                 result=summary,
                 observations=f"translate drain: {key} deferred, server unreachable ({reason})",

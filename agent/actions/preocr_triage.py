@@ -241,9 +241,15 @@ async def triage_one(effects, paper_key: str, pdf_rel: str) -> dict:
         }
 
     try:
+        # DEFAULT domain on purpose: on an ocr lane routed to another box the
+        # page read above went to that box's paddle (vision follows the lane);
+        # the verdict is a TEXT turn for the local model, and paddle cannot
+        # serve text.
+        from agent.effects.child import DEFAULT_DOMAIN
+
         res = await effects.run_inference(
             _TRIAGE_PROMPT.format(page=page[:6000]),
-            {"max_tokens": 700, "temperature": 0.1},
+            {"max_tokens": 700, "temperature": 0.1, "domain": DEFAULT_DOMAIN},
         )
     except Exception as e:  # noqa: BLE001
         return {

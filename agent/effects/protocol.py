@@ -435,6 +435,7 @@ class Effects(Protocol):
         model: str | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
+        domain: str = "",
     ):
         """Vision completion: one image path + text in, completion out.
 

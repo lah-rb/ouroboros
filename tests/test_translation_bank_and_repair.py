@@ -207,7 +207,12 @@ async def test_a_dead_server_spends_no_attempt_and_banks_nothing(monkeypatch):
     monkeypatch.setenv("OUROBOROS_TRANSLATE_CHUNKS", "8")
     src = "\n\n".join([_para(0), _para(1)])
     rec = _rec(translate_attempts=2, translate_epoch=2, pack_status="needs_repack")
-    fx = _Down(files={"databank/papers.jsonl": json.dumps(rec) + "\n", "databank/markdown/p1.md": src})
+    fx = _Down(
+        files={
+            "databank/papers.jsonl": json.dumps(rec) + "\n",
+            "databank/markdown/p1.md": src,
+        }
+    )
     out = await action_translate_drain_batch(_si(fx))
     assert out.result["status"] == "deferred"
     assert "databank/extraction.jsonl" not in fx._files  # nothing booked
@@ -228,7 +233,9 @@ async def test_banked_transport_failures_do_not_gap_a_chunk():
         {"idx": 1, "n": 3, "src_len": 100, "attempt": 0, "failed": True, "reason": r}
         for r in (DOWN, DOWN, "Server disconnected without sending a response.", ERR)
     ]
-    fx = MockEffects(files={_parts_path("p1"): "".join(json.dumps(d) + "\n" for d in lines)})
+    fx = MockEffects(
+        files={_parts_path("p1"): "".join(json.dumps(d) + "\n" for d in lines)}
+    )
     assert await _load_failures(fx, "p1", 3, len(src), 0) == {1: [ERR]}
 
 

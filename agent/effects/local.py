@@ -1350,7 +1350,10 @@ class LocalEffects:
         endpoint, so a lane that never declares one is unaffected and a
         typo'd domain degrades to local rather than failing the round.
         """
-        route = self._llmvp_domains.get(domain) if domain else None
+        # DEFAULT_DOMAIN ("default") is never a route key: it names this.
+        route = (
+            self._llmvp_domains.get(domain) if domain and domain != "default" else None
+        )
         if not route:
             if self._inference is None:
                 self._inference = InferenceEffect(
@@ -1421,15 +1424,19 @@ class LocalEffects:
         model: str | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
+        domain: str = "",
     ):
         """Vision completion over the LLMVP GraphQL API.
+
+        `domain` picks the server exactly as it does for run_inference (a lane
+        stamps its own; DEFAULT_DOMAIN or an unknown name means the default).
 
         `image_path` must resolve under the server's model.vision_image_roots
         or the server refuses to read it — that is deliberate, and it is why
         callers render into the workspace rather than /tmp.
         """
         start = time.monotonic()
-        result = await self._get_inference().run_vision(
+        result = await self._get_inference(domain).run_vision(
             prompt,
             image_path,
             model=model,
