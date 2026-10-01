@@ -1,0 +1,27 @@
+# PaddleOCR-VL on the 3060 OCR box (ai-debian, 192.168.1.76) — device keys only.
+#
+# The box is a Debian 13 QEMU VM with an RTX 3060 (12 GB) passed through. It
+# serves this model as its PRIMARY for the mission's remote ocr lane, and runs
+# tools/pdf_extract/layout_server.py (the layout model) beside it on the same card.
+#
+# vision_pool_size 2 -> 4 (2026-09-30). The base's "width buys nothing" was
+# measured with paddle on a local 3090, where a request is ~80 % fixed serving
+# cost. Here every crop also crosses the LAN, and the box sat idle about a third
+# of the time with two contexts while one OCR tool run fed it. Four contexts let
+# two OCR lanes (OUROBOROS_OCR_LANES=2) keep crops in flight. Memory: ~1 GB of
+# vision KV per 32,768-token context; about 7-8 GB with the layout server,
+# of 12 GB.
+#
+# Launch on the box: systemd user unit llmvp.service, with the cuBLAS
+# LD_LIBRARY_PATH convention (its llama.cpp is this repo's CUDA build, copied in
+# 2026-09-30; the box's own build was CPU-only). The mission names this variant:
+# llmvp_domains["ocr"] = {"endpoint": "http://192.168.1.76:8008/graphql",
+#                         "model": "paddle-ocr-vl-3060",
+#                         "layout_endpoint": "http://192.168.1.76:8010"}
+extends: paddle-ocr-vl
+model:
+  name: paddle-ocr-vl-3060
+  main_gpu: 0
+  split_mode: none
+  vision_projector_device: "CUDA0"
+  vision_pool_size: 4
