@@ -8,13 +8,16 @@ request asking a gemma box to load paddle, orphaned tool processes), so it lives
 here (operator ruling 2026-10-01: schedule the swap; it falls late at night).
 
     tools/transition_3060.py to repack [--wait-ocr-drained] [--bench-triage]
-    tools/transition_3060.py to ocr
+    tools/transition_3060.py to ocr [--wait-repack-idle]
 
   repack: box -> gemma-4-12b-3060; mission lanes: ocr OFF, repack_r1 ON
   ocr:    box -> paddle-ocr-vl-3060; mission lanes: ocr + ocr2 ON, repack OFF
 
 --wait-ocr-drained polls until nothing is pending OCR (the agent's own
 _extraction_pending) and no OCR tool runs for the open workspace.
+--wait-repack-idle polls the newest mission log until the repack lane has
+logged REPACK_LANE_IDLE three rounds running (no pack owed, no missed window
+owed that it may take), so the box returns to OCR when the lane runs dry.
 --bench-triage runs dev/bench_triage_judge.py's gemma arm on the idle box
 BETWEEN the swap and the repack lane's start (operator ruling: bench it in the
 OCR -> packing transition); the mission's muse lanes keep running meanwhile.
@@ -192,6 +195,26 @@ def wait_ocr_drained(poll_s: int = 300) -> None:
         time.sleep(poll_s)
 
 
+def wait_repack_idle(poll_s: int = 600, rounds: int = 3) -> None:
+    from agent.actions.curation_actions import REPACK_LANE_IDLE
+
+    while True:
+        logs = sorted(Path(os.path.expanduser("~/tmp")).glob("run_repack_*.log"))
+        tail: list[str] = []
+        if logs:
+            lines = logs[-1].read_text(errors="replace").splitlines()
+            tail = [ln for ln in lines if "repack lane" in ln or "window repair" in ln]
+        idle = 0
+        for ln in reversed(tail):
+            if REPACK_LANE_IDLE not in ln:
+                break
+            idle += 1
+        log(f"repack lane idle rounds in a row: {idle}/{rounds}")
+        if idle >= rounds:
+            return
+        time.sleep(poll_s)
+
+
 def _cmdlines(pids: list[int]) -> list[str]:
     out = []
     for p in pids:
@@ -230,11 +253,14 @@ def main() -> int:
     ap.add_argument("profile", choices=tuple(PROFILES))
     ap.add_argument("--wait-ocr-drained", action="store_true")
     ap.add_argument("--bench-triage", action="store_true")
+    ap.add_argument("--wait-repack-idle", action="store_true")
     a = ap.parse_args()
     target = PROFILES[a.profile]
     back = "ocr" if a.profile == "repack" else "repack"
     if a.wait_ocr_drained:
         wait_ocr_drained()
+    if a.wait_repack_idle:
+        wait_repack_idle()
     stop_mission()
     if not swap_box(target["model"]):
         log(f"SWAP FAILED -- restarting the mission on '{back}' as it was")

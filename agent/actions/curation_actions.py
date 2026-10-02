@@ -2822,6 +2822,8 @@ def _decline_repack(key: str, why: str) -> dict:
 # by guesswork.
 
 _WINDOW_REPAIR_DECLINED: set[str] = set()
+#: The log line of a repack round with nothing to take (pack or window).
+REPACK_LANE_IDLE = "repack lane idle: no repack or missed window owed"
 
 
 def _window_repair_rounds() -> int:
@@ -3081,12 +3083,16 @@ async def _window_repair_round(effects, databank: dict, _out):
     missed windows (the missed-window repair block above)."""
     key = await _select_window_repair(effects, databank)
     if not key:
+        # Logged every idle round: tools/transition_3060.py --wait-repack-idle
+        # reads it to hand the box back to OCR once this lane runs dry.
+        logger.info(REPACK_LANE_IDLE)
         return _out([], "no repack or missed window owed that this lane may take")
     try:
         res = await _repair_missed_windows(effects, key)
     except _CurateTransportFault as e:
         if _is_oversize_fault(str(e)) or _is_degenerate_fault(str(e)):
             _WINDOW_REPAIR_DECLINED.add(key)
+            logger.info("window repair: %s declined -- engine: %s", key, str(e)[:160])
             return _out(
                 [{"paper_key": key, "outcome": f"declined: engine: {str(e)[:160]}"}]
             )
@@ -3099,6 +3105,7 @@ async def _window_repair_round(effects, databank: dict, _out):
     finally:
         release_curate_keys([key])
     _CURATE_BOOKED[key] = time.monotonic()
+    logger.info("window repair: %s -- %s", key, res["outcome"])
     return _out([res])
 
 
