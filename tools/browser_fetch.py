@@ -300,7 +300,8 @@ async def run(args) -> int:
                 last_pos = pos
                 entry = {"at": dt.datetime.now(dt.timezone.utc).isoformat(),
                          "local_date": dt.date.today().isoformat(), "list": str(list_path),
-                         "position": pos, **res}  # fmt: skip
+                         "position": pos, **res,
+                         **({"ruling": args.ruling} if args.ruling else {})}  # fmt: skip
                 append_log(entry)
                 if res["outcome"] == "ok":
                     ok += 1
@@ -348,11 +349,17 @@ def main() -> int:
     ap.add_argument("--min-delay", type=float, default=MIN_DELAY_S)
     ap.add_argument("--max-delay", type=float, default=MAX_DELAY_S)
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument(
+        "--ruling",
+        default="",
+        help="an operator ruling allowing --daily-cap above the standing cap for this "
+        "run; recorded on every log entry",
+    )
     args = ap.parse_args()
-    if args.min_delay < MIN_DELAY_S or args.daily_cap > DAILY_CAP:
-        sys.exit(
-            f"pace below {MIN_DELAY_S:.0f} s or cap above {DAILY_CAP}/day needs the operator's ruling"
-        )
+    if args.min_delay < MIN_DELAY_S:
+        sys.exit(f"pace below {MIN_DELAY_S:.0f} s needs a new operator ruling")
+    if args.daily_cap > DAILY_CAP and not args.ruling:
+        sys.exit(f"cap above {DAILY_CAP}/day needs --ruling '<the operator's words>'")
     return asyncio.run(run(args))
 
 

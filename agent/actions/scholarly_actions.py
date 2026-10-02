@@ -2373,29 +2373,173 @@ async def _core_fulltext_urls(effects: Any, doi: str) -> list[str]:
     return urls
 
 
-async def action_recover_oa_locations(step_input: StepInput) -> StepOutput:
-    """Recover oa_unresolved papers through archive/aggregator routes.
+# ── Calendar re-checks of the unresolved pool (2026-10-02) ──────────────
+#
+# WHY. Both ways an unresolved paper is looked at again were tied to stages
+# that finish. The acquisition retry (is_stale_retry_candidate, with its 1-2-4-8
+# day backoff) only rides the catalog sweep, which runs while the corpus goal
+# is open -- it closed on 2026-09-06 and the last retry was 2026-09-01, while
+# 1,276 papers sat eligible. The recovery pass below stamped every paper once
+# (2026-08-20..09-01) and, by design, never again. So a publisher repairing a
+# dead link, or an aggregator catching up on a recent paper, went unseen.
+#
+# This lane runs on the network resource alone, all the time, so it now also
+# takes (a) a few STALE ACQUISITION RETRIES per round -- the catalog flow's own
+# resolve + download, same eligibility, same backoff -- and (b) a MONTHLY
+# RE-PASS of the recovery: papers whose last pass is older than
+# OUROBOROS_OA_REPASS_DAYS re-check their stored links (the "was it repaired?"
+# test; walled hosts skipped, a retry there is the same request to the same
+# wall) and ask Wayback, the landing page and CORE again. Small per-round
+# budgets spread the first month's backlog over days instead of a burst.
 
-    Drain-shaped (budgeted, claim-free, declines with a reason): walks
-    unrecovered oa_unresolved records — strong-tagged first, then
-    deterministic — and tries, per record:
 
-      1. Wayback snapshots of the stored OA locations
-      2. the landing page's citation_pdf_url declaration (when the page
-         itself serves us), plus Wayback of THAT target on a direct miss
-      3. CORE's aggregated copy by DOI (keyed POST)
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    try:
+        return max(0, int(raw)) if raw else default
+    except ValueError:
+        return default
 
-    A success flips the record to oa_pdf with pdf_path set, so the OCR
-    lane picks it up with no further wiring. Each record is stamped
-    `oa_recover_attempted_at` — one pass per record per e-poch; re-arming
-    a miss is deliberate operator action (aggregators lag months for
-    recent articles, so a later pass IS worth it — but on a calendar,
-    not a loop).
 
-    Params/env: budget (OUROBOROS_OA_RECOVER_PAPERS, default 6; 0 disables).
+def _repass_days() -> float:
+    raw = os.environ.get("OUROBOROS_OA_REPASS_DAYS", "").strip()
+    try:
+        return max(0.0, float(raw)) if raw else 30.0
+    except ValueError:
+        return 30.0
+
+
+def recovery_repass_due(rec: dict) -> bool:
+    """An unresolved paper whose last recovery pass is a calendar period old."""
+    if (
+        rec.get("access_status") != "oa_unresolved"
+        or rec.get("record_kind") == "supplement"
+    ):
+        return False
+    if not (rec.get("oa_pdf_urls") or rec.get("oa_pdf_url") or rec.get("doi")):
+        return False
+    days = _repass_days()
+    last = rec.get("oa_recover_attempted_at")
+    if days <= 0 or not last:  # the first pass owns never-walked papers
+        return False
+    return _iso_age_days(str(last)) >= days
+
+
+async def _recover_one(effects: Any, rec: dict, *, recheck_stored: bool = False):
+    """One recovery pass over one record; books it; returns the outcome or None.
+
+    The first pass (recheck_stored=False) is the original ladder exactly:
+    Wayback of the stored locations, the landing page's declared PDF (and its
+    Wayback), CORE by DOI -- skipping anything already tried. A RE-PASS also
+    re-tries the stored locations themselves first (not on walled hosts) and
+    ignores the tried list: a month later every door is worth one more knock.
     """
     from agent.persistence.models import _now_iso
 
+    rec = dict(rec)
+    rec["oa_recover_attempted_at"] = _now_iso()
+    if recheck_stored:
+        rec["oa_recover_passes"] = int(rec.get("oa_recover_passes") or 1) + 1
+    stored = list(
+        rec.get("oa_pdf_urls") or ([rec["oa_pdf_url"]] if rec.get("oa_pdf_url") else [])
+    )
+
+    candidates: list[tuple[str, str]] = []
+    if recheck_stored:
+        candidates += [("recheck", u) for u in stored if u and not _is_walled(u)]
+    for u in stored[:2]:
+        snap = await _wayback_snapshot(effects, u)
+        if snap:
+            candidates.append(("wayback", snap))
+    page = await polite_request(effects, "GET", stored[0]) if stored else None
+    if page is not None and page.status == 200 and page.text:
+        meta = _meta_pdf_url(page.text, stored[0])
+        if meta and meta not in stored:
+            candidates.append(("meta", meta))
+            snap = await _wayback_snapshot(effects, meta)
+            if snap:
+                candidates.append(("meta-wayback", snap))
+    for u in await _core_fulltext_urls(effects, str(rec.get("doi") or "")):
+        candidates.append(("core", u))
+
+    tried = set() if recheck_stored else set(rec.get("oa_attempted") or [])
+    seen: set[str] = set()
+    outcome = None
+    for how, u in candidates:
+        if not u or u in tried or u in seen:
+            continue
+        seen.add(u)
+        key = rec.get("paper_key") or paper_key(rec)
+        path = f"{PDF_DIR}/{key}.pdf"
+        dl = await effects.http_download(u, path)
+        attempted = rec.setdefault("oa_attempted", [])
+        if u not in attempted:
+            attempted.append(u)
+        if dl.success:
+            rec["pdf_path"] = path
+            rec["oa_pdf_url"] = u
+            rec["access_status"] = "oa_pdf"
+            rec["failure_reason"] = ""
+            outcome = {"paper_key": key, "via": how}
+            break
+    # Book PER RECORD: a recovered PDF must survive whatever stops the round,
+    # and a stamped miss must not be re-walked next round.
+    await append_records(effects, [rec])
+    return outcome
+
+
+async def _retry_stale_acquisition(step_input: StepInput, rec: dict):
+    """The catalog flow's resolve + download for one stale failure, booked here.
+
+    resolve_oa_pdf does the re-arm itself (clears the tried list, stamps
+    oa_retried_at, counts the attempt before it is made) and may ask Unpaywall
+    for fresh locations; download walks them. Neither books the record -- in
+    the catalog flow a later step does -- so this does, keeping a catalogued
+    paper catalogued (download stamps 'acquired').
+    """
+    rec = dict(rec)
+    prior = rec.get("status")
+    single = step_input.model_copy(update={"context": {"catalog_batch": [rec]}})
+    for action in (action_resolve_oa_pdf, action_download_papers):
+        try:
+            await action(single)
+        except Exception as exc:  # noqa: BLE001 -- one record must not sink the round
+            logger.warning(
+                "stale retry: %s failed on %s: %s",
+                action.__name__,
+                rec.get("paper_key"),
+                exc,
+            )
+            break
+    if prior in ("cataloged", "needs_retag") and rec.get("status") != prior:
+        rec["status"] = prior
+    await append_records(effects=step_input.effects, records=[rec])
+    if rec.get("pdf_path") and rec.get("access_status") == "oa_pdf":
+        return {"paper_key": rec.get("paper_key"), "via": "retry"}
+    return None
+
+
+async def action_recover_oa_locations(step_input: StepInput) -> StepOutput:
+    """Recover oa_unresolved papers: first passes, stale retries, monthly re-passes.
+
+    Drain-shaped (budgeted, claim-free, declines with a reason). Per round, in
+    priority order:
+
+      1. FIRST PASS (OUROBOROS_OA_RECOVER_PAPERS, default 6): never-walked
+         unresolved papers, strong-tagged first -- Wayback snapshots of the
+         stored locations, the landing page's citation_pdf_url (and its
+         Wayback), CORE's copy by DOI. Stamped `oa_recover_attempted_at`.
+      2. STALE ACQUISITION RETRIES (OUROBOROS_OA_RECHECK_STALE, default 2):
+         is_stale_retry_candidate papers through resolve + download, with the
+         acquisition's own 1-2-4-8 day backoff and retry cap.
+      3. MONTHLY RE-PASS (OUROBOROS_OA_REPASS_PAPERS, default 2; period
+         OUROBOROS_OA_REPASS_DAYS, default 30, 0 disables): the recovery again
+         for papers whose last pass is that old, re-checking the stored links
+         themselves (walled hosts skipped). Oldest pass first.
+
+    A success flips the record to oa_pdf with pdf_path set, so the OCR lane
+    picks it up with no further wiring.
+    """
     effects = step_input.effects
     raw = os.environ.get("OUROBOROS_OA_RECOVER_PAPERS", "").strip()
     try:
@@ -2421,8 +2565,6 @@ async def action_recover_oa_locations(step_input: StepInput) -> StepOutput:
         and not r.get("oa_recover_attempted_at")
         and (r.get("oa_pdf_urls") or r.get("oa_pdf_url"))
     ]
-    if not pend:
-        return _decline("nothing unrecovered pending")
 
     def _prio(r: dict):
         strong = any(
@@ -2432,67 +2574,55 @@ async def action_recover_oa_locations(step_input: StepInput) -> StepOutput:
         return (0 if strong else 1, r.get("paper_key", ""))
 
     pend.sort(key=_prio)
-    attempted = recovered = 0
+    first = pend[:budget]
+    stale = sorted(
+        (r for r in databank.values() if is_stale_retry_candidate(r)),
+        key=lambda r: (
+            RETRYABLE_BUCKETS.index(classify_failure(r.get("failure_reason", ""))),
+            r.get("paper_key", ""),
+        ),
+    )[: _env_int("OUROBOROS_OA_RECHECK_STALE", 2)]
+    repass = sorted(
+        (r for r in databank.values() if recovery_repass_due(r)),
+        key=lambda r: (
+            str(r.get("oa_recover_attempted_at") or ""),
+            r.get("paper_key", ""),
+        ),
+    )[: _env_int("OUROBOROS_OA_REPASS_PAPERS", 2)]
+    if not (first or stale or repass):
+        return _decline("nothing unrecovered pending, no retry or re-pass due")
+
     outcomes: list[dict] = []
-    for rec in pend[:budget]:
-        rec = dict(rec)
-        attempted += 1
-        rec["oa_recover_attempted_at"] = _now_iso()
-        stored = list(
-            rec.get("oa_pdf_urls")
-            or ([rec["oa_pdf_url"]] if rec.get("oa_pdf_url") else [])
-        )
-
-        candidates: list[tuple[str, str]] = []
-        for u in stored[:2]:
-            snap = await _wayback_snapshot(effects, u)
-            if snap:
-                candidates.append(("wayback", snap))
-        page = await polite_request(effects, "GET", stored[0]) if stored else None
-        if page is not None and page.status == 200 and page.text:
-            meta = _meta_pdf_url(page.text, stored[0])
-            if meta and meta not in stored:
-                candidates.append(("meta", meta))
-                snap = await _wayback_snapshot(effects, meta)
-                if snap:
-                    candidates.append(("meta-wayback", snap))
-        for u in await _core_fulltext_urls(effects, str(rec.get("doi") or "")):
-            candidates.append(("core", u))
-
-        tried = set(rec.get("oa_attempted") or [])
-        seen: set[str] = set()
-        for how, u in candidates:
-            if not u or u in tried or u in seen:
-                continue
-            seen.add(u)
-            key = rec.get("paper_key") or paper_key(rec)
-            path = f"{PDF_DIR}/{key}.pdf"
-            dl = await effects.http_download(u, path)
-            rec.setdefault("oa_attempted", []).append(u)
-            if dl.success:
-                rec["pdf_path"] = path
-                rec["oa_pdf_url"] = u
-                rec["access_status"] = "oa_pdf"
-                rec["failure_reason"] = ""
-                recovered += 1
-                outcomes.append({"paper_key": key, "via": how})
-                break
-        # Book PER RECORD: a recovered PDF must survive whatever stops the
-        # round, and a stamped miss must not be re-walked next round.
-        await append_records(effects, [rec])
+    for rec in first:
+        hit = await _recover_one(effects, rec)
+        if hit:
+            outcomes.append(hit)
+    retried = 0
+    for rec in stale:
+        retried += 1
+        hit = await _retry_stale_acquisition(step_input, rec)
+        if hit:
+            outcomes.append(hit)
+    for rec in repass:
+        hit = await _recover_one(effects, rec, recheck_stored=True)
+        if hit:
+            outcomes.append(hit)
 
     summary = {
-        "attempted": attempted,
-        "recovered": recovered,
+        "attempted": len(first),
+        "recovered": len(outcomes),
         "outcomes": outcomes,
-        "remaining": max(0, len(pend) - attempted),
+        "remaining": max(0, len(pend) - len(first)),
+        "stale_retried": retried,
+        "repassed": len(repass),
     }
     return StepOutput(
         result=summary,
         observations=(
-            f"oa recovery: {recovered}/{attempted} recovered "
-            f"({', '.join(o['via'] for o in outcomes) or 'none'}); "
-            f"{summary['remaining']} still unwalked"
+            f"oa recovery: {len(outcomes)} recovered "
+            f"({', '.join(o['via'] for o in outcomes) or 'none'}) from {len(first)} first "
+            f"pass(es), {retried} stale retr{'y' if retried == 1 else 'ies'}, "
+            f"{len(repass)} re-pass(es); {summary['remaining']} still unwalked"
         ),
         context_updates={"recover_summary": summary},
     )

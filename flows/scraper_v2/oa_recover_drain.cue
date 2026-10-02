@@ -10,6 +10,12 @@
 // us, and CORE's keyed by-DOI lookup reaches aggregated copies. The
 // action asks those third doors and never beats on the wall.
 //
+// CALENDAR RE-CHECKS (2026-10-02). The lane also runs a few stale
+// acquisition retries per round (the catalog flow's resolve + download, with
+// its 1-2-4-8 day backoff) and a monthly re-pass of the recovery that
+// re-checks the stored links themselves -- both used to depend on stages
+// that finish (see recover_oa_locations).
+//
 // BRANCH-SAFE: databank-only writes (append_records per record), no
 // mission mutation, in-line politeness via the shared per-host pacer.
 // Bound: OUROBOROS_OA_RECOVER_PAPERS (default 6; 0 disables).
@@ -21,8 +27,9 @@ oa_recover_drain: #FlowDefinition & {
 	version: 1
 	description: """
 		Walk a bounded slice of oa_unresolved papers through Wayback,
-		citation_pdf_url, and CORE-by-DOI recovery routes. A success
-		flips the record to oa_pdf so the OCR lane picks it up.
+		citation_pdf_url, and CORE-by-DOI recovery routes, plus a few stale
+		acquisition retries and monthly re-checks of earlier misses. A
+		success flips the record to oa_pdf so the OCR lane picks it up.
 		"""
 
 	context_tier: "session_task"

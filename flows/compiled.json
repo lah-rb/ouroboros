@@ -27770,7 +27770,7 @@
   "oa_recover_drain": {
     "flow": "oa_recover_drain",
     "version": 1,
-    "description": "Walk a bounded slice of oa_unresolved papers through Wayback,\ncitation_pdf_url, and CORE-by-DOI recovery routes. A success\nflips the record to oa_pdf so the OCR lane picks it up.",
+    "description": "Walk a bounded slice of oa_unresolved papers through Wayback,\ncitation_pdf_url, and CORE-by-DOI recovery routes, plus a few stale\nacquisition retries and monthly re-checks of earlier misses. A\nsuccess flips the record to oa_pdf so the OCR lane picks it up.",
     "context_tier": "session_task",
     "returns": {
       "recover_summary": {
