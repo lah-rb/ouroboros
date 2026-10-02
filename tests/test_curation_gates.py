@@ -236,7 +236,8 @@ def test_registry_update_counts_and_format_block():
     block = format_key_registry(registry)
     # Most-used first, exemplar shown.
     assert block.index("yield_strength_mpa") < block.index("hardness_hv")
-    assert "e.g. 759" in block
+    assert "e.g. xxx" in block, "the exemplar's shape, its value masked (2026-10-02)"
+    assert "759" not in block
     assert "coin clear" in format_key_registry({})  # empty-registry guidance
 
 
@@ -579,11 +580,11 @@ def test_unicode_middle_dot_decimal_grounds():
 
 
 def test_cdot_power_of_ten_product_is_not_a_decimal():
-    # "2\cdot 10^{-3}" is multiplication: neither 2.10 nor 0.002 may ground
-    # from it (0.002 is a conversion the paper never states).
-    for value in (2.10, 0.002):
-        result = grounding_check({"k": value}, _CDOT_MD)
-        assert result["passed"] is False, value
+    # "2\cdot 10^{-3}" is multiplication: 2.10 may never ground from it. Its
+    # VALUE, 0.002, now does (2026-10-02): power-of-ten notation is how the
+    # paper states 0.002, and the audit found 131 such correct values flagged.
+    assert grounding_check({"k": 2.10}, _CDOT_MD)["passed"] is False
+    assert grounding_check({"k": 0.002}, _CDOT_MD)["passed"] is True
 
 
 def test_plain_document_unchanged_by_cdot_variant():
@@ -666,3 +667,64 @@ def test_a_packed_identifier_grounds_by_its_whole_run():
     assert _grounds("10.1016/j.marpolbul.2011.05.030", doc)
     assert _grounds("Nikon 283,008", "by optical microscopy (Nikon 283,008)")
     assert not _grounds("2011.05", "a value of 2011.053 was recorded")
+
+
+# ── Printed forms that are not digit strings (2026-10-02 audit) ──────
+
+
+@pytest.mark.parametrize(
+    "value,doc",
+    [
+        (700000, "max output count rate 7 × 10^5 cps"),
+        (0.0004, "a ratio of 4 × 10⁻⁴"),
+        (100000000.0, "A = $ 1.0 \\times 10^{{8}} $ s^-1"),  # OCR'd double braces
+        (1e-05, "a step of 0.00001 s"),  # repr(1e-05) used to tokenize as "05"
+        ("5.9e-05 a.u.", "absorbance 0.000059"),
+        (1.2e-05, "D = 1.2E-05 cm2/s"),
+        (1.7e9, "about 1.7 billion years"),
+        (53, "Fifty-three samples"),
+        (0.93, "Na P₀.₉₃ O₄"),
+        (80, "the ⁸⁰Kr isotope"),
+        ("006", "reflections (0 0 6) and (1 1 0)"),
+        (1000000, "magnified 1.000.000 x"),
+        (0.87, "414 (0,87), 482 (0,93)"),  # lone decimal comma
+        (1250, "7. 1,250 °C"),  # list marker beside a thousands group
+        (23400, "Kα 23 400(570)"),  # value with its uncertainty
+    ],
+)
+def test_other_printed_forms_of_a_stated_number_ground(value, doc):
+    assert _grounds(value, doc)
+
+
+@pytest.mark.parametrize(
+    "value,doc",
+    [
+        (30, "a 3 x 10 mm slab"),  # a dimension, not 3 × 10^1
+        (105, "a ratio of 10⁵ counts"),
+        (128, "30 scans were averaged"),
+        (50000, "precision 50.000 ± 0.002"),  # one period group: a decimal here
+        (1.2, "as shown before [1,2]"),  # a citation pair is no decimal comma
+    ],
+)
+def test_the_new_forms_do_not_ground_what_is_not_printed(value, doc):
+    assert not _grounds(value, doc)
+
+
+def test_registry_examples_are_masked_and_a_copied_mask_fails_the_gate():
+    from agent.actions.curation_actions import (
+        _run_pack_gates,
+        format_key_registry,
+        mask_exemplar,
+    )
+
+    assert mask_exemplar("1.54") == "x.xx"
+    assert mask_exemplar('["ICSD 01-080-0019"]') == '["ICSD xx-xxx-xxxx"]'
+    assert mask_exemplar('{"peak_cm-1": 1086, "f": "Fe2O3"}') == (
+        '{"peak_cm-1": xxxx, "f": "Fe2O3"}'
+    ), "key names and formulas are structure, not values"
+    reg = {
+        "xrd_wavelength_angstrom": {"type": "number", "count": 9, "exemplar": "1.54"}
+    }
+    assert "e.g. x.xx" in format_key_registry(reg)
+    gates = _run_pack_gates({"reference_codes": ["ICSD xx-xxx-xxxx"]}, "no codes", {})
+    assert not gates["passed"] and "MASKED EXAMPLE COPIED" in gates["feedback"]

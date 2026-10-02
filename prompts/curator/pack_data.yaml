@@ -26,7 +26,8 @@ sections:
 
   - id: key_registry
     content: |
-      Current dataset key vocabulary (reuse before coining):
+      Current dataset key vocabulary (reuse before coining; each example shows a
+      key's shape, with its numbers masked as x):
 
       {context.key_registry_block}
 

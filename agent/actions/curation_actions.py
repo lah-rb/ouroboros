@@ -154,7 +154,7 @@ def _numeric_leaf_claims(value, path: str = "") -> list[tuple[str, str, str]]:
     if isinstance(value, bool) or value is None:
         return out
     if isinstance(value, (int, float)):
-        for tok in _NUM_RE.findall(repr(value)):
+        for tok in _NUM_RE.findall(_numeric_repr(value)):
             out.append((path, tok, tok.lstrip("-")))
     elif isinstance(value, str):
         for m in _NUM_RE.finditer(value):
@@ -174,6 +174,18 @@ def _numeric_leaf_claims(value, path: str = "") -> list[tuple[str, str, str]]:
 
 
 _RUN_CHARS = frozenset("0123456789.,")
+
+
+def _numeric_repr(value) -> str:
+    """A number as the claim it makes: repr, except that a float Python would
+    print in e-notation is written out plainly -- repr(1e-05) is "1e-05",
+    whose only token used to be the exponent "05" (2026-10-02 audit)."""
+    r = repr(value)
+    if "e" in r.lower() and isinstance(value, float):
+        from decimal import Decimal
+
+        r = format(Decimal(r), "f")
+    return r
 
 
 def _numeric_leaf_tokens(value, path: str = "") -> list[tuple[str, str]]:
@@ -251,7 +263,13 @@ def _join_digit_groups(text: str) -> str:
     compaction existed for -- measured on the 2026-10-02 audit of 2,269 packs.
     """
     text = _THOUSANDS_RE.sub(lambda m: re.sub(r"[ ,]", "", m.group()), text)
-    text = _DECIMAL_GROUPS_RE.sub(lambda m: m.group().replace(" ", ""), text)
+    return _DECIMAL_GROUPS_RE.sub(lambda m: m.group().replace(" ", ""), text)
+
+
+def _join_split_points(text: str) -> str:
+    """OCR's split decimal point rejoined ("4. 19" -> "4.19") -- its OWN text:
+    applied together with the thousands join it turned a list marker and a
+    value ("7. 1,250") into "7.1250", hiding the 1250 the join had made."""
     return _SPLIT_POINT_RE.sub("", text)
 
 
@@ -362,6 +380,123 @@ def _cdot_decimal_variant(doc_n: str) -> str:
     return out if out != doc_n else ""
 
 
+# ── Printed forms that are not digit strings (2026-10-02 audit) ─────
+#
+# Four reviewers read 120 gate-flagged values against their papers: 55% were
+# CORRECT, written in a form the matcher could not see. These are the forms;
+# each yields VALUES (compared numerically) or an extra TEXT (matched whole),
+# never a replacement for the paper's own text.
+
+_SUP = "⁰¹²³⁴⁵⁶⁷⁸⁹"
+_SUB = "₀₁₂₃₄₅₆₇₈₉"
+_SUPSUB_TO_ASCII = str.maketrans(_SUP + _SUB + "⁻₋⁺₊", "0123456789" * 2 + "  ++")
+_TIMES = r"(?:×|\\times|\\cdot|·|\*|[xX])"
+#: m × 10^e with an EXPLICIT exponent marker (^, **, LaTeX braces or a
+#: superscript): "3 x 10 mm" is a dimension, never 30.
+_POW_ASCII_RE = re.compile(
+    r"(?<![\d.])(\d+(?:[.,]\d+)?)\s*"
+    + _TIMES
+    + r"\s*10\s*(?:\^|\*\*)\s*\{*\s*([-−–+]?)\s*(\d+)"
+)
+_POW_SUP_RE = re.compile(
+    r"(?<![\d.])(?:(\d+(?:[.,]\d+)?)\s*" + _TIMES + r"\s*)?10([⁻⁺]?)([" + _SUP + r"]+)"
+)
+_POW_BARE_RE = re.compile(r"(?<![\d.])10\s*\^\s*\{*\s*([-−–+]?)\s*(\d+)")
+_E_NOTATION_RE = re.compile(r"(?<![\w.])(\d+(?:\.\d+)?)[eE]([-+−]?\d+)(?!\w)")
+_SCALE_WORD_RE = re.compile(
+    r"(?<![\d.])(\d+(?:[.,]\d+)?)\s*(hundred|thousand|million|billion|trillion)\b", re.I
+)
+_SCALE = {
+    "hundred": 1e2,
+    "thousand": 1e3,
+    "million": 1e6,
+    "billion": 1e9,
+    "trillion": 1e12,
+}
+_UNITS = "one two three four five six seven eight nine".split()
+_TEENS = "ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen".split()
+_TENS = "twenty thirty forty fifty sixty seventy eighty ninety".split()
+_WORD_NUMBER_RE = re.compile(
+    r"\b(?:("
+    + "|".join(_TENS)
+    + r")(?:[\s-]("
+    + "|".join(_UNITS)
+    + r"))?|("
+    + "|".join(_TEENS)
+    + r"))\b",
+    re.I,
+)
+_HKL_RE = re.compile(r"\(\s*(\d)\s+(\d)\s+(\d)\s*\)")
+_PERIOD_CHAIN_RE = re.compile(r"(?<![\d.,])\d{1,3}(?:\.\d{3}){2,}(?!\d|\.\d)")
+_PERIOD_GROUP_RE = re.compile(r"(?<![\d.,])\d{1,3}\.\d{3}(?!\d|\.\d)")
+
+
+def _num_key(v: float) -> float:
+    return float(f"{abs(v):.10g}")
+
+
+def _mantissa(m: str) -> float:
+    return float(m.replace(",", "."))
+
+
+def _signed(sign: str, digits: str) -> int:
+    return -int(digits) if sign and sign in "-−–" else int(digits)
+
+
+def _printed_values(doc: str) -> set[float]:
+    """Numbers the paper prints in a form that is not a plain digit string:
+    powers of ten, E-notation, number words, a numeral with a scale word."""
+    out: set[float] = set()
+
+    def add(v: float) -> None:
+        if v and v == v and abs(v) < 1e300:
+            out.add(_num_key(v))
+
+    for m in _POW_ASCII_RE.finditer(doc):
+        add(_mantissa(m.group(1)) * 10.0 ** _signed(m.group(2), m.group(3)))
+    for m in _POW_SUP_RE.finditer(doc):
+        e = _signed(
+            "-" if m.group(2) == "⁻" else "", m.group(3).translate(_SUPSUB_TO_ASCII)
+        )
+        add((_mantissa(m.group(1)) if m.group(1) else 1.0) * 10.0**e)
+    for m in _POW_BARE_RE.finditer(doc):
+        add(10.0 ** _signed(m.group(1), m.group(2)))
+    for m in _E_NOTATION_RE.finditer(doc):
+        add(float(m.group(1)) * 10.0 ** int(m.group(2).replace("−", "-")))
+    for m in _SCALE_WORD_RE.finditer(doc):
+        add(_mantissa(m.group(1)) * _SCALE[m.group(2).lower()])
+    for m in _WORD_NUMBER_RE.finditer(doc):
+        if m.group(3):
+            add(10 + _TEENS.index(m.group(3).lower()))
+        else:
+            add(
+                20
+                + 10 * _TENS.index(m.group(1).lower())
+                + (_UNITS.index(m.group(2).lower()) + 1 if m.group(2) else 0)
+            )
+    return out
+
+
+def _extra_texts(doc: str, doc_n: str, comma_convention: bool) -> list[str]:
+    """Additional texts a token may stand whole in: super/subscript digits
+    written plainly (P₀.₉₃, ⁸⁰Kr; power-of-ten superscripts are values, not
+    text), spaced Miller indices "(0 0 6)", and period thousands -- a chain
+    "1.000.000" always, a single "50.000" only where decimals take commas."""
+    texts = []
+    plain = _POW_SUP_RE.sub(" ", doc_n).translate(_SUPSUB_TO_ASCII)
+    if plain != doc_n:
+        texts.append(plain)
+    hkl = " ".join("".join(m.groups()) for m in _HKL_RE.finditer(doc))
+    if hkl:
+        texts.append(hkl)
+    joined = _PERIOD_CHAIN_RE.sub(lambda m: m.group().replace(".", ""), doc_n)
+    if comma_convention:
+        joined = _PERIOD_GROUP_RE.sub(lambda m: m.group().replace(".", ""), joined)
+    if joined != doc_n:
+        texts.append(joined)
+    return texts
+
+
 def grounding_check(data: dict, doc: str) -> dict:
     """Every numeric token in ``data`` must appear in the curator doc.
 
@@ -384,12 +519,17 @@ def grounding_check(data: dict, doc: str) -> dict:
     wrong quantity.
     """
     doc_n = _norm(doc)
-    texts = [
-        t
-        for t in (doc_n, _decimal_comma_variant(doc_n), _cdot_decimal_variant(doc_n))
-        if t
-    ]
-    texts += [j for t in list(texts) if (j := _join_digit_groups(t)) != t]
+    doc_decimal = _decimal_comma_variant(doc_n)
+    texts = [t for t in (doc_n, doc_decimal, _cdot_decimal_variant(doc_n)) if t]
+    texts += _extra_texts(doc, doc_n, bool(doc_decimal))
+    base = list(texts)
+    texts += [j for t in base if (j := _join_digit_groups(t)) != t]
+    texts += [j for t in base if (j := _join_split_points(t)) != t]
+    # Grouping joined BEFORE normalisation too: _norm turns "(" into a space,
+    # so "23 400(570)" -- a value and its uncertainty -- fused into 23400570.
+    if (j := _norm(_join_digit_groups(doc))) not in texts:
+        texts.append(j)
+    values = _printed_values(doc)
     claims = _numeric_leaf_claims(data)
 
     # Match UNSIGNED: _norm strips '-' from the doc (markdown dash
@@ -401,9 +541,30 @@ def grounding_check(data: dict, doc: str) -> dict:
     def grounded(tok: str, run: str) -> bool:
         u = tok.lstrip("-")
         candidates = {u, run, _join_digit_groups(run)}
+        if "." in u:
+            # A lone decimal comma in a paper that does not use the convention
+            # often enough for the comma variant: "(0,87)", "12,0017 Å". Never a
+            # three-digit fraction (a thousands group) and never "d,d" (a
+            # citation pair like [1,2]).
+            whole, frac = u.split(".", 1)
+            if len(frac) != 3 and (len(frac) >= 2 or whole == "0"):
+                candidates.add(f"{whole},{frac}")
         if re.fullmatch(r"\d+\.0+", u):
             candidates.add(u.split(".")[0])  # 10.0 packed for a printed "10"
-        return any(c and _stands_whole(c, t) for c in candidates for t in texts)
+        if "e" in u.lower():  # "5.9e-05" packed in a string, "0.000059" printed
+            try:
+                from decimal import Decimal
+
+                plain = format(Decimal(u), "f")
+                candidates.add(plain.rstrip("0").rstrip(".") if "." in plain else plain)
+            except ArithmeticError:
+                pass
+        if any(c and _stands_whole(c, t) for c in candidates for t in texts):
+            return True
+        try:
+            return _num_key(float(u)) in values  # "7 × 10^5", "fifty-three"
+        except ValueError:
+            return False
 
     ungrounded = [
         {"path": path, "token": tok}
@@ -734,6 +895,46 @@ async def fold_pack_into_registry(
     return v
 
 
+# EXEMPLARS ARE SHAPES, NOT VALUES (operator ruling 2026-10-02). Each registry
+# line showed the first paper's real value ("xrd_wavelength_angstrom ... e.g.
+# 1.54"), and the 2026-10-02 audit of gate-flagged values found models pasting
+# them into papers that never state them: ICSD/PDF card codes in 12-16 packs,
+# 1.54 A for a Co Kalpha paper and for a thesis with no XRD, 1064 nm for an
+# Nd:KGW laser, 128 scans, pH 8.2 -- 112 flagged values in 52 packs, and the
+# copies that happened to ground elsewhere in their paper were invisible. A
+# number in an exemplar is now masked digit for digit ("1.54" -> "x.xx",
+# "ICSD 01-080-0019" -> "ICSD xx-xxx-xxxx"): the key's shape and units stay,
+# the value does not. Digits glued to a name are kept: formula subscripts
+# (Fe2O3, H2O), unit exponents in key names (peak_cm-1), alloy and identifier
+# parts (Ti-6Al-4V, d_200) are structure, not a copyable measurement.
+_EXEMPLAR_NUMBER_RE = re.compile(r"(?<!\w)(?<![^\W\d_]-)\d+")
+#: A masked exemplar copied into a pack: runs of x joined like a number.
+_PLACEHOLDER_RE = re.compile(r"(?<![^\W\d_])x+(?:[.,:/-]x+)+(?![^\W\d_])|\bx{3,}\b")
+
+
+def mask_exemplar(text: str) -> str:
+    return _EXEMPLAR_NUMBER_RE.sub(lambda m: "x" * len(m.group()), text)
+
+
+def placeholder_leaves(value, path: str = "") -> list[str]:
+    """Paths of string leaves carrying a masked-exemplar placeholder."""
+    if isinstance(value, str):
+        return [path] if _PLACEHOLDER_RE.search(value) else []
+    if isinstance(value, list):
+        return [
+            p
+            for i, v in enumerate(value)
+            for p in placeholder_leaves(v, f"{path}[{i}]")
+        ]
+    if isinstance(value, dict):
+        return [
+            p
+            for k, v in value.items()
+            for p in placeholder_leaves(v, f"{path}.{k}" if path else str(k))
+        ]
+    return []
+
+
 def format_key_registry(registry: dict, top_n: int = REGISTRY_PROMPT_TOP_N) -> str:
     """Prompt block: the current vocabulary, most-used first.
 
@@ -750,7 +951,7 @@ def format_key_registry(registry: dict, top_n: int = REGISTRY_PROMPT_TOP_N) -> s
         line = f"- {key} ({entry.get('type')}, {entry.get('count')} paper(s))"
         if desc:
             line += f": {desc}"
-        line += f" — e.g. {entry.get('exemplar')}"
+        line += f" — e.g. {mask_exemplar(str(entry.get('exemplar') or ''))}"
         lines.append(line)
     if len(ranked) > top_n:
         lines.append(f"...and {len(ranked) - top_n} more keys")
@@ -3815,8 +4016,14 @@ def _run_pack_gates(data: dict, doc: str, registry: dict) -> dict:
             for m in reg["type_mismatches"][:8]
         )
         problems.append(f"TYPE MISMATCHES vs registry: {mm}")
+    copied = placeholder_leaves(data)
+    if copied:
+        problems.append(
+            "MASKED EXAMPLE COPIED (the registry's x placeholders show a key's "
+            f"shape, not a value — remove): {', '.join(copied[:8])}"
+        )
     return {
-        "passed": g["passed"] and not reg["type_mismatches"],
+        "passed": g["passed"] and not reg["type_mismatches"] and not copied,
         "feedback": "\n".join(problems),
         "grounding": g,
         "registry": reg,
