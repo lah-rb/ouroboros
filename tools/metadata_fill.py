@@ -67,7 +67,7 @@ PROMPT = """Below is the OPENING of a {kind} as extracted from a scan or PDF: {w
 </text>
 
 Return ONLY a JSON object with these keys (null for anything not printed in the text above; never guess, never use outside knowledge):
-{{"title": "the full title, with any subtitle after a colon", "authors": ["each author or editor's full name as printed"], "year": "the publication or copyright year of THIS edition (4 digits)", "edition": "the edition statement, e.g. Fifth Edition", "publisher": "the publisher's name", "isbn": "one ISBN printed for this edition", "venue": "the journal or series name"}}"""
+{{"title": "the full title, with any subtitle after a colon", "authors": ["each author's full name as printed on the title page; for an edited volume its editors only, never chapter authors"], "year": "the publication or copyright year of THIS edition (4 digits)", "edition": "the edition statement, e.g. Fifth Edition", "publisher": "the publisher's name", "isbn": "one ISBN printed for this edition", "venue": "the journal or series name"}}"""
 
 
 # ── fields ────────────────────────────────────────────────────────────
@@ -146,6 +146,31 @@ def verified(field: str, value, text: str) -> bool:
     return bool(_fold(value)) and _fold(value) in folded
 
 
+_SMALL_WORDS = frozenset(
+    "a an and as at but by for from in into nor of on or per the to via with".split()
+)
+
+
+def _decap(s: str) -> str:
+    """Title-case a value OCR'd from an all-capitals title page or cover
+    ("PRINCIPLES OF INSTRUMENTAL ANALYSIS", "MINERALOGICAL SOCIETY of
+    AMERICA"); anything already in mixed case is left as printed."""
+    letters = [c for c in s if c.isalpha()]
+    if len(letters) < 4 or sum(c.isupper() for c in letters) / len(letters) < 0.8:
+        return s
+    out = []
+    for i, w in enumerate(s.split(" ")):
+        low = w.lower()
+        if i and low in _SMALL_WORDS:
+            out.append(low)
+        elif any(c.isdigit() for c in w):
+            out.append(w)
+        else:
+            parts = re.split(r"([-/])", w)  # X-Ray, Brooks/Cole
+            out.append("".join(p[:1].upper() + p[1:].lower() for p in parts))
+    return " ".join(out)
+
+
 def _clean(field: str, value):
     """A model or registry value in the record's own shape, or None."""
     if _empty(value):
@@ -153,11 +178,11 @@ def _clean(field: str, value):
     if field == "authors":
         if isinstance(value, str):
             value = [value]
-        names = [
-            re.sub(r"\s+", " ", html.unescape(str(n))).strip()
-            for n in value
-            if str(n).strip()
-        ]
+        names: list[str] = []
+        for n in value:
+            name = _decap(re.sub(r"\s+", " ", html.unescape(str(n))).strip())
+            if name and _fold(name) not in {_fold(x) for x in names}:
+                names.append(name)
         return names or None
     if field == "year":
         m = re.search(r"(1[5-9]\d\d|20\d\d)", str(value))
@@ -170,7 +195,7 @@ def _clean(field: str, value):
     # Registries send markup: Crossref titles carry JATS tags (<i>, <sub>) and
     # HTML entities ("Particle &amp; Particle Systems Characterization").
     text = html.unescape(re.sub(r"<[^>]+>", "", str(value)))
-    return re.sub(r"\s+", " ", text).strip() or None
+    return _decap(re.sub(r"\s+", " ", text).strip()) or None
 
 
 # ── sources ───────────────────────────────────────────────────────────
@@ -411,6 +436,15 @@ async def cmd_plan(a) -> int:
         for n in p["notes"]:
             print(f"  note: {n[:300]}")
     out = root / PLAN_FILE
+    if a.keys and out.exists():
+        # A re-plan of named records replaces only theirs.
+        mine = {p["paper_key"] for p in plans}
+        kept = [
+            p
+            for p in json.loads(out.read_text())["plans"]
+            if p["paper_key"] not in mine
+        ]
+        plans = kept + plans
     out.write_text(
         json.dumps(
             {"made_at": dt.datetime.now(dt.timezone.utc).isoformat(), "plans": plans},
@@ -439,7 +473,11 @@ async def cmd_apply(a) -> int:
     for p in plan["plans"]:
         rec = dict(bank.get(p["paper_key"]) or {})
         still = set(fillable_fields(rec)) if rec else set()
-        fill = {f: x for f, x in p["fill"].items() if f in still}
+        fill = {
+            f: {**x, "value": _clean(f, x["value"])}
+            for f, x in p["fill"].items()
+            if f in still and _clean(f, x["value"]) is not None
+        }
         if not fill:
             continue
         sources = dict(rec.get("metadata_sources") or {})
