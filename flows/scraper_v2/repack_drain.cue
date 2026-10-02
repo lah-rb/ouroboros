@@ -10,6 +10,11 @@
 // and books a pack ONLY when it passed the gates. A gate failure, an over-seat
 // window, a non-English raw doc or an engine refusal books nothing: the paper
 // stays pending for the muse lanes (no-burn). Transport faults end the round.
+//
+// SECOND DUTY (2026-10-02). With no pack owed, the round repairs one booked
+// partial pack instead: only its missed windows are packed again and the ones
+// that pass merge into the stored pack, every round recorded on its window
+// (curation_actions.py, the missed-window repair block).
 
 package ouroboros
 
@@ -19,7 +24,9 @@ repack_drain: #FlowDefinition & {
 	description: """
 		Pack one accepted paper that still owes a pack, on the lane's remote
 		engine; book only a pack that passed the gates, leave every failure
-		for the muse lanes. Mission-clean; returns an attempt summary.
+		for the muse lanes. With none owed, re-pack one booked partial pack's
+		missed windows and merge the passes. Mission-clean; returns an
+		attempt summary.
 		"""
 
 	context_tier: "session_task"
@@ -35,7 +42,7 @@ repack_drain: #FlowDefinition & {
 	steps: {
 		drain: #StepDefinition & {
 			action:      "repack_drain_batch"
-			description: "Claim + pack one accepted paper owed a pack; book only a pass"
+			description: "Claim + pack one paper owed a pack (book only a pass), else repair one partial pack's missed windows"
 			resolver: {
 				type: "rule"
 				rules: [

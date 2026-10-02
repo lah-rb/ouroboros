@@ -27840,7 +27840,7 @@
   "repack_drain": {
     "flow": "repack_drain",
     "version": 1,
-    "description": "Pack one accepted paper that still owes a pack, on the lane's remote\nengine; book only a pack that passed the gates, leave every failure\nfor the muse lanes. Mission-clean; returns an attempt summary.",
+    "description": "Pack one accepted paper that still owes a pack, on the lane's remote\nengine; book only a pack that passed the gates, leave every failure\nfor the muse lanes. With none owed, re-pack one booked partial pack's\nmissed windows and merge the passes. Mission-clean; returns an\nattempt summary.",
     "context_tier": "session_task",
     "returns": {
       "repack_drain_summary": {
@@ -27862,7 +27862,7 @@
     "steps": {
       "drain": {
         "action": "repack_drain_batch",
-        "description": "Claim + pack one accepted paper owed a pack; book only a pass",
+        "description": "Claim + pack one paper owed a pack (book only a pass), else repair one partial pack's missed windows",
         "context": {
           "required": [],
           "optional": []

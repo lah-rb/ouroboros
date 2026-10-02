@@ -2232,6 +2232,64 @@ def _pack_window_sizes() -> tuple[int, int]:
     return target, cap
 
 
+async def _pack_one_window(
+    effects, w, total: int, registry: dict, aliases: dict, prior_keys: list[str]
+) -> tuple[dict | None, dict, int, list[dict]]:
+    """One window's pack turns: (data, gates, attempts, shape repairs).
+
+    The production prompt (registry block, the paper's prior keys, the
+    part-of-N preface on a multi-window paper), two attempts -- the second
+    rendered with the first's gate findings -- output canonicalised and
+    re-shaped, gates run against the window's own text. Shared by
+    _pack_windowed and the missed-window repair so the two cannot drift.
+    """
+    from agent.actions.pack_windows import repair_shapes
+    from agent.llm_json import parse_llm_json
+
+    preface = (
+        _PACK_PREFACE.format(
+            n=w.index + 1,
+            total=total,
+            sections=w.section_count,
+            heading=w.first_heading,
+        )
+        if total > 1
+        else ""
+    )
+    feedback = ""
+    gates: dict = {"passed": False, "feedback": ""}
+    data = None
+    repairs: list[dict] = []
+    w_attempts = 0
+    for _ in range(2):  # attempt 2 renders with attempt 1's gate findings
+        w_attempts += 1
+        ctx = {
+            "key_registry_block": format_key_registry(registry),
+            "gate_feedback": feedback,
+        }
+        if prior_keys:
+            ctx["prior_keys"] = ", ".join(prior_keys[:120])
+        pack_prompt = await _render_prompt("curator/pack_data", ctx)
+        text = await _curate_turn(
+            effects, preface + w.text + "\n\n---\n\n" + pack_prompt, 8192
+        )
+        parsed = parse_llm_json(text)
+        data = parsed if isinstance(parsed, dict) and parsed else None
+        repairs = []
+        if data is not None:
+            data = canonicalize_pack_keys(data, aliases)
+            data, repairs = repair_shapes(data, registry)
+        gates = (
+            _run_pack_gates(data, w.text, registry)
+            if data is not None
+            else {"passed": False, "feedback": "output was not a JSON object"}
+        )
+        if gates["passed"]:
+            break
+        feedback = gates["feedback"]
+    return data, gates, w_attempts, repairs
+
+
 async def _pack_windowed(
     effects, doc: str, registry: dict, *, resume: dict | None = None, on_window=None
 ) -> dict:
@@ -2258,13 +2316,7 @@ async def _pack_windowed(
     """
     import hashlib
 
-    from agent.actions.pack_windows import (
-        MergeReport,
-        merge_packs,
-        repair_shapes,
-        window_sections,
-    )
-    from agent.llm_json import parse_llm_json
+    from agent.actions.pack_windows import MergeReport, merge_packs, window_sections
 
     target, cap = _pack_window_sizes()
     windows = window_sections(doc, target, cap)
@@ -2298,50 +2350,13 @@ async def _pack_windowed(
                 passed_packs.append(prev["data"])
                 repairs_all.extend(prev.get("repairs") or [])
             continue
-        preface = (
-            _PACK_PREFACE.format(
-                n=w.index + 1,
-                total=len(windows),
-                sections=w.section_count,
-                heading=w.first_heading,
-            )
-            if multi
-            else ""
-        )
-        feedback = ""
-        gates: dict = {"passed": False, "feedback": ""}
-        data = None
-        w_attempts = 0
         # The paper's own vocabulary so far: keys the earlier windows packed.
         # Absent on the first window (and so on every single-window paper),
         # which keeps that prompt byte-identical to the pre-windowing one.
         prior_keys = sorted({k for pk in passed_packs for k in pk})
-        for _ in range(2):  # attempt 2 renders with attempt 1's gate findings
-            w_attempts += 1
-            ctx = {
-                "key_registry_block": format_key_registry(registry),
-                "gate_feedback": feedback,
-            }
-            if prior_keys:
-                ctx["prior_keys"] = ", ".join(prior_keys[:120])
-            pack_prompt = await _render_prompt("curator/pack_data", ctx)
-            text = await _curate_turn(
-                effects, preface + w.text + "\n\n---\n\n" + pack_prompt, 8192
-            )
-            parsed = parse_llm_json(text)
-            data = parsed if isinstance(parsed, dict) and parsed else None
-            repairs: list[dict] = []
-            if data is not None:
-                data = canonicalize_pack_keys(data, aliases)
-                data, repairs = repair_shapes(data, registry)
-            gates = (
-                _run_pack_gates(data, w.text, registry)
-                if data is not None
-                else {"passed": False, "feedback": "output was not a JSON object"}
-            )
-            if gates["passed"]:
-                break
-            feedback = gates["feedback"]
+        data, gates, w_attempts, repairs = await _pack_one_window(
+            effects, w, len(windows), registry, aliases, prior_keys
+        )
         attempts += w_attempts
         last_gates = gates
         g = gates.get("grounding") or {}
@@ -2664,6 +2679,312 @@ def _decline_repack(key: str, why: str) -> dict:
     return {"paper_key": key, "outcome": f"declined: {why[:200]}"}
 
 
+# ── Missed-window repair (2026-10-02) ────────────────────────────────
+#
+# WHY. A windowed pack books the merge of the windows that passed; "a window
+# that fails costs that window, not the paper". Nothing ever came back for the
+# window: on 2026-10-02 159 booked packs had missed 240 windows (2.78 M tokens
+# of paper), ungrounded values (157), no JSON object (61) and registry type
+# mismatches (18), each failed twice in one sitting and then forgotten.
+# Operator ruling 2026-10-02: repacks are attempted on the missed sections so
+# the rest of the packing work is not wasted, as long as the attempts are
+# tracked.
+#
+# WHAT. Only the missed windows are packed again -- the same prompt, gates
+# and two attempts as production (_pack_one_window), with the stored pack's
+# keys as the paper's prior vocabulary -- and the windows that pass are merged
+# INTO the stored pack (stored first, so its scalars stand; lists append).
+# The merge then faces the whole-document gates. Only keys the stored pack
+# lacked are folded into the registry, under the coinage guard: the paper's
+# existing keys were counted when it was booked.
+#
+# TRACKED. Every attempted window gets repair_rounds, repair_last_at,
+# repair_model and (on a miss) repair_feedback on its window_outcomes row; a
+# passed window turns passed with repaired_by/repaired_at; every round is also
+# logged in pack_quality.window_repairs and the envelope's provenance names
+# each repaired window's model. A window stops after
+# OUROBOROS_WINDOW_REPAIR_ROUNDS rounds (default 2).
+#
+# THE WINDOW MAP MUST STILL HOLD. A window is found again by cutting today's
+# raw doc the same way; if the doc changed since the pack (figtext added,
+# translation re-gated, window sizes changed), the indices no longer name the
+# same text and a "missed" window could duplicate a passed one. The paper is
+# then marked window_map_stale and left for a full repack -- never repaired
+# by guesswork.
+
+_WINDOW_REPAIR_DECLINED: set[str] = set()
+
+
+def _window_repair_rounds() -> int:
+    raw = os.environ.get("OUROBOROS_WINDOW_REPAIR_ROUNDS", "").strip()
+    try:
+        return max(0, int(raw)) if raw else 2
+    except ValueError:
+        return 2
+
+
+def missed_windows_owed(rec: dict) -> list[dict]:
+    """The window_outcomes rows of a booked partial pack still owed a round."""
+    if rec.get("review_status") != "accepted" or rec.get("pack_status") != "packed":
+        return []
+    q = rec.get("pack_quality") or {}
+    if q.get("window_map_stale"):
+        return []
+    cap = _window_repair_rounds()
+    return [
+        o
+        for o in (q.get("window_outcomes") or [])
+        if isinstance(o, dict)
+        and not o.get("passed")
+        and int(o.get("repair_rounds") or 0) < cap
+    ]
+
+
+async def _select_window_repair(effects, databank: dict) -> str:
+    """Claim the partial pack with the fewest missed-window tokens owed."""
+    ranked: list[tuple[int, str]] = []
+    for key, rec in databank.items():
+        if (
+            key in _CURATE_CLAIMS
+            or key in _WINDOW_REPAIR_DECLINED
+            or key in _CURATE_SKIP
+            or _recently_booked(key)
+        ):
+            continue
+        owed = missed_windows_owed(rec)
+        if owed:
+            ranked.append((sum(int(o.get("tokens") or 0) for o in owed), key))
+    for _, key in sorted(ranked):
+        if key not in _CURATE_CLAIMS:
+            _CURATE_CLAIMS.add(key)
+            return key
+    return ""
+
+
+async def _repair_missed_windows(effects, paper_key: str) -> dict:
+    """Pack a booked partial pack's missed windows again and merge the passes.
+
+    Returns {"paper_key", "outcome", "windows_attempted", "windows_repaired"}.
+    Raises _CurateTransportFault only when the FIRST window faulted (nothing
+    to book); a fault after that books the rounds already finished.
+    """
+    from datetime import datetime, timezone
+
+    from agent.actions.pack_windows import MergeReport, merge_packs, window_sections
+    from agent.actions.scholarly_actions import append_records, read_databank
+
+    rec = (await read_databank(effects)).get(paper_key) or {}
+    owed = {int(o["window"]): o for o in missed_windows_owed(rec)}
+    q = rec.get("pack_quality") or {}
+    stamp = datetime.now(timezone.utc).isoformat()
+    model = _provenance_model(effects)
+    result = {
+        "paper_key": paper_key,
+        "windows_attempted": 0,
+        "windows_repaired": 0,
+    }
+    if not owed:
+        return {**result, "outcome": "no missed window owed"}
+
+    doc = await _raw_curator_doc(effects, paper_key)
+    target, cap = _pack_window_sizes()
+    windows = window_sections(doc, target, cap)
+    recorded = {
+        int(o["window"]): int(o.get("tokens") or 0)
+        for o in (q.get("window_outcomes") or [])
+        if isinstance(o, dict) and "window" in o
+    }
+    if len(windows) != int(q.get("windows") or 0) or any(
+        recorded.get(w.index) != w.tokens for w in windows
+    ):
+        rec = (await read_databank(effects)).get(paper_key) or rec
+        rec["pack_quality"] = {
+            **(rec.get("pack_quality") or {}),
+            "window_map_stale": {
+                "at": stamp,
+                "windows_booked": int(q.get("windows") or 0),
+                "windows_now": len(windows),
+            },
+        }
+        await append_records(effects, [rec])
+        return {**result, "outcome": "window map stale: left for a full repack"}
+
+    env_fc = await effects.read_file(str(rec.get("dataset_path") or ""))
+    try:
+        envelope = json.loads(env_fc.content) if env_fc.exists else None
+    except json.JSONDecodeError:
+        envelope = None
+    stored = (envelope or {}).get("data")
+    if not isinstance(stored, dict) or not stored:
+        _WINDOW_REPAIR_DECLINED.add(paper_key)
+        return {**result, "outcome": "declined: stored pack unreadable"}
+
+    seat = _lane_seat_tokens(effects)
+    todo = [
+        w
+        for w in windows
+        if w.index in owed and w.tokens + _CURATE_TURN_OVERHEAD_TOKENS <= seat
+    ]
+    if not todo:
+        _WINDOW_REPAIR_DECLINED.add(paper_key)
+        return {**result, "outcome": "declined: every missed window exceeds this seat"}
+
+    registry = await _load_registry(effects)
+    aliases = await load_key_aliases(effects)
+    prior = set(stored)
+    rounds: list[dict] = []
+    new_packs: list[tuple[int, dict]] = []
+    fault = ""
+    for w in todo:
+        try:
+            data, gates, n_att, _ = await _pack_one_window(
+                effects, w, len(windows), registry, aliases, sorted(prior)
+            )
+        except _CurateTransportFault as e:
+            if not rounds:
+                raise
+            fault = str(e)[:160]
+            break
+        ok = bool(gates["passed"] and data)
+        g = gates.get("grounding") or {}
+        rounds.append(
+            {
+                "window": w.index,
+                "at": stamp,
+                "model": model,
+                "passed": ok,
+                "attempts": n_att,
+                "grounding_rate": g.get("grounding_rate"),
+                "numeric_leaves": g.get("numeric_leaves"),
+                "feedback": "" if ok else str(gates.get("feedback") or "")[:300],
+            }
+        )
+        if ok:
+            new_packs.append((w.index, data))
+            prior |= set(data)
+
+    merged_ok = False
+    final: dict = {}
+    combined = stored
+    report = MergeReport()
+    if new_packs:
+        combined = merge_packs([stored] + [d for _, d in new_packs], report)
+        final = _run_pack_gates(combined, doc, registry)
+        merged_ok = bool(final["passed"])
+        if not merged_ok:
+            why = "merge failed the whole-document gates: " + final["feedback"][:240]
+            for r in rounds:
+                if r["passed"]:
+                    r["passed"] = False
+                    r["feedback"] = why
+    repaired = {r["window"] for r in rounds if r["passed"]}
+
+    coinage: dict = {}
+    if merged_ok:
+        envelope["data"] = combined
+        prov = dict(envelope.get("provenance") or {})
+        prov["window_repairs"] = list(prov.get("window_repairs") or []) + [
+            {"window": i, "model": model, "repaired_at": stamp}
+            for i in sorted(repaired)
+        ]
+        envelope["provenance"] = prov
+        # The dataset first, the record second: a reader that sees the record
+        # say "repaired" always finds the repaired data behind it.
+        await effects.write_file(
+            rec["dataset_path"], json.dumps(envelope, indent=1, ensure_ascii=False)
+        )
+        delta = {k: combined[k] for k in combined if k not in stored}
+        if delta:
+            coinage = await fold_pack_into_registry(effects, registry, delta, paper_key)
+
+    rec = (await read_databank(effects)).get(paper_key) or rec
+    q = dict(rec.get("pack_quality") or {})
+    by_window = {r["window"]: r for r in rounds}
+    outcomes = []
+    for o in q.get("window_outcomes") or []:
+        r = by_window.get(o.get("window")) if isinstance(o, dict) else None
+        if r is None:
+            outcomes.append(o)
+            continue
+        o = {
+            **o,
+            "repair_rounds": int(o.get("repair_rounds") or 0) + 1,
+            "repair_last_at": stamp,
+            "repair_model": model,
+        }
+        if r["window"] in repaired:
+            o.update(
+                passed=True,
+                repaired_by=model,
+                repaired_at=stamp,
+                grounding_rate=r["grounding_rate"],
+                numeric_leaves=r["numeric_leaves"],
+                feedback="",
+            )
+        else:
+            o["repair_feedback"] = r["feedback"]
+        outcomes.append(o)
+    q["window_outcomes"] = outcomes
+    q["window_repairs"] = list(q.get("window_repairs") or []) + rounds
+    if merged_ok:
+        g = final["grounding"]
+        q.update(
+            windows_passed=int(q.get("windows_passed") or 0) + len(repaired),
+            grounding_rate=g["grounding_rate"],
+            numeric_leaves=g["numeric_leaves"],
+            ungrounded=g["ungrounded"],
+            window_conflicts=(list(q.get("window_conflicts") or []) + report.conflicts)[
+                :25
+            ],
+        )
+        if coinage:
+            q["repair_coinage"] = {
+                k: v for k, v in coinage.items() if not k.startswith("_")
+            }
+    rec["pack_quality"] = q
+    await append_records(effects, [rec])
+
+    outcome = (
+        f"repaired {len(repaired)}/{len(rounds)} missed window(s)"
+        if rounds
+        else "no window attempted"
+    )
+    if fault:
+        outcome += f"; transport fault after {len(rounds)} ({fault})"
+    return {
+        **result,
+        "outcome": outcome,
+        "windows_attempted": len(rounds),
+        "windows_repaired": len(repaired),
+    }
+
+
+async def _window_repair_round(effects, databank: dict, _out):
+    """The repack lane's second duty, once no pack is owed: one partial pack's
+    missed windows (the missed-window repair block above)."""
+    key = await _select_window_repair(effects, databank)
+    if not key:
+        return _out([], "no repack or missed window owed that this lane may take")
+    try:
+        res = await _repair_missed_windows(effects, key)
+    except _CurateTransportFault as e:
+        if _is_oversize_fault(str(e)) or _is_degenerate_fault(str(e)):
+            _WINDOW_REPAIR_DECLINED.add(key)
+            return _out(
+                [{"paper_key": key, "outcome": f"declined: engine: {str(e)[:160]}"}]
+            )
+        logger.warning("window repair transport fault on %s: %s", key, e)
+        return _out([], f"transport fault ({str(e)[:120]})")
+    except Exception:  # noqa: BLE001 -- code faults must not touch the pack
+        logger.exception("window repair errored on %s -- nothing booked", key)
+        _WINDOW_REPAIR_DECLINED.add(key)
+        return _out([], "internal error (see log)")
+    finally:
+        release_curate_keys([key])
+    _CURATE_BOOKED[key] = time.monotonic()
+    return _out([res])
+
+
 async def action_repack_drain_batch(step_input):
     """One pack-only round on the repack lane's engine (see the block above).
 
@@ -2702,7 +3023,7 @@ async def action_repack_drain_batch(step_input):
     databank = await read_databank(effects)
     key = await _select_repack_paper(effects, databank)
     if not key:
-        return _out([], "no repack owed that this lane may take")
+        return await _window_repair_round(effects, databank, _out)
     rec = databank.get(key) or {}
     try:
         doc = await _raw_curator_doc(effects, key)
