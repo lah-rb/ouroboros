@@ -53,14 +53,20 @@ def model_params(split: str, keep: list):
     return mp
 
 
+OPTS = {"kv_dft": 1, "unified": False, "nseq": 1, "fa": 1}
+
+
 def ctx_params(other=None):
     cp = L.llama_context_default_params()
-    cp.n_ctx, cp.n_batch, cp.n_ubatch, cp.n_seq_max = N_CTX, N_BATCH, N_UBATCH, 1
-    cp.flash_attn_type = 1
+    cp.n_ctx, cp.n_batch, cp.n_ubatch = N_CTX, N_BATCH, N_UBATCH
+    cp.n_seq_max = OPTS["nseq"]
+    cp.kv_unified = OPTS["unified"]
+    cp.flash_attn_type = OPTS["fa"]
     cp.swa_full = True  # rollback and forks mid-window, as LLMVP runs muse
     if other is not None:
         cp.n_rs_seq = 0
         cp.ctx_other = other
+        cp.type_k = cp.type_v = OPTS["kv_dft"]
     return cp
 
 
@@ -68,28 +74,29 @@ class Batch:
     """A llama_batch with numpy views over its arrays."""
 
     def __init__(self, n: int, embd: int = 0):
-        self.b = L.llama_batch_init(n, embd, 1)
+        self.b = L.llama_batch_init(n, embd, OPTS["nseq"])
         self.n, self.embd = n, embd
+        self.seq = 0
 
-    def fill_tokens(self, toks, pos0, logits_all=False, logits_last=False):
+    def fill_tokens(self, toks, pos0, logits_all=False, logits_last=False, seq=0):
         for i, t in enumerate(toks):
             self.b.token[i] = t
             self.b.pos[i] = pos0 + i
             self.b.n_seq_id[i] = 1
-            self.b.seq_id[i][0] = 0
+            self.b.seq_id[i][0] = seq
             self.b.logits[i] = (
                 1 if logits_all or (logits_last and i == len(toks) - 1) else 0
             )
         self.b.n_tokens = len(toks)
 
-    def fill_embd(self, rows: np.ndarray, positions):
+    def fill_embd(self, rows: np.ndarray, positions, seqs=None):
         n, d = rows.shape
         dst = np.ctypeslib.as_array(self.b.embd, shape=(self.n * self.embd,))
         dst[: n * d] = rows.reshape(-1)
         for i, p in enumerate(positions):
             self.b.pos[i] = p
             self.b.n_seq_id[i] = 1
-            self.b.seq_id[i][0] = 0
+            self.b.seq_id[i][0] = seqs[i] if seqs is not None else self.seq
             self.b.logits[i] = 0
         self.b.n_tokens = n
 
@@ -149,7 +156,7 @@ class Spec:
         )
 
     def rm(self, ctx, p0: int) -> None:
-        L.llama_memory_seq_rm(L.llama_get_memory(ctx), 0, p0, -1)
+        L.llama_memory_seq_rm(L.llama_get_memory(ctx), self.seq, p0, -1)
 
     def process(self, n_rows: int, pos0: int) -> None:
         """Target features of the last decode -> drafter encode -> KV inject."""
@@ -171,17 +178,39 @@ class Spec:
                 L.llama_get_embeddings_nextn(self.c_dft),
                 shape=(chunk.shape[0], self.n_embd_dec),
             ).copy()
+            self.bi.seq = self.seq
             self.bi.fill_embd(g, range(pos0 + off, pos0 + off + chunk.shape[0]))
             rc = L.llama_decode(self.c_dft, self.bi.b)
             assert rc == 0, f"inject decode rc={rc}"
 
     def prefill(self, toks: list[int], spec: bool) -> int:
-        self.rm(self.c_tgt, 0)
-        self.rm(self.c_dft, 0)
-        for off in range(0, len(toks), N_BATCH):
+        for sq in range(OPTS["nseq"]):
+            for c in (self.c_tgt, self.c_dft):
+                L.llama_memory_seq_rm(L.llama_get_memory(c), sq, 0, -1)
+        self.seq = 0
+        start = 0
+        head = OPTS.get("head", 0)
+        if head:
+            # LLMVP's persona path: eval the head on seq 0, pin it on a band
+            # seq, clear seq 0, fork the head onto a seat, prefill the rest.
+            for off in range(0, head, N_BATCH):
+                chunk = toks[off : min(off + N_BATCH, head)]
+                self.bt.fill_tokens(chunk, off, seq=0)
+                assert L.llama_decode(self.c_tgt, self.bt.b) == 0
+                if spec:
+                    self.process(len(chunk), off)
+            band, seat = OPTS["nseq"] - 1, 1
+            for c in (self.c_tgt, self.c_dft):
+                m = L.llama_get_memory(c)
+                L.llama_memory_seq_cp(m, 0, band, -1, -1)
+                L.llama_memory_seq_rm(m, 0, 0, -1)
+                L.llama_memory_seq_cp(m, band, seat, -1, -1)
+            self.seq = seat
+            start = head
+        for off in range(start, len(toks), N_BATCH):
             chunk = toks[off : off + N_BATCH]
             last = off + len(chunk) == len(toks)
-            self.bt.fill_tokens(chunk, off, logits_last=last)
+            self.bt.fill_tokens(chunk, off, logits_last=last, seq=self.seq)
             assert L.llama_decode(self.c_tgt, self.bt.b) == 0
             if spec:
                 self.process(len(chunk), off)
@@ -193,7 +222,7 @@ class Spec:
         tok = self.prefill(toks, spec=False)
         out, pos, t0 = [tok], len(toks), time.time()
         while len(out) < n:
-            self.bt.fill_tokens([tok], pos, logits_all=True)
+            self.bt.fill_tokens([tok], pos, logits_all=True, seq=self.seq)
             assert L.llama_decode(self.c_tgt, self.bt.b) == 0
             tok = int(np.argmax(self.logits(self.c_tgt, 0)))
             out.append(tok)
@@ -207,14 +236,14 @@ class Spec:
         while len(out) < n:
             # draft: [id_last, mask x n_max] in one non-causal pass
             block = [tok] + [self.mask] * self.n_max
-            self.bd.fill_tokens(block, n_past, logits_all=True)
+            self.bd.fill_tokens(block, n_past, logits_all=True, seq=self.seq)
             assert L.llama_decode(self.c_dft, self.bd.b) == 0
             draft = [
                 int(np.argmax(self.logits(self.c_dft, i))) for i in range(1, len(block))
             ]
             self.rm(self.c_dft, n_past)  # the mask block is not history
             # verify on the target
-            self.bt.fill_tokens([tok] + draft, n_past, logits_all=True)
+            self.bt.fill_tokens([tok] + draft, n_past, logits_all=True, seq=self.seq)
             assert L.llama_decode(self.c_tgt, self.bt.b) == 0
             k = 0
             while k < len(draft):
@@ -240,11 +269,22 @@ def main() -> int:
     ap.add_argument("--split", choices=tuple(SPLITS), default="tensor")
     ap.add_argument("--n", type=int, default=256)
     ap.add_argument("--n-max", type=int, default=3)
+    ap.add_argument("--kv-dft", choices=("f16", "q8_0"), default="f16")
+    ap.add_argument("--unified", action="store_true")
+    ap.add_argument("--nseq", type=int, default=1)
+    ap.add_argument("--fa", choices=("on", "auto"), default="on")
+    ap.add_argument("--head", type=int, default=0, help="fork the first H tokens via seq_cp")
+    ap.add_argument("--first", action="store_true", help="first pack prompt only")
+    ap.add_argument("--tag", default="")
     a = ap.parse_args()
+    OPTS.update(kv_dft={"f16": 1, "q8_0": 8}[a.kv_dft], unified=a.unified,
+                nseq=max(a.nseq, 3 if a.head else 1), fa={"on": 1, "auto": -1}[a.fa],
+                head=a.head)  # fmt: skip
     prompts = json.load(open(PROMPTS))
     s = Spec(a.split, a.n_max)
     results = []
-    for pr in [p for p in prompts if p["workload"] in ("pack", "translate")]:
+    sel = [p for p in prompts if p["workload"] in ("pack", "translate")]
+    for pr in sel[:1] if a.first else sel:
         toks = s.tokenize(pr["prompt"])
         ref, tps_plain = s.plain(toks, a.n)
         got, tps_spec, drafted, acc, steps = s.speculative(toks, a.n)
@@ -253,10 +293,10 @@ def main() -> int:
              "spec_tps": round(tps_spec, 1), "speedup": round(tps_spec / tps_plain, 2),
              "accept_rate": round(acc / drafted, 3) if drafted else 0,
              "tokens_per_step": round(len(got) / steps, 2) if steps else 0,
-             "identical_prefix_tokens": same, "n": a.n}  # fmt: skip
+             "identical_prefix_tokens": same, "n": a.n, "tag": a.tag}  # fmt: skip
         results.append(r)
         print(json.dumps(r), flush=True)
-    out = os.path.expanduser(f"~/tmp/spec_bench/smoke_{a.split}.json")
+    out = os.path.expanduser(f"~/tmp/spec_bench/smoke_{a.split}{('_' + a.tag) if a.tag else ''}.json")
     json.dump(results, open(out, "w"), indent=1)
     return 0
 
