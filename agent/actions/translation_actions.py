@@ -205,6 +205,26 @@ def collapse_source_loops(text: str) -> tuple[str, dict]:
     return out, {"words": words, "chars": chars}
 
 
+#: PADDLE'S CELL DECORATION (2026-10-02). Every OCR'd table cell carries the
+#: same ``style='text-align: center; word-wrap: break-word;'``: 22.3 % of the
+#: untranslated queue's characters (5.5 M of 24.5 M, 58 of 63 documents).
+#: Sent verbatim, muse re-typed it cell by cell, and a big sparse table's
+#: faithful translation fell under the long-cycle guard's n-gram diversity
+#: floor: 13 aborted chunks in under three hours, each after 2-3k tokens.
+#: The style carries nothing (pack and figtext read cell text), so it is
+#: stripped before prompting -- the collapse precedent: chunks change, the
+#: parts binding (n, len(src)) stays on the original.
+_CELL_STYLE_RE = re.compile(
+    r"""(<(?:table|thead|tbody|tr|td|th)\b[^>]*?)\s+style=(['"])[^'"]*\2""",
+    re.IGNORECASE,
+)
+
+
+def strip_table_decoration(text: str) -> str:
+    """Drop style attributes from table tags (see _CELL_STYLE_RE)."""
+    return _CELL_STYLE_RE.sub(r"\1", text)
+
+
 def chunk_markdown(md: str, target_chars: int = _CHUNK_CHARS) -> list[str]:
     """Split on paragraph boundaries into ~target_chars chunks.
 
@@ -391,7 +411,12 @@ def _output_language_problem(out: str) -> str:
 
 
 def translation_gate(src: str, out: str) -> dict:
-    """Deterministic verdict on one assembled translation."""
+    """Deterministic verdict on one assembled translation.
+
+    Both sides are measured without table decoration: parts banked before
+    2026-10-02 still carry paddle's cell style, their sources no longer do,
+    and the length ratio must not read the attribute as text."""
+    src, out = strip_table_decoration(src), strip_table_decoration(out)
     numeric = _numeric_preservation(src, out)
     img_src, img_out = len(_IMG_RE.findall(src)), len(_IMG_RE.findall(out))
     src_len = max(1, len(re.sub(r"\s", "", src)))
@@ -753,14 +778,15 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
         return _decline(f"markdown unreadable: {md_rel}")
     src = fc.content
     chunks = chunk_markdown(src)
-    # SOURCE-LOOP COLLAPSE (see _SOURCE_LOOP_WORDS): the prompt, the span
-    # checks, the salvage pieces and the paper gate all see the collapsed
-    # chunk; n and len(src) — the parts-file binding — stay on the original.
+    # SOURCE-LOOP COLLAPSE (see _SOURCE_LOOP_WORDS) and TABLE DECORATION
+    # (see _CELL_STYLE_RE): the prompt, the span checks, the salvage pieces
+    # and the paper gate all see the cleaned chunk; n and len(src) — the
+    # parts-file binding — stay on the original.
     source_collapsed = {"words": 0, "chars": 0}
     for _i, _c in enumerate(chunks):
         _c2, _rep = collapse_source_loops(_c)
+        chunks[_i] = strip_table_decoration(_c2)
         if _rep["words"] or _rep["chars"]:
-            chunks[_i] = _c2
             source_collapsed["words"] += _rep["words"]
             source_collapsed["chars"] += _rep["chars"]
 

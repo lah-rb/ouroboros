@@ -127,4 +127,69 @@ async def test_drain_leaves_a_clean_paper_unmarked(monkeypatch):
     assert out.result["status"] == "translated", out.result
     side = _side(fx)
     assert "source_collapsed" not in side["translation_quality"]
-    assert TABLE_ROW in fx._files["databank/markdown/p1.en.md"]
+    # the row survives whole -- without paddle's cell style (2026-10-02)
+    assert (
+        "<tr>" + "<td>—</td>" * 20 + "</tr>" in fx._files["databank/markdown/p1.en.md"]
+    )
+
+
+# ── table decoration (2026-10-02) ─────────────────────────────────────
+
+
+def test_table_style_attributes_are_stripped_and_nothing_else():
+    from agent.actions.translation_actions import strip_table_decoration
+
+    src = (
+        "<table border=1 style='margin: auto; word-wrap: break-word;'><tr>"
+        "<td style='text-align: center; word-wrap: break-word;'>Образец</td>"
+        '<th colspan="2" style="text-align: center;">0,284</th></tr></table>\n'
+        '<div style="text-align: center;">*[figure removed by extraction filter]*</div>'
+    )
+    assert strip_table_decoration(src) == (
+        "<table border=1><tr><td>Образец</td>"
+        '<th colspan="2">0,284</th></tr></table>\n'
+        '<div style="text-align: center;">*[figure removed by extraction filter]*</div>'
+    )
+
+
+def test_the_gate_measures_both_sides_without_decoration():
+    """A part banked before the strip still carries the cell style; its
+    source no longer does. The attribute is not text the ratio may count."""
+    from agent.actions.translation_actions import (
+        strip_table_decoration,
+        translation_gate,
+    )
+
+    styled = _para(1) + "\n\n<table>" + TABLE_ROW * 25 + "</table>"
+    bare = strip_table_decoration(styled)
+    raw_ratio = len(re.sub(r"\s", "", styled)) / len(re.sub(r"\s", "", bare))
+    assert raw_ratio > 2.5, "read as text, the style alone would fail the ratio"
+    verdict = translation_gate(bare, styled)
+    assert verdict["passed"], verdict
+    assert verdict["length_ratio"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_drain_never_sends_the_cell_style_to_the_model(monkeypatch):
+    _clear()
+    monkeypatch.setenv("OUROBOROS_TRANSLATE_CHUNKS", "8")
+    src = _para(1) + "\n\n<table>" + TABLE_ROW * 40 + "</table>\n\n" + _para(2)
+    seen: list[str] = []
+
+    class _Spy(_Scripted):
+        async def run_inference(self, prompt, config=None, **k):  # noqa: D102
+            seen.append(prompt)
+            return await super().run_inference(prompt, config, **k)
+
+    fx = _Spy(
+        files={
+            "databank/papers.jsonl": json.dumps(_rec()) + "\n",
+            "databank/markdown/p1.md": src,
+        }
+    )
+    out = await action_translate_drain_batch(_si(fx))
+    assert out.result["status"] == "translated", out.result
+    assert seen and not any("word-wrap" in p for p in seen)
+    assert any("<td>—</td>" * 20 in p for p in seen)
+    en = fx._files["databank/markdown/p1.en.md"]
+    assert "word-wrap" not in en and en.count("<td>—</td>") == 800
