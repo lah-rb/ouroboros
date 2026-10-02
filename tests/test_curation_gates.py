@@ -649,6 +649,7 @@ def test_a_fragment_or_truncation_of_a_printed_number_does_not_ground(value, doc
         (200, "up to 200."),
         (17500, "spun at 17,500 rpm"),  # thousands separator
         (4922, "4 922 spectra"),
+        (15160, "$ \\Delta_{0} = 15, 160 $ B = 726"),  # comma-space thousands
         (0.10798, "λ 0.107 98 Å"),  # ISO-grouped fraction in an OCR'd cell
         (4.19, "<td>4. 19</td>"),  # OCR's split decimal point
         (10.0, "a 10 cm lens"),  # an integral float for a printed integer

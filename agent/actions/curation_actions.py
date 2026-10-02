@@ -229,10 +229,11 @@ def _stands_whole(u: str, text: str) -> bool:
 _POWER_OF_TEN_DOT = re.compile(r"\.10 ?[\^{]")
 
 
-#: A thousands-grouped integer ("17,500", "4 922", "1 234 567"): one to three
-#: leading digits not themselves the tail of a decimal, then groups of
-#: exactly three.
-_THOUSANDS_RE = re.compile(r"(?<![\d.])\d{1,3}(?:[ ,]\d{3})+(?!\d)")
+#: A thousands-grouped integer ("17,500", "4 922", "1 234 567", and the
+#: comma-space "15, 160" an OCR'd 1952 table prints -- 77 values of the
+#: 2026-10-02 audit): one to three leading digits not themselves the tail of
+#: a decimal, then groups of exactly three.
+_THOUSANDS_RE = re.compile(r"(?<![\d.])\d{1,3}(?:(?:, |[ ,])\d{3})+(?!\d)")
 #: A decimal whose FRACTION is grouped in threes, as ISO typesetting prints
 #: it and OCR keeps it in table cells: "0.107 98", "0.113 78", "1.257 7".
 _DECIMAL_GROUPS_RE = re.compile(r"(?<![\d.])\d+\.\d{3}(?: \d{3})*(?: \d{1,3})(?!\d)")
