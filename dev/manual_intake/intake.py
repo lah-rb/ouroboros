@@ -245,7 +245,9 @@ def failure_class(rec: dict) -> str:
 
 
 def scholar_url(title: str) -> str:
-    return "https://scholar.google.com/scholar?hl=en&q=" + urllib.parse.quote_plus(f'"{title}"')
+    return "https://scholar.google.com/scholar?hl=en&q=" + urllib.parse.quote_plus(
+        f'"{title}"'
+    )
 
 
 # ── ranking ────────────────────────────────────────────────────────────
@@ -271,7 +273,9 @@ def features(rec: dict, cites: collections.Counter) -> list[float]:
         stored = int(rec.get("cited_by_accepted") or 0)
     except (TypeError, ValueError):
         stored = 0
-    cited = max(stored, cites.get(str(rec.get("doi") or "").lower(), 0) if rec.get("doi") else 0)
+    cited = max(
+        stored, cites.get(str(rec.get("doi") or "").lower(), 0) if rec.get("doi") else 0
+    )
     return [
         1.0,
         float(exact),
@@ -328,19 +332,41 @@ def rank_pool(papers: dict[str, dict], pool: list[dict]) -> tuple[list[dict], di
     import numpy as np
 
     cites = cited_counts(papers)
-    reviewed = [r for r in papers.values() if r.get("review_status") in ("accepted", "denied")]
+    reviewed = [
+        r for r in papers.values() if r.get("review_status") in ("accepted", "denied")
+    ]
     X = [features(r, cites) for r in reviewed]
     y = [r["review_status"] == "accepted" for r in reviewed]
     w = fit_logistic(X, y)
     fit_scores = 1 / (1 + np.exp(-np.asarray(X) @ w))
-    report = {"reviewed": len(reviewed), "accept_rate": round(sum(y) / max(1, len(y)), 3),
-              "auc": round(auc(fit_scores.tolist(), y), 3), "weights": [round(float(v), 3) for v in w]}
+    report = {
+        "reviewed": len(reviewed),
+        "accept_rate": round(sum(y) / max(1, len(y)), 3),
+        "auc": round(auc(fit_scores.tolist(), y), 3),
+        "weights": [round(float(v), 3) for v in w],
+    }
     items = []
     for r in pool:
         p = float(1 / (1 + np.exp(-np.asarray(features(r, cites)) @ w)))
-        items.append({"rec": r, "p": p, "tier": tier(p), "english": is_english(r), "klass": failure_class(r)})
+        items.append(
+            {
+                "rec": r,
+                "p": p,
+                "tier": tier(p),
+                "english": is_english(r),
+                "klass": failure_class(r),
+            }
+        )
     order = {name: i for i, (_, name) in enumerate(TIERS)}
-    items.sort(key=lambda it: (order[it["tier"]], not it["english"], it["klass"] != "bot wall", -it["p"], it["rec"]["paper_key"]))
+    items.sort(
+        key=lambda it: (
+            order[it["tier"]],
+            not it["english"],
+            it["klass"] != "bot wall",
+            -it["p"],
+            it["rec"]["paper_key"],
+        )
+    )
     return items, report
 
 
@@ -349,12 +375,17 @@ def rank_pool(papers: dict[str, dict], pool: list[dict]) -> tuple[list[dict], di
 
 def cmd_export(args) -> int:
     papers = last_rows(DATABANK / "papers.jsonl")
-    statuses = {"unresolved": ("oa_unresolved",), "closed": ("closed",), "both": ("oa_unresolved", "closed")}[args.pool]
+    statuses = {
+        "unresolved": ("oa_unresolved",),
+        "closed": ("closed",),
+        "both": ("oa_unresolved", "closed"),
+    }[args.pool]
     missed = {e["key"] for e in read_ledger() if e.get("event") == "miss"}
     pool = [
         r for r in papers.values()
         if r.get("access_status") in statuses and clean_title(r.get("title") or "")
         and r.get("record_kind") != "supplement" and (args.retry_missed or r["paper_key"] not in missed)
+        and (not args.doi_prefix or str(r.get("doi") or "").lower().startswith(args.doi_prefix.lower()))
     ]  # fmt: skip
     items, fit = rank_pool(papers, pool)
     chosen = items[: args.n]
@@ -380,18 +411,50 @@ def cmd_export(args) -> int:
     for i, it in enumerate(chosen, 1):
         r = it["rec"]
         t = clean_title(r["title"])
-        meta = " · ".join(x for x in (str(r.get("venue") or "").strip(), str(r.get("year") or "").strip()) if x) or "venue unknown"
+        meta = (
+            " · ".join(
+                x
+                for x in (
+                    str(r.get("venue") or "").strip(),
+                    str(r.get("year") or "").strip(),
+                )
+                if x
+            )
+            or "venue unknown"
+        )
         doi = f"[doi](https://doi.org/{r['doi']})" if r.get("doi") else "no DOI"
         lang = "" if it["english"] else " · non-English"
-        L += [f"{i}. [{t}]({scholar_url(t)})",
-              f"   {meta} · {doi} · p {it['p']:.2f} ({it['tier']}){lang} · {it['klass']} · `{r['paper_key']}`", ""]
+        L += [
+            f"{i}. [{t}]({scholar_url(t)})",
+            f"   {meta} · {doi} · p {it['p']:.2f} ({it['tier']}){lang} · {it['klass']} · `{r['paper_key']}`",
+            "",
+        ]
     out.write_text("\n".join(L), encoding="utf-8")
-    append_ledger([{"event": "export", "at": dt.datetime.now(dt.timezone.utc).isoformat(), "list": str(out.relative_to(REPO)),
-                    "keys": [it["rec"]["paper_key"] for it in chosen], "pool": len(pool), "fit": fit}])
+    append_ledger(
+        [
+            {
+                "event": "export",
+                "at": dt.datetime.now(dt.timezone.utc).isoformat(),
+                "list": str(out.relative_to(REPO)),
+                "keys": [it["rec"]["paper_key"] for it in chosen],
+                "pool": len(pool),
+                "fit": fit,
+            }
+        ]
+    )
     shown = collections.Counter(it["tier"] for it in chosen)
     print(f"-> {out}")
-    print(f"pool {len(pool):,}; fit on {fit['reviewed']:,} reviewed (accept {fit['accept_rate']}), AUC {fit['auc']}")
-    print("list tiers:", dict(shown), "| English", sum(it["english"] for it in chosen), "| bot wall", sum(it["klass"] == "bot wall" for it in chosen))
+    print(
+        f"pool {len(pool):,}; fit on {fit['reviewed']:,} reviewed (accept {fit['accept_rate']}), AUC {fit['auc']}"
+    )
+    print(
+        "list tiers:",
+        dict(shown),
+        "| English",
+        sum(it["english"] for it in chosen),
+        "| bot wall",
+        sum(it["klass"] == "bot wall" for it in chosen),
+    )
     return 0
 
 
@@ -421,17 +484,25 @@ def read_pdf(path: Path, pages: int = 2) -> tuple[str, int, str]:
     with pymupdf.open(path) as doc:
         texts = [doc[i].get_text() for i in range(min(pages, doc.page_count))]
         meta = " ".join(str(v) for v in (doc.metadata or {}).values() if v)
-        return "\n".join(texts) + "\n" + meta, doc.page_count, (texts[0] if texts else "") + "\n" + meta
+        return (
+            "\n".join(texts) + "\n" + meta,
+            doc.page_count,
+            (texts[0] if texts else "") + "\n" + meta,
+        )
 
 
-def body_match(path: Path, papers: dict, listed: dict[str, int], max_pages: int = 60) -> tuple[str | None, str]:
+def body_match(
+    path: Path, papers: dict, listed: dict[str, int], max_pages: int = 60
+) -> tuple[str | None, str]:
     """Fallback when the first two pages name no record: a LISTED title, verbatim and at least
     30 compacted characters, anywhere in the document (proceedings excerpts and theses put
     cover matter first). Exactly one such title, or no match."""
     import pymupdf
 
     with pymupdf.open(path) as doc:
-        pages = [compact(doc[i].get_text()) for i in range(min(max_pages, doc.page_count))]
+        pages = [
+            compact(doc[i].get_text()) for i in range(min(max_pages, doc.page_count))
+        ]
     found = []
     for key in listed:
         ct = compact(clean_title(papers.get(key, {}).get("title") or ""))
@@ -441,18 +512,28 @@ def body_match(path: Path, papers: dict, listed: dict[str, int], max_pages: int 
                 found.append((key, hit))
     if len(found) == 1:
         return found[0][0], f"title on page {found[0][1]}"
-    return None, ("several listed titles in the body: " + ", ".join(k for k, _ in found)) if found else "no listed title anywhere in the document"
+    return None, (
+        ("several listed titles in the body: " + ", ".join(k for k, _ in found))
+        if found
+        else "no listed title anywhere in the document"
+    )
 
 
 def read_html(path: Path) -> tuple[str, dict]:
     raw = path.read_text(encoding="utf-8", errors="ignore")
     meta: dict[str, str] = {}
-    for a, b in (('name', 'content'), ('content', 'name')):
-        for m in re.finditer(rf'<meta\s+{a}="([^"]*)"\s+{b}="([^"]*)"', raw, re.IGNORECASE):
-            name, value = (m.group(1), m.group(2)) if a == "name" else (m.group(2), m.group(1))
+    for a, b in (("name", "content"), ("content", "name")):
+        for m in re.finditer(
+            rf'<meta\s+{a}="([^"]*)"\s+{b}="([^"]*)"', raw, re.IGNORECASE
+        ):
+            name, value = (
+                (m.group(1), m.group(2)) if a == "name" else (m.group(2), m.group(1))
+            )
             if name.lower().startswith(("citation_", "dc.")):
                 meta.setdefault(name.lower(), html.unescape(value))
-    body = re.sub(r"<script.*?</script>|<style.*?</style>", " ", raw, flags=re.S | re.IGNORECASE)
+    body = re.sub(
+        r"<script.*?</script>|<style.*?</style>", " ", raw, flags=re.S | re.IGNORECASE
+    )
     body = html.unescape(re.sub(r"<[^>]+>", " ", body))
     return body + "\n" + " ".join(meta.values()), meta
 
@@ -488,8 +569,20 @@ class TitleIndex:
                 score = min(0.99, len(toks & ttoks) / max(1, len(toks)))
             else:
                 continue
-            if (contained and len(ct) >= 20) or (score >= 0.85 and len(toks) >= 4) or (doi_hit and score >= 0.5):
-                out.append({"key": k, "score": round(score, 3), "doi_hit": doi_hit, "tlen": len(ct), "contained": contained})
+            if (
+                (contained and len(ct) >= 20)
+                or (score >= 0.85 and len(toks) >= 4)
+                or (doi_hit and score >= 0.5)
+            ):
+                out.append(
+                    {
+                        "key": k,
+                        "score": round(score, 3),
+                        "doi_hit": doi_hit,
+                        "tlen": len(ct),
+                        "contained": contained,
+                    }
+                )
         out.sort(key=lambda c: (c["doi_hit"], c["score"], c["tlen"]), reverse=True)
         return out
 
@@ -499,11 +592,26 @@ def decide(cands: list[dict], listed: set[str]) -> tuple[str | None, str]:
     if not cands:
         return None, "no record's title or DOI is on the first two pages"
     best = cands[0]
-    if len(cands) > 1 and (cands[1]["doi_hit"], cands[1]["score"], cands[1]["tlen"]) == (best["doi_hit"], best["score"], best["tlen"]):
+    if len(cands) > 1 and (
+        cands[1]["doi_hit"],
+        cands[1]["score"],
+        cands[1]["tlen"],
+    ) == (best["doi_hit"], best["score"], best["tlen"]):
         return None, f"ambiguous: {best['key']} vs {cands[1]['key']}"
-    if best["key"] not in listed and not best["doi_hit"] and not (best.get("contained") and best["tlen"] >= 40):
-        return None, f"weak match to an unlisted record ({best['key']}, title score {best['score']})"
-    return best["key"], ("doi+title" if best["doi_hit"] else ("title" if best.get("contained") else "title-words"))
+    if (
+        best["key"] not in listed
+        and not best["doi_hit"]
+        and not (best.get("contained") and best["tlen"] >= 40)
+    ):
+        return (
+            None,
+            f"weak match to an unlisted record ({best['key']}, title score {best['score']})",
+        )
+    return best["key"], (
+        "doi+title"
+        if best["doi_hit"]
+        else ("title" if best.get("contained") else "title-words")
+    )
 
 
 def holds_itself(rec: dict, text: str) -> bool:
@@ -514,7 +622,9 @@ def holds_itself(rec: dict, text: str) -> bool:
         return True
     cov = len(toks & tokens(text)) / max(1, len(toks))
     doi = str(rec.get("doi") or "").lower()
-    return (cov >= 0.85 and len(toks) >= 4) or (bool(doi) and doi in dois_in(text) and cov >= 0.5)
+    return (cov >= 0.85 and len(toks) >= 4) or (
+        bool(doi) and doi in dois_in(text) and cov >= 0.5
+    )
 
 
 def infer_host(path: Path, text: str, rec: dict) -> str:
@@ -526,7 +636,11 @@ def infer_host(path: Path, text: str, rec: dict) -> str:
         return "academia.edu"
     stem = path.stem
     if re.fullmatch(r"[A-Za-z0-9]+(?:_[A-Za-z0-9]+)+", stem) and len(stem) <= 44:
-        folded = unicodedata.normalize("NFKD", rec.get("title") or "").encode("ascii", "ignore").decode()
+        folded = (
+            unicodedata.normalize("NFKD", rec.get("title") or "")
+            .encode("ascii", "ignore")
+            .decode()
+        )
         if compact(folded).startswith(compact(stem)):
             return "academia.edu"  # its downloads are named Title_words_cut_at_40.pdf
     if "hal id" in low or "hal open science" in low or "to cite this version" in low:
@@ -557,7 +671,9 @@ def derived_paths(key: str, rec: dict) -> list[Path]:
         DATABANK / "dataset" / f"{key}.json", DATABANK / "translations" / f"{key}.parts.jsonl",
         DATABANK / "translations" / f"{key}..parts.jsonl",
     ]  # fmt: skip
-    paths += [Path(p) for p in sorted(glob.glob(str(md / f"{glob.escape(key)}.part_*.md")))]
+    paths += [
+        Path(p) for p in sorted(glob.glob(str(md / f"{glob.escape(key)}.part_*.md")))
+    ]
     for field in ("pdf_path", "md_path", "md_en_path", "figtext_path", "dataset_path"):
         v = rec.get(field)
         if v:
@@ -599,8 +715,10 @@ def _strip_embedded(node):
         return None
     if "c" in node:
         node = {**node, "c": _strip_embedded(node["c"])}
-    if t == "Link" and not _stringify(node["c"][1]).strip() and not any(
-        isinstance(i, dict) and i.get("t") == "Image" for i in node["c"][1]
+    if (
+        t == "Link"
+        and not _stringify(node["c"][1]).strip()
+        and not any(isinstance(i, dict) and i.get("t") == "Image" for i in node["c"][1])
     ):
         return None
     return node
@@ -624,7 +742,9 @@ def html_fragment(ast: dict, title: str, min_chars: int = 1500) -> list:
                 return path + [(blocks, i)]
         return None
 
-    path = find(ast["blocks"], [], ("Header",)) or find(ast["blocks"], [], ("Para", "Plain"))
+    path = find(ast["blocks"], [], ("Header",)) or find(
+        ast["blocks"], [], ("Para", "Plain")
+    )
     if not path:
         return []
     for blocks, i in reversed(path[:-1]):
@@ -639,8 +759,15 @@ def convert_html(src: Path, key: str, record_title: str) -> dict:
     from tools.supplement_records import rasterise, rewrite_images
 
     rep = {"ok": False, "chars": 0, "figures": 0, "skipped": 0}
-    title = clean_title(read_html(src)[1].get("citation_title", "")) or clean_title(record_title)
-    proc = subprocess.run(["pandoc", "-f", "html", "-t", "json", str(src)], capture_output=True, text=True, timeout=300)
+    title = clean_title(read_html(src)[1].get("citation_title", "")) or clean_title(
+        record_title
+    )
+    proc = subprocess.run(
+        ["pandoc", "-f", "html", "-t", "json", str(src)],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
     if proc.returncode != 0:
         rep["error"] = proc.stderr[:300]
         return rep
@@ -649,8 +776,18 @@ def convert_html(src: Path, key: str, record_title: str) -> dict:
     if not blocks:
         rep["error"] = "title not found in the page"
         return rep
-    doc = {"pandoc-api-version": ast["pandoc-api-version"], "meta": {}, "blocks": _strip_embedded(blocks)}
-    proc = subprocess.run(["pandoc", "-f", "json", "-t", "gfm-raw_html", "--wrap=none"], input=json.dumps(doc), capture_output=True, text=True, timeout=300)
+    doc = {
+        "pandoc-api-version": ast["pandoc-api-version"],
+        "meta": {},
+        "blocks": _strip_embedded(blocks),
+    }
+    proc = subprocess.run(
+        ["pandoc", "-f", "json", "-t", "gfm-raw_html", "--wrap=none"],
+        input=json.dumps(doc),
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
     if proc.returncode != 0:
         rep["error"] = proc.stderr[:300]
         return rep
@@ -659,15 +796,24 @@ def convert_html(src: Path, key: str, record_title: str) -> dict:
     kept = 0
     for i, s in enumerate(sources, 1):
         local = src.parent / urllib.parse.unquote(s)
-        if not s.startswith(("http:", "https:", "data:")) and local.is_file() and rasterise(local, fig_dir / f"fig_{i:02d}.png"):
+        if (
+            not s.startswith(("http:", "https:", "data:"))
+            and local.is_file()
+            and rasterise(local, fig_dir / f"fig_{i:02d}.png")
+        ):
             kept += 1
         else:
             rep["skipped"] += 1
-            md = md.replace(f'<img src="../figures/{key}/fig_{i:02d}.png">', f"<!-- dropped figure: {Path(s).name} -->")
+            md = md.replace(
+                f'<img src="../figures/{key}/fig_{i:02d}.png">',
+                f"<!-- dropped figure: {Path(s).name} -->",
+            )
     md = re.sub(r"\n{3,}", "\n\n", md).strip() + "\n"
     (DATABANK / "markdown").mkdir(parents=True, exist_ok=True)
     (DATABANK / "markdown" / f"{key}.md").write_text(md, encoding="utf-8")
-    rep.update(ok=True, chars=len(md), figures=kept, latin_ratio=round(latin_ratio(md), 3))
+    rep.update(
+        ok=True, chars=len(md), figures=kept, latin_ratio=round(latin_ratio(md), 3)
+    )
     return rep
 
 
@@ -686,15 +832,26 @@ def bundle_files(paths: list[Path]) -> list[Path]:
     out = []
     for p in paths:
         if p.is_dir():
-            out += sorted(x for x in p.iterdir() if x.is_file() and x.suffix.lower() in (".pdf", ".html", ".htm"))
+            out += sorted(
+                x
+                for x in p.iterdir()
+                if x.is_file() and x.suffix.lower() in (".pdf", ".html", ".htm")
+            )
         elif p.is_file():
             out.append(p)
     return out
 
 
-def plan_ingest(files: list[Path], papers: dict, listed: dict[str, int], replace: bool) -> list[dict]:
+def plan_ingest(
+    files: list[Path], papers: dict, listed: dict[str, int], replace: bool
+) -> list[dict]:
     index = TitleIndex(papers)
-    done_hashes = {h.get("sha256") for e in read_ledger() if e.get("event") == "ingest" for h in e.get("hits", [])}
+    done_hashes = {
+        h.get("sha256")
+        for e in read_ledger()
+        if e.get("event") == "ingest"
+        for h in e.get("hits", [])
+    }
     plans, taken = [], {}
     for f in files:
         kind = "html" if f.suffix.lower() in (".html", ".htm") else "pdf"
@@ -710,7 +867,9 @@ def plan_ingest(files: list[Path], papers: dict, listed: dict[str, int], replace
             else:
                 text, _ = read_html(f)
                 text1 = text
-        except Exception as exc:  # noqa: BLE001 — one unreadable file must not sink the bundle
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 — one unreadable file must not sink the bundle
             plans.append({**p, "action": "SKIP", "why": f"unreadable: {exc}"[:120]})
             continue
         p["sha256"] = sha256(f)
@@ -722,8 +881,16 @@ def plan_ingest(files: list[Path], papers: dict, listed: dict[str, int], replace
             cands = index.candidates(text)
             key, why = decide(cands, set(listed))
             own = dois_in(text)
-            if key and not cands[0]["doi_hit"] and own and str(papers[key].get("doi") or "").lower() not in own:
-                key, why = None, f"its first pages carry a different DOI ({sorted(own)[0]}); {cands[0]['key']}'s title is on page 2 (a citation?)"
+            if (
+                key
+                and not cands[0]["doi_hit"]
+                and own
+                and str(papers[key].get("doi") or "").lower() not in own
+            ):
+                key, why = (
+                    None,
+                    f"its first pages carry a different DOI ({sorted(own)[0]}); {cands[0]['key']}'s title is on page 2 (a citation?)",
+                )
         if not key and kind == "pdf" and listed:
             key2, why2 = body_match(f, papers, listed)
             own = dois_in(text)
@@ -735,10 +902,24 @@ def plan_ingest(files: list[Path], papers: dict, listed: dict[str, int], replace
             elif key2:
                 key, why = key2, why2
         if not key:
-            plans.append({**p, "action": "UNMATCHED", "why": why, "snippet": re.sub(r"\s+", " ", text)[:90]})
+            plans.append(
+                {
+                    **p,
+                    "action": "UNMATCHED",
+                    "why": why,
+                    "snippet": re.sub(r"\s+", " ", text)[:90],
+                }
+            )
             continue
         if key in taken:
-            plans.append({**p, "action": "SKIP", "key": key, "why": f"second file for {key} (kept {taken[key].name})"})
+            plans.append(
+                {
+                    **p,
+                    "action": "SKIP",
+                    "key": key,
+                    "why": f"second file for {key} (kept {taken[key].name})",
+                }
+            )
             continue
         rec = papers[key]
         p.update(key=key, match=why, pos=listed.get(key), host=infer_host(f, text, rec))
@@ -751,13 +932,23 @@ def plan_ingest(files: list[Path], papers: dict, listed: dict[str, int], replace
             if held and held.is_file():
                 try:
                     held_ok = holds_itself(rec, read_pdf(held)[0])
-                except Exception:  # noqa: BLE001 — an unreadable held PDF counts as wrong
+                except (
+                    Exception
+                ):  # noqa: BLE001 — an unreadable held PDF counts as wrong
                     held_ok = False
             if held_ok:
-                plans.append({**p, "action": "SKIP", "why": "record already holds this paper"})
+                plans.append(
+                    {**p, "action": "SKIP", "why": "record already holds this paper"}
+                )
                 continue
             if not replace:
-                plans.append({**p, "action": "MISMATCH", "why": "record holds a DIFFERENT document; --replace-mismatched swaps it"})
+                plans.append(
+                    {
+                        **p,
+                        "action": "MISMATCH",
+                        "why": "record holds a DIFFERENT document; --replace-mismatched swaps it",
+                    }
+                )
                 continue
             p["action"] = "REPLACE"
         else:
@@ -767,7 +958,9 @@ def plan_ingest(files: list[Path], papers: dict, listed: dict[str, int], replace
         if p.get("pages") and rec.get("first_page") and rec.get("last_page"):
             try:
                 extent = int(rec["last_page"]) - int(rec["first_page"]) + 1
-                if extent > 1 and abs(extent - p["pages"]) > 2:  # extent 1 = an article number, not pages
+                if (
+                    extent > 1 and abs(extent - p["pages"]) > 2
+                ):  # extent 1 = an article number, not pages
                     p["note"] = f"PDF has {p['pages']} pages; the article runs {extent}"
             except (TypeError, ValueError):
                 pass
@@ -791,7 +984,9 @@ def paper_row(rec: dict, p: dict, batch: str, now: str) -> dict:
         row["status"] = "acquired"
     row["failure_reason"] = ""
     row["retrieval_method"] = "operator_browser"
-    if p["host"] in ASN_HOSTS and not str(row.get("license") or "").lower().startswith(OPEN_LICENCE_PREFIXES):
+    if p["host"] in ASN_HOSTS and not str(row.get("license") or "").lower().startswith(
+        OPEN_LICENCE_PREFIXES
+    ):
         row["license"] = "restricted-asn"
     row["manual_intake"] = {
         "batch": batch, "position": p.get("pos"), "file": p["file"].name, "host": p["host"], "sha256": p["sha256"],
@@ -811,13 +1006,20 @@ def extraction_reset_row(key: str) -> dict:
 def extraction_html_row(key: str, rep: dict) -> dict:
     return {
         "paper_key": key,
-        "extraction_status": "extracted" if rep.get("latin_ratio", 1.0) >= 0.5 else "extract_lingual",
+        "extraction_status": (
+            "extracted" if rep.get("latin_ratio", 1.0) >= 0.5 else "extract_lingual"
+        ),
         "failure_reason": "",
         "md_path": f"databank/markdown/{key}.md",
         "figure_count": int(rep.get("figures") or 0),
         "extraction_method": "pandoc-html",
-        "extraction_quality": {"oracle": "none", "native_text": True, "chars": int(rep.get("chars") or 0),
-                               "figures_dropped": int(rep.get("skipped") or 0), "latin_ratio": rep.get("latin_ratio", 1.0)},
+        "extraction_quality": {
+            "oracle": "none",
+            "native_text": True,
+            "chars": int(rep.get("chars") or 0),
+            "figures_dropped": int(rep.get("skipped") or 0),
+            "latin_ratio": rep.get("latin_ratio", 1.0),
+        },
     }
 
 
@@ -826,30 +1028,51 @@ def cmd_ingest(args) -> int:
     ext = last_rows(DATABANK / "extraction.jsonl")
     listed = {k: pos for pos, k in parse_list(Path(args.list))} if args.list else {}
     batch = str(Path(args.list).name) if args.list else "unlisted"
-    files = bundle_files([Path(os.path.expanduser(b)) for b in (args.bundle or [str(BUNDLE)])])
+    files = bundle_files(
+        [Path(os.path.expanduser(b)) for b in (args.bundle or [str(BUNDLE)])]
+    )
     plans = plan_ingest(files, papers, listed, args.replace_mismatched)
     book = [p for p in plans if p["action"].startswith(("NEW", "REPLACE"))]
-    hits = {p["key"]: p for p in plans if p.get("key") and p.get("pos") and p["action"] != "UNMATCHED"}
+    hits = {
+        p["key"]: p
+        for p in plans
+        if p.get("key") and p.get("pos") and p["action"] != "UNMATCHED"
+    }
     for p in sorted(plans, key=lambda p: (p.get("pos") or 999, p["file"].name)):
         pos = f"#{p['pos']:<3}" if p.get("pos") else "    "
         who = p.get("key", "")[:52]
-        extra = p.get("why") or f"{p.get('match')} · {p.get('host')}" + (f" · NOTE {p['note']}" if p.get("note") else "")
+        extra = p.get("why") or f"{p.get('match')} · {p.get('host')}" + (
+            f" · NOTE {p['note']}" if p.get("note") else ""
+        )
         print(f"  {p['action']:<12} {pos} {who:<52} {p['file'].name[:40]:<40} {extra}")
         if p["action"] == "UNMATCHED":
             print(f"               first page: {p['snippet']}")
-    through = args.through or max((pos for k, pos in listed.items() if k in hits), default=0)
-    misses = [(pos, k) for k, pos in sorted(listed.items(), key=lambda x: x[1]) if pos <= through and k not in hits]
+    through = args.through or max(
+        (pos for k, pos in listed.items() if k in hits), default=0
+    )
+    misses = [
+        (pos, k)
+        for k, pos in sorted(listed.items(), key=lambda x: x[1])
+        if pos <= through and k not in hits
+    ]
     n_hit = sum(1 for k, pos in listed.items() if pos <= through and k in hits)
     if listed:
-        print(f"\nlist {batch}: through #{through}: {n_hit} hit(s), {len(misses)} miss(es)" + (f" → hit rate {n_hit / through:.0%}" if through else ""))
+        print(
+            f"\nlist {batch}: through #{through}: {n_hit} hit(s), {len(misses)} miss(es)"
+            + (f" → hit rate {n_hit / through:.0%}" if through else "")
+        )
         times = sorted(p["mtime"] for p in hits.values())
         if len(times) >= 2:
             span = times[-1] - times[0]
             first = min(p["pos"] for p in hits.values())
             last = max(p["pos"] for p in hits.values())
-            print(f"files saved over {span / 60:.1f} min between items #{first} and #{last} ≈ {span / max(1, last - first):.0f} s per item")
-    print(f"{len(book)} to book ({sum(p['action'].startswith('REPLACE') for p in book)} replacement(s)); "
-          f"{sum(p['action'] == 'MISMATCH' for p in plans)} wrong-document holder(s) left alone; {sum(p['action'] == 'UNMATCHED' for p in plans)} unmatched file(s)")
+            print(
+                f"files saved over {span / 60:.1f} min between items #{first} and #{last} ≈ {span / max(1, last - first):.0f} s per item"
+            )
+    print(
+        f"{len(book)} to book ({sum(p['action'].startswith('REPLACE') for p in book)} replacement(s)); "
+        f"{sum(p['action'] == 'MISMATCH' for p in plans)} wrong-document holder(s) left alone; {sum(p['action'] == 'UNMATCHED' for p in plans)} unmatched file(s)"
+    )
     if not args.apply:
         print("DRY RUN — pass --apply to write.")
         return 0
@@ -857,7 +1080,10 @@ def cmd_ingest(args) -> int:
 
 
 def apply_ingest(book, papers, ext, batch, misses, n_hit, through, hits) -> int:
-    from agent.actions.scholarly_actions import append_extraction_records, append_records
+    from agent.actions.scholarly_actions import (
+        append_extraction_records,
+        append_records,
+    )
     from agent.effects.local import LocalEffects
 
     for f in ("papers.jsonl", "extraction.jsonl"):
@@ -877,14 +1103,37 @@ def apply_ingest(book, papers, ext, batch, misses, n_hit, through, hits) -> int:
             if moved:
                 q = INTAKE / "quarantine" / key / stamp
                 q.mkdir(parents=True, exist_ok=True)
-                for src in moved:  # keep the corpus-relative path: figtext/ and figdata/ share file names
+                for (
+                    src
+                ) in (
+                    moved
+                ):  # keep the corpus-relative path: figtext/ and figdata/ share file names
                     dst = q / src.relative_to(CORPUS)
                     dst.parent.mkdir(parents=True, exist_ok=True)
                     shutil.move(str(src), str(dst))
-                (q / "why.json").write_text(json.dumps({"key": key, "replaced_by": p["file"].name, "at": now,
-                                                        "old_review": {f: rec.get(f) for f in ("review_status", "deny_category", "review_summary")}},
-                                                       ensure_ascii=False, indent=1), encoding="utf-8")
-            safe_ext.append(extraction_reset_row(key))  # SAFE: nothing downstream selects an empty extraction
+                (q / "why.json").write_text(
+                    json.dumps(
+                        {
+                            "key": key,
+                            "replaced_by": p["file"].name,
+                            "at": now,
+                            "old_review": {
+                                f: rec.get(f)
+                                for f in (
+                                    "review_status",
+                                    "deny_category",
+                                    "review_summary",
+                                )
+                            },
+                        },
+                        ensure_ascii=False,
+                        indent=1,
+                    ),
+                    encoding="utf-8",
+                )
+            safe_ext.append(
+                extraction_reset_row(key)
+            )  # SAFE: nothing downstream selects an empty extraction
         shutil.copy2(p["file"], received / f"{key}{p['file'].suffix.lower()}")
         if p["kind"] == "pdf":
             shutil.copy2(p["file"], CORPUS / "pdfs" / f"{key}.pdf")
@@ -892,14 +1141,24 @@ def apply_ingest(book, papers, ext, batch, misses, n_hit, through, hits) -> int:
         else:
             companion = p["file"].parent / f"{p['file'].stem}_files"
             if companion.is_dir():
-                shutil.copytree(companion, received / f"{key}_files", dirs_exist_ok=True)
+                shutil.copytree(
+                    companion, received / f"{key}_files", dirs_exist_ok=True
+                )
             rep = convert_html(p["file"], key, rec.get("title") or "")
             if not rep["ok"]:
-                print(f"  HTML conversion failed for {key}: {rep.get('error')} — not booked")
+                print(
+                    f"  HTML conversion failed for {key}: {rep.get('error')} — not booked"
+                )
                 continue
-            print(f"  HTML {key}: {rep['chars']:,} chars, {rep['figures']} figure(s), {rep['skipped']} dropped")
-            safe_papers.append(paper_row(rec, p, batch, now))  # oa_html: no acquisition or OCR lane selects it
-            act_ext.append(extraction_html_row(key, rep))  # ACTIVATES figtext + curation
+            print(
+                f"  HTML {key}: {rep['chars']:,} chars, {rep['figures']} figure(s), {rep['skipped']} dropped"
+            )
+            safe_papers.append(
+                paper_row(rec, p, batch, now)
+            )  # oa_html: no acquisition or OCR lane selects it
+            act_ext.append(
+                extraction_html_row(key, rep)
+            )  # ACTIVATES figtext + curation
     if safe_ext:
         asyncio.run(append_extraction_records(fx, safe_ext))
     if safe_papers:
@@ -921,14 +1180,41 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     e = sub.add_parser("export", help="write a ranked fetch list")
-    e.add_argument("--n", type=int, default=80, help="list length (ask for more than you plan to do)")
-    e.add_argument("--pool", choices=("unresolved", "closed", "both"), default="unresolved")
-    e.add_argument("--retry-missed", action="store_true", help="list earlier misses again")
+    e.add_argument(
+        "--n",
+        type=int,
+        default=80,
+        help="list length (ask for more than you plan to do)",
+    )
+    e.add_argument(
+        "--pool", choices=("unresolved", "closed", "both"), default="unresolved"
+    )
+    e.add_argument(
+        "--retry-missed", action="store_true", help="list earlier misses again"
+    )
+    e.add_argument(
+        "--doi-prefix",
+        default="",
+        help="only records whose DOI starts with this (e.g. 10.3390/ for MDPI, the browser fetcher's pool)",
+    )
     i = sub.add_parser("ingest", help="match downloaded files to records and book them")
     i.add_argument("--list", help="the fetch list the files answer (positions, misses)")
-    i.add_argument("--bundle", action="append", help=f"a directory or file (repeatable; default {BUNDLE})")
-    i.add_argument("--through", type=int, default=0, help="last list item tried (default: the last item with a file)")
-    i.add_argument("--replace-mismatched", action="store_true", help="swap a record's wrong-document PDF")
+    i.add_argument(
+        "--bundle",
+        action="append",
+        help=f"a directory or file (repeatable; default {BUNDLE})",
+    )
+    i.add_argument(
+        "--through",
+        type=int,
+        default=0,
+        help="last list item tried (default: the last item with a file)",
+    )
+    i.add_argument(
+        "--replace-mismatched",
+        action="store_true",
+        help="swap a record's wrong-document PDF",
+    )
     i.add_argument("--apply", action="store_true")
     args = ap.parse_args()
     return cmd_export(args) if args.cmd == "export" else cmd_ingest(args)
