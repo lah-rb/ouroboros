@@ -351,7 +351,9 @@ async def clean_one(fx, t: dict, *, apply: bool, lock: asyncio.Lock) -> dict:
     envelope = json.loads(env_path.read_text())
     data = envelope.get("data") or {}
     doc = await ca._raw_curator_doc(fx, key)
-    wd = WORK / key
+    # A key ending in "." (doi_10.7907_0st8-5h98.) reads as a Windows path
+    # pattern to Claude Code's permission check, which refused every read.
+    wd = WORK / key.rstrip(". ")
     wd.mkdir(parents=True, exist_ok=True)
     (wd / "paper.txt").write_text(doc)
     (wd / "pack.json").write_text(json.dumps(data, indent=1, ensure_ascii=False))

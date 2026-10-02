@@ -916,8 +916,12 @@ async def fold_pack_into_registry(
 # (Fe2O3, H2O), unit exponents in key names (peak_cm-1), alloy and identifier
 # parts (Ti-6Al-4V, d_200) are structure, not a copyable measurement.
 _EXEMPLAR_NUMBER_RE = re.compile(r"(?<!\w)(?<![^\W\d_]-)\d+")
-#: A masked exemplar copied into a pack: runs of x joined like a number.
-_PLACEHOLDER_RE = re.compile(r"(?<![^\W\d_])x+(?:[.,:/-]x+)+(?![^\W\d_])|\bx{3,}\b")
+#: A masked exemplar copied into a pack: runs of x joined like a number, at
+#: least one run two long ("x.xx", "xx-xxx-xxxx") -- an equation's
+#: "(x-x_{0})" has single x's and failed a real pack on the first pass.
+_PLACEHOLDER_RE = re.compile(
+    r"(?<![^\W\d_])(?=[x.,:/-]*xx)x+(?:[.,:/-]x+)+(?![^\W\d_])|\bx{3,}\b"
+)
 
 
 def mask_exemplar(text: str) -> str:

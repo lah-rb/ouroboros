@@ -735,3 +735,10 @@ def test_absurd_exponents_are_noise_not_a_crash():
     doc = "OCR noise 3E400, 7e-999, 10^{9999}; the value 1.2E-05 is real"
     assert grounding_check({"v": 1.2e-05}, doc)["passed"]
     assert not grounding_check({"v": "1e-999999"}, doc)["passed"]
+
+
+def test_an_equation_is_not_a_copied_mask():
+    from agent.actions.curation_actions import placeholder_leaves
+
+    assert placeholder_leaves({"eq": "Y=y_{0}+A exp(-(x-x_{0})/tau)"}) == []
+    assert placeholder_leaves({"c": ["ICSD xx-xxx-xxxx", "x.xx Å"]}) == ["c[0]", "c[1]"]

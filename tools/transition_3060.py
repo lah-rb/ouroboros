@@ -9,6 +9,7 @@ here (operator ruling 2026-10-01: schedule the swap; it falls late at night).
 
     tools/transition_3060.py to repack [--wait-ocr-drained] [--bench-triage]
     tools/transition_3060.py to ocr [--wait-repack-idle]
+    tools/transition_3060.py to repack --quiet-local   (free this box's GPUs)
 
   repack: box -> gemma-4-12b-3060; mission lanes: ocr OFF, repack_r1 ON
   ocr:    box -> paddle-ocr-vl-3060; mission lanes: ocr + ocr2 ON, repack OFF
@@ -152,13 +153,34 @@ def stop_mission() -> None:
         time.sleep(3)
 
 
-def start_mission(profile: str, *, repack_lanes: str | None = None) -> str:
+#: Lane resources that live on THIS machine's GPUs (muse's text seats and
+#: vision contexts, a local paddle). --quiet-local switches every such lane
+#: off, so the box's GPUs can be freed for a test while the 3060 and the
+#: network lanes keep working.
+LOCAL_RESOURCES = frozenset({"text_seat", "vision_ctx", "paddle"})
+
+
+def local_lane_names() -> list[str]:
+    from agent.scheduler.worker_pool import _all_scraper_lanes
+
+    return sorted(
+        {ln.name for ln in _all_scraper_lanes(None) if ln.resource in LOCAL_RESOURCES}
+    )
+
+
+def start_mission(
+    profile: str, *, repack_lanes: str | None = None, quiet_local: bool = False
+) -> str:
     env = dict(os.environ, **COMMON_ENV, **PROFILES[profile]["env"])
     for k in ("OUROBOROS_DISABLE_LANES", "OUROBOROS_OCR_LANES"):
         if k not in PROFILES[profile]["env"]:
             env.pop(k, None)
     if repack_lanes is not None:
         env["OUROBOROS_REMOTE_REPACK_LANES"] = repack_lanes
+    if quiet_local:
+        off = {x for x in env.get("OUROBOROS_DISABLE_LANES", "").split(",") if x}
+        env["OUROBOROS_DISABLE_LANES"] = ",".join(sorted(off | set(local_lane_names())))
+        log(f"local GPU lanes off: {env['OUROBOROS_DISABLE_LANES']}")
     mission("resume")
     stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
     logf = os.path.expanduser(f"~/tmp/run_{profile}_{stamp}.log")
@@ -254,6 +276,11 @@ def main() -> int:
     ap.add_argument("--wait-ocr-drained", action="store_true")
     ap.add_argument("--bench-triage", action="store_true")
     ap.add_argument("--wait-repack-idle", action="store_true")
+    ap.add_argument(
+        "--quiet-local",
+        action="store_true",
+        help="run no lane on this machine's GPUs (free them for a test)",
+    )
     a = ap.parse_args()
     target = PROFILES[a.profile]
     back = "ocr" if a.profile == "repack" else "repack"
@@ -277,7 +304,7 @@ def main() -> int:
         log(f"triage bench gemma arm done (rc {rc})")
         subprocess.run([PY, "dev/bench_triage_judge.py", "report"], cwd=REPO)
         stop_mission()
-    start_mission(a.profile)
+    start_mission(a.profile, quiet_local=a.quiet_local)
     log("transition complete")
     return 0
 
