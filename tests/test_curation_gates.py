@@ -728,3 +728,10 @@ def test_registry_examples_are_masked_and_a_copied_mask_fails_the_gate():
     assert "e.g. x.xx" in format_key_registry(reg)
     gates = _run_pack_gates({"reference_codes": ["ICSD xx-xxx-xxxx"]}, "no codes", {})
     assert not gates["passed"] and "MASKED EXAMPLE COPIED" in gates["feedback"]
+
+
+def test_absurd_exponents_are_noise_not_a_crash():
+    """10.0 ** 400 raised OverflowError and took the whole gate down."""
+    doc = "OCR noise 3E400, 7e-999, 10^{9999}; the value 1.2E-05 is real"
+    assert grounding_check({"v": 1.2e-05}, doc)["passed"]
+    assert not grounding_check({"v": "1e-999999"}, doc)["passed"]

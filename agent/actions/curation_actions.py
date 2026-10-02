@@ -452,17 +452,24 @@ def _printed_values(doc: str) -> set[float]:
         if v and v == v and abs(v) < 1e300:
             out.add(_num_key(v))
 
+    def scaled(m: float, e: int) -> None:
+        # Exponents beyond a double's range are OCR noise ("3E400"), not
+        # values: 10.0 ** 400 raises OverflowError, which took the whole
+        # gate down on 2026-10-02 (caught in a corpus pass before a pack).
+        if abs(e) <= 300:
+            add(m * 10.0**e)
+
     for m in _POW_ASCII_RE.finditer(doc):
-        add(_mantissa(m.group(1)) * 10.0 ** _signed(m.group(2), m.group(3)))
+        scaled(_mantissa(m.group(1)), _signed(m.group(2), m.group(3)))
     for m in _POW_SUP_RE.finditer(doc):
         e = _signed(
             "-" if m.group(2) == "⁻" else "", m.group(3).translate(_SUPSUB_TO_ASCII)
         )
-        add((_mantissa(m.group(1)) if m.group(1) else 1.0) * 10.0**e)
+        scaled(_mantissa(m.group(1)) if m.group(1) else 1.0, e)
     for m in _POW_BARE_RE.finditer(doc):
-        add(10.0 ** _signed(m.group(1), m.group(2)))
+        scaled(1.0, _signed(m.group(1), m.group(2)))
     for m in _E_NOTATION_RE.finditer(doc):
-        add(float(m.group(1)) * 10.0 ** int(m.group(2).replace("−", "-")))
+        scaled(float(m.group(1)), int(m.group(2).replace("−", "-")))
     for m in _SCALE_WORD_RE.finditer(doc):
         add(_mantissa(m.group(1)) * _SCALE[m.group(2).lower()])
     for m in _WORD_NUMBER_RE.finditer(doc):
@@ -497,7 +504,7 @@ def _extra_texts(doc: str, doc_n: str, comma_convention: bool) -> list[str]:
     return texts
 
 
-def grounding_check(data: dict, doc: str) -> dict:
+def grounding_check(data: dict, doc: str, *, cap: int | None = 25) -> dict:
     """Every numeric token in ``data`` must appear in the curator doc.
 
     The anti-fabrication gate: a value the paper (text or inlined
@@ -551,7 +558,8 @@ def grounding_check(data: dict, doc: str) -> dict:
                 candidates.add(f"{whole},{frac}")
         if re.fullmatch(r"\d+\.0+", u):
             candidates.add(u.split(".")[0])  # 10.0 packed for a printed "10"
-        if "e" in u.lower():  # "5.9e-05" packed in a string, "0.000059" printed
+        exp = re.search(r"[eE]([-+]?\d+)$", u)
+        if exp and abs(int(exp.group(1))) <= 30:  # "5.9e-05" packed, "0.000059" printed
             try:
                 from decimal import Decimal
 
@@ -575,7 +583,7 @@ def grounding_check(data: dict, doc: str) -> dict:
     return {
         "grounding_rate": round(rate, 4),
         "numeric_leaves": len(claims),
-        "ungrounded": ungrounded[:25],
+        "ungrounded": ungrounded[:cap] if cap is not None else ungrounded,
         "passed": rate >= MIN_GROUNDING_RATE,
     }
 
