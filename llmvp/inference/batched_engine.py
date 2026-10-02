@@ -303,6 +303,7 @@ class StreamRequest:
     flow_key: str = ""
     temperature: float = 0.0
     kv_base: int = 0  # KV skipped (static head / restored session occupancy)
+    fit_logged_at: float = 0.0  # last "does not fit" log (throttled per request)
 
 
 def build_sampling_params(
@@ -437,6 +438,8 @@ _MIN_PREFILL_BUDGET = 16
 # prefill and a round-trip to produce nothing usable, so the request waits for
 # capacity instead.
 _MIN_ADMIT_BUDGET = 512
+#: Seconds between "does not fit" logs for one queued request.
+_FIT_LOG_EVERY_S = 60.0
 # End reason for a stream ended early by KV pressure. Callers MUST be able to
 # tell this from a natural stop: the response carries real content and stops
 # BELOW max_tokens, so the derived "tokens_generated >= max_tokens" truncation
@@ -885,17 +888,23 @@ class BatchedEngine:
         # It could not, and the engine spent 3h38m rediscovering that one
         # 2,048-row batch at a time.
         if usable < _MIN_ADMIT_BUDGET:
-            logger.info(
-                "⏳ prompt %d tok does not fit: %d free cells (pool %d, "
-                "occupied %d, slack %d) leave %d for generation, floor %d",
-                prompt,
-                pool,
-                n_ctx,
-                n_ctx - pool - self._pool_slack,
-                self._pool_slack,
-                usable,
-                _MIN_ADMIT_BUDGET,
-            )
+            # Once per request per minute: admission re-sizes a queued request
+            # every pass (~65 ms), and on 2026-10-02 one waiting 17,844-token
+            # prompt wrote 16,399 of the log's 27,310 lines.
+            now = time.monotonic()
+            if now - req.fit_logged_at >= _FIT_LOG_EVERY_S:
+                req.fit_logged_at = now
+                logger.info(
+                    "⏳ prompt %d tok does not fit: %d free cells (pool %d, "
+                    "occupied %d, slack %d) leave %d for generation, floor %d",
+                    prompt,
+                    pool,
+                    n_ctx,
+                    n_ctx - pool - self._pool_slack,
+                    self._pool_slack,
+                    usable,
+                    _MIN_ADMIT_BUDGET,
+                )
             # Can it EVER fit? Compare against the irreducible floor.
             headroom = n_ctx - self._pinned_occupancy() - self._pool_slack
             if headroom - prompt < _MIN_ADMIT_BUDGET:

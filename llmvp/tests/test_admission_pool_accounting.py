@@ -121,6 +121,23 @@ class TestTheThreeVerdicts:
         assert verdict is _AdmitVerdict.QUEUE
         assert got == 0
 
+    def test_a_queued_prompt_logs_does_not_fit_once_a_minute(self, caplog, monkeypatch):
+        """Admission re-sizes a queued request every pass; on 2026-10-02 one
+        waiting prompt wrote 16,399 of the log's 27,310 lines."""
+        import inference.batched_engine as be
+
+        clock = [1000.0]
+        monkeypatch.setattr(be.time, "monotonic", lambda: clock[0])
+        eng = _eng()
+        _live(eng, "a", 0, gen_start=0, budget=65_000)
+        req = _req("x", [100], max_tokens=40_000, slot=_seat(3))
+        with caplog.at_level("INFO", logger="inference.batched_engine"):
+            for _ in range(50):
+                assert eng._size_against_pool(req, POOL, 100)[1] is _AdmitVerdict.QUEUE
+            clock[0] += be._FIT_LOG_EVERY_S
+            eng._size_against_pool(req, POOL, 100)
+        assert sum("does not fit" in r.message for r in caplog.records) == 2
+
     def test_what_can_never_fit_fails_instead_of_queueing_forever(self):
         """Pinned occupancy is irreducible — waiting cannot help, so the caller
         gets a diagnosable error rather than a silent stall."""

@@ -1528,6 +1528,30 @@ class LlamaCppBackend(BaseBackend):
         if _memwatch is not None:
             _memwatch.__exit__(None, None, None)
 
+    def _markup_token_ids(self) -> frozenset:
+        """The primary model's bare-table-markup token ids, for the
+        repetition guard's empty-cell allowance (inference/repetition.py).
+        Built once per loaded model (~0.25 s over muse's 202k vocab); an
+        unreadable vocab yields the empty set, i.e. today's strict guard."""
+        from inference.repetition import markup_token_ids
+
+        model = getattr(self._primary_instance, "_model", None)
+        if model is None:
+            return frozenset()
+        cached = getattr(self, "_markup_ids", None)
+        if cached is not None and cached[0] is model:
+            return cached[1]
+        try:
+            ids = markup_token_ids(
+                model.n_vocab(),
+                lambda t: model.token_to_piece(t).decode("utf-8", "replace"),
+            )
+        except Exception:  # noqa: BLE001 — the strict guard is the safe default
+            log.exception("markup token scan failed — strict repetition guard")
+            ids = frozenset()
+        self._markup_ids = (model, ids)
+        return ids
+
     def _warm_batched(self) -> None:
         """Warm the batched context: pin every persona's static head on its
         band seq, create the working seats, and start the decode engine.
@@ -1625,6 +1649,8 @@ class LlamaCppBackend(BaseBackend):
                 DEFAULT_MIN_CYCLE_REPS,
             )
 
+            markup = self._markup_token_ids()
+
             def _guard_factory() -> RepetitionGuard:
                 return RepetitionGuard(
                     max_run=gen_cfg.repetition_max_run or DEFAULT_MAX_RUN,
@@ -1633,6 +1659,7 @@ class LlamaCppBackend(BaseBackend):
                     ),
                     min_cycle_reps=gen_cfg.repetition_min_cycle_reps
                     or DEFAULT_MIN_CYCLE_REPS,
+                    markup_tokens=markup,
                 )
 
             engine._repetition_guard_factory = _guard_factory
@@ -4996,6 +5023,7 @@ class LlamaCppBackend(BaseBackend):
                 ),
                 min_cycle_reps=gen_cfg.repetition_min_cycle_reps
                 or DEFAULT_MIN_CYCLE_REPS,
+                markup_tokens=self._markup_token_ids(),
             )
 
         # Long-cycle guard + abnormal-exit capture (runaway_capture.py).

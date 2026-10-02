@@ -97,3 +97,67 @@ def test_guard_disabled_via_zero_max_run_still_catches_cycle():
     # max_run=0 disables run-length; cycle detection still active.
     assert _run([7] * 100, max_run=0) is None
     assert _run([1, 2] * DEFAULT_MIN_CYCLE_REPS, max_run=0) is not None
+
+
+# ── empty table cells (2026-10-02) ──────────────────────────────────
+# muse tokenizes a row of empty cells as '<tr' then ['><', 'td', '></', 'td']
+# repeated: an exact period-4 cycle. Ids here stand in for those pieces.
+_LT_GT, _TD, _CLOSE = 501, 502, 503
+_CELL = [_LT_GT, _TD, _CLOSE, _TD]
+_MARKUP = frozenset({500, _LT_GT, _TD, _CLOSE, 504})
+
+
+def test_empty_table_cells_pass_with_the_markup_set():
+    row = [500] + _CELL * 30 + [504]  # 30 empty cells, then '></tr>'
+    assert (
+        _run(row) == f"cycle period 4 x {DEFAULT_MIN_CYCLE_REPS}"
+    ), "strict guard trips"
+    assert _run(row, markup_tokens=_MARKUP) is None
+
+
+def test_a_markup_loop_still_dies():
+    from inference.repetition import DEFAULT_MARKUP_CYCLE_REPS
+
+    r = _run(_CELL * 200, markup_tokens=_MARKUP)
+    assert r == f"cycle period 4 x {DEFAULT_MARKUP_CYCLE_REPS} (table markup)"
+
+
+def test_a_cell_with_content_keeps_the_strict_threshold():
+    zero = 600  # '0.00' is content, never markup
+    cell = [_LT_GT, _TD, 504, zero, _CLOSE, _TD]
+    assert _run(cell * 20, markup_tokens=_MARKUP) is not None
+    assert "(table markup)" not in _run(cell * 20, markup_tokens=_MARKUP)
+
+
+def test_markup_pieces():
+    from inference.repetition import is_markup_piece as m
+
+    for piece in (
+        "<tr",
+        "><",
+        "td",
+        "></",
+        "</td>",
+        " |",
+        "|---",
+        "---|---|",
+        ":-:",
+        "th>",
+    ):
+        assert m(piece), piece
+    # whitespace alone is a real degeneration; content is content
+    for piece in ("", " ", "\n", "  \n", "0", "the", "t", "rd", "<b>"):
+        assert not m(piece), piece
+
+
+def test_markup_token_ids_skips_unrenderable_ids():
+    from inference.repetition import markup_token_ids
+
+    pieces = {0: "<td", 1: "hello", 2: "></", 3: " "}
+
+    def piece(t):
+        if t == 4:
+            raise ValueError("control token")
+        return pieces[t]
+
+    assert markup_token_ids(5, piece) == frozenset({0, 2})

@@ -15,6 +15,7 @@ from typing import Any, AsyncGenerator, List, Optional, Tuple
 # Local imports
 from core.config import ActiveConfigView, get_config
 from inference.backends.factory import get_backend, initialize_backend_async
+from inference.repetition import DegenerateGenerationError
 from preprocessing.static_tokens import manager as static_tokens_manager
 from inference.tokenizer import (
     get_cached_tokenizer,
@@ -1322,6 +1323,10 @@ async def _run_vision_batched(
     fallback is the CONTRACT: any install-side failure must cost this
     request a slower answer, never an error the pool path would not have
     produced). ImageIntakeError propagates — it is the shared 4xx shape.
+    DegenerateGenerationError propagates too: it is a verdict on the
+    GENERATION, not the install. The pool would only replay the same loop,
+    and under tensor split there is no pool -- the fallback turned a looped
+    table transcription into "cannot build a vision context" (2026-10-02).
 
     v1 scope: the primary model only, one user message (text + images),
     an optional system message. Anything else falls back."""
@@ -1488,6 +1493,8 @@ async def _run_vision_batched(
                 handler="batched-engine",
                 decode_ms=round((_time.time() - t0) * 1000.0, 1),
             )
+        except DegenerateGenerationError:
+            raise
         except VisionInstallError as exc:
             log.warning("batched vision install failed (%s) — pool fallback", exc)
             stats["fallbacks"] += 1

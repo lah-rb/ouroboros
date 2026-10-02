@@ -19,7 +19,8 @@ token repeated ``max_run`` times, or an exact length-``p`` block repeated
 ``min_cycle_reps`` times back-to-back, is treated as degenerate.
 """
 
-from typing import List, Optional
+import re
+from typing import Callable, FrozenSet, List, Optional
 
 # Conservative defaults. A single token repeated 48x, or an exact 2-8 token block
 # repeated 12x straight, is never legitimate prose/code but caps a degenerate turn
@@ -27,6 +28,45 @@ from typing import List, Optional
 DEFAULT_MAX_RUN = 48
 DEFAULT_MAX_CYCLE_PERIOD = 8
 DEFAULT_MIN_CYCLE_REPS = 12
+#: EMPTY TABLE CELLS repeat legitimately: a row of a wide table is ``<td></td>``
+#: a dozen times over, an exact 4-token cycle. On 2026-10-02 the guard aborted
+#: three table transcriptions (a muse table-triage read, two curate turns that
+#: rebuilt an HTML table while reasoning) at "cycle period 4 x 12". A cycle
+#: whose every token is bare table markup must repeat this many times instead
+#: -- more cells than any printed table row has, since ``</tr><tr>`` breaks
+#: the cycle at every row, while a markup loop still dies in a few hundred
+#: tokens.
+DEFAULT_MARKUP_CYCLE_REPS = 64
+#: A token is BARE TABLE MARKUP when its text is cell punctuation with only
+#: the tag letters of td/th/tr and whitespace around it -- the pieces of
+#: ``<td></td>``, ``<th></th>`` and markdown's ``| |`` / ``|---|:-:|`` rows --
+#: or a bare tag name. Any content (a digit, a word) puts the cycle back
+#: under the normal threshold, and so does whitespace alone: a whitespace
+#: loop is a real degeneration.
+_MARKUP_PIECE = re.compile(r"[\s<>/|:\-tdhr]+")
+_MARKUP_PUNCT = re.compile(r"[<>/|\-]")
+_TAG_NAMES = frozenset({"td", "th", "tr"})
+
+
+def is_markup_piece(piece: str) -> bool:
+    """True for the text of a bare-table-markup token (see _MARKUP_PIECE)."""
+    if not piece or _MARKUP_PIECE.fullmatch(piece) is None:
+        return False
+    return _MARKUP_PUNCT.search(piece) is not None or piece.strip() in _TAG_NAMES
+
+
+def markup_token_ids(n_vocab: int, piece: Callable[[int], str]) -> FrozenSet[int]:
+    """Every token id whose text is bare table markup. ``piece`` maps an id to
+    its text; an id it cannot render is skipped."""
+    out = set()
+    for tid in range(n_vocab):
+        try:
+            text = piece(tid)
+        except Exception:  # noqa: BLE001 — control/byte tokens
+            continue
+        if is_markup_piece(text):
+            out.add(tid)
+    return frozenset(out)
 
 
 class DegenerateGenerationError(RuntimeError):
@@ -70,7 +110,9 @@ class RepetitionGuard:
     Two independent signals:
       * **run-length** — the same token id repeated ``>= max_run`` times in a row.
       * **short-cycle** — an exact length-``p`` block (``2 <= p <= max_cycle_period``)
-        repeated ``>= min_cycle_reps`` times back-to-back.
+        repeated ``>= min_cycle_reps`` times back-to-back; ``>= markup_cycle_reps``
+        when every token of the block is in ``markup_tokens`` (empty table
+        cells, see DEFAULT_MARKUP_CYCLE_REPS).
     """
 
     def __init__(
@@ -78,10 +120,14 @@ class RepetitionGuard:
         max_run: int = DEFAULT_MAX_RUN,
         max_cycle_period: int = DEFAULT_MAX_CYCLE_PERIOD,
         min_cycle_reps: int = DEFAULT_MIN_CYCLE_REPS,
+        markup_tokens: FrozenSet[int] = frozenset(),
+        markup_cycle_reps: int = DEFAULT_MARKUP_CYCLE_REPS,
     ) -> None:
         self.max_run = max_run
         self.max_cycle_period = max_cycle_period
         self.min_cycle_reps = min_cycle_reps
+        self.markup_tokens = markup_tokens
+        self.markup_cycle_reps = max(markup_cycle_reps, min_cycle_reps)
 
         # run-length state
         self._run_token: Optional[int] = None
@@ -89,7 +135,9 @@ class RepetitionGuard:
 
         # short-cycle state: a bounded tail ring of recent token ids, just long
         # enough to test the largest cycle we look for.
-        self._ring_cap = max_cycle_period * min_cycle_reps
+        self._ring_cap = max_cycle_period * (
+            self.markup_cycle_reps if markup_tokens else min_cycle_reps
+        )
         self._ring: List[int] = []
 
     def observe(self, token: int) -> Optional[str]:
@@ -120,5 +168,12 @@ class RepetitionGuard:
             window = self._ring[-need:]
             # window is `reps` consecutive copies of `block`?
             if all(window[i] == block[i % p] for i in range(need)):
-                return f"cycle period {p} x {reps}"
+                if not (self.markup_tokens and set(block) <= self.markup_tokens):
+                    return f"cycle period {p} x {reps}"
+                # Empty table cells: legitimate until markup_cycle_reps.
+                long_need = p * self.markup_cycle_reps
+                if len(self._ring) >= long_need:
+                    long_window = self._ring[-long_need:]
+                    if all(long_window[i] == block[i % p] for i in range(long_need)):
+                        return f"cycle period {p} x {self.markup_cycle_reps} (table markup)"
         return None

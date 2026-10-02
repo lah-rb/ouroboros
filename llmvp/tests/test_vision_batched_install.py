@@ -439,3 +439,85 @@ async def test_encoder_pool_ensure_is_idempotent(monkeypatch):
     await pool.ensure(object())
     await pool.ensure(object())
     assert calls["n"] == 3, "each member once, second ensure a no-op"
+
+
+@pytest.mark.asyncio
+async def test_a_degenerate_generation_raises_and_never_falls_back(monkeypatch):
+    """Live 2026-10-02 (tensor split): a table transcription looped on empty
+    cells, the batched helper swallowed the DegenerateGenerationError and
+    returned None, and the pool path -- which tensor split cannot build --
+    answered "cannot build a vision context". The abort is a verdict on the
+    generation: it must surface as itself, and the seat must still be
+    scrubbed and released."""
+    import contextlib
+    from types import SimpleNamespace
+
+    from core import inference as ci
+    from inference import vision_batched as vb
+    from inference.repetition import DegenerateGenerationError
+
+    calls = []
+
+    class _Encoder:
+        def split_prompt(self, *a):
+            return SimpleNamespace(text2=[1, 2], free=lambda: None)
+
+    class _Pool:
+        marker = "<__media__>"
+
+        async def ensure(self, model):
+            return None
+
+        @contextlib.asynccontextmanager
+        async def lease(self):
+            yield _Encoder()
+
+    class _Engine:
+        def control(self, fn):
+            import concurrent.futures
+
+            fut = concurrent.futures.Future()
+            fut.set_result(fn())
+            return fut
+
+        def prepare_seat(self, inst, persona):
+            calls.append(("scrub", persona))
+
+    seat = SimpleNamespace(n_tokens=0)
+
+    class _Backend:
+        _engine = _Engine()
+        _vision_batched_encoder_pool = _Pool()
+        _vision_installing: set = set()
+        _primary_instance = SimpleNamespace(
+            _model=SimpleNamespace(n_embd_inp=lambda: 8), n_batch=512
+        )
+
+        async def generate_async(self, **kw):
+            raise DegenerateGenerationError("cycle period 4 x 12", tokens_generated=557)
+
+        async def release_instance(self, inst):
+            calls.append(("release", inst is seat))
+
+    async def _seat(backend, mcfg):
+        return seat
+
+    async def _install(*a, **k):
+        return None
+
+    monkeypatch.setattr(ci, "_acquire_vision_seat", _seat)
+    monkeypatch.setattr(vb, "install_multimodal_prefix", _install)
+    monkeypatch.setattr(vb, "render_vision_prompt", lambda *a, **k: "prompt")
+    monkeypatch.setattr(
+        "inference.vision_images.resolve_image_part", lambda part, roots, limit: b"png"
+    )
+    mcfg = SimpleNamespace(family="muse-glimmer", name="muse", vision_image_roots=[])
+    msgs = [{"role": "user", "content": [
+        {"type": "text", "text": "x"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,eA=="}},
+    ]}]  # fmt: skip
+    backend = _Backend()
+    with pytest.raises(DegenerateGenerationError, match="cycle period 4 x 12"):
+        await ci._run_vision_batched(backend, mcfg, msgs, 100, 0.0, None, [], 100, 0.0)
+    assert calls == [("scrub", "vision"), ("release", True)]
+    assert backend._vision_batched_stats["fallbacks"] == 0
