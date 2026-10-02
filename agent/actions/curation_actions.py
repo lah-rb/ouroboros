@@ -2759,6 +2759,8 @@ def _repack_pending(rec: dict) -> bool:
 async def _select_repack_paper(effects, databank: dict) -> str:
     """Claim the next repack: needs_repack first, then the smallest raw doc."""
     ranked: list[tuple[int, int, str]] = []
+    declines = await _load_repack_declines(effects)
+    model = _provenance_model(effects)
     for key, rec in databank.items():
         if (
             key in _CURATE_CLAIMS
@@ -2766,6 +2768,7 @@ async def _select_repack_paper(effects, databank: dict) -> str:
             or key in _CURATE_SKIP
             or _recently_booked(key)
             or not _repack_pending(rec)
+            or _repack_declined_before(declines, key, rec, model)
         ):
             continue
         raw_chars, _ = await _cached_doc_sizes(effects, key, rec)
@@ -2784,8 +2787,62 @@ async def _select_repack_paper(effects, databank: dict) -> str:
 
 def _decline_repack(key: str, why: str) -> dict:
     _REPACK_DECLINED.add(key)
+    _REPACK_DECLINES_PENDING[key] = why
     logger.info("repack lane: %s left for the muse lanes -- %s", key, why)
     return {"paper_key": key, "outcome": f"declined: {why[:200]}"}
+
+
+# DECLINES OUTLIVE THE PROCESS (2026-10-02). _REPACK_DECLINED is per process,
+# so every mission restart sent the lane back through every paper it had
+# declined -- smallest first, so they came first: ~30 papers at ~5 min each,
+# 2.5 h of the box per restart, three restarts that day. A decline is now
+# also kept in REPACK_DECLINES_PATH per paper with the model and the doc
+# fingerprint it was declined on; the lane skips it while both still hold (a
+# translation or figure text landing changes the doc and re-arms it). The
+# paper itself is untouched, as no-burn requires.
+REPACK_DECLINES_PATH = "databank/repack_declines.json"
+_REPACK_DECLINES_PENDING: dict[str, str] = {}
+
+
+async def _load_repack_declines(effects) -> dict:
+    fc = await effects.read_file(REPACK_DECLINES_PATH)
+    if not getattr(fc, "exists", False) or not fc.content.strip():
+        return {}
+    try:
+        data = json.loads(fc.content)
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _repack_declined_before(declines: dict, key: str, rec: dict, model: str) -> bool:
+    d = declines.get(key)
+    return (
+        isinstance(d, dict)
+        and d.get("model") == model
+        and d.get("doc") == list(_doc_fingerprint(rec))
+    )
+
+
+async def _persist_repack_declines(effects, databank: dict) -> None:
+    if not _REPACK_DECLINES_PENDING:
+        return
+    from datetime import datetime, timezone
+
+    declines = await _load_repack_declines(effects)
+    model = _provenance_model(effects)
+    stamp = datetime.now(timezone.utc).isoformat()
+    for key, why in list(_REPACK_DECLINES_PENDING.items()):
+        declines[key] = {
+            "model": model,
+            "why": why[:300],
+            "at": stamp,
+            "doc": list(_doc_fingerprint(databank.get(key) or {})),
+        }
+        _REPACK_DECLINES_PENDING.pop(key, None)
+    await effects.write_file(
+        REPACK_DECLINES_PATH, json.dumps(declines, indent=1, ensure_ascii=False)
+    )
 
 
 # ── Missed-window repair (2026-10-02) ────────────────────────────────
@@ -3218,6 +3275,7 @@ async def action_repack_drain_batch(step_input):
         )
     finally:
         release_curate_keys([key])
+        await _persist_repack_declines(effects, databank)
 
 
 async def action_fig_review_sweep_next(step_input):

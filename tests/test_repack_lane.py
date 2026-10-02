@@ -89,10 +89,22 @@ def _si(fx) -> StepInput:
 
 @pytest.fixture(autouse=True)
 def _clean():
-    for s in (_CURATE_CLAIMS, _CURATE_DOC_CACHE, _CURATE_BOOKED, _REPACK_DECLINED):
+    for s in (
+        _CURATE_CLAIMS,
+        _CURATE_DOC_CACHE,
+        _CURATE_BOOKED,
+        _REPACK_DECLINED,
+        ca._REPACK_DECLINES_PENDING,
+    ):
         s.clear()
     yield
-    for s in (_CURATE_CLAIMS, _CURATE_DOC_CACHE, _CURATE_BOOKED, _REPACK_DECLINED):
+    for s in (
+        _CURATE_CLAIMS,
+        _CURATE_DOC_CACHE,
+        _CURATE_BOOKED,
+        _REPACK_DECLINED,
+        ca._REPACK_DECLINES_PENDING,
+    ):
         s.clear()
 
 
@@ -226,3 +238,26 @@ def test_lanes_exist_only_when_routed_and_asked_for(monkeypatch):
     assert "repack_r1" in [x.name for x in wp._all_scraper_lanes(_route())]
     monkeypatch.setenv("OUROBOROS_REMOTE_REPACK_LANES", "0")
     assert wp._repack_lanes(_route()) == []
+
+
+@pytest.mark.asyncio
+async def test_a_decline_outlives_the_process_until_the_doc_changes():
+    """Each restart used to re-run every declined paper first (~2.5 h a time)."""
+    invented = json.dumps({"chemical_composition_mass_fraction_pct": [0.028, 0.004]})
+    base, fx = _lane(
+        [_accepted("p", pack_status="needs_repack")],
+        {"p": MD},
+        responses=[invented, invented],
+    )
+    await action_repack_drain_batch(_si(fx))
+    saved = json.loads((await base.read_file(ca.REPACK_DECLINES_PATH)).content)
+    assert saved["p"]["model"] == "gemma-4-12b-3060"
+    assert saved["p"]["why"].startswith("gates")
+
+    _REPACK_DECLINED.clear()  # a fresh process
+    bank = await read_databank(fx)
+    assert await _select_repack_paper(fx, bank) == "", "skipped across the restart"
+
+    rec = {**bank["p"], "figtext_status": "figtext_done"}  # the doc changed
+    await base.write_file("databank/papers.jsonl", json.dumps(rec) + "\n")
+    assert await _select_repack_paper(fx, await read_databank(fx)) == "p"
