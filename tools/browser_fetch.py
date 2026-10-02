@@ -8,8 +8,8 @@ agent) and headless Chromium with "Access Denied", while the operator's own
 browser downloads them with one click. robots.txt neither allows nor disallows
 the /pdf paths, and the operator ruled a respectful full-browser crawler fine.
 
-WHAT IT DOES, per item of an intake fetch list (`intake.py export --doi-prefix
-10.3390/`): open the article page in a WINDOWED Chromium on the operator's
+WHAT IT DOES, per item of an intake fetch list (`intake.py export --route
+browser`: the papers agent/acquisition_routes.py gives this fetcher): open the article page in a WINDOWED Chromium on the operator's
 desktop (persistent profile of its own), pause as a reader would, then have the
 page fetch() its own "Download PDF" link -- the same browser, cookies and
 request as the click, minus Chromium's download machinery, which segfaulted
@@ -45,12 +45,26 @@ import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO))
+from agent.acquisition_routes import (  # noqa: E402
+    BROWSER_FETCH_LOG,
+    acquirer,
+    browser_exhausted,
+    publisher_for,
+)
+
 CORPUS = Path(os.path.expanduser("~/corpora/ouroboros-spectra"))
-LOG = CORPUS / "manual_intake" / "browser_fetch.jsonl"
+LOG = CORPUS / BROWSER_FETCH_LOG
 FAIL_DIR = CORPUS / "manual_intake" / "browser_fetch_failures"
 PROFILE = Path(os.path.expanduser("~/.cache/ouroboros/browser_fetch_profile"))
 CHROMIUM = os.environ.get("OUROBOROS_CHROMIUM", "/usr/lib/chromium/chromium")
 BUNDLE = Path(os.path.expanduser("~/Downloads/paper_bundle_mdpi"))
+
+
+#: Publishers this fetcher knows how to fetch. The routes table decides which
+#: papers are the browser's; a browser-route publisher missing here is skipped
+#: with a reason rather than fetched with another publisher's page logic.
+STRATEGIES = frozenset({"mdpi"})
 
 MIN_DELAY_S, MAX_DELAY_S = 20.0, 40.0
 DAILY_CAP = 200
@@ -241,12 +255,24 @@ async def run(args) -> int:
     papers = last_rows(CORPUS / "databank" / "papers.jsonl")
     log = read_log()
     done = {e["key"] for e in log if e.get("outcome") == "ok"}
+    exhausted = browser_exhausted(log)
     bundle = Path(args.bundle).expanduser()
     bundle.mkdir(parents=True, exist_ok=True)
     plan = []
     for pos, key in items:
         rec = papers.get(key) or {}
         if key in done or rec.get("pdf_path"):
+            continue
+        if acquirer(rec, exhausted) != "browser":
+            print(
+                f"  #{pos:<4} {key:<45} skipped: not the browser's (the operator's route)"
+            )
+            continue
+        pub = publisher_for(rec)
+        if pub is None or pub.name not in STRATEGIES:
+            print(
+                f"  #{pos:<4} {key:<45} skipped: no fetch strategy for {pub and pub.name}"
+            )
             continue
         url = landing_url(rec)
         if url:
@@ -338,7 +364,7 @@ def main() -> int:
     ap.add_argument(
         "--list",
         required=True,
-        help="an intake fetch list (export --doi-prefix 10.3390/)",
+        help="an intake fetch list (intake.py export --route browser)",
     )
     ap.add_argument("--bundle", default=str(BUNDLE))
     ap.add_argument("--start", type=int, default=1, help="first list position to try")

@@ -46,6 +46,7 @@ import os
 import re
 from typing import Any
 
+from agent.acquisition_routes import crawler_walled_hosts, is_crawler_walled
 from agent.models import StepInput, StepOutput
 
 logger = logging.getLogger(__name__)
@@ -68,36 +69,11 @@ MAX_REFERENCE_DOIS = 200
 # check monitors tag quality independently.
 CATALOG_BATCH_SIZE = int(os.environ.get("OUROBOROS_CATALOG_BATCH", "8"))
 
-# Publisher hosts MEASURED to refuse a polite crawler: Cloudflare 403, unmoved
-# by the browser User-Agent we already send or by following redirects. Used to
-# skip them when harvesting alternate locations, and to keep the capped
-# re-arm slots off records that cannot recover.
-#
-# HOST IS THE VARIABLE THAT PREDICTS RECOVERY — not the failure bucket, which
-# is what the first version of the re-arm sorted on and why it returned 0/6 on
-# its first live batch. Plain re-fetch yield, sampled per host 2026-08-13:
-#
-#   link.springer.com        4/6   (and 9/9, 4/4 in two earlier samples)
-#   onlinelibrary.wiley.com  0/6
-#   www.sciencedirect.com    0/6
-#   doi.org                  0/6
-#   www.mdpi.com             0/6
-#
-# link.springer.com was in this list and should NOT have been. It was added
-# from a table of failure COUNTS (93 failures) without asking whether those
-# failures were durable — they were transient, and Springer serves PDFs on a
-# retry more often than not. Counting failures is not measuring refusal.
-WALLED_HOSTS = (
-    "sciencedirect.com",
-    "onlinelibrary.wiley.com",
-    "www.mdpi.com",
-    "iopscience.iop.org",
-    "pubs.rsc.org",
-    # The DOI resolver itself: it lands on a meta-refresh stub that forwards
-    # into the publisher (measured: linkinghub.elsevier.com -> sciencedirect),
-    # so a doi.org URL in an unresolved record is a wall one hop away.
-    "doi.org",
-)
+# Publisher hosts MEASURED to refuse a polite crawler: skipped when harvesting
+# alternate locations and when re-checking stored links. Derived from the one
+# table of acquisition routes (agent/acquisition_routes.py), which keeps the
+# per-host measurements and says who fetches what the crawler cannot.
+WALLED_HOSTS = crawler_walled_hosts()
 
 
 def classify_failure(failure_reason: str) -> str:
@@ -884,8 +860,7 @@ _OPENALEX_OA_FILTER = "is_oa:true,has_fulltext:true"
 
 def _is_walled(url: str) -> bool:
     """Is this URL at a host measured to refuse a polite crawler?"""
-    host = url.split("/")[2].lower() if "//" in (url or "") else ""
-    return any(w in host for w in WALLED_HOSTS)
+    return is_crawler_walled(url)
 
 
 async def _alt_host_urls(effects: Any, doi: str, rec: dict) -> list:

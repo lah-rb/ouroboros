@@ -95,6 +95,12 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
+from agent.acquisition_routes import (  # noqa: E402
+    acquirer,
+    browser_exhausted,
+    read_browser_log,
+)
+
 CORPUS = Path(os.path.expanduser("~/corpora/ouroboros-spectra"))
 DATABANK = CORPUS / "databank"
 INTAKE = CORPUS / "manual_intake"
@@ -381,12 +387,21 @@ def cmd_export(args) -> int:
         "both": ("oa_unresolved", "closed"),
     }[args.pool]
     missed = {e["key"] for e in read_ledger() if e.get("event") == "miss"}
+    # WHO FETCHES IT comes from the one routes table (agent/acquisition_routes):
+    # an operator list never carries a paper the browser fetcher still owns,
+    # and a browser list carries only those (operator ruling 2026-10-02).
+    exhausted = browser_exhausted(read_browser_log(CORPUS))
     pool = [
         r for r in papers.values()
         if r.get("access_status") in statuses and clean_title(r.get("title") or "")
         and r.get("record_kind") != "supplement" and (args.retry_missed or r["paper_key"] not in missed)
-        and (not args.doi_prefix or str(r.get("doi") or "").lower().startswith(args.doi_prefix.lower()))
+        and acquirer(r, exhausted) == args.route
     ]  # fmt: skip
+    routed_away = sum(
+        1 for r in papers.values()
+        if r.get("access_status") in statuses and r.get("record_kind") != "supplement"
+        and acquirer(r, exhausted) != args.route
+    )  # fmt: skip
     items, fit = rank_pool(papers, pool)
     chosen = items[: args.n]
     stamp = dt.datetime.now().strftime("%Y-%m-%d_%H%M")
@@ -396,6 +411,7 @@ def cmd_export(args) -> int:
     L = [
         f"# Fetch list {stamp}: {len(chosen)} papers",
         "",
+        f"Route: {args.route} ({routed_away:,} `{'/'.join(statuses)}` papers belong to another route). "
         f"Pool: {len(pool):,} `{'/'.join(statuses)}` papers (tiers: "
         + ", ".join(f"{name} {dist.get(name, 0):,}" for _, name in TIERS)
         + f"; {len(missed):,} earlier misses left out). Order: on-topic tier, then English, then bot-walled "
@@ -1193,9 +1209,11 @@ def main() -> int:
         "--retry-missed", action="store_true", help="list earlier misses again"
     )
     e.add_argument(
-        "--doi-prefix",
-        default="",
-        help="only records whose DOI starts with this (e.g. 10.3390/ for MDPI, the browser fetcher's pool)",
+        "--route",
+        choices=("operator", "browser"),
+        default="operator",
+        help="whose list: the operator's manual fetches, or tools/browser_fetch.py's "
+        "(agent/acquisition_routes.py decides which papers are whose)",
     )
     i = sub.add_parser("ingest", help="match downloaded files to records and book them")
     i.add_argument("--list", help="the fetch list the files answer (positions, misses)")
