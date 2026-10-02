@@ -53,6 +53,7 @@ sys.path.insert(0, str(REPO))
 
 DEFAULT_ROOT = os.path.expanduser("~/corpora/ouroboros-spectra")
 PLAN_FILE = "databank/metadata_fill_plan.json"
+PROGRESS_FILE = "databank/metadata_fill_progress.jsonl"
 BOOK_FIELDS = ("title", "authors", "year", "edition", "publisher", "isbn")
 PAPER_FIELDS = ("title", "authors", "year", "venue")
 FRONT_CHARS = {"book": 6000, "paper": 6000}
@@ -424,11 +425,28 @@ async def cmd_plan(a) -> int:
         for k in keys
         if k in bank and _in_scope(bank[k], a.scope) and fillable_fields(bank[k])
     ][: a.limit or None]
-    print(f"{len(todo)} record(s) with fields to fill under {root}", flush=True)
+    # RESUMABLE: every planned record is appended to PROGRESS_FILE as it lands,
+    # so a pass stopped midway (a GPU test needs muse down) costs one record,
+    # not hours. --resume skips the keys already there and folds them in.
+    progress = root / PROGRESS_FILE
     plans = []
+    if a.resume and progress.exists():
+        for line in progress.read_text(encoding="utf-8").splitlines():
+            try:
+                plans.append(json.loads(line))
+            except ValueError:
+                continue  # a torn last line costs that record only
+        done = {p["paper_key"] for p in plans}
+        todo = [r for r in todo if r["paper_key"] not in done]
+    elif progress.exists():
+        progress.unlink()
+    print(f"{len(todo)} record(s) with fields to fill under {root}"
+          f"{f' ({len(plans)} resumed)' if plans else ''}", flush=True)  # fmt: skip
     for rec in todo:
         p = await plan_one(fx, root, rec, llm=not a.no_llm, web=not a.offline)
         plans.append(p)
+        with open(progress, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(p, ensure_ascii=False) + "\n")
         filled = {f: f"{x['value']!r} [{x['source']}]" for f, x in p["fill"].items()}
         print(f"\n{p['paper_key']}  wants {p['wanted']}", flush=True)
         for f, s in filled.items():
@@ -518,6 +536,11 @@ def main() -> int:
     p.add_argument("--limit", type=int, default=0)
     p.add_argument("--no-llm", action="store_true", help="registries only")
     p.add_argument("--offline", action="store_true", help="front matter only")
+    p.add_argument(
+        "--resume",
+        action="store_true",
+        help="continue a stopped pass from its progress file",
+    )
     q = sub.add_parser("apply", help="book the plan file onto fresh rows")
     q.add_argument("--root", default=DEFAULT_ROOT)
     a = ap.parse_args()
