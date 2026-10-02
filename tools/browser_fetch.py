@@ -10,8 +10,10 @@ the /pdf paths, and the operator ruled a respectful full-browser crawler fine.
 
 WHAT IT DOES, per item of an intake fetch list (`intake.py export --doi-prefix
 10.3390/`): open the article page in a WINDOWED Chromium on the operator's
-desktop (persistent profile of its own), pause as a reader would, click the
-"Download PDF" link, save the file into a bundle folder, and check it is a PDF.
+desktop (persistent profile of its own), pause as a reader would, then have the
+page fetch() its own "Download PDF" link -- the same browser, cookies and
+request as the click, minus Chromium's download machinery, which segfaulted
+under Playwright -- save the bytes into a bundle folder, and check it is a PDF.
 `intake.py ingest --list <list> --bundle <folder>` then verifies each file's
 first page against its record and books it, exactly as for the operator's
 manual downloads.
@@ -32,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import datetime as dt
 import json
 import os
@@ -156,6 +159,19 @@ async def _record_failure(page, key: str, why: str) -> str:
     return str(stem)
 
 
+# fetch() a same-origin URL from the rendered page; base64 the bytes for transfer.
+_FETCH_JS = """async (href) => {
+  const r = await fetch(href, {credentials: 'include'});
+  const buf = new Uint8Array(await r.arrayBuffer());
+  let bin = '';
+  for (let i = 0; i < buf.length; i += 0x8000) {
+    bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
+  }
+  return {status: r.status, len: buf.length, b64: btoa(bin),
+          disposition: r.headers.get('content-disposition') || ''};
+}"""
+
+
 async def fetch_one(page, key: str, url: str, bundle: Path) -> dict:
     t0 = time.monotonic()
     out = {"key": key, "url": url}
@@ -185,25 +201,35 @@ async def fetch_one(page, key: str, url: str, bundle: Path) -> dict:
     if await link.count() == 0:
         return {**out, "outcome": "no_pdf_link", "page": page.url,
                 "evidence": await _record_failure(page, key, "no link")}  # fmt: skip
+    # THE PAGE FETCHES ITS OWN PDF LINK; NOTHING IS "DOWNLOADED". Clicking the
+    # link hands the file to Chromium's download machinery, and Chromium 153
+    # driven by Playwright segfaulted there on most articles (2026-10-01). A
+    # fetch() from the rendered article page goes through the same browser
+    # network stack and cookies as the click -- MDPI answers it with the PDF
+    # itself (Content-Disposition: attachment) -- and the bytes come back to
+    # this process instead of to a download.
+    href = (await link.first.get_attribute("href")) or f"{path}/pdf"
     try:
-        async with page.expect_download(timeout=90_000) as dl_info:
-            await link.first.click()
-        dl = await dl_info.value
+        got = await page.evaluate(_FETCH_JS, href)
     except Exception as e:  # noqa: BLE001
-        return {**out, "outcome": "no_download", "why": str(e)[:200],
-                "evidence": await _record_failure(page, key, "no download")}  # fmt: skip
-    name = dl.suggested_filename or f"{key}.pdf"
+        return {**out, "outcome": "download_failed", "why": str(e)[:200],
+                "evidence": await _record_failure(page, key, "fetch failed")}  # fmt: skip
+    if got.get("status") != 200:
+        return {**out, "outcome": "blocked" if got.get("status") in (401, 403, 429) else "download_failed",
+                "why": f"HTTP {got.get('status')} for {href}"}  # fmt: skip
+    m = re.search(r'filename\*?=(?:UTF-8\'\')?"?([^";]+)', got.get("disposition") or "")
+    name = Path(m.group(1)).name if m else f"{key}.pdf"
     dest = bundle / name
     if dest.exists():
         dest = bundle / f"{key}__{name}"
-    await dl.save_as(str(dest))
+    dest.write_bytes(base64.b64decode(got["b64"]))
     head = dest.read_bytes()[:5] if dest.exists() else b""
     size = dest.stat().st_size if dest.exists() else 0
     if head != b"%PDF-" or size < 10_000:
         bad = dest.with_suffix(dest.suffix + ".notpdf")
         dest.rename(bad)
         return {**out, "outcome": "not_a_pdf", "file": str(bad), "bytes": size}
-    return {**out, "outcome": "ok", "file": str(dest), "bytes": size,
+    return {**out, "outcome": "ok", "file": str(dest), "bytes": size, "source": href,
             "seconds": round(time.monotonic() - t0, 1)}  # fmt: skip
 
 
@@ -244,8 +270,9 @@ async def run(args) -> int:
             str(PROFILE),
             executable_path=CHROMIUM,
             headless=False,
-            accept_downloads=True,
-            downloads_path=str(bundle),
+            # Nothing here downloads: a stray download is cancelled rather than
+            # handed to the machinery that segfaulted.
+            accept_downloads=False,
             no_viewport=True,
             args=["--window-size=1280,900"],
         )
@@ -257,7 +284,19 @@ async def run(args) -> int:
                     break
                 if i:
                     await asyncio.sleep(random.uniform(args.min_delay, args.max_delay))
-                res = await fetch_one(page, key, url, bundle)
+                try:
+                    res = await fetch_one(page, key, url, bundle)
+                except Exception as e:  # noqa: BLE001 -- the browser itself went away
+                    append_log({"at": dt.datetime.now(dt.timezone.utc).isoformat(),
+                                "local_date": dt.date.today().isoformat(), "list": str(list_path),
+                                "position": pos, "key": key, "url": url,
+                                "outcome": "browser_error", "why": str(e)[:200]})  # fmt: skip
+                    print(
+                        f"#{pos:<4} {key:<45} browser_error -- stopping: {str(e)[:120]}",
+                        flush=True,
+                    )
+                    last_pos = pos
+                    break
                 last_pos = pos
                 entry = {"at": dt.datetime.now(dt.timezone.utc).isoformat(),
                          "local_date": dt.date.today().isoformat(), "list": str(list_path),
@@ -278,7 +317,10 @@ async def run(args) -> int:
                     )
                     break
         finally:
-            await ctx.close()
+            try:
+                await ctx.close()
+            except Exception:  # noqa: BLE001 -- already gone
+                pass
     rel = (
         list_path.relative_to(REPO)
         if list_path.is_absolute() and REPO in list_path.parents
