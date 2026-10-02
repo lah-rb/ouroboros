@@ -428,9 +428,20 @@ class WorkerPool:
             )
 
     async def _idle(self, lane: Lane) -> None:
+        """Wait out an idle round.
+
+        A lane that competes for THIS engine's capacity wakes early on a
+        capacity change -- a stream retiring is the event that changes its
+        answer. A lane whose resource is elsewhere (network, remote_*) waits its
+        full backoff: on a busy muse the feed changes every 30-60 s, and waking
+        on it erased that lane's backoff entirely (measured 2026-10-02: the
+        recover lane re-ran every ~60 s instead of every 300 s, re-checking
+        papers against Wayback and CORE several times faster than intended).
+        """
         feed = getattr(self.model, "_feed", None)
         waited = None
-        if feed is not None and hasattr(feed, "wait_for_change"):
+        local = not (lane.resource == "network" or lane.resource.startswith("remote_"))
+        if local and feed is not None and hasattr(feed, "wait_for_change"):
             waited = await feed.wait_for_change(timeout=lane.idle_backoff_s)
         if waited is None:
             try:

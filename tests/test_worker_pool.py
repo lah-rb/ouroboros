@@ -527,3 +527,36 @@ def test_a_claim_never_breaks_a_lane_when_the_model_raises():
     c = Claim(tokens=55_000, lane="curate", _model=_Boom(), _token="t1")
     c.resize(20_000)  # must not raise
     assert c.tokens == 20_000
+
+
+@pytest.mark.asyncio
+async def test_a_network_lane_waits_its_full_backoff_whatever_the_feed_does():
+    """Measured 2026-10-02: idle waits woke on every local capacity change, so
+    on a busy muse the recover lane re-ran every ~60 s instead of every 300 s.
+    A lane whose resource is not this engine ignores the feed; a local one
+    still wakes on it."""
+
+    class _Chatty(_Feed):
+        async def wait_for_change(self, timeout):
+            await asyncio.sleep(0)
+            return self._snap  # "something changed" -- immediately
+
+    def pool_with(resource):
+        model = CapacityModel(_Chatty(_snap()))
+        model._now = lambda: 0.0
+        return WorkerPool(
+            effects=None,
+            lanes=[Lane(name="x", flow="f", resource=resource, idle_backoff_s=0.2)],
+            capacity_model=model,
+        )
+
+    for resource, slow in (
+        ("network", True),
+        ("remote_text_seat", True),
+        ("text_seat", False),
+    ):
+        pool = pool_with(resource)
+        t0 = asyncio.get_running_loop().time()
+        await pool._idle(pool.lanes[0])
+        took = asyncio.get_running_loop().time() - t0
+        assert (took >= 0.15) is slow, (resource, took)
