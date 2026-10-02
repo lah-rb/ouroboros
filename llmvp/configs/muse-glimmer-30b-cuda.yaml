@@ -190,6 +190,19 @@ model:
   resident_strip_reasoning: true
   reasoning_head_swap: true
 
+  # ── DFLASH SPECULATIVE DECODING (operator ruling 2026-10-02) ──────────
+  # Muse's released drafter. Benched on this rig, tensor split: 59 -> 92-111
+  # tok/s per stream (1.56-1.80x), +21% aggregate at 8 streams, pack quality
+  # unchanged (dev/bench_spec_decode.py; dev/spec_dflash_smoke.py ran the
+  # same loop through this binding). n_max 3 measured best. The drafter
+  # loads with THIS placement (tensor split) and keeps a q8_0 KV of the
+  # same 327,680 cells (~3.6 GB) beside its 1.6 GB of weights. A drafter
+  # that fails to load leaves the server up on plain decoding.
+  speculative_type: dflash
+  speculative_draft_model: /home/lah-rb/models/dflash-kquant.gguf
+  speculative_n_max: 3
+  speculative_draft_cache_type: q8_0
+
 resources:
   decode_mode: batched
   # 4 -> 5 (2026-08-21): the doubled translate lanes proved seats were

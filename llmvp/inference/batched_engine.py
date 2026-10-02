@@ -50,6 +50,10 @@ from inference.token_pipeline import (  # noqa: F401 — Verdict re-exported
 
 logger = logging.getLogger(__name__)
 
+#: LLMVP_DFLASH_TRACE=1 logs drafted vs sampled tokens for the first verify
+#: steps (diagnosing acceptance; off in production).
+_DFLASH_TRACE = __import__("os").environ.get("LLMVP_DFLASH_TRACE") == "1"
+
 
 # ----------------------------------------------------------------------
 # Seq map
@@ -418,6 +422,9 @@ class StreamState:
     t_first_token: Optional[float] = None
     t_prefill_done: Optional[float] = None
     end_reason: Optional[str] = None
+    # Tokens drafted for this step (speculative decoding); their rows follow
+    # the stream's last token in the batch. Cleared after the step.
+    draft: List[int] = field(default_factory=list)
 
 
 # ----------------------------------------------------------------------
@@ -557,6 +564,9 @@ class BatchedEngine:
         # Occupied-seat clears refused — each one is a PREVENTED seq-wedge;
         # a nonzero count means some caller's seat bookkeeping went stale.
         self.h_clear_refusals = 0
+        # Speculative drafter (inference/speculative_dflash.DFlashDrafter),
+        # injected by the backend when the config asks for it. None = plain.
+        self._spec: Any = None
 
     # -- lifecycle -------------------------------------------------------
 
@@ -1053,8 +1063,14 @@ class BatchedEngine:
         for s in active:
             s.mark = (s.n_past, s.prompt_pos)
             s.i_batch = -1
+            s.draft = []
 
-        # 1. Generation rows — one token per DECODING stream.
+        # 0. Speculative drafts (DFlash): k tokens per DECODING stream whose
+        # seq the drafter covers, never past the stream's own budget.
+        drafts = self._draft_for(active)
+
+        # 1. Generation rows — one token per DECODING stream, then its drafted
+        # tokens (logits on every row: each is a verification position).
         for s in active:
             if s.phase is StreamPhase.DECODING and s.last_token is not None:
                 batch.add_token(s.last_token, s.n_past, [s.slot.seq], True)
@@ -1062,6 +1078,12 @@ class BatchedEngine:
                 rows += 1
                 s.slot.input_ids.append(s.last_token)
                 s.n_past += 1
+                for tok in drafts.get(s.stream_id, ()):
+                    batch.add_token(tok, s.n_past, [s.slot.seq], True)
+                    rows += 1
+                    s.slot.input_ids.append(tok)
+                    s.n_past += 1
+                    s.draft.append(tok)
 
         # 2. Chunked prefill interleave (join order).
         budget = min(self._live_prefill_budget, self._n_batch - rows)
@@ -1106,6 +1128,7 @@ class BatchedEngine:
                     if s.prompt_pos < len(s.req.prompt_tokens):
                         s.phase = StreamPhase.PREFILL  # roll back mid-step join
                 s.i_batch = -1
+                s.draft = []
             self._relieve_pressure(active)
             return
         # The decode landed. This is the only evidence that justifies giving
@@ -1113,56 +1136,128 @@ class BatchedEngine:
         self._consecutive_pressure = 0
         self._grow_prefill_budget()
 
-        # 4. Sample + per-stream hooks.
+        # 4. Sample + per-stream hooks. A stream with drafts samples at each of
+        # its rows in turn and keeps going while the sampled token IS the next
+        # drafted one (llama-server's sample-and-accept: every emitted token is
+        # drawn from the target's distribution given the accepted prefix, so
+        # the output distribution is unchanged). Its position is set BEFORE
+        # each token is consumed so a retire mid-acceptance books the right
+        # n_past; rows past the last consumed token are rolled back after.
         for s in sorted((x for x in active if x.i_batch >= 0), key=lambda x: x.i_batch):
             if s.phase is StreamPhase.DONE:
                 continue
-            tok = s.sampling.sample(self._llama._ctx, idx=s.i_batch)
-            s.sampling.accept(tok, s.has_grammar)
+            draft = s.draft
+            base_past = s.mark[0]
+            accepted = 0
+            sampled_trace: List[int] = []
+            for j in range(len(draft) + 1):
+                tok = s.sampling.sample(self._llama._ctx, idx=s.i_batch + j)
+                s.sampling.accept(tok, s.has_grammar)
+                sampled_trace.append(tok)
+                if draft:
+                    # Rows 0..j are history; tok itself is not fed yet.
+                    s.n_past = base_past + 1 + j
+                alive = self._consume_token(s, tok)
+                if j < len(draft) and tok == draft[j]:
+                    accepted += 1  # the drafted row j+1 already holds tok
+                    if alive:
+                        continue
+                break
+            if draft:
+                self._spec.record(len(draft), accepted)
+                if _DFLASH_TRACE and self._spec.h_steps <= 40:
+                    logger.info(
+                        "DFlash trace seq %d pos %d: last %s draft %s sampled %s",
+                        s.slot.seq,
+                        base_past,
+                        (
+                            s.slot.input_ids[base_past]
+                            if base_past < len(s.slot.input_ids)
+                            else "?"
+                        ),
+                        draft,
+                        sampled_trace,
+                    )
+                written = base_past + 1 + len(draft)
+                if s.n_past < written:
+                    # Mirrored onto the drafter's KV by the attachment.
+                    self._llama._ctx.memory_seq_rm(s.slot.seq, s.n_past, -1)
+                    del s.slot.input_ids[len(s.slot.input_ids) - (written - s.n_past) :]
             s.i_batch = -1
+            s.draft = []
 
-            if self._is_eog(tok):
-                self._retire(s, reason="completed")
+    def _draft_for(self, active: List["StreamState"]) -> Dict[str, List[int]]:
+        """{stream_id: drafted tokens} for this step (empty without a drafter)."""
+        spec = self._spec
+        if spec is None or not getattr(spec, "enabled", False):
+            return {}
+        items, owners = [], []
+        for s in active:
+            if s.phase is not StreamPhase.DECODING or s.last_token is None:
                 continue
-
-            if s.t_first_token is None:
-                s.t_first_token = time.monotonic()
-                self._tracker_call("mark_first_token")
-            s.completion_tokens.append(tok)
-            s.last_token = tok
-            self._tracker_call("record_token")
-
-            verdict = s.pipeline.feed(tok)
-            if verdict.degenerate:
-                self.h_runaway_captures += 1
-                s.pipeline.dump_capture(verdict.degenerate)
-                self._retire(
-                    s,
-                    error=_degenerate_error(
-                        verdict.degenerate, len(s.completion_tokens)
-                    ),
-                )
+            k = min(int(spec.n_max), s.effective_max - len(s.completion_tokens) - 1)
+            if k <= 0 or not spec.covered(s.slot.seq, s.n_past):
                 continue
-            if verdict.end_reason == "final_channel_close":
-                self.h_final_channel_stops += 1
+            items.append((s.slot.seq, s.n_past, s.last_token, k))
+            owners.append(s)
+        if not items:
+            return {}
+        try:
+            by_seq = spec.draft(items)
+        except Exception:  # noqa: BLE001 — a drafter fault never fails a stream
+            logger.exception("DFlash draft failed — this step decodes plainly")
+            return {}
+        return {
+            s.stream_id: list(by_seq[s.slot.seq])
+            for s in owners
+            if by_seq.get(s.slot.seq)
+        }
 
-            text = s.pipeline.pop_text()
-            if text:
-                s.req.out.emit(text)
+    def _consume_token(self, s: "StreamState", tok: int) -> bool:
+        """One sampled token through the stream's hooks: EOG, pipeline, emit,
+        stop and cap. Returns False once the stream has retired."""
+        if self._is_eog(tok):
+            self._retire(s, reason="completed")
+            return False
 
-            hit_cap = len(s.completion_tokens) >= s.effective_max
-            if verdict.stop or hit_cap:
-                # "completed" for both was a real hole. `effective_max` is the
-                # ENGINE's budget, which admission may have sized BELOW the
-                # caller's max_tokens — so a generation cut at the cap looked
-                # identical to one that stopped on EOS, and the API's derived
-                # `tokens_generated >= max_tokens` test could not see it. The
-                # 2026-07-27 replay generated 60,138 of an admitted 60,138 and
-                # reported truncated=False.
-                reason = verdict.end_reason or (
-                    _END_LENGTH if hit_cap and not verdict.stop else "completed"
-                )
-                self._retire(s, reason=reason)
+        if s.t_first_token is None:
+            s.t_first_token = time.monotonic()
+            self._tracker_call("mark_first_token")
+        s.completion_tokens.append(tok)
+        s.last_token = tok
+        self._tracker_call("record_token")
+
+        verdict = s.pipeline.feed(tok)
+        if verdict.degenerate:
+            self.h_runaway_captures += 1
+            s.pipeline.dump_capture(verdict.degenerate)
+            self._retire(
+                s,
+                error=_degenerate_error(verdict.degenerate, len(s.completion_tokens)),
+            )
+            return False
+        if verdict.end_reason == "final_channel_close":
+            self.h_final_channel_stops += 1
+
+        text = s.pipeline.pop_text()
+        if text:
+            s.req.out.emit(text)
+
+        hit_cap = len(s.completion_tokens) >= s.effective_max
+        if verdict.stop or hit_cap:
+            # "completed" for both was a real hole. `effective_max` is the
+            # ENGINE's budget, which admission may have sized BELOW the
+            # caller's max_tokens — so a generation cut at the cap looked
+            # identical to one that stopped on EOS, and the API's derived
+            # `tokens_generated >= max_tokens` test could not see it. The
+            # 2026-07-27 replay generated 60,138 of an admitted 60,138 and
+            # reported truncated=False.
+            reason = verdict.end_reason or (
+                _END_LENGTH if hit_cap and not verdict.stop else "completed"
+            )
+            self._retire(s, reason=reason)
+            return False
+        return True
 
     def _grow_prefill_budget(self) -> None:
         """Climb back toward the configured chunk — on EVIDENCE, not on time.
@@ -1956,6 +2051,7 @@ class BatchedEngine:
             "latch_heals": self.h_latch_heals,
             "clear_refusals": self.h_clear_refusals,
             "engine_fatal": str(self._fatal) if self._fatal else None,
+            "speculative": self._spec.stats() if self._spec is not None else None,
         }
 
 

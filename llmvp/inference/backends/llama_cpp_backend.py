@@ -208,6 +208,9 @@ class LlamaCppBackend(BaseBackend):
         # modified when "batched" is off. See inference/batched_engine.py.
         self._decode_mode: str = getattr(config.resources, "decode_mode", "pool")
         self._engine: Any = None  # BatchedEngine when _decode_mode=="batched"
+        # DFlash drafter (inference/speculative_dflash) when the config asks
+        # for model.speculative_type: dflash; attached to the batched context.
+        self._spec: Any = None
         self._engine_seats: List[Any] = []  # SeqSlot seats (batched mode)
         self._batched_map: Any = None  # memoized SeqMap (batched mode)
         self._all_instances: List[Any] = []  # For shutdown cleanup
@@ -1414,6 +1417,29 @@ class LlamaCppBackend(BaseBackend):
         primary.reset()
         return heads, reasoning_heads
 
+    def _make_drafter(self, primary: Any) -> Any:
+        """The DFlash drafter, or None (plain decoding). A drafter that fails
+        to load never takes the server down with it: the engine serves plain."""
+        mcfg = self.config.model
+        if getattr(mcfg, "speculative_type", None) != "dflash":
+            return None
+        try:
+            from inference.speculative_dflash import DFlashDrafter
+
+            return DFlashDrafter(
+                primary,
+                str(mcfg.speculative_draft_model),
+                n_max=int(getattr(mcfg, "speculative_n_max", 3) or 3),
+                cache_type=str(
+                    getattr(mcfg, "speculative_draft_cache_type", "q8_0") or "q8_0"
+                ),
+            )
+        except Exception:  # noqa: BLE001
+            log.exception(
+                "🚫 DFlash drafter failed to load — serving WITHOUT speculation"
+            )
+            return None
+
     def _rebuild_batched_context(self) -> None:
         """Latch recovery for the batched engine: drop + rebuild the shared
         llama_context (fresh Metal backend clears the sticky error latch),
@@ -1437,6 +1463,13 @@ class LlamaCppBackend(BaseBackend):
             _memwatch.__enter__()
         except Exception:  # noqa: BLE001
             _memwatch = None
+        # The drafter's context points at the target's (ctx_other): free it
+        # FIRST, and rebuild it against the new target context below.
+        if self._spec is not None:
+            try:
+                self._spec.release_ctx()
+            except Exception:  # noqa: BLE001
+                log.exception("⚠️ DFlash drafter release FAILED during rebuild")
         try:
             if primary._ctx is not None:
                 primary._ctx.close()
@@ -1467,6 +1500,14 @@ class LlamaCppBackend(BaseBackend):
         primary.n_tokens = 0
         primary._sampler = None
         primary._sampling_ctx = None
+        if self._spec is not None:
+            try:
+                self._spec.create_ctx(primary._ctx)
+            except (
+                Exception
+            ) as exc:  # noqa: BLE001 — serve plain, never fail the rebuild
+                log.exception("⚠️ DFlash drafter rebuild FAILED — speculation off")
+                self._spec.disable(f"rebuild failed: {exc}")
         heads, reasoning_heads = self._pin_batched_heads()
         if self._engine is not None:
             self._engine._persona_heads = heads
@@ -1499,6 +1540,9 @@ class LlamaCppBackend(BaseBackend):
 
         primary = self._primary_instance
         seq_map = self._batched_seq_map()
+        # The drafter attaches BEFORE the heads are pinned: every target decode
+        # from here on (head evals included) must reach its KV.
+        self._spec = self._make_drafter(primary)
         heads, reasoning_heads = self._pin_batched_heads()
 
         # Session flow-fork (the per-session resident fork) stays pool-only;
@@ -1595,6 +1639,7 @@ class LlamaCppBackend(BaseBackend):
         else:
             engine._repetition_guard_factory = lambda: None
         engine._reasoning_heads = reasoning_heads
+        engine._spec = self._spec
         # Cells the engine cannot see: the snapshot band lives in the backend's
         # registry, and under kv_unified those pins are free until their source
         # seat is cleared — then they are not. Admission over-reported free
@@ -3689,6 +3734,13 @@ class LlamaCppBackend(BaseBackend):
             await run_in_threadpool(self._engine.shutdown)
             self._engine = None
             self._engine_seats = []
+        if self._spec is not None:
+            # Before the target context goes: the drafter points at it.
+            try:
+                self._spec.close()
+            except Exception:  # noqa: BLE001
+                log.exception("DFlash drafter close failed at shutdown")
+            self._spec = None
 
         pool_size = len(self._all_instances)
 

@@ -417,6 +417,17 @@ model:
   speculative: false
   speculative_ngram_size: 3   # [O] int, default 3
   speculative_num_pred: 10    # [O] int, default 10
+  # [O] DFlash speculative decoding — decode_mode 'batched' ONLY. A drafter
+  # model (GGUF arch `dflash`, e.g. muse's dflash-kquant.gguf) reads the
+  # target's hidden states and drafts up to speculative_n_max tokens per
+  # stream per step; the target verifies them in the same batch (lossless in
+  # distribution). The drafter loads with the TARGET's placement (it borrows
+  # the target's output weight) and keeps a KV cache the size of the target's
+  # cell count. Costs ~15% prefill. Unset/null = plain decoding.
+  # speculative_type: dflash                 # [O] null | "dflash"
+  # speculative_draft_model: /path/to/dflash-kquant.gguf  # [O] required with dflash
+  # speculative_n_max: 3                     # [O] int >= 1, default 3 (measured best)
+  # speculative_draft_cache_type: q8_0       # [O] f16 | q8_0 | q4_0 | bf16 | f32, default q8_0
 
   # ── Thinking / reasoning ────────────────────────────────────────────────
   # [O] Type: bool — does the MODEL support thinking at all (a fact about the

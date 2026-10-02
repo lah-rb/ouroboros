@@ -183,6 +183,21 @@ class ModelConfig(BaseModel):
     speculative: bool = False
     speculative_ngram_size: int = 3
     speculative_num_pred: int = 10
+    # DFlash speculative decoding — BATCHED ENGINE ONLY (2026-10-02). A drafter
+    # model (arch `dflash`) reads the target's hidden states at a few layers and
+    # proposes up to speculative_n_max tokens per stream per step in one
+    # non-causal pass; the target verifies them in the same batch (lossless in
+    # distribution). Muse on two 3090s, tensor split: 59 -> 92-111 tok/s per
+    # stream, +21% aggregate at 8 streams, pack quality unchanged
+    # (dev/bench_spec_decode.py, dev/spec_dflash_smoke.py). Costs ~15% prefill
+    # (layer-input extraction on every target decode) and the drafter's
+    # weights + a KV cache the size of the target's cell count — q8_0 halves
+    # it. n_max 3 measured best (7 slower everywhere; 15 wins only translation
+    # and loses at 8 streams). Unset = plain decoding.
+    speculative_type: Optional[str] = None  # "dflash"
+    speculative_draft_model: Optional[str] = None
+    speculative_n_max: int = 3
+    speculative_draft_cache_type: str = "q8_0"
     # ── THE TWO THINKING LEVERS (operator design, 2026-08-03) ──────────
     # Together these make a config instantly auditable for how it will act
     # when called, replacing the old ambiguous bool.
@@ -826,7 +841,8 @@ class Config(BaseModel):
             if self.model.speculative:
                 raise ValueError(
                     "decode_mode 'batched' is incompatible with model.speculative "
-                    "(the binding's draft state is per-instance and seq-0-coupled)"
+                    "(the binding's draft state is per-instance and seq-0-coupled); "
+                    "use model.speculative_type: dflash"
                 )
             if self.resources.slot_personas is not None:
                 logging.getLogger(__name__).warning(
@@ -834,6 +850,23 @@ class Config(BaseModel):
                     "every persona in `personas` is warmed as a pinned head and "
                     "any seat can serve any persona"
                 )
+        if self.model.speculative_type is not None:
+            if self.model.speculative_type != "dflash":
+                raise ValueError(
+                    f"model.speculative_type {self.model.speculative_type!r} is not "
+                    "supported (only 'dflash')"
+                )
+            if self.resources.decode_mode != "batched":
+                raise ValueError(
+                    "model.speculative_type 'dflash' requires decode_mode 'batched' "
+                    "(the drafter mirrors the batched engine's single context)"
+                )
+            if not self.model.speculative_draft_model:
+                raise ValueError(
+                    "model.speculative_type 'dflash' needs model.speculative_draft_model"
+                )
+            if self.model.speculative_n_max < 1:
+                raise ValueError("model.speculative_n_max must be >= 1")
         # An INERT flow cache. Since the M8 save_state-blob path was deleted
         # (2026-07-30) the flow cache is a seq-ops mechanism only, so without
         # the resident cache there is nothing to pin onto: the request takes
