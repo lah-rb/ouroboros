@@ -139,28 +139,119 @@ def _norm(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
-def _numeric_leaf_tokens(value, path: str = "") -> list[tuple[str, str]]:
-    """(json_path, numeric_token) for every leaf under ``value``.
+def _numeric_leaf_claims(value, path: str = "") -> list[tuple[str, str, str]]:
+    """(json_path, numeric_token, run) for every numeric claim under ``value``.
 
     Numbers inside strings count too — "1.2 GPa at 77 K" carries two
-    groundable claims. Booleans are not numerics.
+    groundable claims. Booleans are not numerics. ``run`` is the whole
+    number-like stretch of the packed STRING the token was cut from
+    (digits, points, commas): a packed "doi 10.1016/j.x.2011.05.030" yields
+    the tokens "2011.05" and "030", neither of which stands alone in the
+    paper, but their run "2011.05.030" does. For a numeric leaf the run is
+    the token itself.
     """
-    out: list[tuple[str, str]] = []
+    out: list[tuple[str, str, str]] = []
     if isinstance(value, bool) or value is None:
         return out
     if isinstance(value, (int, float)):
         for tok in _NUM_RE.findall(repr(value)):
-            out.append((path, tok))
+            out.append((path, tok, tok.lstrip("-")))
     elif isinstance(value, str):
-        for tok in _NUM_RE.findall(value):
-            out.append((path, tok))
+        for m in _NUM_RE.finditer(value):
+            a, b = m.start(), m.end()
+            while a > 0 and value[a - 1] in _RUN_CHARS:
+                a -= 1
+            while b < len(value) and value[b] in _RUN_CHARS:
+                b += 1
+            out.append((path, m.group(), value[a:b].strip(".,").lstrip("-")))
     elif isinstance(value, list):
         for i, v in enumerate(value):
-            out.extend(_numeric_leaf_tokens(v, f"{path}[{i}]"))
+            out.extend(_numeric_leaf_claims(v, f"{path}[{i}]"))
     elif isinstance(value, dict):
         for k, v in value.items():
-            out.extend(_numeric_leaf_tokens(v, f"{path}.{k}" if path else str(k)))
+            out.extend(_numeric_leaf_claims(v, f"{path}.{k}" if path else str(k)))
     return out
+
+
+_RUN_CHARS = frozenset("0123456789.,")
+
+
+def _numeric_leaf_tokens(value, path: str = "") -> list[tuple[str, str]]:
+    """(json_path, numeric_token) for every leaf under ``value``."""
+    return [(p, tok) for p, tok, _ in _numeric_leaf_claims(value, path)]
+
+
+_DIGITS = frozenset("0123456789")
+
+
+def _stands_whole(u: str, text: str) -> bool:
+    """Does the number ``u`` appear in ``text`` as a WHOLE number?
+
+    Not touching a digit on the left (nor "<digit>." -- the tail of a
+    decimal), and on the right allowed only trailing zeros: "0.8" stands in
+    "0.80", "200" in "200.0" or "200.", but "0.5" never in "0.52", "63" never
+    in "632", "200" never in "2000" or "200.5", "87" never in "2.87". A
+    point that multiplies a power of ten ("1,90.10^{-9}") ends the number.
+    """
+    n, k = len(text), len(u)
+    i = text.find(u)
+    while i >= 0:
+        ok = not (
+            (i > 0 and text[i - 1] in _DIGITS)
+            or (i > 1 and text[i - 1] == "." and text[i - 2] in _DIGITS)
+        )
+        j = i + k
+        if ok and "." in u:
+            while j < n and text[j] == "0":
+                j += 1
+        elif ok and j + 1 < n and text[j] == "." and text[j + 1] == "0":
+            z = j + 1
+            while z < n and text[z] == "0":
+                z += 1
+            if not (z < n and text[z] in _DIGITS):
+                j = z
+        if ok and not (
+            (j < n and text[j] in _DIGITS)
+            or (
+                j + 1 < n
+                and text[j] == "."
+                and text[j + 1] in _DIGITS
+                and not _POWER_OF_TEN_DOT.match(text, j)
+            )
+        ):
+            return True
+        i = text.find(u, i + 1)
+    return False
+
+
+#: A point used as the MULTIPLICATION dot before a power of ten -- Laue 1912's
+#: "1,90.10^{-9} cm" is 1.90 x 10^-9 -- so "1.9" stands whole there.
+_POWER_OF_TEN_DOT = re.compile(r"\.10 ?[\^{]")
+
+
+#: A thousands-grouped integer ("17,500", "4 922", "1 234 567"): one to three
+#: leading digits not themselves the tail of a decimal, then groups of
+#: exactly three.
+_THOUSANDS_RE = re.compile(r"(?<![\d.])\d{1,3}(?:[ ,]\d{3})+(?!\d)")
+#: A decimal whose FRACTION is grouped in threes, as ISO typesetting prints
+#: it and OCR keeps it in table cells: "0.107 98", "0.113 78", "1.257 7".
+_DECIMAL_GROUPS_RE = re.compile(r"(?<![\d.])\d+\.\d{3}(?: \d{3})*(?: \d{1,3})(?!\d)")
+#: OCR's space after a decimal point in a table cell: "4. 19".
+_SPLIT_POINT_RE = re.compile(r"(?<=\d\.) (?=\d)")
+
+
+def _join_digit_groups(text: str) -> str:
+    """``text`` with grouped and split numbers rejoined ("17500", "0.10798").
+
+    An ADDITIONAL text a token may match, replacing the old whole-document
+    compaction: stripping every space and comma also manufactured numbers
+    the paper never prints ("0.1 0.05 0" -> "0.10.050", which "grounded" a
+    packed 10.0). Joining only digit groups keeps the printed forms that
+    compaction existed for -- measured on the 2026-10-02 audit of 2,269 packs.
+    """
+    text = _THOUSANDS_RE.sub(lambda m: re.sub(r"[ ,]", "", m.group()), text)
+    text = _DECIMAL_GROUPS_RE.sub(lambda m: m.group().replace(" ", ""), text)
+    return _SPLIT_POINT_RE.sub("", text)
 
 
 #: A comma acting as a DECIMAL separator: between digits, with one or two
@@ -275,35 +366,53 @@ def grounding_check(data: dict, doc: str) -> dict:
 
     The anti-fabrication gate: a value the paper (text or inlined
     figtext) never states cannot be packed. Matching runs against the
-    normalized doc, a whitespace-compacted form (tables and
-    thousands-separated numbers split tokens across whitespace), and —
-    only for documents that use the convention — a decimal-comma
-    variant (see ``_decimal_comma_variant``).
+    normalized doc, its digit-group-joined form, and -- only for documents
+    that use the convention -- a decimal-comma variant (see
+    ``_decimal_comma_variant``) and a raised-dot variant.
+
+    WHOLE NUMBERS ONLY (2026-10-02). A token used to ground if it was a
+    SUBSTRING of the doc or of the doc with every space and comma removed.
+    Audited over 300 production packs, 70 of 31,002 numbers grounded only
+    that way and most were wrong: 0.5 packed from "0.52", 0.0 from
+    "0.0008", 63 (a space group) from "632 nm", 200 from "2000", 10.0 from
+    an axis reading "0.1 0.05 0". A token now grounds only where it stands
+    whole (``_stands_whole``), or where the whole run of the packed string
+    it came from does (an identifier like "2011.05.030"). Trailing zeros,
+    decimal commas, raised-dot decimals and thousands separators still
+    ground. What no matcher can catch: a stated number filed under the
+    wrong quantity.
     """
     doc_n = _norm(doc)
-    doc_compact = re.sub(r"[\s,]", "", doc_n)
-    doc_decimal = _decimal_comma_variant(doc_n)
-    doc_cdot = _cdot_decimal_variant(doc_n)
-    doc_cdot_compact = re.sub(r"[\s,]", "", doc_cdot) if doc_cdot else ""
-    tokens = _numeric_leaf_tokens(data)
+    texts = [
+        t
+        for t in (doc_n, _decimal_comma_variant(doc_n), _cdot_decimal_variant(doc_n))
+        if t
+    ]
+    texts += [j for t in list(texts) if (j := _join_digit_groups(t)) != t]
+    claims = _numeric_leaf_claims(data)
+
     # Match UNSIGNED: _norm strips '-' from the doc (markdown dash
     # punctuation), so a signed packed token can never match — live,
     # every negative quantity (Curie-Weiss theta, mixing enthalpies,
     # interaction parameters) failed grounding while sitting verbatim
     # in the paper's tables. Magnitude+digits is the grounding anchor;
     # the sign is not a fabrication discriminator.
+    def grounded(tok: str, run: str) -> bool:
+        u = tok.lstrip("-")
+        candidates = {u, run, _join_digit_groups(run)}
+        if re.fullmatch(r"\d+\.0+", u):
+            candidates.add(u.split(".")[0])  # 10.0 packed for a printed "10"
+        return any(c and _stands_whole(c, t) for c in candidates for t in texts)
+
     ungrounded = [
         {"path": path, "token": tok}
-        for path, tok in tokens
-        if (u := tok.lstrip("-")) not in doc_n
-        and u not in doc_compact
-        and not (doc_decimal and u in doc_decimal)
-        and not (doc_cdot and (u in doc_cdot or u in doc_cdot_compact))
+        for path, tok, run in claims
+        if not grounded(tok, run)
     ]
-    rate = 1.0 if not tokens else 1 - len(ungrounded) / len(tokens)
+    rate = 1.0 if not claims else 1 - len(ungrounded) / len(claims)
     return {
         "grounding_rate": round(rate, 4),
-        "numeric_leaves": len(tokens),
+        "numeric_leaves": len(claims),
         "ungrounded": ungrounded[:25],
         "passed": rate >= MIN_GROUNDING_RATE,
     }
@@ -2694,9 +2803,9 @@ def _decline_repack(key: str, why: str) -> dict:
 # and two attempts as production (_pack_one_window), with the stored pack's
 # keys as the paper's prior vocabulary -- and the windows that pass are merged
 # INTO the stored pack (stored first, so its scalars stand; lists append).
-# The merge then faces the whole-document gates. Only keys the stored pack
-# lacked are folded into the registry, under the coinage guard: the paper's
-# existing keys were counted when it was booked.
+# The repaired data first faces the whole-document gates. Only keys the
+# stored pack lacked are folded into the registry, under the coinage guard:
+# the paper's existing keys were counted when it was booked.
 #
 # TRACKED. Every attempted window gets repair_rounds, repair_last_at,
 # repair_model and (on a miss) repair_feedback on its window_outcomes row; a
@@ -2868,11 +2977,19 @@ async def _repair_missed_windows(effects, paper_key: str) -> dict:
     combined = stored
     report = MergeReport()
     if new_packs:
-        combined = merge_packs([stored] + [d for _, d in new_packs], report)
-        final = _run_pack_gates(combined, doc, registry)
+        # The REPAIRED data faces the whole-document gates; the stored pack
+        # passed them when it was booked, and judging it again would tie
+        # every repair to any later change in the gates themselves.
+        fresh = merge_packs([d for _, d in new_packs], MergeReport())
+        final = _run_pack_gates(fresh, doc, registry)
         merged_ok = bool(final["passed"])
-        if not merged_ok:
-            why = "merge failed the whole-document gates: " + final["feedback"][:240]
+        if merged_ok:
+            combined = merge_packs([stored] + [d for _, d in new_packs], report)
+        else:
+            why = (
+                "repaired windows failed the whole-document gates: "
+                + final["feedback"][:240]
+            )
             for r in rounds:
                 if r["passed"]:
                     r["passed"] = False
@@ -2927,7 +3044,7 @@ async def _repair_missed_windows(effects, paper_key: str) -> dict:
     q["window_outcomes"] = outcomes
     q["window_repairs"] = list(q.get("window_repairs") or []) + rounds
     if merged_ok:
-        g = final["grounding"]
+        g = grounding_check(combined, doc)  # the booked pack's figures, whole
         q.update(
             windows_passed=int(q.get("windows_passed") or 0) + len(repaired),
             grounding_rate=g["grounding_rate"],

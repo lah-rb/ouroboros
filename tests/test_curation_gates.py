@@ -611,3 +611,57 @@ def test_thousands_groups_still_not_decimals_under_wider_tail():
     doc = "0,0555 0,0571 0,0563 0,1234 0,9876 counts: 1,234 and 12,345,678"
     assert grounding_check({"n": 1.234}, doc)["passed"] is False
     assert grounding_check({"n": 12.345}, doc)["passed"] is False
+
+
+# ── Whole-number grounding (2026-10-02) ──────────────────────────────
+# Substring matching on the doc and on its space-and-comma-stripped copy let
+# fragments and truncations ground; every case below is a production pack
+# value from the audit, against the text its paper actually prints.
+
+
+def _grounds(value, doc: str) -> bool:
+    return grounding_check({"v": value}, doc)["passed"]
+
+
+@pytest.mark.parametrize(
+    "value,doc",
+    [
+        (0.5, "pulse energy (mJ) | 0.52 | 0.61"),  # truncated, not stated
+        (0.0, "0.2363 ± 0.0008"),
+        (63, "a He-Ne laser (632 nm)"),  # a space group from the laser line
+        (200, "see ref. 2000"),
+        (10.0, "axis ticks 0.1 0.05 0"),  # stripped copy read "0.10.050"
+        (495.8, "lines at 1495.8 nm and 1506.3 nm"),
+        (87, "olivine (2.87 Å)"),
+        (51.2, "<td>51.25</td>"),
+        (164, "dashed lines mark 1640 cm-1"),
+    ],
+)
+def test_a_fragment_or_truncation_of_a_printed_number_does_not_ground(value, doc):
+    assert not _grounds(value, doc)
+
+
+@pytest.mark.parametrize(
+    "value,doc",
+    [
+        (0.8, "a ratio of 0.80 was used"),  # trailing zero
+        (200, "heated to 200.0 K."),
+        (200, "up to 200."),
+        (17500, "spun at 17,500 rpm"),  # thousands separator
+        (4922, "4 922 spectra"),
+        (0.10798, "λ 0.107 98 Å"),  # ISO-grouped fraction in an OCR'd cell
+        (4.19, "<td>4. 19</td>"),  # OCR's split decimal point
+        (10.0, "a 10 cm lens"),  # an integral float for a printed integer
+        ([282, 430, 628], "absorption peaks at 282,430,628 nm"),  # a comma list
+        (1107, "bands at 632,1107 cm-1"),
+    ],
+)
+def test_printed_forms_of_a_stated_number_still_ground(value, doc):
+    assert _grounds(value, doc)
+
+
+def test_a_packed_identifier_grounds_by_its_whole_run():
+    doc = "https://doi.org/10.1016/j.marpolbul.2011.05.030. Andrady 2003"
+    assert _grounds("10.1016/j.marpolbul.2011.05.030", doc)
+    assert _grounds("Nikon 283,008", "by optical microscopy (Nikon 283,008)")
+    assert not _grounds("2011.05", "a value of 2011.053 was recorded")
