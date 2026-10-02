@@ -444,7 +444,10 @@ async def cmd_figtext(root: Path, args) -> None:
             f"  {key}: {json.dumps({k: rep.get(k) for k in ('described', 'figs_total', 'remaining', 'error')})}"
         )
         if rep and not rep.get("error") and not rep.get("remaining"):
-            rec = dict(bank[key])
+            # A FRESH row: the figure run took hours, and appending the row
+            # read before it would revert anything booked meanwhile (the
+            # metadata fill, a pack) -- the last row replaces the record.
+            rec = dict((await read_databank(fx)).get(key) or bank[key])
             rec.update(
                 figtext_status="figtext_done",
                 figtext_path=f"databank/figtext/{key}.json",
