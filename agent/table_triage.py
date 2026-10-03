@@ -9,33 +9,39 @@ catch, because every number is printed somewhere.
 
 The v1 bench (dev/bench_table_triage.py) showed muse, given the page image
 and the OCR's HTML, catches every damaged table (35/35) and cuts rows with a
-misplaced or wrong value by 64%, but it is not safe blind. It flagged 9 of 13
-clean tables, and all three corrections that made a table WORSE kept every
-number and only moved cells, so a number check cannot stop them. v2 is what
-this module holds:
+misplaced or wrong value by 64%, but it is not safe blind: it flagged 9 of 13
+clean tables and corrupted 2 of them. v2, measured on the same 48 tables
+(2026-10-03) and judged against the pages:
 
-  * a prompt that asks for evidence and says most transcriptions are right
-    (v1 named the expected failure, and muse found it everywhere);
+  * a prompt that asks for evidence and says most transcriptions are right:
+    clean tables flagged 4 of 13 (v1: 9), and no clean table corrupted;
+  * the model thinks in its own channel -- the caller sends a reasoning
+    level, so the answer is the final channel only (LLMVP 2026-10-02);
   * plain VERDICT / PROBLEMS / TABLE lines (HTML inside JSON broke on
     unescaped quotes);
-  * the model thinks in its own channel: the caller sends a reasoning level,
-    so the answer is the final channel only (LLMVP 2026-10-02);
-  * a GATE: corrections that lose numbers keep the OCR table; corrections
-    that read numbers from the image are applied (v1: 20 better, 0 worse);
-    corrections that only move cells are applied only when a blind A/B read
-    of the page prefers them.
+  * corrections: 30 better, 2 same, 3 worse of 35; number edits 99/106 right;
+  * a deterministic GATE that keeps the OCR table when the correction LOSES
+    numbers (the one worse fix that dropped printed values) or BREAKS A
+    RECTANGULAR GRID into rows of unequal width (both other worse fixes: 20
+    rows one cell short; a value outside the header columns). Every better
+    fix kept a rectangular grid except one whose OCR grid was ragged already.
+    Gated: 28 better, 2 same, 0 worse.
+
+A blind A/B second read was tried as the gate and dropped: it preferred the
+correction 34 times of 35, so it cost a vision call per fix for no signal.
+An EMPTY answer is retryable, never a verdict: 5 of 48 first reads were
+admitted with a shrunk generation budget on a busy server (1,723-2,254
+tokens) and thinking used it all.
 """
 
 from __future__ import annotations
 
 import collections
 import html as htmlmod
-import random
 import re
 
-#: Reasoning levels (muse's own vocabulary) for the two reads.
+#: Reasoning level (muse's own vocabulary) for the triage read.
 TRIAGE_REASONING = "medium"
-VERIFY_REASONING = "low"
 
 TRIAGE_PROMPT = """The image is one page of a scientific paper. Below is an HTML transcription of ONE table on this page, made by an OCR model.
 
@@ -55,22 +61,6 @@ TABLE:
 <transcription>
 {table}
 </transcription>"""
-
-VERIFY_PROMPT = """The image is one page of a scientific paper. Below are two HTML transcriptions, A and B, of the same table on this page. Compare each with the printed table: which one puts every value under its printed column header, on its printed row, with the printed digits?
-
-Answer in exactly this format:
-CHOICE: A | B | SAME
-REASON: one line
-
-SAME means both are equally right or equally wrong.
-
-<A>
-{a}
-</A>
-
-<B>
-{b}
-</B>"""
 
 _NUM = re.compile(r"(?<![\d.,])\d+(?:[.,]\d+)?(?![\d])")
 _STYLE = re.compile(r"""\s+style=(['"]).*?\1""")
@@ -153,39 +143,36 @@ def parse_triage(text: str) -> dict:
     return {"verdict": verdict, "problems": problems, "html": html}
 
 
-def parse_choice(text: str) -> str:
-    """ "A" | "B" | "SAME" | "unparsed" -- the last CHOICE line."""
-    found = re.findall(r"CHOICE:\s*\**\s*(A|B|SAME)\b", text, re.I)
-    return found[-1].upper() if found else "unparsed"
+def grid_widths(table_html: str) -> list[int]:
+    """Each row's width in columns, colspans counted and rowspans carried down."""
+    rows = re.findall(r"<tr\b[^>]*>(.*?)</tr>", table_html, re.S | re.I)
+    carry: list[tuple[int, int]] = []  # (rows still covered, width)
+    out = []
+    for row in rows:
+        cells = re.findall(r"<t[dh]\b([^>]*)>", row, re.I)
+        spans = []
+        for attrs in cells:
+            c = re.search(r"colspan\s*=\s*['\"]?(\d+)", attrs, re.I)
+            r = re.search(r"rowspan\s*=\s*['\"]?(\d+)", attrs, re.I)
+            spans.append((int(c.group(1)) if c else 1, int(r.group(1)) if r else 1))
+        out.append(sum(c for c, _ in spans) + sum(w for _, w in carry))
+        carry = [(n - 1, w) for n, w in carry if n > 1]
+        carry += [(r - 1, c) for c, r in spans if r > 1]
+    return out
 
 
-def verify_order(key: str) -> bool:
-    """True when the CORRECTION is shown as A. Seeded by the table's key so a
-    re-run asks the same question, and balanced across tables so a model's
-    letter bias cannot pass as a preference."""
-    return random.Random(f"table-verify:{key}").random() < 0.5
+def is_rectangular(table_html: str) -> bool:
+    """Every non-empty row spans the same number of columns."""
+    return len({w for w in grid_widths(table_html) if w}) <= 1
 
 
-def verify_prompt(key: str, ocr_html: str, fixed_html: str) -> str:
-    fixed_first = verify_order(key)
-    a, b = (fixed_html, ocr_html) if fixed_first else (ocr_html, fixed_html)
-    return VERIFY_PROMPT.format(a=slim(a), b=slim(b))
-
-
-def prefers_fix(key: str, choice: str) -> bool | None:
-    """Did the blind read prefer the correction? None when it did not choose."""
-    if choice not in ("A", "B"):
-        return None
-    return (choice == "A") == verify_order(key)
-
-
-def gate(triage: dict, ocr_html: str, verify_choice: str | None, key: str) -> dict:
+def gate(triage: dict, ocr_html: str) -> dict:
     """Apply the correction or keep the OCR table.
 
     Returns {"apply": bool, "reason": str, "numbers": numbers_outcome | None}.
-    Only a "fixed" verdict with a changed table is a candidate; then lost
-    numbers keep the OCR table, numbers read from the image apply, and a
-    cells-only move applies only when the blind read preferred it."""
+    Only a "fixed" verdict with a changed table is a candidate. Lost numbers
+    keep the OCR table, and so does a correction that breaks the OCR's
+    rectangular grid; everything else applies."""
     html = triage.get("html") or ""
     if triage.get("verdict") != "fixed" or not html:
         return {
@@ -198,14 +185,10 @@ def gate(triage: dict, ocr_html: str, verify_choice: str | None, key: str) -> di
     nums = numbers_outcome(slim(ocr_html), html)
     if nums["kind"] == "lost":
         return {"apply": False, "reason": "numbers lost", "numbers": nums}
-    if nums["kind"] == "from-image":
-        return {"apply": True, "reason": "numbers read from the image", "numbers": nums}
-    pref = prefers_fix(key, verify_choice or "")
-    if pref:
+    if is_rectangular(ocr_html) and not is_rectangular(html):
         return {
-            "apply": True,
-            "reason": "cells moved; blind read prefers the fix",
+            "apply": False,
+            "reason": "grid broken (rows of unequal width)",
             "numbers": nums,
         }
-    why = "blind read prefers the OCR" if pref is False else "blind read undecided"
-    return {"apply": False, "reason": f"cells moved; {why}", "numbers": nums}
+    return {"apply": True, "reason": f"applied ({nums['kind']})", "numbers": nums}

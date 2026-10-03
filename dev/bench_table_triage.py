@@ -29,10 +29,13 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # agent.table_triage
 
 ROOT = Path(os.path.expanduser("~/corpora/ouroboros-spectra"))
 OUT = Path(os.path.expanduser("~/tmp/table_triage"))
@@ -165,9 +168,15 @@ def cmd_pages(a) -> int:
 # ── run ───────────────────────────────────────────────────────────────
 
 
-def vision(prompt: str, png: Path, max_tokens: int) -> dict:
+def vision(
+    prompt: str, png: Path, max_tokens: int, *, reasoning: str | None = None, temperature: float | None = 0.0
+) -> dict:
     uri = "data:image/png;base64," + base64.b64encode(png.read_bytes()).decode()
-    req = {"prompt": prompt, "images": [{"url": uri}], "maxTokens": max_tokens, "temperature": 0.0}
+    req = {"prompt": prompt, "images": [{"url": uri}], "maxTokens": max_tokens}
+    if temperature is not None:
+        req["temperature"] = temperature
+    if reasoning:
+        req["reasoning"] = reasoning
     r = urllib.request.Request(
         f"{LLMVP}/graphql",
         data=json.dumps({"query": _VISION, "variables": {"request": req}}).encode(),
@@ -388,10 +397,180 @@ def cmd_judge_score(a) -> int:
     print("earlier review right:", sum(bool(j.get("earlier_review_right")) for j in js), "of", len(js))
     return 0
 
+# ── v2: reasoning channel, evidence prompt, blind A/B verify, gate ──────
+#
+# agent/table_triage.py holds the method; this drives it over the same 48
+# tables. Muse thinks in its own channel (an explicit reasoning level), at the
+# family's own sampling (temperature unset), and EVERY non-trivial fix gets
+# the blind A/B read so the gate and the verify-everything policy can both be
+# scored from one run.
+
+V2 = OUT / "v2"
+
+
+def _one_v2(it: dict, max_tokens: int) -> dict:
+    from agent import table_triage as tt
+
+    ocr = Path(it["ocr_table"]).read_text()
+    png = Path(it["page_image"])
+    row = {"id": it["id"], "stratum": it["stratum"]}
+    t0 = time.time()
+    try:
+        r = vision(tt.TRIAGE_PROMPT.format(table=tt.slim(ocr)), png, max_tokens,
+                   reasoning=tt.TRIAGE_REASONING, temperature=None)  # fmt: skip
+        text = r.get("text") or ""
+        d = tt.parse_triage(text)
+        row.update(gen=r.get("generatedTokens"), raw=text, **d)
+        g = tt.gate(d, ocr)
+        row.update(apply=g["apply"], gate_reason=g["reason"],
+                   numbers=(g["numbers"] or {}).get("kind"))  # fmt: skip
+    except Exception as e:  # noqa: BLE001
+        row.update(verdict="error", error=str(e)[:300])
+    row["seconds"] = round(time.time() - t0)
+    return row
+
+
+def cmd_run2(a) -> int:
+    V2.mkdir(parents=True, exist_ok=True)
+    items = json.loads((OUT / "items.json").read_text())[: a.limit or None]
+    path = V2 / "results.jsonl"
+    done = {json.loads(x)["id"] for x in path.read_text().splitlines() if x.strip()} if path.exists() else set()
+    todo = [it for it in items if it["id"] not in done]
+    with ThreadPoolExecutor(max_workers=a.concurrency) as pool:
+        for fut in as_completed(pool.submit(_one_v2, it, a.max_tokens) for it in todo):
+            row = fut.result()
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+            brief = {k: row.get(k) for k in ("id", "verdict", "numbers", "verify_choice", "apply", "seconds", "gen")}
+            print(json.dumps(brief), flush=True)
+    return 0
+
+
+def _round1_truth() -> dict:
+    """The page-judged state of each OCR table (round 1; a later batch wins)."""
+    by_id = {}
+    for b in sorted(OUT.glob("judge_result_*.json"), key=lambda f: int(f.stem.rsplit("_", 1)[1])):
+        for r in json.loads(b.read_text()):
+            by_id[r["id"]] = r
+    return by_id
+
+
+def _v2_rows() -> dict:
+    rows = {}
+    for x in (V2 / "results.jsonl").read_text().splitlines():
+        if x.strip():
+            r = json.loads(x)
+            rows[r["id"]] = r
+    return rows
+
+
+def cmd_score2(a) -> int:
+    truth, res = _round1_truth(), _v2_rows()
+    grid = collections.Counter()
+    for k, r in res.items():
+        bad = truth.get(k, {}).get("ocr_had_errors")
+        flagged = r.get("verdict") == "fixed" and r.get("gate_reason") != "no-op fix"
+        grid[("damaged" if bad else "clean", r.get("verdict") if r.get("verdict") in ("error", "unparsed") else ("flagged" if flagged or r.get("verdict") == "unfixable" else "passed"))] += 1
+    print(f"{len(res)} tables. OCR truth (round 1) x v2 call:")
+    for (t, v), n in sorted(grid.items()):
+        print(f"  {t:<8} {v:<9} {n}")
+    print("gate:", dict(collections.Counter(r.get("gate_reason") for r in res.values())))
+    print("verify choices on fixes:", dict(collections.Counter(r.get("prefers_fix") for r in res.values() if "verify_choice" in r)))
+    secs = sorted(r.get("seconds", 0) for r in res.values() if r.get("seconds"))
+    gens = sorted(r.get("gen") or 0 for r in res.values() if r.get("gen"))
+    if secs:
+        print(f"median {secs[len(secs) // 2]} s per table (triage + verify), median {gens[len(gens) // 2]} generated tokens")
+    return 0
+
+
+def cmd_judge_batches2(a) -> int:
+    """Reviewer rows for every v2 fix that changed the table (gate hidden)."""
+    items = {i["id"]: i for i in json.loads((OUT / "items.json").read_text())}
+    truth, res = _round1_truth(), _v2_rows()
+    papers = {}
+    for line in (ROOT / "databank" / "papers.jsonl").read_text().splitlines():
+        try:
+            d = json.loads(line)
+            papers[d["paper_key"]] = d
+        except (ValueError, KeyError):
+            pass
+    (V2 / "muse_html").mkdir(parents=True, exist_ok=True)
+    rows = []
+    for k, r in sorted(res.items()):
+        if not r.get("numbers"):  # no candidate fix: nothing new to judge
+            continue
+        it = items[k]
+        mh = V2 / "muse_html" / f"{k}.html"
+        mh.write_text(r["html"])
+        t = truth.get(k, {})
+        rows.append({
+            "id": k, "page_image": it["page_image"], "pdf_page": it["page"],
+            "pdf": str(ROOT / papers[it["paper_key"]]["pdf_path"]),
+            "ocr_table": it["ocr_table"], "muse_table": str(mh), "muse_problems": r.get("problems", []),
+            "numbers_outcome": r.get("numbers"),
+            "earlier_review_of_ocr": {kk: t.get(kk) for kk in ("ocr_had_errors", "rows_wrong_before", "note")},
+        })  # fmt: skip
+    n = a.batches
+    for i in range(n):
+        (V2 / f"judge_batch_{i + 1}.json").write_text(json.dumps(rows[i::n], indent=1))
+    print(f"{len(rows)} v2 fixes in {n} batches")
+    return 0
+
+
+def cmd_judge_score2(a) -> int:
+    truth, res = _round1_truth(), _v2_rows()
+    judged = {}
+    for b in sorted(V2.glob("judge_result_*.json")):
+        for r in json.loads(b.read_text()):
+            judged[r["id"]] = r
+    print(f"{len(res)} tables; {len(judged)} v2 fixes judged against the page")
+
+    def policy(name, take):
+        c, before, after = collections.Counter(), 0, 0
+        for k, r in res.items():
+            t = truth.get(k, {})
+            j = judged.get(k)
+            if j and take(r):
+                c[j.get("correction")] += 1
+                before += j.get("rows_wrong_before") or 0
+                after += j.get("rows_wrong_after") or 0
+            else:
+                c["kept OCR"] += 1
+                w = (j or t).get("rows_wrong_before") or 0
+                before += w
+                after += w
+        worse = [k for k, r in res.items() if k in judged and take(r) and judged[k].get("correction") == "worse"]
+        print(f"  {name:<34} {dict(c)}; rows wrong {before} -> {after}; worse {worse}")
+
+    print("policies:")
+    policy("apply every fix", lambda r: bool(r.get("numbers")))
+    policy("v2 gate", lambda r: bool(r.get("apply")))
+    policy("verify every fix (not lost)", lambda r: r.get("numbers") in ("from-image", "structure-only") and r.get("prefers_fix") is True)
+
+    from agent import table_triage as tt
+
+    items = {i["id"]: i for i in json.loads((OUT / "items.json").read_text())}
+
+    def _final_gate(r):
+        return tt.gate(r, Path(items[r["id"]]["ocr_table"]).read_text())["apply"]
+
+    policy("final gate (lost + grid shape)", _final_gate)
+    by = collections.defaultdict(collections.Counter)
+    for k, j in judged.items():
+        r = res[k]
+        by[(r.get("numbers"), r.get("prefers_fix"))][j.get("correction")] += 1
+    print("judged fixes by numbers outcome x blind preference:")
+    for key, c in sorted(by.items(), key=str):
+        print(f"  {str(key):<34} {dict(c)}")
+    edits = [e for j in judged.values() for e in (j.get("digit_edits") or [])]
+    print(f"number edits judged {len(edits)}: right {sum(bool(e.get('right')) for e in edits)}")
+    return 0
+
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=("pages", "run", "score", "judge-batches", "judge-score"))
+    ap.add_argument("cmd", choices=("pages", "run", "score", "judge-batches", "judge-score",
+                                    "run2", "score2", "judge-batches2", "judge-score2"))
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--max-tokens", type=int, default=12000)
     ap.add_argument("--concurrency", type=int, default=2)
@@ -402,7 +581,9 @@ def main() -> int:
     a = ap.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
     cmds = {"pages": cmd_pages, "run": cmd_run, "score": cmd_score,
-            "judge-batches": cmd_judge_batches, "judge-score": cmd_judge_score}
+            "judge-batches": cmd_judge_batches, "judge-score": cmd_judge_score,
+            "run2": cmd_run2, "score2": cmd_score2, "judge-batches2": cmd_judge_batches2,
+            "judge-score2": cmd_judge_score2}
     return cmds[a.cmd](a)
 
 
