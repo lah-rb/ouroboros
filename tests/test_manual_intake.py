@@ -425,3 +425,50 @@ def test_body_match_refuses_a_paper_that_cites_the_listed_title(tmp_path):
     assert (
         plans[0]["action"] == "UNMATCHED" and "different DOI" in plans[0]["why"]
     )  # cited on page 2
+
+
+def test_body_match_reads_a_line_numbered_manuscript(tmp_path):
+    """2026-10-02: two author manuscripts number every line, the numbers land
+    inside the title, and the verbatim match never saw them."""
+    import pymupdf
+
+    doc = pymupdf.open()
+    page = doc.new_page()
+    for i, line in enumerate(
+        (
+            "Post-Landing Major Element Quantification Using",
+            "SuperCam Laser Induced Breakdown Spectroscopy",
+            "R.B. Anderson, O. Forni, A. Cousin",
+        )
+    ):
+        page.insert_text((40, 72 + 14 * i), f"{i + 1}", fontsize=8)
+        page.insert_text((72, 72 + 14 * i), line, fontsize=8)
+    f = tmp_path / "manuscript.pdf"
+    doc.save(f)
+    papers = {
+        "k31": {
+            "title": "Post-landing major element quantification using SuperCam laser induced breakdown spectroscopy"
+        },
+        "k32": {"title": "Post-landing calibration of a different instrument entirely"},
+    }
+    assert intake.body_match(f, papers, {"k31": 31, "k32": 32}) == (
+        "k31",
+        "title on page 1 (line numbers ignored)",
+    )
+
+
+def test_filename_match_books_a_file_saved_under_its_listed_title(tmp_path):
+    papers = {
+        "k52": {
+            "title": "Optimisation of fast quantification of fluorine content using handheld laser induced breakdown spectroscopy"
+        },
+        "k9": {"title": "A short title"},
+    }
+    f = tmp_path / (
+        "Optimisation of fast quantification of fluorine content using handheld laser induced breakdown spectroscopy.pdf"
+    )
+    assert intake.filename_match(f, papers, {"k52": 52, "k9": 9}) == "k52"
+    assert intake.filename_match(f, papers, {"k9": 9}) is None, "only LISTED titles"
+    assert (
+        intake.filename_match(tmp_path / "A short title.pdf", papers, {"k9": 9}) is None
+    )

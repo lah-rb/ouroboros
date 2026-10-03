@@ -526,6 +526,24 @@ def body_match(
             hit = next((i + 1 for i, pg in enumerate(pages) if ct in pg), None)
             if hit:
                 found.append((key, hit))
+    if not found:
+        # LINE-NUMBERED MANUSCRIPTS (2026-10-02): an author's accepted
+        # manuscript numbers every line, and the numbers land inside the
+        # title ("Post-Landing Major Element Quantification Using 1 SuperCam
+        # Laser Induced Breakdown Spectro..."), so the verbatim test never
+        # sees it. Second pass with digits dropped from both sides, under the
+        # same exactly-one-listed-title rule.
+        bare = [re.sub(r"\d+", "", pg) for pg in pages]
+        for key in listed:
+            ct = re.sub(
+                r"\d+", "", compact(clean_title(papers.get(key, {}).get("title") or ""))
+            )
+            if len(ct) >= 30:
+                hit = next((i + 1 for i, pg in enumerate(bare) if ct in pg), None)
+                if hit:
+                    found.append((key, hit))
+        if len(found) == 1:
+            return found[0][0], f"title on page {found[0][1]} (line numbers ignored)"
     if len(found) == 1:
         return found[0][0], f"title on page {found[0][1]}"
     return None, (
@@ -601,6 +619,23 @@ class TitleIndex:
                 )
         out.sort(key=lambda c: (c["doi_hit"], c["score"], c["tlen"]), reverse=True)
         return out
+
+
+def filename_match(path: Path, papers: dict, listed: dict[str, int]) -> str | None:
+    """A file SAVED UNDER a listed title (exact compacted match, >= 30 chars,
+    exactly one). Last resort for a manuscript whose own title differs from the
+    record's -- 2026-10-02: the accepted manuscript of "Optimisation of fast
+    quantification of fluorine content using handheld laser induced breakdown
+    spectroscopy" titles itself "... using handheld LIBS"."""
+    stem = compact(path.stem)
+    if len(stem) < 30:
+        return None
+    hits = [
+        k
+        for k in listed
+        if compact(clean_title(papers.get(k, {}).get("title") or "")) == stem
+    ]
+    return hits[0] if len(hits) == 1 else None
 
 
 def decide(cands: list[dict], listed: set[str]) -> tuple[str | None, str]:
@@ -917,6 +952,12 @@ def plan_ingest(
                 why = f"its first pages carry a different DOI ({sorted(own)[0]}); {key2}'s title appears only past the title page (a citation?)"
             elif key2:
                 key, why = key2, why2
+        if not key and listed:
+            key3 = filename_match(f, papers, listed)
+            own = dois_in(text)
+            rec_doi = str(papers.get(key3 or "", {}).get("doi") or "").lower()
+            if key3 and not (own and rec_doi not in own):
+                key, why = key3, "saved under the listed title (file name)"
         if not key:
             plans.append(
                 {
