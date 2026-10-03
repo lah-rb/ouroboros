@@ -55,6 +55,13 @@ COMMON_ENV = {
     "OUROBOROS_SCRAPER_OVERLAP_PDFS": "4",
     "OUROBOROS_CURATE_SEAT_TOKENS": "131072",
 }
+#: Lanes switched off on EVERY profile (operator ruling 2026-10-03: translate
+#: down to one lane during the curation finale -- 18 accepted lingual papers
+#: wait, none await review, and curate lanes were refused seats while four
+#: translate lanes held them). Merged into each start's DISABLE_LANES so a
+#: profile switch does not bring the lanes back.
+STANDING_OFF = ("translate2", "translate3", "translate4")
+
 PROFILES = {
     "repack": {
         "model": "gemma-4-12b-3060",
@@ -177,10 +184,12 @@ def start_mission(
             env.pop(k, None)
     if repack_lanes is not None:
         env["OUROBOROS_REMOTE_REPACK_LANES"] = repack_lanes
+    off = {x for x in env.get("OUROBOROS_DISABLE_LANES", "").split(",") if x}
+    off |= set(STANDING_OFF)
     if quiet_local:
-        off = {x for x in env.get("OUROBOROS_DISABLE_LANES", "").split(",") if x}
-        env["OUROBOROS_DISABLE_LANES"] = ",".join(sorted(off | set(local_lane_names())))
-        log(f"local GPU lanes off: {env['OUROBOROS_DISABLE_LANES']}")
+        off |= set(local_lane_names())
+        log(f"local GPU lanes off: {','.join(sorted(off))}")
+    env["OUROBOROS_DISABLE_LANES"] = ",".join(sorted(off))
     mission("resume")
     stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
     logf = os.path.expanduser(f"~/tmp/run_{profile}_{stamp}.log")
