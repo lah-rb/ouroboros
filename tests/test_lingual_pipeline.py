@@ -1329,3 +1329,27 @@ def test_translation_selects_smallest_first_within_a_tag_tier():
         assert select_translation_paper(bank) == "big", "tag strength outranks size"
     finally:
         _TRANSLATE_CLAIMS.clear()
+
+
+@pytest.mark.asyncio
+async def test_a_verified_english_pack_stands_through_any_translation_outcome():
+    """2026-10-03: papers whose translation failed were packed from the
+    original straight into English (dev/pack_failed_sonnet.py). A later
+    translation -- success or failure -- says nothing about that pack."""
+    import json
+
+    from agent.actions.scholarly_actions import read_databank
+    from agent.actions.translation_actions import _book_pack_state_after_translation
+    from agent.effects.mock import MockEffects
+
+    rec = {"paper_key": "p", "review_status": "accepted", "pack_status": "packed",
+           "pack_language": "en", "dataset_path": "databank/dataset/p.json"}  # fmt: skip
+    for outcome in ("translated", "failed"):
+        fx = MockEffects(files={"databank/papers.jsonl": json.dumps(rec) + "\n"})
+        await _book_pack_state_after_translation(fx, dict(rec), outcome, "why")
+        assert (await read_databank(fx))["p"]["pack_status"] == "packed", outcome
+    # an original-language pack still goes to needs_repack on a translation
+    plain = {k: v for k, v in rec.items() if k != "pack_language"}
+    fx = MockEffects(files={"databank/papers.jsonl": json.dumps(plain) + "\n"})
+    await _book_pack_state_after_translation(fx, dict(plain), "translated", "")
+    assert (await read_databank(fx))["p"]["pack_status"] == "needs_repack"

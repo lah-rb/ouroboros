@@ -82,7 +82,15 @@ _LANGUAGE_NAMES = {
     "ko": "Korean",
 }
 
-TRANSLATE_MIN_NUMERIC = 0.98
+#: 0.98 -> 0.95 (operator ruling 2026-10-03). Of 18 accepted papers booked
+#: pack_failed on a failed translation, ~10 had translated correctly and lost
+#: only furniture the translator legitimately reformats (citation markers,
+#: affiliation superscripts, journal lines, an unmatched reference list).
+#: With reference SECTIONS excluded (agent/bibliography.py), 0.95 passed
+#: every correct one but two furniture-only papers (0.926, 0.937) and none
+#: of the genuine failures -- 0.93 would have let a 9 %-data-loss paper
+#: (0.936) through.
+TRANSLATE_MIN_NUMERIC = 0.95
 # Per-chunk retry threshold — looser than the assembly bar on purpose: a
 # chunk is a small sample (a few dozen tokens), so one boundary artifact
 # shouldn't force a retry; the assembly gate still holds 0.98 overall.
@@ -1268,6 +1276,12 @@ async def _book_pack_state_after_translation(
     from agent.actions.scholarly_actions import append_records
 
     try:
+        # A pack VERIFIED ENGLISH stands either way (2026-10-03): papers whose
+        # translation failed were packed from the original text straight into
+        # English (dev/pack_failed_sonnet.py), so neither a later translation
+        # nor a failed one says anything about the pack's language.
+        if rec.get("pack_language") == "en" and rec.get("pack_status") == "packed":
+            return
         # A prior pack_failed booked by a translation that later completed
         # (the bank-and-repair policy re-arms such papers) re-enters the pack
         # queue the same way a stale original-language pack does.

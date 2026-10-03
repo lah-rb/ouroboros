@@ -105,7 +105,10 @@ DEFAULT_LANE_MAX_INFLIGHT: Dict[str, int] = {
     # two concurrent figure streams pipeline image-encode on the 3060
     # projector against decode on the split model. With one context this
     # cap was correct: a second request only queued at the server.
-    "vision_ctx": 4,  # tracks vision_batched_max_streams
+    # 4 -> 5 (2026-10-03): the local translate lane's text seat went to a
+    # third table_triage lane, and the server's vision_batched_max_streams
+    # rose 3 -> 4 with it.
+    "vision_ctx": 5,  # tracks vision_batched_max_streams
     "paddle": 1,
     # The ocr lane when it is ROUTED to another fleet (llmvp_domains["ocr"]):
     # one tool subprocess, which fans its region crops out itself; the real
@@ -688,6 +691,41 @@ def _repack_lanes(domains: Optional[dict]) -> List[Lane]:
     ]
 
 
+def _remote_translate_lanes() -> int:
+    """How many translate lanes to run on llmvp_domains["curate_remote"] (the
+    Mac's qwen3-next). OUROBOROS_REMOTE_TRANSLATE_LANES, default 0 (opt-in);
+    qwen3-next's 256k config serves one stream, so one lane fills it."""
+    import os
+
+    raw = os.environ.get("OUROBOROS_REMOTE_TRANSLATE_LANES", "").strip()
+    try:
+        return max(0, min(4, int(raw))) if raw else 0
+    except ValueError:
+        return 0
+
+
+def _translate_remote_lanes(domains: Optional[dict]) -> List[Lane]:
+    """translate_r1.. on the curate_remote domain (2026-10-03, operator: the
+    Mac finished a week-long job; qwen3-next cleans up the last translations
+    and the local translate lane closes). Same construction as repack_r*:
+    their own resource, gated on the engine that serves them, built only when
+    the mission routes the domain."""
+    if not (isinstance(domains, dict) and "curate_remote" in domains):
+        return []
+    return [
+        Lane(
+            name=f"translate_r{i}",
+            flow="translate_drain",
+            resource="remote_translate_seat",
+            est_kv=0,
+            seats=0,
+            domain="curate_remote",
+            idle_backoff_s=60.0,
+        )
+        for i in range(1, _remote_translate_lanes() + 1)
+    ]
+
+
 def _disabled_lanes() -> set:
     """Lane names switched off for THIS run: OUROBOROS_DISABLE_LANES, a
     comma-separated list (e.g. "ocr"). Empty means every lane runs.
@@ -862,6 +900,16 @@ def _all_scraper_lanes(domains: Optional[dict] = None) -> List[Lane]:
             est_kv=0,
             seats=0,
         ),
+        # Third lane (2026-10-03, operator): the local translate lane closed
+        # in favour of the job furthest from completion -- table triage, 4,194
+        # tables owed at 15.7/h (~11 days) against hours for every other job.
+        Lane(
+            name="table_triage3",
+            flow="table_triage_drain",
+            resource="vision_ctx",
+            est_kv=0,
+            seats=0,
+        ),
         # ── TRANSLATE LANES REOPENED (2026-08-29, operator) — as the
         # POST-ACCEPT gated lanes the 2026-08-22 closure prescribed. The
         # closure's two findings now shape the selection instead of
@@ -1023,6 +1071,8 @@ def _all_scraper_lanes(domains: Optional[dict] = None) -> List[Lane]:
         ],
         # Remote REPACK lanes: pack-only work on another engine (opt-in).
         *_repack_lanes(domains),
+        # Remote TRANSLATE lanes: the translation tail on the Mac's qwen3-next.
+        *_translate_remote_lanes(domains),
         # OA recovery: pure network I/O (Wayback / CORE / meta-tag routes)
         # — no muse seat, no KV, paced by the shared per-host politeness
         # state. Long idle backoff: each record is walked ONCE (stamped),

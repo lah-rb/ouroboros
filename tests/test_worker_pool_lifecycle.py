@@ -78,6 +78,7 @@ async def test_a_v2_mission_starts_lanes_and_stops_them_cleanly():
             "figtext4",  # fourth lane, P5 ramp step 2
             "table_triage",  # OCR table correction before the pack (2026-10-03)
             "table_triage2",
+            "table_triage3",
             "translate",  # post-accept translation, reopened 2026-08-29
             # translate2 restored 2026-08-30: one lane was REFUSED (not
             # empty) by five dynamic curate lanes claiming the whole free

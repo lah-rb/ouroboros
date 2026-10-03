@@ -90,7 +90,10 @@ def original_failure(rec: dict) -> dict:
         if isinstance(o, dict) and not o.get("passed")
     )
     reason = str(rec.get("failure_reason") or "")
-    if reason.startswith("translation:") or rec.get("extraction_status") == "translate_failed":
+    if (
+        reason.startswith("translation:")
+        or rec.get("extraction_status") == "translate_failed"
+    ):
         family = "translation"
     elif fb:
         family = "pack gates"
@@ -160,7 +163,9 @@ async def pack_one(eff, key: str, rec: dict, lock: asyncio.Lock, log_path: str) 
     if pack.get("status") == "packed":
         why = pack_language_problem(" ".join(_strings(pack.get("data"))))
         if why:
-            out.update(status="not_english", reason=f"pack strings read non-English: {why}")
+            out.update(
+                status="not_english", reason=f"pack strings read non-English: {why}"
+            )
             return _log(log_path, out, t0)  # nothing booked
     async with lock:
         res = await ca.action_curate_book_result(
@@ -171,6 +176,16 @@ async def pack_one(eff, key: str, rec: dict, lock: asyncio.Lock, log_path: str) 
             )
         )
     out["booked"] = res.observations[:200]
+    if out.get("status") == "packed":
+        # VERIFIED ENGLISH: a later translation of the paper (success or
+        # failure) must not knock this pack to needs_repack / pack_failed.
+        from agent.actions.scholarly_actions import append_records
+
+        async with lock:
+            cur = dict((await read_databank(eff)).get(key) or {})
+            if cur.get("pack_status") == "packed":
+                cur["pack_language"] = "en"
+                await append_records(eff, [cur])
     return _log(log_path, out, t0)
 
 
@@ -215,7 +230,9 @@ async def main() -> int:
           f"model {pbs.MODEL}; log {log_path}")  # fmt: skip
     for k, r in todo:
         f = original_failure(r)
-        print(f"  {f['family']:<24} {k[:60]}  {f['failure_reason'][:60] or f['window_feedback']}")
+        print(
+            f"  {f['family']:<24} {k[:60]}  {f['failure_reason'][:60] or f['window_feedback']}"
+        )
     if a.dry_run or not todo:
         return 0
     sem, lock = asyncio.Semaphore(a.concurrency), asyncio.Lock()

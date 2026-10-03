@@ -163,7 +163,11 @@ model:
   # cap 3 they keep the streams saturated through tool-overhead gaps.
   # 3090 decode bandwidth is the wall; the next real multiplier is a
   # second GPU.
-  vision_batched_max_streams: 3
+  # 3 -> 4 (2026-10-03): the second 3090 arrived (tensor split, DFlash:
+  # 4 concurrent streams 132 tok/s vs 85 for one), and the local translate
+  # lane's text seat went to a third table_triage lane. Re-measure vision
+  # tokens/h against the 3-stream figure before keeping it.
+  vision_batched_max_streams: 4
   # PROJECTOR ON THE 3060. GPU0 holds weights + the batched cell and has
   # ~2.9 GiB slack; the vision graph needs its KV (0.85 GiB) AND a compute
   # buffer (measured 1.18 GiB at reserve, 2026-08-16) — adding the ~1.3 GiB

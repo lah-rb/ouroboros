@@ -54,13 +54,16 @@ COMMON_ENV = {
     "OUROBOROS_CURATE_PAPERS": "1",
     "OUROBOROS_SCRAPER_OVERLAP_PDFS": "4",
     "OUROBOROS_CURATE_SEAT_TOKENS": "131072",
+    "OUROBOROS_REMOTE_TRANSLATE_LANES": "1",
 }
-#: Lanes switched off on EVERY profile (operator ruling 2026-10-03: translate
-#: down to one lane during the curation finale -- 18 accepted lingual papers
-#: wait, none await review, and curate lanes were refused seats while four
-#: translate lanes held them). Merged into each start's DISABLE_LANES so a
-#: profile switch does not bring the lanes back.
-STANDING_OFF = ("translate2", "translate3", "translate4")
+#: Lanes switched off on EVERY profile, merged into each start's
+#: DISABLE_LANES so a profile switch does not bring them back. Operator
+#: rulings 2026-10-03: translate down to one lane during the curation finale
+#: (curate lanes were refused seats while four translate lanes held them);
+#: later the same day the LOCAL translate lane closed too -- the translation
+#: tail (~1.1 M tokens) runs on the Mac's qwen3-next (translate_r1), and the
+#: seat went to a third table_triage lane.
+STANDING_OFF = ("translate", "translate2", "translate3", "translate4")
 
 PROFILES = {
     "repack": {
