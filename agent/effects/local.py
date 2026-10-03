@@ -1425,6 +1425,7 @@ class LocalEffects:
         max_tokens: int | None = None,
         temperature: float | None = None,
         domain: str = "",
+        reasoning: str | None = None,
     ):
         """Vision completion over the LLMVP GraphQL API.
 
@@ -1442,6 +1443,7 @@ class LocalEffects:
             model=model,
             max_tokens=max_tokens,
             temperature=temperature,
+            reasoning=reasoning,
         )
         self._log_entry(
             "run_vision",

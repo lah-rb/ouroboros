@@ -414,22 +414,33 @@ def render_vision_prompt(
     schema = load_schema(family)
     r = FormatRenderer(schema)
     parts = []
-    if system_text:
-        parts.append(r.render_system(system_text))
+    # AN EXPLICIT REASONING LEVEL OPENS THE THINKING CHANNEL (2026-10-02).
+    # The level rides the family's system block (muse: `Reasoning strength:
+    # <level>.` plus the recipients line), and the content channel below is
+    # NOT forced, so the model reasons in its own channel and the engine's
+    # thinking FSM returns only the answer -- as the text path always has.
+    # Forced, a task that needs deliberation (judging a table against its
+    # page) deliberated INSIDE the answer: draft verdicts before the real
+    # one, and two greedy loops ("The image shows 3.7830? The image shows
+    # 3.7830? ..."). None keeps the old shape for every existing caller
+    # (figure reading and OCR send no level).
+    think = reasoning is not None
+    if system_text or think:
+        parts.append(r.render_system(persona=system_text, reasoning=reasoning))
     parts.append(r.render_user(user_text))
     gen = r.render_generation_prompt(reasoning)
-    # FORCE THE CONTENT CHANNEL for channel-thinking families (muse):
-    # the bare generation head lets the model open ` to=self` and spend
-    # the whole budget reasoning — the first live batched request leaked
-    # exactly that. The dedicated pool path never had the problem only
-    # because the GGUF template it renders with closes the channel
-    # itself. Reconstructed from the same schema fields vision_text's
-    # _channel_heads uses, so the string matches byte for byte. The
-    # reasoning dial is structurally inert on this path as a result —
-    # figure description is content work.
+    # FORCE THE CONTENT CHANNEL for channel-thinking families (muse) when
+    # no level was asked for: the bare generation head lets the model open
+    # ` to=self` and spend the whole budget reasoning — the first live
+    # batched request leaked exactly that. The dedicated pool path never had
+    # the problem only because the GGUF template it renders with closes the
+    # channel itself. Reconstructed from the same schema fields vision_text's
+    # _channel_heads uses, so the string matches byte for byte. Figure
+    # description is content work.
     th = getattr(schema, "thinking", None)
     if (
-        th is not None
+        not think
+        and th is not None
         and getattr(th, "style", "") == "channel"
         and th.channel_token
         and th.content_channel

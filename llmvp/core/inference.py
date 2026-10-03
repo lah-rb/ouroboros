@@ -1481,7 +1481,13 @@ async def _run_vision_batched(
                 stop_texts=list(stops) if stops else None,
                 static_in_prompt=False,
             )
-            text = vision_clean(answer or "", mcfg.family)
+            raw = answer or ""
+            if reasoning is not None:
+                # The thinking channel was opened (render_vision_prompt): the
+                # text path's FSM keeps the content phase only and forwards
+                # the reasoning to the tracker, exactly as run_completion does.
+                raw = _strip_delimiter(raw)
+            text = vision_clean(raw, mcfg.family)
             generated = len(getattr(instance, "_last_completion_tokens", None) or [])
             stats["served"] += 1
             return VisionOutcome(

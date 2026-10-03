@@ -441,20 +441,14 @@ async def test_encoder_pool_ensure_is_idempotent(monkeypatch):
     assert calls["n"] == 3, "each member once, second ensure a no-op"
 
 
-@pytest.mark.asyncio
-async def test_a_degenerate_generation_raises_and_never_falls_back(monkeypatch):
-    """Live 2026-10-02 (tensor split): a table transcription looped on empty
-    cells, the batched helper swallowed the DegenerateGenerationError and
-    returned None, and the pool path -- which tensor split cannot build --
-    answered "cannot build a vision context". The abort is a verdict on the
-    generation: it must surface as itself, and the seat must still be
-    scrubbed and released."""
+def _vision_rig(monkeypatch, generate):
+    """_run_vision_batched over fakes: one seat, a no-op install, and
+    ``generate(**kw)`` standing in for the engine's generation."""
     import contextlib
     from types import SimpleNamespace
 
     from core import inference as ci
     from inference import vision_batched as vb
-    from inference.repetition import DegenerateGenerationError
 
     calls = []
 
@@ -494,7 +488,7 @@ async def test_a_degenerate_generation_raises_and_never_falls_back(monkeypatch):
         )
 
         async def generate_async(self, **kw):
-            raise DegenerateGenerationError("cycle period 4 x 12", tokens_generated=557)
+            return await generate(**kw)
 
         async def release_instance(self, inst):
             calls.append(("release", inst is seat))
@@ -505,9 +499,16 @@ async def test_a_degenerate_generation_raises_and_never_falls_back(monkeypatch):
     async def _install(*a, **k):
         return None
 
+    prompts = []
+    real_render = vb.render_vision_prompt
+
+    def _render(*a, **k):
+        prompts.append(real_render(*a, **k))
+        return prompts[-1]
+
     monkeypatch.setattr(ci, "_acquire_vision_seat", _seat)
     monkeypatch.setattr(vb, "install_multimodal_prefix", _install)
-    monkeypatch.setattr(vb, "render_vision_prompt", lambda *a, **k: "prompt")
+    monkeypatch.setattr(vb, "render_vision_prompt", _render)
     monkeypatch.setattr(
         "inference.vision_images.resolve_image_part", lambda part, roots, limit: b"png"
     )
@@ -516,8 +517,83 @@ async def test_a_degenerate_generation_raises_and_never_falls_back(monkeypatch):
         {"type": "text", "text": "x"},
         {"type": "image_url", "image_url": {"url": "data:image/png;base64,eA=="}},
     ]}]  # fmt: skip
-    backend = _Backend()
+    return SimpleNamespace(
+        backend=_Backend(), mcfg=mcfg, msgs=msgs, calls=calls, prompts=prompts
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_degenerate_generation_raises_and_never_falls_back(monkeypatch):
+    """Live 2026-10-02 (tensor split): a table transcription looped on empty
+    cells, the batched helper swallowed the DegenerateGenerationError and
+    returned None, and the pool path -- which tensor split cannot build --
+    answered "cannot build a vision context". The abort is a verdict on the
+    generation: it must surface as itself, and the seat must still be
+    scrubbed and released."""
+    from core import inference as ci
+    from inference.repetition import DegenerateGenerationError
+
+    async def _loop(**kw):
+        raise DegenerateGenerationError("cycle period 4 x 12", tokens_generated=557)
+
+    rig = _vision_rig(monkeypatch, _loop)
     with pytest.raises(DegenerateGenerationError, match="cycle period 4 x 12"):
-        await ci._run_vision_batched(backend, mcfg, msgs, 100, 0.0, None, [], 100, 0.0)
-    assert calls == [("scrub", "vision"), ("release", True)]
-    assert backend._vision_batched_stats["fallbacks"] == 0
+        await ci._run_vision_batched(
+            rig.backend, rig.mcfg, rig.msgs, 100, 0.0, None, [], 100, 0.0
+        )
+    assert rig.calls == [("scrub", "vision"), ("release", True)]
+    assert rig.backend._vision_batched_stats["fallbacks"] == 0
+
+
+def test_the_vision_prompt_forces_the_answer_channel_only_without_a_level():
+    from inference.vision_batched import render_vision_prompt
+
+    bare = render_vision_prompt("muse-glimmer", "", "see <m>", "<m>", 1)
+    assert (
+        bare
+        == "<|start|>user<|message|>see <m><|eot|><|start|>assistant to=user<|message|>"
+    )
+    opened = render_vision_prompt(
+        "muse-glimmer", "", "see <m>", "<m>", 1, reasoning="medium"
+    )
+    # the LEVEL follows the server's thinking mode (resolve_thinking: "on"
+    # renders high whatever was asked); the CHANNEL opening is what matters
+    assert opened.startswith("<|start|>system<|message|>Reasoning strength: ")
+    assert '# Valid recipients: "self", "user".' in opened
+    assert opened.endswith("<|start|>assistant"), "the model chooses to=self itself"
+    # a system message renders (it raised TypeError before: keyword-only API)
+    sys_ = render_vision_prompt("muse-glimmer", "You read tables.", "see <m>", "<m>", 1)
+    assert sys_.startswith("<|start|>system<|message|>You read tables.")
+    assert sys_.endswith("assistant to=user<|message|>")
+
+
+@pytest.mark.asyncio
+async def test_an_explicit_level_returns_the_final_channel_only(monkeypatch):
+    """With the thinking channel open, `text` is the content phase -- the
+    text path's FSM -- and the reasoning never reaches the caller."""
+    from core import inference as ci
+
+    raw = (
+        " to=self<|message|>Row 2 sits one column left? No: the header has"
+        ' "Sample". Draft {"verdict": "fixed"} -- no, it is fine.<|eom|>'
+        "<|start|>assistant to=user<|message|>VERDICT: ok<|eot|>"
+    )
+
+    async def _gen(**kw):
+        return raw
+
+    monkeypatch.setattr(ci, "_get_delimiter", lambda: "x")
+    monkeypatch.setattr(ci, "_get_fsm_family", lambda: "muse-glimmer")
+    rig = _vision_rig(monkeypatch, _gen)
+    out = await ci._run_vision_batched(
+        rig.backend, rig.mcfg, rig.msgs, 100, None, "medium", [], 100, 1.0
+    )
+    assert out.text == "VERDICT: ok"
+    assert rig.prompts[-1].endswith("<|start|>assistant")
+    # without a level nothing is stripped beyond vision_clean (forced channel)
+    rig2 = _vision_rig(monkeypatch, _gen)
+    out2 = await ci._run_vision_batched(
+        rig2.backend, rig2.mcfg, rig2.msgs, 100, None, None, [], 100, 1.0
+    )
+    assert rig2.prompts[-1].endswith("to=user<|message|>")
+    assert "verdict" in out2.text, "forced path: the stream is taken as the answer"

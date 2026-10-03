@@ -436,11 +436,14 @@ class Effects(Protocol):
         max_tokens: int | None = None,
         temperature: float | None = None,
         domain: str = "",
+        reasoning: str | None = None,
     ):
         """Vision completion: one image path + text in, completion out.
 
         The path is read server-side and only under its configured image
-        roots; remote URLs are refused rather than fetched.
+        roots; remote URLs are refused rather than fetched. `reasoning` (a
+        level) lets the model think in its own channel; the answer is then
+        the final channel only.
         """
         ...
 

@@ -63,10 +63,11 @@ query Completion($request: CompletionRequest!) {
 # `model` routes to a HOT SECONDARY (loadModel) — this is how paddle-ocr-vl is
 # reached without a second server or a private llama-server process.
 #
-# NOTE for callers: unlike the text path, run_vision_completion does NOT split
-# reasoning from the answer (core/inference.py does that only in
-# run_completion). A prompt that invites deliberation will get deliberation in
-# `text`. Ask this path to TRANSCRIBE or DESCRIBE; ask the text path to decide.
+# NOTE for callers: WITHOUT a `reasoning` level the vision path forces the
+# content channel, so a prompt that invites deliberation gets deliberation in
+# `text` -- ask that mode to TRANSCRIBE or DESCRIBE. WITH a level (batched
+# path, 2026-10-02) the model thinks in its own channel and `text` is the final
+# channel only, as on the text path.
 VISION_MUTATION = """
 mutation VisionCompletion($request: VisionCompletionRequest!) {
     visionCompletion(request: $request) {
@@ -869,6 +870,7 @@ class InferenceEffect:
         model: str | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
+        reasoning: str | None = None,
     ) -> InferenceResult:
         """One image + text in, completion out, over the SAME transport.
 
@@ -881,9 +883,11 @@ class InferenceEffect:
 
         `model` routes to a hot secondary (e.g. "paddle-ocr-vl" for OCR).
 
-        THE ANSWER IS RAW. This path does not split reasoning from content the
-        way the text path does, so give it transcription/description work and
-        let the text path do any deciding.
+        WITHOUT `reasoning` THE ANSWER IS RAW: the server forces the content
+        channel, so a prompt that invites deliberation gets it in `text` --
+        give that mode transcription/description work. WITH a level the
+        model thinks in its own channel and `text` is the final channel only
+        (the text path's FSM; LLMVP 2026-10-02) -- the mode for judging.
         """
         client = await self._get_client()
         request_vars: dict[str, Any] = {
@@ -896,6 +900,8 @@ class InferenceEffect:
             request_vars["temperature"] = float(temperature)
         if model:
             request_vars["model"] = str(model)
+        if reasoning:
+            request_vars["reasoning"] = str(reasoning)
         return await self._request_with_health_watchdog(
             client,
             {"query": VISION_MUTATION, "variables": {"request": request_vars}},

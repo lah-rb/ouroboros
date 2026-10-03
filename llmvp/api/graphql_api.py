@@ -526,11 +526,11 @@ class VisionCompletionRequest:
     # Route to a HOT SECONDARY (loadModel) instead of the primary. None =
     # the primary, which is every pre-existing caller.
     model: Optional[str] = strawberry.field(default=None)
-    # Reasoning DEPTH (low/medium/high/xhigh). The mtmd handler builds its
-    # prompt from the model's own chat template, so this is delivered as a
-    # system block rendered by the family's spec — see run_vision_completion.
-    # None = the family's resting default, which is what every pre-existing
-    # caller got implicitly.
+    # Reasoning DEPTH (low/medium/high/xhigh), delivered as a system block
+    # rendered by the family's spec. On the batched path an explicit level
+    # also OPENS the family's thinking channel and `text` is the final
+    # channel only (the text path's FSM strips the reasoning); None keeps the
+    # content channel forced -- what every figure/OCR caller relies on.
     reasoning: Optional[str] = strawberry.field(default=None)
 
 

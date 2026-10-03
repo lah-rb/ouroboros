@@ -123,3 +123,29 @@ def test_a_remote_paddle_restart_mid_request_is_a_toolchain_fault():
     )
     assert is_toolchain_fault("Server disconnected without sending a response.")
     assert not is_toolchain_fault("below quality threshold (numeric=0.73)")
+
+
+@pytest.mark.asyncio
+async def test_run_vision_sends_a_reasoning_level_only_when_asked(tmp_path):
+    """A level opens the model's thinking channel server-side (LLMVP,
+    2026-10-02); without one the request is byte-identical to before."""
+    from agent.effects.inference import InferenceEffect, InferenceResult
+
+    img = tmp_path / "p.png"
+    img.write_bytes(b"png")
+    fx = InferenceEffect(endpoint="http://127.0.0.1:8008/graphql")
+    sent = []
+
+    async def _client():
+        return None
+
+    async def _send(client, body, response_key="completion", **kw):
+        sent.append(body["variables"]["request"])
+        return InferenceResult(text="ok", tokens_generated=1, finished=True)
+
+    fx._get_client = _client  # type: ignore[method-assign]
+    fx._request_with_health_watchdog = _send  # type: ignore[method-assign]
+    await fx.run_vision("judge", str(img), reasoning="medium")
+    await fx.run_vision("describe", str(img))
+    assert sent[0]["reasoning"] == "medium"
+    assert "reasoning" not in sent[1]
