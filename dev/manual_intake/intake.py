@@ -894,8 +894,15 @@ def bundle_files(paths: list[Path]) -> list[Path]:
 
 
 def plan_ingest(
-    files: list[Path], papers: dict, listed: dict[str, int], replace: bool
+    files: list[Path],
+    papers: dict,
+    listed: dict[str, int],
+    replace: bool,
+    assign: dict[str, str] | None = None,
 ) -> list[dict]:
+    """``assign`` maps a file NAME to the record the operator says it is:
+    the match for documents no text check can verify (2026-10-02: a 1997
+    article scanned to JPEG pages with no text layer)."""
     index = TitleIndex(papers)
     done_hashes = {
         h.get("sha256")
@@ -958,6 +965,8 @@ def plan_ingest(
             rec_doi = str(papers.get(key3 or "", {}).get("doi") or "").lower()
             if key3 and not (own and rec_doi not in own):
                 key, why = key3, "saved under the listed title (file name)"
+        if assign and f.name in assign:
+            key, why = assign[f.name], "assigned by the operator"
         if not key:
             plans.append(
                 {
@@ -1088,7 +1097,16 @@ def cmd_ingest(args) -> int:
     files = bundle_files(
         [Path(os.path.expanduser(b)) for b in (args.bundle or [str(BUNDLE)])]
     )
-    plans = plan_ingest(files, papers, listed, args.replace_mismatched)
+    assign = {}
+    for spec in args.assign or []:
+        name, _, item = spec.partition("=")
+        item = item.strip().lstrip("#")
+        key = next((k for k, pos in listed.items() if str(pos) == item), item)
+        if key not in papers:
+            print(f"--assign {spec!r}: no record {key!r}")
+            return 2
+        assign[name.strip()] = key
+    plans = plan_ingest(files, papers, listed, args.replace_mismatched, assign)
     book = [p for p in plans if p["action"].startswith(("NEW", "REPLACE"))]
     hits = {
         p["key"]: p
@@ -1273,6 +1291,13 @@ def main() -> int:
         "--replace-mismatched",
         action="store_true",
         help="swap a record's wrong-document PDF",
+    )
+    i.add_argument(
+        "--assign",
+        action="append",
+        metavar="FILE=ITEM",
+        help="book FILE (a bundle file name) as list item ITEM (a position or a paper key) "
+        "when no text check can match it, e.g. a scan with no text layer",
     )
     i.add_argument("--apply", action="store_true")
     args = ap.parse_args()

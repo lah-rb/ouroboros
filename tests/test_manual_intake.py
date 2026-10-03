@@ -472,3 +472,20 @@ def test_filename_match_books_a_file_saved_under_its_listed_title(tmp_path):
     assert (
         intake.filename_match(tmp_path / "A short title.pdf", papers, {"k9": 9}) is None
     )
+
+
+def test_assign_books_a_file_no_text_check_can_match(tmp_path, monkeypatch):
+    """A scan with no text layer: the operator names the record."""
+    import pymupdf
+
+    doc = pymupdf.open()
+    doc.new_page()  # a page with no text at all
+    f = tmp_path / "scan.pdf"
+    doc.save(f)
+    papers = {"k74": {"title": "Archaeometric application of the Raman microprobe"}}
+    monkeypatch.setattr(intake, "read_ledger", lambda: [])
+    plans = intake.plan_ingest([f], papers, {"k74": 74}, False)
+    assert plans[0]["action"] == "UNMATCHED"
+    plans = intake.plan_ingest([f], papers, {"k74": 74}, False, {"scan.pdf": "k74"})
+    assert plans[0]["key"] == "k74" and plans[0]["match"] == "assigned by the operator"
+    assert plans[0]["action"] == "NEW"
