@@ -1173,7 +1173,7 @@ class BatchedEngine:
                         continue
                 break
             if draft:
-                self._spec.record(len(draft), accepted)
+                self._spec.record(len(draft), accepted, s.req.persona or "default")
                 if _DFLASH_TRACE and self._spec.h_steps <= 40:
                     logger.info(
                         "DFlash trace seq %d pos %d: last %s draft %s sampled %s",

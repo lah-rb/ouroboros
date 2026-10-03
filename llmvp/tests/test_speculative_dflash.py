@@ -31,6 +31,7 @@ class FakeSpec:
         self.raise_on_draft = raise_on_draft
         self.items = []
         self.records = []
+        self.kinds = []
 
     def covered(self, seq, n_past):
         return self.cov
@@ -44,8 +45,9 @@ class FakeSpec:
             out[seq] = self.drafts.pop(0)[:k] if self.drafts else []
         return out
 
-    def record(self, drafted, accepted):
+    def record(self, drafted, accepted, kind="default"):
         self.records.append((drafted, accepted))
+        self.kinds.append(kind)
 
 
 def _running(spec, script, *, max_tokens=16, decode_script=None):
@@ -317,3 +319,31 @@ def test_every_draft_row_is_an_output_the_anchor_included():
         (999, 52, (4,), True),
         (999, 53, (4,), True),
     ]
+
+
+def test_each_verify_step_is_counted_under_its_stream_kind():
+    spec = FakeSpec(drafts=[[11, 12, 13]])
+    eng, ctx, sampler, req = _running(spec, [11, 12, 13, 14])
+    eng._step()
+    assert spec.kinds == [req.persona or "default"]
+
+
+def test_stats_split_acceptance_by_kind():
+    """2026-10-03: the pooled rate could not say whether vision answers draft
+    as well as prose; the stats line now carries both."""
+    d = _bare_drafter()
+    d.n_max = 3
+    d.h_drafted = d.h_accepted = d.h_steps = 0
+    d.h_uncovered = d.h_injected_rows = d.h_skipped_rows = 0
+    d.h_by_kind = {}
+    for acc in (3, 3, 1):
+        d.record(3, acc, "default")
+    for acc in (0, 2):
+        d.record(3, acc, "vision")
+    st = d.stats()
+    assert st["accepted"] == 9 and st["verify_steps"] == 5
+    v = st["by_kind"]["vision"]
+    assert v["drafted"] == 6 and v["accepted"] == 2 and v["accept_rate"] == 0.3333
+    assert v["tokens_per_step"] == 2.0, "(2 accepted + 2 bonus) / 2 steps"
+    assert v["accepted_hist"] == [1, 0, 1, 0]
+    assert st["by_kind"]["default"]["accepted_hist"] == [0, 1, 0, 2]

@@ -170,6 +170,11 @@ class DFlashDrafter:
         self.h_injected_rows = 0
         self.h_skipped_rows = 0
         self.h_failures = 0
+        # Per stream KIND (the request's persona: "default", "vision", ...):
+        # [drafted, accepted, verify steps, accepted-length histogram 0..n_max].
+        # The pooled rate cannot say whether a vision answer drafts as well
+        # as prose (2026-10-03, vision work entering the pipeline).
+        self.h_by_kind: Dict[str, list] = {}
         self.create_ctx(primary._ctx)
         logger.info(
             "🚀 DFlash drafter loaded in %.1fs: %s (target layers %s, n_max %d, "
@@ -458,10 +463,18 @@ class DFlashDrafter:
                 n_past = int(b.batch.pos[first]) - 1
                 self.ctx.memory_seq_rm(seq, n_past, -1)
 
-    def record(self, drafted: int, accepted: int) -> None:
+    def record(self, drafted: int, accepted: int, kind: str = "default") -> None:
         self.h_drafted += int(drafted)
         self.h_accepted += int(accepted)
         self.h_steps += 1
+        by = self.h_by_kind.get(kind)
+        if by is None:
+            by = self.h_by_kind[kind] = [0, 0, 0, [0] * (int(self.n_max) + 1)]
+        by[0] += int(drafted)
+        by[1] += int(accepted)
+        by[2] += 1
+        if 0 <= int(accepted) < len(by[3]):
+            by[3][int(accepted)] += 1
         if self.h_steps % 100 == 0:
             logger.info("🚀 DFlash: %s", self.stats())
 
@@ -480,4 +493,18 @@ class DFlashDrafter:
             "injected_rows": self.h_injected_rows,
             "skipped_rows": self.h_skipped_rows,
             "failures": self.h_failures,
+            "by_kind": {
+                kind: {
+                    "drafted": d,
+                    "accepted": a,
+                    "accept_rate": round(a / d, 4) if d else None,
+                    "verify_steps": n,
+                    # tokens a verify step yields: the accepted drafts plus
+                    # the bonus token -- the speed-up before batching costs
+                    "tokens_per_step": round((a + n) / n, 3) if n else None,
+                    # verify steps that accepted 0, 1, ..., n_max drafts
+                    "accepted_hist": list(hist),
+                }
+                for kind, (d, a, n, hist) in sorted(self.h_by_kind.items())
+            },
         }
