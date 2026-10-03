@@ -807,6 +807,29 @@ def _all_scraper_lanes(domains: Optional[dict] = None) -> List[Lane]:
             est_kv=0,
             seats=0,
         ),
+        # TABLE TRIAGE LANES (2026-10-03, operator: "plumb the proper lane").
+        # Muse reads each OCR'd table against its page and the gate applies a
+        # correction only when it keeps every number and the grid's shape
+        # (fresh 60-table validation: 26 applied, 125 -> 8 wrong rows). An
+        # accepted paper with tables waits for these lanes before its pack
+        # (table_triage_actions). Two lanes: ~170 owed packs and ~840 tables
+        # were waiting the day they opened; _TRIAGE_CLAIMS keeps them on
+        # different papers. Vision work, so they share vision_ctx admission
+        # with figtext.
+        Lane(
+            name="table_triage",
+            flow="table_triage_drain",
+            resource="vision_ctx",
+            est_kv=0,
+            seats=0,
+        ),
+        Lane(
+            name="table_triage2",
+            flow="table_triage_drain",
+            resource="vision_ctx",
+            est_kv=0,
+            seats=0,
+        ),
         # ── TRANSLATE LANES REOPENED (2026-08-29, operator) — as the
         # POST-ACCEPT gated lanes the 2026-08-22 closure prescribed. The
         # closure's two findings now shape the selection instead of

@@ -489,6 +489,9 @@ def build_action_registry() -> ActionRegistry:
     from agent.actions.translation_actions import action_translate_drain_batch
 
     registry.register("translate_drain_batch", action_translate_drain_batch)
+    from agent.actions.table_triage_actions import action_table_triage_drain_batch
+
+    registry.register("table_triage_drain_batch", action_table_triage_drain_batch)
     from agent.actions.synth_actions import (
         action_synth_check_done,
         action_synth_generate_round,

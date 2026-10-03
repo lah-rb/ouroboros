@@ -28453,6 +28453,76 @@
       "fallback": "reorganize"
     }
   },
+  "table_triage_drain": {
+    "flow": "table_triage_drain",
+    "version": 1,
+    "description": "Read a bounded slice of one accepted paper's OCR'd tables against\ntheir pages on muse's vision path, keep the corrections the gate\naccepts in the paper's sidecar, and release the paper's pack when\nevery table has an outcome. Mission-clean; returns an attempt summary.",
+    "context_tier": "session_task",
+    "returns": {
+      "table_triage_summary": {
+        "type": "dict",
+        "from": "context.table_triage_summary",
+        "optional": true
+      }
+    },
+    "projections": {},
+    "input": {
+      "required": [
+        "working_directory"
+      ],
+      "optional": []
+    },
+    "defaults": {
+      "config": {}
+    },
+    "steps": {
+      "drain": {
+        "action": "table_triage_drain_batch",
+        "description": "Claim one paper waiting on table triage and read a bounded slice of its tables",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "done"
+            }
+          ]
+        },
+        "publishes": [
+          "table_triage_summary"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "done": {
+        "action": "noop",
+        "description": "Drain complete",
+        "context": {
+          "required": [],
+          "optional": [
+            "table_triage_summary"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": true,
+        "status": "success"
+      }
+    },
+    "entry": "drain",
+    "overflow": {
+      "strategy": "split",
+      "fallback": "reorganize"
+    }
+  },
   "synth_control": {
     "flow": "synth_control",
     "version": 1,

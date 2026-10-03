@@ -175,3 +175,12 @@ def compiled_rewrite_flow() -> FlowDefinition:
 @pytest.fixture
 def compiled_set_env_flow() -> FlowDefinition:
     return load_compiled_flow("set_env")
+
+
+@pytest.fixture(autouse=True)
+def _table_triage_gate_off(monkeypatch):
+    """The table-triage pack gate (2026-10-03) is OFF suite-wide: an accepted,
+    unpacked paper in a test that predates the gate would otherwise wait for
+    a lane the test never runs. tests/test_table_triage_lane.py switches it
+    back on for itself."""
+    monkeypatch.setenv("OUROBOROS_TABLE_TRIAGE", "0")

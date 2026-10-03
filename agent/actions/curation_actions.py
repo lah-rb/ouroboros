@@ -1147,8 +1147,36 @@ def _curation_pending(record: dict) -> bool:
             "translated"
         ):
             return False
+        # AN ACCEPTED PAPER WITH TABLES WAITS FOR TABLE TRIAGE (2026-10-03),
+        # the same shape as the translation wait: the table_triage lane takes
+        # exactly this state and books a terminal table_triage_status, after
+        # which the pack reads the corrected tables (table_triage_actions).
+        from agent.actions.table_triage_actions import awaiting_table_triage
+
+        if awaiting_table_triage(record):
+            return False
         return True
     return True  # review not yet run
+
+
+def _pack_waiting(record: dict) -> bool:
+    """An accepted paper still owed a pack that waits on a prerequisite lane
+    (translation, table triage). Not selectable -- _curation_pending says so
+    -- but still WORK: the completion checks must not read it as done."""
+    if record.get("record_kind") == "supplement":
+        return False
+    if record.get("review_status") != "accepted" or record.get("pack_status") in (
+        "packed",
+        "pack_failed",
+    ):
+        return False
+    if record.get("extraction_status") == "extract_lingual" and not record.get(
+        "translated"
+    ):
+        return True
+    from agent.actions.table_triage_actions import awaiting_table_triage
+
+    return awaiting_table_triage(record)
 
 
 # ── Drain backlog: the gate's admission check ─────────────────────────
@@ -2390,6 +2418,27 @@ async def _curate_stateless(
         }
         return state
 
+    # TABLES ARE TRIAGED BEFORE THE PACK (2026-10-03): a paper accepted this
+    # round with tables in its doc books the review and waits for the
+    # table_triage lane; one without tables is marked so it never waits.
+    from agent.actions.table_triage_actions import (
+        awaiting_table_triage,
+        doc_tables,
+        pack_markdown,
+    )
+
+    if awaiting_table_triage({**(rec or {}), "review_status": "accepted"}):
+        _, md = await pack_markdown(effects, paper_key)
+        if doc_tables(md):
+            state["pack"] = {
+                "status": "awaiting_table_triage",
+                "reason": "accepted; pack deferred until its tables are triaged",
+                "attempts": 0,
+                "quality": {},
+            }
+            return state
+        state["table_triage_status"] = "no_tables"
+
     registry = await _load_registry(effects)
     # THE PACK READS THE WHOLE PAPER. The review is a judgement and may see a
     # compressed doc; the pack is an extraction, and a fact in a paragraph
@@ -2406,15 +2455,25 @@ async def _curate_stateless(
     return state
 
 
-async def _raw_curator_doc(effects, paper_key: str) -> str:
+async def _raw_curator_doc(effects, paper_key: str, corrected: bool = True) -> str:
     """The UNCOMPRESSED curator doc: raw markdown (the gated English
     translation when one exists) with figtext anchored -- what the pack
     reads. Kept apart from _build_doc_for so building it never overwrites
-    the review form recorded in _DOC_FORMS."""
-    fc = await effects.read_file(f"databank/markdown/{paper_key}.en.md")
-    if not getattr(fc, "exists", False):
-        fc = await effects.read_file(f"databank/markdown/{paper_key}.md")
-    md = fc.content if getattr(fc, "exists", False) else ""
+    the review form recorded in _DOC_FORMS.
+
+    `corrected` overlays the table_triage lane's applied corrections
+    (2026-10-03); the markdown on disk is never edited. The missed-window
+    repair passes False: it must cut the same windows the booked pack was
+    cut from."""
+    from agent.actions.table_triage_actions import (
+        apply_corrections,
+        load_sidecar,
+        pack_markdown,
+    )
+
+    _, md = await pack_markdown(effects, paper_key)
+    if corrected and md:
+        md = apply_corrections(md, await load_sidecar(effects, paper_key))
     return build_curator_doc(md, await _load_figtext(effects, paper_key))
 
 
@@ -3232,7 +3291,7 @@ async def _repair_missed_windows(effects, paper_key: str) -> dict:
     if not owed:
         return {**result, "outcome": "no missed window owed"}
 
-    doc = await _raw_curator_doc(effects, paper_key)
+    doc = await _raw_curator_doc(effects, paper_key, corrected=False)
     target, cap = _pack_window_sizes()
     windows = window_sections(doc, target, cap)
     recorded = {
@@ -3816,7 +3875,7 @@ async def action_curate_sweep_next(step_input):
         if _curation_pending(r) and r.get("pack_status") != "needs_repack"
     )
     worklist = retry + fresh
-    if not worklist:
+    if not worklist and not any(_pack_waiting(r) for r in databank.values()):
         goal.status = "complete"
         await effects.save_mission(mission)
         return StepOutput(
@@ -4316,6 +4375,8 @@ async def action_curate_book_result(step_input):
     databank = await read_databank(effects)
     rec = dict(databank.get(paper_key) or {"paper_key": paper_key})
     rec["review_status"] = review.get("status") or "review_failed"
+    if state.get("table_triage_status"):
+        rec["table_triage_status"] = state["table_triage_status"]
     # Which compression rung the reviewed doc was built at ("raw" for
     # the untouched form) — provenance for the serializer and for any
     # later audit of compressed-doc verdicts.
@@ -4402,6 +4463,14 @@ async def action_curate_book_result(step_input):
         elif pack.get("status") == "needs_repack":
             rec["pack_status"] = "needs_repack"
             outcome = "needs_repack"
+        elif pack.get("status") == "awaiting_table_triage":
+            # Not a failure: the pack waits for the table_triage lane. An owed
+            # repack stays needs_repack; a fresh acceptance stays unpacked.
+            rec["pack_status"] = (
+                "needs_repack" if rec.get("pack_status") == "needs_repack" else ""
+            )
+            rec["failure_reason"] = str(pack.get("reason") or "")
+            outcome = "accepted; pack awaiting table triage"
         elif pack.get("status") == "awaiting_translation":
             # Not a failure: the review stands, the pack waits for English text.
             # An EMPTY pack_status is what the translation gate in
@@ -4450,7 +4519,9 @@ async def action_check_curation_complete(step_input):
         return StepOutput(result={"gate_passed": False}, observations="No effects")
     databank = await read_databank(effects)
     pending = sorted(
-        k for k, r in databank.items() if _fig_pending(r) or _curation_pending(r)
+        k
+        for k, r in databank.items()
+        if _fig_pending(r) or _curation_pending(r) or _pack_waiting(r)
     )
     if pending:
         return StepOutput(
