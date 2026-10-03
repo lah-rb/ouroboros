@@ -48,9 +48,10 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 from agent.acquisition_routes import (  # noqa: E402
     BROWSER_FETCH_LOG,
+    REPOSITORIES,
     acquirer,
     browser_exhausted,
-    publisher_for,
+    route_row,
 )
 
 CORPUS = Path(os.path.expanduser("~/corpora/ouroboros-spectra"))
@@ -61,10 +62,19 @@ CHROMIUM = os.environ.get("OUROBOROS_CHROMIUM", "/usr/lib/chromium/chromium")
 BUNDLE = Path(os.path.expanduser("~/Downloads/paper_bundle_mdpi"))
 
 
-#: Publishers this fetcher knows how to fetch. The routes table decides which
-#: papers are the browser's; a browser-route publisher missing here is skipped
-#: with a reason rather than fetched with another publisher's page logic.
-STRATEGIES = frozenset({"mdpi"})
+#: Routes this fetcher knows how to fetch, and the path suffix of the PDF link
+#: on the landing page. The routes table decides which papers are the
+#: browser's; a browser-route row missing here is skipped with a reason rather
+#: than fetched with another site's page logic. HAL (2026-10-03): the landing
+#: page links its main file at <landing>/document, which a real browser gets
+#: past HAL's intermittent bot challenge to open.
+STRATEGIES = {"mdpi": "/pdf", "hal": "/document"}
+#: Titles of interstitial challenge pages a real browser clears on its own
+#: (JavaScript proof of work / redirect); waited out, never solved.
+_CHALLENGE_TITLE = re.compile(
+    r"not a bot|anubis|just a moment|checking your browser", re.I
+)
+CHALLENGE_WAIT_S = 30
 
 MIN_DELAY_S, MAX_DELAY_S = 20.0, 40.0
 DAILY_CAP = 200
@@ -103,14 +113,33 @@ def last_rows(path: Path) -> dict[str, dict]:
     return out
 
 
-def landing_url(rec: dict) -> str:
-    """The article page: the record's MDPI pdf URL minus `/pdf...`, else the DOI."""
-    for u in [rec.get("oa_pdf_url") or "", *(rec.get("oa_pdf_urls") or [])]:
+def landing_url(rec: dict, strategy: str = "mdpi") -> tuple[str, str]:
+    """(article page, PDF link) for the route's strategy.
+
+    MDPI: the record's pdf URL minus `/pdf...` (else the DOI), PDF link found
+    on the page. HAL: the record's HAL link -- a /document or /file/ URL is
+    the PDF itself, its landing page the URL up to the document id."""
+    urls = [rec.get("oa_pdf_url") or "", *(rec.get("oa_pdf_urls") or [])]
+    urls += [str(u) for u in rec.get("oa_attempted") or []]
+    if strategy == "hal":
+        hosts = next(r.hosts for r in REPOSITORIES if r.name == "hal")
+        for u in urls:
+            m = re.match(r"(https?://([^/]+)/[^/?#]+)(/[^?#]*)?", str(u))
+            if m and any(h in m.group(2).lower() for h in hosts):
+                tail = m.group(3) or ""
+                pdf = (
+                    u
+                    if tail.startswith(("/document", "/file/"))
+                    else m.group(1) + "/document"
+                )
+                return m.group(1), pdf
+        return "", ""
+    for u in urls:
         m = re.match(r"(https?://www\.mdpi\.com/[^?#]+?)/pdf\b", str(u))
         if m:
-            return m.group(1)
+            return m.group(1), ""
     doi = str(rec.get("doi") or "").strip()
-    return f"https://doi.org/{doi}" if doi else ""
+    return (f"https://doi.org/{doi}" if doi else ""), ""
 
 
 # ── log + caps ────────────────────────────────────────────────────────
@@ -186,7 +215,18 @@ _FETCH_JS = """async (href) => {
 }"""
 
 
-async def fetch_one(page, key: str, url: str, bundle: Path) -> dict:
+async def _wait_challenge(page) -> bool:
+    """Let an interstitial challenge page clear on its own; False if it never does."""
+    for _ in range(CHALLENGE_WAIT_S):
+        if not _CHALLENGE_TITLE.search(await page.title()):
+            return True
+        await page.wait_for_timeout(1_000)
+    return not _CHALLENGE_TITLE.search(await page.title())
+
+
+async def fetch_one(
+    page, key: str, url: str, bundle: Path, strategy: str = "mdpi", pdf_href: str = ""
+) -> dict:
     t0 = time.monotonic()
     out = {"key": key, "url": url}
     resp = None
@@ -202,17 +242,21 @@ async def fetch_one(page, key: str, url: str, bundle: Path) -> dict:
                 await page.wait_for_timeout(5_000)
                 continue
             return {**out, "outcome": "page_error", "why": str(e)[:200]}
+    if not await _wait_challenge(page):
+        return {**out, "outcome": "blocked", "why": f"challenge never cleared: {(await page.title())[:80]}",
+                "evidence": await _record_failure(page, key, "challenge")}  # fmt: skip
     await page.wait_for_timeout(int(random.uniform(*READ_PAUSE_S) * 1000))
     title = await page.title()
     status = resp.status if resp else 0
     if status in (401, 403, 429) or "access denied" in title.lower():
         return {**out, "outcome": "blocked", "why": f"HTTP {status} / {title[:80]}",
                 "evidence": await _record_failure(page, key, "blocked")}  # fmt: skip
+    suffix = STRATEGIES.get(strategy, "/pdf")
     path = re.sub(r"^https?://[^/]+", "", page.url).split("?")[0].rstrip("/")
-    link = page.locator(f'a[href="{path}/pdf"]')
+    link = page.locator(f'a[href="{path}{suffix}"]')
     if await link.count() == 0:
-        link = page.locator('a[href$="/pdf"]')
-    if await link.count() == 0:
+        link = page.locator(f'a[href$="{suffix}"]')
+    if await link.count() == 0 and not pdf_href:
         return {**out, "outcome": "no_pdf_link", "page": page.url,
                 "evidence": await _record_failure(page, key, "no link")}  # fmt: skip
     # THE PAGE FETCHES ITS OWN PDF LINK; NOTHING IS "DOWNLOADED". Clicking the
@@ -222,7 +266,11 @@ async def fetch_one(page, key: str, url: str, bundle: Path) -> dict:
     # network stack and cookies as the click -- MDPI answers it with the PDF
     # itself (Content-Disposition: attachment) -- and the bytes come back to
     # this process instead of to a download.
-    href = (await link.first.get_attribute("href")) or f"{path}/pdf"
+    href = (
+        ((await link.first.get_attribute("href")) if await link.count() else "")
+        or pdf_href
+        or f"{path}{suffix}"
+    )
     try:
         got = await page.evaluate(_FETCH_JS, href)
     except Exception as e:  # noqa: BLE001
@@ -268,21 +316,21 @@ async def run(args) -> int:
                 f"  #{pos:<4} {key:<45} skipped: not the browser's (the operator's route)"
             )
             continue
-        pub = publisher_for(rec)
+        pub = route_row(rec)
         if pub is None or pub.name not in STRATEGIES:
             print(
                 f"  #{pos:<4} {key:<45} skipped: no fetch strategy for {pub and pub.name}"
             )
             continue
-        url = landing_url(rec)
+        url, pdf_href = landing_url(rec, pub.name)
         if url:
-            plan.append((pos, key, url))
+            plan.append((pos, key, url, pub.name, pdf_href))
     budget = min(args.max, args.daily_cap - fetched_today(log))
     print(f"{len(plan)} to fetch from {list_path.name}; today's budget {budget} "
           f"(cap {args.daily_cap}, {fetched_today(log)} already today)", flush=True)  # fmt: skip
     if args.dry_run:
-        for pos, key, url in plan[: max(0, budget)]:
-            print(f"  #{pos:<4} {key:<45} {url}")
+        for pos, key, url, strategy, pdf_href in plan[: max(0, budget)]:
+            print(f"  #{pos:<4} {key:<45} [{strategy}] {pdf_href or url}")
         return 0
     if budget <= 0:
         print("daily cap reached -- nothing to do today")
@@ -304,14 +352,14 @@ async def run(args) -> int:
         )
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
         try:
-            for i, (pos, key, url) in enumerate(plan):
+            for i, (pos, key, url, strategy, pdf_href) in enumerate(plan):
                 if ok >= budget:
                     print(f"run limit reached ({budget} PDFs)", flush=True)
                     break
                 if i:
                     await asyncio.sleep(random.uniform(args.min_delay, args.max_delay))
                 try:
-                    res = await fetch_one(page, key, url, bundle)
+                    res = await fetch_one(page, key, url, bundle, strategy, pdf_href)
                 except Exception as e:  # noqa: BLE001 -- the browser itself went away
                     append_log({"at": dt.datetime.now(dt.timezone.utc).isoformat(),
                                 "local_date": dt.date.today().isoformat(), "list": str(list_path),

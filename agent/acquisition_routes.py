@@ -113,6 +113,33 @@ PUBLISHERS: tuple[Publisher, ...] = (
     ),
 )
 
+#: REPOSITORIES hold an open copy of papers whose DOI names a publisher. A
+#: record whose stored links reach a browser-route repository is routed by
+#: the REPOSITORY, ahead of its DOI's publisher: a HAL copy of a Wiley paper
+#: is the open one, and the publisher row would hand it to the operator.
+REPOSITORIES: tuple[Publisher, ...] = (
+    Publisher(
+        "hal",
+        (),
+        # Every HAL portal: hal.science and its institutional subdomains
+        # (theses., insu., inserm., ...), the archives-ouvertes.fr family
+        # (tel., pastel., hal-brgm., ...), and the university/CCSD instances.
+        (
+            "hal.science",
+            "archives-ouvertes.fr",
+            "hal.sorbonne-universite.fr",
+            "hal.univ-",
+            "ccsd.cnrs.fr",
+        ),
+        crawler="open",
+        browser=True,
+        evidence="plain fetch of /document 8/8 on 2026-10-03, but 69 of the 82 "
+        "unresolved HAL-linked papers had drawn an HTML page instead of the PDF "
+        "(an intermittent bot challenge a real browser passes); operator ruling "
+        "2026-10-03: HAL takes the browser route, the PDF opens in the viewer",
+    ),
+)
+
 #: Not a publisher but a wall one hop away: doi.org lands on a meta-refresh
 #: stub that forwards into the publisher (measured: linkinghub.elsevier.com ->
 #: sciencedirect), so an unresolved record still pointing at it is walled.
@@ -126,7 +153,12 @@ def _host(url: str) -> str:
 def crawler_walled_hosts() -> tuple[str, ...]:
     """Every host measured to refuse the polite crawler, resolvers included."""
     return (
-        tuple(h for p in PUBLISHERS if p.crawler == "walled" for h in p.hosts)
+        tuple(
+            h
+            for p in PUBLISHERS + REPOSITORIES
+            if p.crawler == "walled"
+            for h in p.hosts
+        )
         + RESOLVER_HOSTS
     )
 
@@ -154,6 +186,25 @@ def publisher_for(rec: dict) -> Publisher | None:
             if any(h in host for h in p.hosts):
                 return p
     return None
+
+
+def repository_for(rec: dict) -> Publisher | None:
+    """The repository one of the record's stored links reaches, if any."""
+    for url in _record_urls(rec):
+        host = _host(url)
+        for p in REPOSITORIES:
+            if any(h in host for h in p.hosts):
+                return p
+    return None
+
+
+def route_row(rec: dict) -> Publisher | None:
+    """The row that decides who fetches: a browser-route repository holding a
+    copy first (its copy is the open one), else the DOI's publisher."""
+    repo = repository_for(rec)
+    if repo is not None and repo.browser:
+        return repo
+    return publisher_for(rec)
 
 
 def read_browser_log(corpus_root: str | Path) -> list[dict]:
@@ -190,7 +241,7 @@ def acquirer(rec: dict, exhausted: set[str] = frozenset()) -> str:
     the crawler's own retries run regardless and are not a route a human
     waits on. `exhausted` is browser_exhausted() over the fetcher's log.
     """
-    p = publisher_for(rec)
+    p = route_row(rec)
     if p is not None and p.browser and rec.get("paper_key") not in exhausted:
         return "browser"
     return "operator"

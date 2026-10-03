@@ -85,3 +85,57 @@ def test_the_browser_log_is_read_from_the_corpus(tmp_path):
     )
     assert read_browser_log(tmp_path) == [{"key": "a", "outcome": "ok"}]
     assert read_browser_log(tmp_path / "missing") == []
+
+
+def test_a_hal_copy_routes_the_paper_to_the_browser_ahead_of_its_publisher():
+    """HAL (operator ruling 2026-10-03) is a REPOSITORY: no DOI prefix of its
+    own, and the open copy of papers whose DOI names a walled publisher."""
+    from agent.acquisition_routes import repository_for, route_row
+
+    rec = {
+        "paper_key": "doi_10.1111_ggr.12577",
+        "doi": "10.1111/ggr.12577",
+        "oa_pdf_url": "https://hal.science/hal-04763842/document",
+    }
+    assert publisher_for(rec).name == "wiley"
+    assert repository_for(rec).name == "hal" and route_row(rec).name == "hal"
+    assert acquirer(rec) == "browser"
+    for host in (
+        "https://theses.hal.science/tel-01127004",
+        "https://tel.archives-ouvertes.fr/tel-00001",
+        "https://hal.univ-lille.fr/hal-04467475v1/document",
+        "https://hal-lirmm.ccsd.cnrs.fr/lirmm-0001",
+    ):
+        assert acquirer({"paper_key": "k", "oa_pdf_urls": [host]}) == "browser", host
+    # without a HAL link the publisher decides, as before
+    assert acquirer({"paper_key": "w", "doi": "10.1111/ggr.1"}) == "operator"
+    # two failed browser tries hand it to the operator, as for MDPI
+    two = [{"key": "doi_10.1111_ggr.12577", "outcome": "blocked"}] * 2
+    assert acquirer(rec, browser_exhausted(two)) == "operator"
+    # the crawler keeps trying HAL: it serves plain clients most of the time
+    assert not any("hal" in h for h in crawler_walled_hosts())
+
+
+def test_browser_fetch_finds_the_hal_landing_page_and_document():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("bf", "tools/browser_fetch.py")
+    bf = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bf)
+    assert bf.landing_url(
+        {"oa_pdf_url": "https://hal.science/hal-04763842/document"}, "hal"
+    ) == (
+        "https://hal.science/hal-04763842",
+        "https://hal.science/hal-04763842/document",
+    )
+    assert bf.landing_url(
+        {"oa_pdf_urls": ["https://theses.hal.science/tel-01127004"]}, "hal"
+    ) == (
+        "https://theses.hal.science/tel-01127004",
+        "https://theses.hal.science/tel-01127004/document",
+    )
+    assert bf.landing_url({"doi": "10.1/x"}, "hal") == ("", "")
+    assert bf.landing_url(
+        {"oa_pdf_url": "https://www.mdpi.com/2075-163X/12/1/1/pdf?version=1"}, "mdpi"
+    ) == ("https://www.mdpi.com/2075-163X/12/1/1", "")
+    assert bf.STRATEGIES["hal"] == "/document"
