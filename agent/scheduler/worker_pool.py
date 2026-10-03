@@ -179,6 +179,9 @@ class WorkerPool:
         self._tasks: List[asyncio.Task] = []
         self._stopping = asyncio.Event()
         self._resource_inflight: Dict[str, int] = {}
+        # Lanes refused for a full resource: resource -> {lane: first refused,
+        # last asked} (see _may_dispatch).
+        self._turns: Dict[str, Dict[str, List[float]]] = {}
 
         # Timing knobs as instance attributes (TESTING.md) so tests drive
         # the real loop rather than a rewritten one.
@@ -516,9 +519,38 @@ class WorkerPool:
             st.units_idle += 1
         return did
 
+    #: A refused lane that has not asked again for this long has stopped
+    #: asking (stopped, disabled, deadline) and holds no turn.
+    _TURN_STALE_S = 120.0
+
     def _may_dispatch(self, lane: Lane) -> bool:
+        """Is there a slot of this lane's resource FOR THIS LANE?
+
+        TURNS, not a race (2026-10-03). A lane that finishes a unit asks again
+        at once, while a refused lane sleeps out its backoff, so under a full
+        cap the lanes already running re-took every freed slot: the two new
+        table_triage lanes never ran a round beside four busy figtext lanes.
+        A refused lane now queues, and a free slot goes to the lanes that
+        have waited longest; a lane may take one only while fewer waiters
+        than free slots stand ahead of it."""
         cap = self.max_inflight.get(lane.resource, 1)
-        return self._resource_inflight.get(lane.resource, 0) < cap
+        free = cap - self._resource_inflight.get(lane.resource, 0)
+        now = self._now()
+        turns = self._turns.setdefault(lane.resource, {})
+        for name in [
+            n for n, (_, seen) in turns.items() if now - seen > self._TURN_STALE_S
+        ]:
+            del turns[name]
+        if lane.name in turns:
+            turns[lane.name][1] = now
+        ahead = sorted((t[0], n) for n, t in turns.items() if n != lane.name)
+        mine = turns.get(lane.name, [float("inf")])[0]
+        ahead = [n for t, n in ahead if t < mine]
+        if free > len(ahead):
+            turns.pop(lane.name, None)
+            return True
+        turns.setdefault(lane.name, [now, now])
+        return False
 
     async def _run_flow(self, lane: Lane) -> bool:
         """Run this lane's drain flow once. True if it did work.

@@ -560,3 +560,58 @@ async def test_a_network_lane_waits_its_full_backoff_whatever_the_feed_does():
         await pool._idle(pool.lanes[0])
         took = asyncio.get_running_loop().time() - t0
         assert (took >= 0.15) is slow, (resource, took)
+
+
+def test_a_full_resource_hands_freed_slots_to_the_longest_waiters():
+    """2026-10-03: four busy figtext lanes re-took every freed vision slot (a
+    lane asks again the moment its unit ends; a refused lane sleeps out its
+    backoff) and the two new table_triage lanes never ran. Refused lanes now
+    queue and a freed slot is theirs first."""
+    from agent.scheduler.worker_pool import Lane, WorkerPool
+
+    lanes = [
+        Lane(name=n, flow="f", resource="vision_ctx") for n in ("fig", "fig2", "tri")
+    ]
+    pool = WorkerPool(None, lanes, max_inflight={"vision_ctx": 2})
+    clock = [100.0]
+    pool._now = lambda: clock[0]
+    fig, fig2, tri = lanes
+
+    def run(lane):
+        assert pool._may_dispatch(lane)
+        pool._resource_inflight["vision_ctx"] = (
+            pool._resource_inflight.get("vision_ctx", 0) + 1
+        )
+
+    def done():
+        pool._resource_inflight["vision_ctx"] -= 1
+
+    run(fig)
+    run(fig2)
+    assert not pool._may_dispatch(tri), "full: tri queues"
+    clock[0] += 5
+    done()  # fig finishes and asks again at once
+    assert not pool._may_dispatch(fig), "the waiter's turn, not fig's"
+    clock[0] += 20
+    assert pool._may_dispatch(tri), "tri wakes from its backoff and takes the slot"
+    pool._resource_inflight["vision_ctx"] += 1
+    # tri is no longer waiting; fig is, and gets the next freed slot
+    done()
+    assert not pool._may_dispatch(fig2) and pool._may_dispatch(fig)
+
+
+def test_a_waiter_that_stopped_asking_holds_no_turn():
+    from agent.scheduler.worker_pool import Lane, WorkerPool
+
+    lanes = [Lane(name=n, flow="f", resource="vision_ctx") for n in ("a", "b")]
+    pool = WorkerPool(None, lanes, max_inflight={"vision_ctx": 1})
+    clock = [0.0]
+    pool._now = lambda: clock[0]
+    pool._resource_inflight["vision_ctx"] = 1
+    assert not pool._may_dispatch(lanes[1])  # b queues, then stops (disabled)
+    pool._resource_inflight["vision_ctx"] = 0
+    clock[0] += WorkerPool._TURN_STALE_S + 1
+    assert pool._may_dispatch(lanes[0])
+    # free slots beyond the waiters ahead are anyone's
+    pool2 = WorkerPool(None, lanes, max_inflight={"vision_ctx": 3})
+    assert pool2._may_dispatch(lanes[0]) and pool2._may_dispatch(lanes[1])
