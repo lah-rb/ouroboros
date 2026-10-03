@@ -43,6 +43,7 @@ import re
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urljoin
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
@@ -274,8 +275,17 @@ async def fetch_one(
     try:
         got = await page.evaluate(_FETCH_JS, href)
     except Exception as e:  # noqa: BLE001
-        return {**out, "outcome": "download_failed", "why": str(e)[:200],
-                "evidence": await _record_failure(page, key, "fetch failed")}  # fmt: skip
+        # A link the page's own fetch() may not read -- a redirect to another
+        # origin (HAL serving v2 for a stored v1 link, 2026-10-03) fails CORS
+        # as "Failed to fetch". The browser context's request client sends the
+        # same cookies and is not bound by CORS.
+        try:
+            r = await page.context.request.get(urljoin(page.url, href), timeout=120_000)
+            got = {"status": r.status, "b64": base64.b64encode(await r.body()).decode(),
+                   "disposition": r.headers.get("content-disposition", "")}  # fmt: skip
+        except Exception as e2:  # noqa: BLE001
+            return {**out, "outcome": "download_failed", "why": f"{str(e)[:120]} / {str(e2)[:80]}",
+                    "evidence": await _record_failure(page, key, "fetch failed")}  # fmt: skip
     if got.get("status") != 200:
         return {**out, "outcome": "blocked" if got.get("status") in (401, 403, 429) else "download_failed",
                 "why": f"HTTP {got.get('status')} for {href}"}  # fmt: skip
