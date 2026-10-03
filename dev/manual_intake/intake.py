@@ -207,8 +207,14 @@ def clean_title(t: str) -> str:
 
 
 def compact(s: str) -> str:
-    """Case-, whitespace- and punctuation-blind form (NFKC folds ligatures)."""
+    """Case-, whitespace-, punctuation- and accent-blind form (NFKC folds
+    ligatures; accents fold because title pages print capitals without them:
+    "COPOLYMERES ANTIBACTERIENS" for a record's "copolymères antibactériens",
+    2026-10-03)."""
     s = unicodedata.normalize("NFKC", s or "").lower().replace("-\n", "")
+    s = "".join(
+        c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c)
+    )
     return re.sub(r"[\W_]+", "", s)
 
 
@@ -621,6 +627,36 @@ class TitleIndex:
         return out
 
 
+_HAL_ID = re.compile(r"HAL Id:\s*([a-z]+-\d{6,})", re.I)
+
+
+def hal_id_match(text: str, papers: dict, listed: dict[str, int]) -> str | None:
+    """The listed record whose stored HAL link carries the document's HAL Id.
+
+    HAL prepends a cover sheet ("HAL Id: tel-05326197 ... Submitted on ...")
+    whose title can differ from the record's (a thesis's French title, an
+    English translation in the record); the id is exact (2026-10-03: 6 of 87
+    browser-fetched HAL theses)."""
+    m = _HAL_ID.search(text or "")
+    if not m:
+        return None
+    hal = m.group(1).lower()
+    pat = re.compile(r"/" + re.escape(hal) + r"(?:v\d+)?(?:[/?#]|$)", re.I)
+    hits = [
+        k
+        for k in listed
+        if any(
+            pat.search(str(u))
+            for u in [
+                papers.get(k, {}).get("oa_pdf_url") or "",
+                *(papers.get(k, {}).get("oa_pdf_urls") or []),
+                *(papers.get(k, {}).get("oa_attempted") or []),
+            ]
+        )
+    ]
+    return hits[0] if len(hits) == 1 else None
+
+
 def filename_match(path: Path, papers: dict, listed: dict[str, int]) -> str | None:
     """A file SAVED UNDER a listed title (exact compacted match, >= 30 chars,
     exactly one). Last resort for a manuscript whose own title differs from the
@@ -959,6 +995,10 @@ def plan_ingest(
                 why = f"its first pages carry a different DOI ({sorted(own)[0]}); {key2}'s title appears only past the title page (a citation?)"
             elif key2:
                 key, why = key2, why2
+        if not key and listed:
+            key_hal = hal_id_match(text1, papers, listed)
+            if key_hal:
+                key, why = key_hal, "HAL Id on the cover sheet"
         if not key and listed:
             key3 = filename_match(f, papers, listed)
             own = dois_in(text)

@@ -489,3 +489,27 @@ def test_assign_books_a_file_no_text_check_can_match(tmp_path, monkeypatch):
     plans = intake.plan_ingest([f], papers, {"k74": 74}, False, {"scan.pdf": "k74"})
     assert plans[0]["key"] == "k74" and plans[0]["match"] == "assigned by the operator"
     assert plans[0]["action"] == "NEW"
+
+
+def test_hal_id_match_reads_the_cover_sheet():
+    papers = {
+        "k85": {"oa_pdf_url": "https://theses.hal.science/tel-05326197/document"},
+        "k86": {"oa_pdf_urls": ["https://hal.science/hal-04763842v1/document"]},
+    }
+    cover = "HAL Id: tel-05326197 https://theses.hal.science/tel-05326197v1 Submitted on 22 Oct 2025"
+    assert intake.hal_id_match(cover, papers, {"k85": 85, "k86": 86}) == "k85"
+    assert (
+        intake.hal_id_match("HAL Id: hal-04763842", papers, {"k85": 85, "k86": 86})
+        == "k86"
+    )
+    assert (
+        intake.hal_id_match(cover, papers, {"k86": 86}) is None
+    ), "only LISTED records"
+    assert intake.hal_id_match("HAL Id: tel-0532619", papers, {"k85": 85}) is None
+
+
+def test_compact_folds_accents():
+    assert intake.compact("Greffage de copolymères antibactériens") == intake.compact(
+        "GREFFAGE DE COPOLYMERES ANTIBACTERIENS"
+    )
+    assert intake.compact("ﬁbre") == "fibre", "ligatures still fold"
