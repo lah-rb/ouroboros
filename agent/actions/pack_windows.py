@@ -36,6 +36,7 @@ import re
 from dataclasses import dataclass, field
 
 from agent.actions.curation_actions import _estimate_doc_tokens, _type_name
+from agent.bibliography import BIBLIOGRAPHY_HEADING
 
 # Sized from the corpus measurement: 10-25k tokens is the 96% band.
 DEFAULT_TARGET_TOKENS = 18_000
@@ -86,18 +87,8 @@ def _heading_of(section: str) -> str:
     return line.lstrip("#").strip()[:80]
 
 
-#: A REFERENCE-LIST HEADING, in the corpus's languages: optional numbering,
-#: optional bold, nothing after the name but a colon.
-_BIBLIOGRAPHY_HEADING = re.compile(
-    r"^\s*#{1,6}\s*(?:[\dIVX]+[.)]?\s*)?(?:\*\*)?\s*(?:"
-    r"references?(?: and notes| cited)?|notes and references|bibliography"
-    r"|literature cited|works cited|cited literature"
-    r"|refer[êe]ncias(?: bibliogr[áa]ficas)?|referencias(?: bibliogr[áa]ficas)?"
-    r"|r[ée]f[ée]rences(?: bibliographiques)?|bibliograf[íi]a|literatur(?:verzeichnis)?"
-    r"|参考文献|引用文献|список литературы|литература"
-    r")\s*(?:\*\*)?\s*:?\s*$",
-    re.IGNORECASE,
-)
+#: The reference-list heading: agent/bibliography.py (one definition).
+_BIBLIOGRAPHY_HEADING = BIBLIOGRAPHY_HEADING
 _PIPE_TABLE_RULE = re.compile(r"^\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$", re.M)
 
 

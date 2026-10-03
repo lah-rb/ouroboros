@@ -636,12 +636,39 @@ def test_refs_section_stripped_across_languages():
         "# REFERENCES.",
         "### 참 고 문 헌",
         "## Список литературы",
+        # 2026-10-03: missed by the old pattern, failing correct translations
+        "## 7. References",
+        "### **REFERENCES**",
+        "## Referências Bibliográficas",
+        "## REFERÊNCIAS",
+        "## Bibliografía",
+        "## Références bibliographiques",
+        "## Literature Cited",
+        "## Литература",
+        "## Notes and References",
+        "## VI. Bibliography:",
     ):
         md = "body 532 nm\n\n" + heading + "\n\n[1] Author, 2020, 42(6): 276-277."
         assert strip_reference_section(md).strip() == "body 532 nm", heading
     # No heading -> full text stands (never over-strip).
     plain = "body 532 nm\n\n[1] Author, 2020."
     assert strip_reference_section(plain) == plain
+    # Only the reference SECTION goes: an annex after it still counts
+    # (SPECTRHABENT, 2026-10-03), and so does each later chapter.
+    md = "# Report\n\nbody 532\n\n## Bibliographie\n\n[1] A, 2010, 12.\n\n## Annexe 1\n\nTable 1086 cm-1\n"
+    assert (
+        strip_reference_section(md)
+        == "# Report\n\nbody 532\n\n## Annexe 1\n\nTable 1086 cm-1\n"
+    )
+    md = "## Ch 1\n\n41\n\n### References\n\n[1] 1999\n\n## Ch 2\n\n77\n\n### References\n\n[2] 2001\n"
+    assert strip_reference_section(md) == "## Ch 1\n\n41\n\n## Ch 2\n\n77\n\n"
+    # A heading that merely CONTAINS the word is a section, not the list.
+    for heading in (
+        "## Reference materials",
+        "## Results and references to prior work",
+    ):
+        md = "body\n\n" + heading + "\n\ntext 532"
+        assert strip_reference_section(md) == md, heading
 
 
 def test_gate_ignores_reference_furniture_but_guards_body():

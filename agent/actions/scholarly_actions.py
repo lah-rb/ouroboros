@@ -1302,10 +1302,14 @@ def extract_reference_dois(md: str, cap: int = MAX_REFERENCE_DOIS) -> list[str]:
     scans only the FINAL THIRD of the document — bibliographies live at
     the end, and body DOIs (data citations, 'as in doi:...') would
     otherwise smuggle in references the paper never listed."""
-    from agent.actions.translation_actions import _REFS_HEADING_RE
+    from agent.bibliography import bibliography_spans
 
-    m = _REFS_HEADING_RE.search(md or "")
-    refs = md[m.start() :] if m else (md or "")[-max(2000, len(md or "") // 3) :]
+    spans = bibliography_spans(md)
+    refs = (
+        "\n".join(md[a:b] for a, b in spans)
+        if spans
+        else (md or "")[-max(2000, len(md or "") // 3) :]
+    )
     out: list[str] = []
     seen: set[str] = set()
     sici = _SICI_DOI_RE.findall(refs)

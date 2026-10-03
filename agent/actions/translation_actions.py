@@ -49,6 +49,8 @@ import logging
 import os
 import re
 
+from agent.bibliography import BIBLIOGRAPHY_HEADING, strip_bibliography
+
 from agent.models import StepInput, StepOutput
 
 logger = logging.getLogger(__name__)
@@ -248,14 +250,8 @@ def chunk_markdown(md: str, target_chars: int = _CHUNK_CHARS) -> list[str]:
 # Reference-section headings across the corpus's languages. Character-level
 # \s* because CJK journals typeset headings with inter-character spacing
 # ("参 考 文 献", "文 献" — both live in this corpus).
-_REFS_HEADING_RE = re.compile(
-    r"^#{1,6}\s*(?:"
-    r"参\s*考\s*文\s*献|引\s*用\s*文\s*献|文\s*献|"
-    r"references?|bibliography|literatur(?:verzeichnis)?|"
-    r"referencias|références|참\s*고\s*문\s*헌|список\s+литературы"
-    r")\s*\.?\s*$",
-    re.IGNORECASE | re.MULTILINE,
-)
+# The reference-list heading lives in agent/bibliography.py (one definition).
+_REFS_HEADING_RE = BIBLIOGRAPHY_HEADING
 
 
 def strip_reference_section(md: str) -> str:
@@ -268,8 +264,7 @@ def strip_reference_section(md: str) -> str:
     0.98 bar while preserving every number the curator will ever ground
     against. The verdict must score the BODY. When no heading matches, the
     full text stands (over-stripping would blind the gate for real)."""
-    m = _REFS_HEADING_RE.search(md)
-    return md[: m.start()] if m else md
+    return strip_bibliography(md)
 
 
 def _numeric_preservation(src: str, out: str) -> float:
