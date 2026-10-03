@@ -161,3 +161,23 @@ def test_markup_token_ids_skips_unrenderable_ids():
         return pieces[t]
 
     assert markup_token_ids(5, piece) == frozenset({0, 2})
+
+
+def test_a_markdown_row_of_empty_cells_passes_with_its_whitespace():
+    """2026-10-03: muse wrote `|  |  |  |` while reasoning about a wide table
+    -- ' |' and '  ' alternating, a period-2 cycle with a whitespace token in
+    it -- and two translate turns died at "cycle period 2 x 12"."""
+    from inference.repetition import table_token_classes
+
+    PIPE, SP, NL = 0, 1, 2
+    markup, space = table_token_classes(3, {PIPE: " |", SP: "  ", NL: "\n"}.__getitem__)
+    assert markup == {PIPE} and space == {SP, NL}
+    row = [PIPE, SP] * 30
+    assert _run(row, markup_tokens=markup) == "cycle period 2 x 12"
+    assert _run(row, markup_tokens=markup, space_tokens=space) is None
+    # still bounded, and whitespace alone is never a table
+    assert "(table markup)" in _run(row * 5, markup_tokens=markup, space_tokens=space)
+    assert (
+        _run([SP, NL] * 30, markup_tokens=markup, space_tokens=space)
+        == "cycle period 2 x 12"
+    )

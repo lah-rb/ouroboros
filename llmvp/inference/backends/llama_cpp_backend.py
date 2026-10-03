@@ -1528,28 +1528,29 @@ class LlamaCppBackend(BaseBackend):
         if _memwatch is not None:
             _memwatch.__exit__(None, None, None)
 
-    def _markup_token_ids(self) -> frozenset:
-        """The primary model's bare-table-markup token ids, for the
-        repetition guard's empty-cell allowance (inference/repetition.py).
-        Built once per loaded model (~0.25 s over muse's 202k vocab); an
-        unreadable vocab yields the empty set, i.e. today's strict guard."""
-        from inference.repetition import markup_token_ids
+    def _table_token_ids(self) -> tuple:
+        """(bare-table-markup ids, whitespace-only ids) of the primary model,
+        for the repetition guard's empty-cell allowance
+        (inference/repetition.py). Built once per loaded model (~0.25 s over
+        muse's 202k vocab); an unreadable vocab yields empty sets, i.e. the
+        strict guard."""
+        from inference.repetition import table_token_classes
 
         model = getattr(self._primary_instance, "_model", None)
         if model is None:
-            return frozenset()
-        cached = getattr(self, "_markup_ids", None)
+            return frozenset(), frozenset()
+        cached = getattr(self, "_table_ids", None)
         if cached is not None and cached[0] is model:
             return cached[1]
         try:
-            ids = markup_token_ids(
+            ids = table_token_classes(
                 model.n_vocab(),
                 lambda t: model.token_to_piece(t).decode("utf-8", "replace"),
             )
         except Exception:  # noqa: BLE001 — the strict guard is the safe default
             log.exception("markup token scan failed — strict repetition guard")
-            ids = frozenset()
-        self._markup_ids = (model, ids)
+            ids = (frozenset(), frozenset())
+        self._table_ids = (model, ids)
         return ids
 
     def _warm_batched(self) -> None:
@@ -1649,7 +1650,7 @@ class LlamaCppBackend(BaseBackend):
                 DEFAULT_MIN_CYCLE_REPS,
             )
 
-            markup = self._markup_token_ids()
+            markup, space = self._table_token_ids()
 
             def _guard_factory() -> RepetitionGuard:
                 return RepetitionGuard(
@@ -1660,6 +1661,7 @@ class LlamaCppBackend(BaseBackend):
                     min_cycle_reps=gen_cfg.repetition_min_cycle_reps
                     or DEFAULT_MIN_CYCLE_REPS,
                     markup_tokens=markup,
+                    space_tokens=space,
                 )
 
             engine._repetition_guard_factory = _guard_factory
@@ -5023,7 +5025,8 @@ class LlamaCppBackend(BaseBackend):
                 ),
                 min_cycle_reps=gen_cfg.repetition_min_cycle_reps
                 or DEFAULT_MIN_CYCLE_REPS,
-                markup_tokens=self._markup_token_ids(),
+                markup_tokens=self._table_token_ids()[0],
+                space_tokens=self._table_token_ids()[1],
             )
 
         # Long-cycle guard + abnormal-exit capture (runaway_capture.py).

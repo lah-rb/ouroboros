@@ -20,7 +20,7 @@ token repeated ``max_run`` times, or an exact length-``p`` block repeated
 """
 
 import re
-from typing import Callable, FrozenSet, List, Optional
+from typing import Callable, FrozenSet, List, Optional, Tuple
 
 # Conservative defaults. A single token repeated 48x, or an exact 2-8 token block
 # repeated 12x straight, is never legitimate prose/code but caps a degenerate turn
@@ -42,7 +42,11 @@ DEFAULT_MARKUP_CYCLE_REPS = 64
 #: ``<td></td>``, ``<th></th>`` and markdown's ``| |`` / ``|---|:-:|`` rows --
 #: or a bare tag name. Any content (a digit, a word) puts the cycle back
 #: under the normal threshold, and so does whitespace alone: a whitespace
-#: loop is a real degeneration.
+#: loop is a real degeneration. Whitespace BESIDE markup is a table, though:
+#: a markdown row of empty cells is ``" |"`` + ``"  "`` repeated, and two
+#: translate turns that wrote one while reasoning died at "cycle period 2 x
+#: 12" (2026-10-03) -- so a block of markup and whitespace tokens with at
+#: least one markup token gets the allowance too.
 _MARKUP_PIECE = re.compile(r"[\s<>/|:\-tdhr]+")
 _MARKUP_PUNCT = re.compile(r"[<>/|\-]")
 _TAG_NAMES = frozenset({"td", "th", "tr"})
@@ -55,18 +59,27 @@ def is_markup_piece(piece: str) -> bool:
     return _MARKUP_PUNCT.search(piece) is not None or piece.strip() in _TAG_NAMES
 
 
-def markup_token_ids(n_vocab: int, piece: Callable[[int], str]) -> FrozenSet[int]:
-    """Every token id whose text is bare table markup. ``piece`` maps an id to
-    its text; an id it cannot render is skipped."""
-    out = set()
+def table_token_classes(
+    n_vocab: int, piece: Callable[[int], str]
+) -> Tuple[FrozenSet[int], FrozenSet[int]]:
+    """(bare-table-markup ids, whitespace-only ids) in one vocab scan.
+    ``piece`` maps an id to its text; an id it cannot render is skipped."""
+    markup, space = set(), set()
     for tid in range(n_vocab):
         try:
             text = piece(tid)
         except Exception:  # noqa: BLE001 — control/byte tokens
             continue
         if is_markup_piece(text):
-            out.add(tid)
-    return frozenset(out)
+            markup.add(tid)
+        elif text and not text.strip():
+            space.add(tid)
+    return frozenset(markup), frozenset(space)
+
+
+def markup_token_ids(n_vocab: int, piece: Callable[[int], str]) -> FrozenSet[int]:
+    """Every token id whose text is bare table markup."""
+    return table_token_classes(n_vocab, piece)[0]
 
 
 class DegenerateGenerationError(RuntimeError):
@@ -122,11 +135,13 @@ class RepetitionGuard:
         min_cycle_reps: int = DEFAULT_MIN_CYCLE_REPS,
         markup_tokens: FrozenSet[int] = frozenset(),
         markup_cycle_reps: int = DEFAULT_MARKUP_CYCLE_REPS,
+        space_tokens: FrozenSet[int] = frozenset(),
     ) -> None:
         self.max_run = max_run
         self.max_cycle_period = max_cycle_period
         self.min_cycle_reps = min_cycle_reps
         self.markup_tokens = markup_tokens
+        self._table_tokens = markup_tokens | space_tokens
         self.markup_cycle_reps = max(markup_cycle_reps, min_cycle_reps)
 
         # run-length state
@@ -168,7 +183,8 @@ class RepetitionGuard:
             window = self._ring[-need:]
             # window is `reps` consecutive copies of `block`?
             if all(window[i] == block[i % p] for i in range(need)):
-                if not (self.markup_tokens and set(block) <= self.markup_tokens):
+                kinds = set(block)
+                if not (kinds & self.markup_tokens and kinds <= self._table_tokens):
                     return f"cycle period {p} x {reps}"
                 # Empty table cells: legitimate until markup_cycle_reps.
                 long_need = p * self.markup_cycle_reps
