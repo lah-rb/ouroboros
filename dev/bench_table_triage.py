@@ -406,6 +406,7 @@ def cmd_judge_score(a) -> int:
 # scored from one run.
 
 V2 = OUT / "v2"
+ITEMS = OUT / "items.json"
 
 
 def _one_v2(it: dict, max_tokens: int) -> dict:
@@ -419,6 +420,14 @@ def _one_v2(it: dict, max_tokens: int) -> dict:
         r = vision(tt.TRIAGE_PROMPT.format(table=tt.slim(ocr)), png, max_tokens,
                    reasoning=tt.TRIAGE_REASONING, temperature=None)  # fmt: skip
         text = r.get("text") or ""
+        if not text.strip():
+            # EMPTY IS RETRYABLE, never a verdict: on a busy server the engine
+            # can admit the stream with a shrunk budget and thinking eats it
+            # (5 of 48 first reads, 2026-10-03). One more read.
+            r = vision(tt.TRIAGE_PROMPT.format(table=tt.slim(ocr)), png, max_tokens,
+                       reasoning=tt.TRIAGE_REASONING, temperature=None)  # fmt: skip
+            text = r.get("text") or ""
+            row["retried_empty"] = True
         d = tt.parse_triage(text)
         row.update(gen=r.get("generatedTokens"), raw=text, **d)
         g = tt.gate(d, ocr)
@@ -432,7 +441,7 @@ def _one_v2(it: dict, max_tokens: int) -> dict:
 
 def cmd_run2(a) -> int:
     V2.mkdir(parents=True, exist_ok=True)
-    items = json.loads((OUT / "items.json").read_text())[: a.limit or None]
+    items = json.loads(ITEMS.read_text())[: a.limit or None]
     path = V2 / "results.jsonl"
     done = {json.loads(x)["id"] for x in path.read_text().splitlines() if x.strip()} if path.exists() else set()
     todo = [it for it in items if it["id"] not in done]
@@ -485,7 +494,7 @@ def cmd_score2(a) -> int:
 
 def cmd_judge_batches2(a) -> int:
     """Reviewer rows for every v2 fix that changed the table (gate hidden)."""
-    items = {i["id"]: i for i in json.loads((OUT / "items.json").read_text())}
+    items = {i["id"]: i for i in json.loads(ITEMS.read_text())}
     truth, res = _round1_truth(), _v2_rows()
     papers = {}
     for line in (ROOT / "databank" / "papers.jsonl").read_text().splitlines():
@@ -549,7 +558,7 @@ def cmd_judge_score2(a) -> int:
 
     from agent import table_triage as tt
 
-    items = {i["id"]: i for i in json.loads((OUT / "items.json").read_text())}
+    items = {i["id"]: i for i in json.loads(ITEMS.read_text())}
 
     def _final_gate(r):
         return tt.gate(r, Path(items[r["id"]]["ocr_table"]).read_text())["apply"]
@@ -567,23 +576,181 @@ def cmd_judge_score2(a) -> int:
     return 0
 
 
+# ── fresh-sample validation of the final gate (2026-10-03) ─────────────
+#
+# PRE-REGISTERED BAR (written before the run): the gate passes if at most 1
+# of the corrections it APPLIES is worse than the OCR table, and applied
+# corrections cut rows with a wrong or misplaced value overall. Sample: tables
+# drawn uniformly (seeded) from accepted papers -- the production scope --
+# excluding every paper of the 48-table bench the gate was fitted on.
+
+FRESH = OUT / "fresh"
+
+
+def cmd_sample(a) -> int:
+    import asyncio
+    import random
+
+    from agent.actions.scholarly_actions import read_databank
+    from agent.effects.local import LocalEffects
+
+    FRESH.mkdir(parents=True, exist_ok=True)
+    (FRESH / "tables").mkdir(exist_ok=True)
+    (FRESH / "pages").mkdir(exist_ok=True)
+    bench_papers = {i["paper_key"] for i in json.loads((OUT / "items.json").read_text())}
+    db = asyncio.run(read_databank(LocalEffects(working_directory=str(ROOT))))
+    pool = []
+    for k, r in sorted(db.items()):
+        if r.get("review_status") != "accepted" or k in bench_papers:
+            continue
+        md, pdf = r.get("md_path"), r.get("pdf_path")
+        if not md or not pdf or not (ROOT / md).exists() or not (ROOT / pdf).exists():
+            continue
+        text = (ROOT / md).read_text(encoding="utf-8", errors="replace")
+        for t in re.findall(r"<table\b.*?</table>", text, re.S | re.I):
+            if t.lower().count("<tr") >= 2:
+                pool.append((k, t))
+    rng = random.Random(a.seed)
+    rng.shuffle(pool)
+    print(f"pool: {len(pool)} tables in accepted papers outside the bench")
+    items, skipped = [], collections.Counter()
+    for k, t in pool:
+        if len(items) >= a.n:
+            break
+        pdf = ROOT / db[k]["pdf_path"]
+        pages = subprocess.run(["pdftotext", "-layout", str(pdf), "-"],
+                               capture_output=True, text=True).stdout.split("\f")  # fmt: skip
+        want = _toks(re.sub(r"<[^>]+>", " ", t))
+        bag = _toks
+        if sum(want.values()) < 5:
+            want, bag = _words(re.sub(r"<[^>]+>", " ", t)), _words
+        if not pages or sum(want.values()) < 3:
+            skipped["too little text to place"] += 1
+            continue
+        scores = [sum((bag(pg) & want).values()) for pg in pages]
+        best = max(range(len(pages)), key=lambda i: scores[i])
+        if scores[best] < 0.5 * sum(want.values()):
+            skipped["page not found (scan or weak text layer)"] += 1
+            continue
+        tid = f"fresh-{len(items) + 1:02d}"
+        (FRESH / "tables" / f"{tid}.html").write_text(t)
+        png = FRESH / "pages" / tid
+        subprocess.run(["pdftoppm", "-r", str(DPI), "-png", "-f", str(best + 1), "-l", str(best + 1),
+                        "-singlefile", str(pdf), str(png)], capture_output=True)  # fmt: skip
+        items.append({"id": tid, "stratum": "fresh", "paper_key": k, "page": best + 1,
+                      "page_image": str(png) + ".png", "ocr_table": str(FRESH / "tables" / f"{tid}.html"),
+                      "page_score": scores[best]})  # fmt: skip
+    (FRESH / "items.json").write_text(json.dumps(items, indent=1))
+    print(f"{len(items)} sampled (seed {a.seed}); skipped: {dict(skipped)}")
+    return 0
+
+
+def cmd_judge_batches_fresh(a) -> int:
+    """Reviewer rows for EVERY fresh table: the OCR's own state is the truth
+    the detection is scored on, and a changed correction is judged too."""
+    items = {i["id"]: i for i in json.loads(ITEMS.read_text())}
+    res = _v2_rows()
+    papers = {}
+    for line in (ROOT / "databank" / "papers.jsonl").read_text().splitlines():
+        try:
+            d = json.loads(line)
+            papers[d["paper_key"]] = d
+        except (ValueError, KeyError):
+            pass
+    (V2 / "muse_html").mkdir(parents=True, exist_ok=True)
+    rows = []
+    for k, r in sorted(res.items()):
+        it = items[k]
+        changed = bool(r.get("numbers"))
+        mh = V2 / "muse_html" / f"{k}.html"
+        if changed:
+            mh.write_text(r["html"])
+        rows.append({
+            "id": k, "page_image": it["page_image"], "pdf_page": it["page"],
+            "pdf": str(ROOT / papers[it["paper_key"]]["pdf_path"]),
+            "ocr_table": it["ocr_table"], "muse_table": str(mh) if changed else None,
+            "muse_verdict": r.get("verdict"), "muse_problems": r.get("problems", []),
+            "numbers_outcome": r.get("numbers"),
+        })  # fmt: skip
+    n = a.batches
+    for i in range(n):
+        (V2 / f"judge_batch_{i + 1}.json").write_text(json.dumps(rows[i::n], indent=1))
+    print(f"{len(rows)} fresh tables in {n} batches ({sum(1 for r in rows if r['muse_table'])} with a changed table)")
+    return 0
+
+
+def cmd_score_fresh(a) -> int:
+    from agent import table_triage as tt
+
+    items = {i["id"]: i for i in json.loads(ITEMS.read_text())}
+    res = _v2_rows()
+    judged = {}
+    for b in sorted(V2.glob("judge_result_*.json")):
+        for r in json.loads(b.read_text()):
+            judged[r["id"]] = r
+    print(f"{len(res)} fresh tables run, {len(judged)} judged against the page")
+    det = collections.Counter()
+    for k, r in res.items():
+        j = judged.get(k)
+        if not j:
+            continue
+        bad = bool(j.get("ocr_had_errors"))
+        flagged = r.get("verdict") in ("fixed", "unfixable") and r.get("gate_reason") != "no-op fix"
+        det[("damaged" if bad else "clean", "flagged" if flagged else r.get("verdict") if r.get("verdict") in ("error", "unparsed") else "passed")] += 1
+    print("OCR truth x call:", dict(sorted(det.items())))
+    applied = collections.Counter()
+    before = after = 0
+    worse = []
+    for k, r in res.items():
+        j = judged.get(k)
+        if not j or not r.get("numbers"):
+            continue
+        g = tt.gate(r, Path(items[k]["ocr_table"]).read_text())
+        corr = j.get("correction")
+        applied[("applied" if g["apply"] else "kept OCR", corr)] += 1
+        if g["apply"]:
+            before += j.get("rows_wrong_before") or 0
+            after += j.get("rows_wrong_after") or 0
+            if corr == "worse":
+                worse.append(k)
+    print("gate x correction:", dict(sorted(applied.items())))
+    print(f"applied: rows wrong {before} -> {after}; worse among applied: {len(worse)} {worse}")
+    n_applied = sum(v for (g, _), v in applied.items() if g == "applied")
+    verdict = "PASS" if len(worse) <= 1 and after < before else "FAIL"
+    print(f"PRE-REGISTERED BAR (<= 1 worse of {n_applied} applied, rows wrong falls): {verdict}")
+    edits = [e for j in judged.values() for e in (j.get("digit_edits") or [])]
+    print(f"number edits judged {len(edits)}: right {sum(bool(e.get('right')) for e in edits)}")
+    secs = sorted(r.get("seconds", 0) for r in res.values() if r.get("seconds"))
+    print(f"retried empties: {sum(1 for r in res.values() if r.get('retried_empty'))}; "
+          f"median {secs[len(secs) // 2] if secs else 0} s per table")  # fmt: skip
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=("pages", "run", "score", "judge-batches", "judge-score",
-                                    "run2", "score2", "judge-batches2", "judge-score2"))
+                                    "run2", "score2", "judge-batches2", "judge-score2",
+                                    "sample", "judge-batches-fresh", "score-fresh"))
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--max-tokens", type=int, default=12000)
     ap.add_argument("--concurrency", type=int, default=2)
     ap.add_argument("--batches", type=int, default=4)
+    ap.add_argument("--set", choices=("v2", "fresh"), default="v2", help="which item set the v2 commands use")
+    ap.add_argument("--n", type=int, default=60)
+    ap.add_argument("--seed", type=int, default=20261003)
     ap.add_argument("--first-batch", type=int, default=1)
     ap.add_argument("--ids", default="", help="judge-batches: only these ids (comma list)")
     ap.add_argument("--page", action="append", default=[], help="id=page (pin a page the reviewers found)")
     a = ap.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
+    if a.set == "fresh":
+        global V2, ITEMS
+        V2, ITEMS = FRESH, FRESH / "items.json"
     cmds = {"pages": cmd_pages, "run": cmd_run, "score": cmd_score,
             "judge-batches": cmd_judge_batches, "judge-score": cmd_judge_score,
             "run2": cmd_run2, "score2": cmd_score2, "judge-batches2": cmd_judge_batches2,
-            "judge-score2": cmd_judge_score2}
+            "judge-score2": cmd_judge_score2, "sample": cmd_sample,
+            "judge-batches-fresh": cmd_judge_batches_fresh, "score-fresh": cmd_score_fresh}
     return cmds[a.cmd](a)
 
 
