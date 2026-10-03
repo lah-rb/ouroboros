@@ -86,6 +86,47 @@ def _heading_of(section: str) -> str:
     return line.lstrip("#").strip()[:80]
 
 
+#: A REFERENCE-LIST HEADING, in the corpus's languages: optional numbering,
+#: optional bold, nothing after the name but a colon.
+_BIBLIOGRAPHY_HEADING = re.compile(
+    r"^\s*#{1,6}\s*(?:[\dIVX]+[.)]?\s*)?(?:\*\*)?\s*(?:"
+    r"references?(?: and notes| cited)?|notes and references|bibliography"
+    r"|literature cited|works cited|cited literature"
+    r"|refer[êe]ncias(?: bibliogr[áa]ficas)?|referencias(?: bibliogr[áa]ficas)?"
+    r"|r[ée]f[ée]rences(?: bibliographiques)?|bibliograf[íi]a|literatur(?:verzeichnis)?"
+    r"|参考文献|引用文献|список литературы|литература"
+    r")\s*(?:\*\*)?\s*:?\s*$",
+    re.IGNORECASE,
+)
+_PIPE_TABLE_RULE = re.compile(r"^\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$", re.M)
+
+
+def is_bibliography(text: str) -> bool:
+    """True when a window is NOTHING BUT a reference list (2026-10-03).
+
+    Every section must open with a reference-list heading, and the window
+    must hold no table -- three References-headed windows did, and a table
+    there may be appendix data under a heading the OCR missed. Measured over
+    the multi-window packs: 93 such windows; 25 failed their gates and alone
+    made 24 of 60 partial packs partial (the repack lane then retried them
+    on gemma), and 60 "passed" by packing years, volumes and pages, which
+    ground because the list prints them -- one leaked into a booked pack as
+    a Raman peak intensity, and the repack lane once booked a pack on a
+    reference-list window alone (doi_10.7498_aps.73.20240186). A reference
+    list holds nothing to pack. Keyed to HEADINGS, not citation density: a
+    citation-density rule also flagged 97 body windows that carried data."""
+    if "<table" in text or _PIPE_TABLE_RULE.search(text):
+        return False
+    secs = [s for s in split_sections(text) if s.strip()]
+    if not secs:
+        return False
+    for sec in secs:
+        head = sec.lstrip().splitlines()[0]
+        if not _BIBLIOGRAPHY_HEADING.match(head):
+            return False
+    return True
+
+
 def window_sections(
     doc: str,
     target_tokens: int = DEFAULT_TARGET_TOKENS,

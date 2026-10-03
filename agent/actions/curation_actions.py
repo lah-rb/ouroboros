@@ -53,6 +53,7 @@ from agent.actions.drain_lane import (
 )
 
 import difflib
+import contextvars
 import json
 import os
 import time
@@ -2258,15 +2259,35 @@ async def _book_curate_min_seat(
     _CURATE_STARVED.pop(paper_key, None)
 
 
+#: DEGENERATE-ABORT RETRIES per turn, for the lanes that set it (2026-10-03,
+#: operator ruling: one retry on gemma). The repack lane's gemma aborted 21
+#: pack turns in a day on genuine loops (16-923 distinct n-grams of 8,161)
+#: that a replay at the same temperature did not reproduce: the loop is a
+#: sampling accident, and one more draw usually clears it -- far cheaper than
+#: handing the whole paper back to the muse lanes. Set by
+#: action_repack_drain_batch only; every other lane keeps zero.
+_DEGENERATE_TURN_RETRIES: contextvars.ContextVar[int] = contextvars.ContextVar(
+    "degenerate_turn_retries", default=0
+)
+
+
 async def _curate_turn(effects, prompt: str, max_tokens: int):
     # No `domain` here ON PURPOSE. Which engine a curate turn runs on is a
     # property of the LANE, not of the action: worker_pool stamps it on the
     # branch's ChildEffects, so curate..curate5 stay local while curate_r1-4
     # run on the remote host, from this one code path. Setting it here would
     # force every lane onto one server and re-create the no-op it replaced.
-    result = await effects.run_inference(
-        prompt, {"max_tokens": max_tokens, "temperature": "t*0.4"}
-    )
+    retries = _DEGENERATE_TURN_RETRIES.get()
+    while True:
+        result = await effects.run_inference(
+            prompt, {"max_tokens": max_tokens, "temperature": "t*0.4"}
+        )
+        err = str(getattr(result, "error", None) or "")
+        if err and retries > 0 and _is_degenerate_fault(err):
+            retries -= 1
+            logger.info("degenerate abort -- retrying the turn once: %s", err[:120])
+            continue
+        break
     if getattr(result, "error", None):
         raise _CurateTransportFault(str(result.error))
     text = result.text or ""
@@ -2639,7 +2660,12 @@ async def _pack_windowed(
     """
     import hashlib
 
-    from agent.actions.pack_windows import MergeReport, merge_packs, window_sections
+    from agent.actions.pack_windows import (
+        MergeReport,
+        is_bibliography,
+        merge_packs,
+        window_sections,
+    )
 
     target, cap = _pack_window_sizes()
     windows = window_sections(doc, target, cap)
@@ -2672,6 +2698,35 @@ async def _pack_windowed(
             if prev.get("passed") and prev.get("data"):
                 passed_packs.append(prev["data"])
                 repairs_all.extend(prev.get("repairs") or [])
+            continue
+        # A REFERENCE LIST HOLDS NOTHING TO PACK (pack_windows.is_bibliography):
+        # recorded as done, never sent to the model, never owed to a repair.
+        if is_bibliography(w.text):
+            outcomes.append(
+                {
+                    "window": w.index,
+                    "tokens": w.tokens,
+                    "sections": w.section_count,
+                    "oversize": w.oversize,
+                    "passed": True,
+                    "skipped": "bibliography",
+                    "attempts": 0,
+                    "numeric_leaves": 0,
+                    "feedback": "",
+                }
+            )
+            if on_window is not None:
+                await on_window(
+                    w.index,
+                    {
+                        "sha": w_sha,
+                        "passed": True,
+                        "data": None,
+                        "attempts": 0,
+                        "outcome": outcomes[-1],
+                        "repairs": [],
+                    },
+                )
             continue
         # The paper's own vocabulary so far: keys the earlier windows packed.
         # Absent on the first window (and so on every single-window paper),
@@ -2715,6 +2770,7 @@ async def _pack_windowed(
                 },
             )
 
+    skipped = sum(1 for o in outcomes if o.get("skipped"))
     if not passed_packs:
         return {
             "status": "pack_failed",
@@ -2731,7 +2787,8 @@ async def _pack_windowed(
                 ),
                 "parse_attempts": attempts,
                 "windows": len(windows),
-                "windows_passed": 0,
+                "windows_passed": skipped,
+                "windows_skipped": skipped,
                 "window_outcomes": outcomes,
             },
         }
@@ -2756,7 +2813,8 @@ async def _pack_windowed(
                 "grounding_rate": (final.get("grounding") or {}).get("grounding_rate"),
                 "parse_attempts": attempts,
                 "windows": len(windows),
-                "windows_passed": len(passed_packs),
+                "windows_passed": len(passed_packs) + skipped,
+                "windows_skipped": skipped,
                 "window_outcomes": outcomes,
             },
         }
@@ -2773,7 +2831,8 @@ async def _pack_windowed(
             "near_duplicate_flags": final["near_dups"],
             "parse_attempts": attempts,
             "windows": len(windows),
-            "windows_passed": len(passed_packs),
+            "windows_passed": len(passed_packs) + skipped,
+            "windows_skipped": skipped,
             "window_conflicts": report.conflicts[:25],
             "shape_repairs": repairs_all[:25],
             "window_outcomes": outcomes,
@@ -3152,7 +3211,12 @@ async def _repair_missed_windows(effects, paper_key: str) -> dict:
     """
     from datetime import datetime, timezone
 
-    from agent.actions.pack_windows import MergeReport, merge_packs, window_sections
+    from agent.actions.pack_windows import (
+        MergeReport,
+        is_bibliography,
+        merge_packs,
+        window_sections,
+    )
     from agent.actions.scholarly_actions import append_records, read_databank
 
     rec = (await read_databank(effects)).get(paper_key) or {}
@@ -3201,13 +3265,19 @@ async def _repair_missed_windows(effects, paper_key: str) -> dict:
         _WINDOW_REPAIR_DECLINED.add(paper_key)
         return {**result, "outcome": "declined: stored pack unreadable"}
 
+    # An owed REFERENCE LIST is resolved here, without a turn: it holds
+    # nothing to pack (pack_windows.is_bibliography). Partial packs booked
+    # before 2026-10-03 owe theirs; 24 of 60 owed nothing else.
+    bib = {w.index for w in windows if w.index in owed and is_bibliography(w.text)}
     seat = _lane_seat_tokens(effects)
     todo = [
         w
         for w in windows
-        if w.index in owed and w.tokens + _CURATE_TURN_OVERHEAD_TOKENS <= seat
+        if w.index in owed
+        and w.index not in bib
+        and w.tokens + _CURATE_TURN_OVERHEAD_TOKENS <= seat
     ]
-    if not todo:
+    if not todo and not bib:
         _WINDOW_REPAIR_DECLINED.add(paper_key)
         return {**result, "outcome": "declined: every missed window exceeds this seat"}
 
@@ -3223,7 +3293,7 @@ async def _repair_missed_windows(effects, paper_key: str) -> dict:
                 effects, w, len(windows), registry, aliases, sorted(prior)
             )
         except _CurateTransportFault as e:
-            if not rounds:
+            if not rounds and not bib:
                 raise
             fault = str(e)[:160]
             break
@@ -3292,6 +3362,12 @@ async def _repair_missed_windows(effects, paper_key: str) -> dict:
     by_window = {r["window"]: r for r in rounds}
     outcomes = []
     for o in q.get("window_outcomes") or []:
+        if isinstance(o, dict) and o.get("window") in bib:
+            outcomes.append(
+                {**o, "passed": True, "skipped": "bibliography", "feedback": "",
+                 "resolved_at": stamp}  # fmt: skip
+            )
+            continue
         r = by_window.get(o.get("window")) if isinstance(o, dict) else None
         if r is None:
             outcomes.append(o)
@@ -3316,6 +3392,9 @@ async def _repair_missed_windows(effects, paper_key: str) -> dict:
         outcomes.append(o)
     q["window_outcomes"] = outcomes
     q["window_repairs"] = list(q.get("window_repairs") or []) + rounds
+    if bib:
+        q["windows_passed"] = int(q.get("windows_passed") or 0) + len(bib)
+        q["windows_skipped"] = int(q.get("windows_skipped") or 0) + len(bib)
     if merged_ok:
         g = grounding_check(combined, doc)  # the booked pack's figures, whole
         q.update(
@@ -3339,6 +3418,8 @@ async def _repair_missed_windows(effects, paper_key: str) -> dict:
         if rounds
         else "no window attempted"
     )
+    if bib:
+        outcome += f"; {len(bib)} reference-list window(s) resolved as nothing to pack"
     if fault:
         outcome += f"; transport fault after {len(rounds)} ({fault})"
     return {
@@ -3381,6 +3462,16 @@ async def _window_repair_round(effects, databank: dict, _out):
 
 
 async def action_repack_drain_batch(step_input):
+    """One pack-only round on the repack lane's engine; a pack turn that
+    aborts degenerate gets one more draw (_DEGENERATE_TURN_RETRIES)."""
+    token = _DEGENERATE_TURN_RETRIES.set(1)
+    try:
+        return await _repack_drain_batch(step_input)
+    finally:
+        _DEGENERATE_TURN_RETRIES.reset(token)
+
+
+async def _repack_drain_batch(step_input):
     """One pack-only round on the repack lane's engine (see the block above).
 
     Books a pack only when it PASSED the gates, through the production booking
