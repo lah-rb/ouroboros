@@ -96,6 +96,7 @@ class ChildEffects:
         max_tokens: int | None = None,
         temperature: float | None = None,
         domain: str = "",
+        reasoning: str | None = None,
     ):
         """Delegate, stamping this branch's domain like run_inference does.
 
@@ -109,6 +110,11 @@ class ChildEffects:
         domain = domain or self._inference_domain
         if domain:
             kw["domain"] = domain
+        # A reasoning level (2026-10-03, the table-triage lanes) passes through
+        # only when asked for, so every other caller's call is unchanged. Its
+        # absence here made every table_triage round raise TypeError live.
+        if reasoning:
+            kw["reasoning"] = reasoning
         return await self._parent.run_vision(prompt, image_path, **kw)
 
     async def push_note(

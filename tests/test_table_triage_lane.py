@@ -290,3 +290,17 @@ async def test_papers_with_the_fewest_tables_go_first(tmp_path):
     db = await read_databank(fx)
     order = [await tl.select_paper(fx, db) for _ in range(3)]
     assert order == ["none", "small", "big"]
+
+
+@pytest.mark.asyncio
+async def test_the_lane_runs_through_child_effects_as_the_mission_does(tmp_path):
+    """Live 2026-10-03: ChildEffects.run_vision did not accept `reasoning`, so
+    every round raised TypeError -- the mock above takes any keyword."""
+    from agent.effects.child import ChildEffects
+
+    answer = "VERDICT: fixed\nPROBLEMS:\n- header lost 'Sample'\nTABLE:\n" + FIXED
+    base = _fx(tmp_path, [answer])
+    fx = ChildEffects(base, branch="lane:table_triage")
+    out = await tl.action_table_triage_drain_batch(_si(fx))
+    assert out.result["outcomes"][0]["outcome"] == "done"
+    assert base.vision_calls[0][1]["reasoning"] == "medium"
