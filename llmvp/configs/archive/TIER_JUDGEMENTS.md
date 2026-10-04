@@ -4595,3 +4595,48 @@ asserting a room name's CASE vetoing a working, freshly fixed `examine`
 (2 cycles at the cap; ships as the judge's "one failing test"). Hybrid
 rollback recovered two degenerate turns (an engine.py thinking orbit caught
 at 79,872 tokens; a tester token run) with no history replay.
+
+## 2026-10-03 — FRONTIER SCORECARD: qwen3.8-flash-next APEX, functional phase COMPLETE (114/114), 3-judge panel: LEVEL 2–2 / 3–3, overall FRONTIER 3–0 (CLOSE ×2)
+
+**Panel (axis majority): Delivery 2–2 · Character 3–3 · OVERALL: FRONTIER, 3–0 across judges.**
+
+| judge | Delivery | Character | flag |
+|---|---|---|---|
+| judge 1 | 2–2 | 3–3 | CLOSE |
+| judge 2 | FRONTIER 3–1 | FRONTIER 4–2 | not CLOSE |
+| judge 3 | 2–2 | 3–3 | CLOSE |
+
+Judge 1's self-flagged CLOSE fired the §6(a) escalation to a 3-judge panel. This is an out-of-band scorecard: it does NOT bear on the ladder and is NOT a tier placement. The METHODS §5 family caveat applies (Opus judges, Claude-authored frontier). Axis lines were re-added for every judge, and each sums to the tally that judge reported. Record: `dev/blind_panel/records/flight_20261003_apex_functional_complete_vs_frontier.md`.
+
+**The arm.** Mission `4cee1f5fbc74` completed 114/114 in 12,593 min: session mode, `top_phase: functional`, contemplator league, no cap. It produced 38 files, 0 py_fail and 5 degenerations. The game was judged as shipped, including every repair-loop edit (operator direction: judge the framework and model together). The candidate sat on B, which is the position-bias swap from 09-24.
+
+**Both artifacts WON and both scored 47/47 NEAR-FULL.** All 9 rooms are reachable in each, with no unplaced entities.
+
+**The local artifact took five axes:**
+- **unanimously:** A4 delivered scope, B5 ambition, B6 imagination;
+- **2–1:** A3 robustness, B9 workability.
+
+**The frontier took the other five unanimously:** A1, A2, B7, B8, B10. It won on flee as a silent soft-trap, a boss weakness that gates nothing (phase 1 never attacks, phase 2 is auto-exposed, and all three judges won without the chalice), and monster flavour leaking across monsters.
+
+**Firsts for the epoch:**
+- **B6 imagination** was taken from the frontier for the first time.
+- **Character 3–3** is the best Character result yet (the previous best was 2–4).
+- **Delivery 2–2** ties the earlier best (08-19, 08-22, 09-23).
+
+**Post-verdict attribution (history store):** most of B's decisive defects entered through the functional-phase repair loop, not the model's original build.
+
+| defect | commit | origin |
+|---|---|---|
+| flee trap | patch `3ffeff05e6c4`, seq 26712 | the re-fix that blocks every exit while a monster lives |
+| phase 2 auto-exposed | patch `920b995b47e5`, seq 75423 | the "second phase is exposed" fix sets `weakness_triggered` on every phase advance |
+| phase 1 never attacks | `68c1d3f63376` | a blind-diagnosis design change |
+| shriek leak | `7e0f7979b9cf` | |
+| "Bone Sentinel steps aside" hardcoded | `ffe839d3e53f` | |
+| meta hint line | `44d64627a20d` | |
+| "You use the relic" | `9f2923a26543` | |
+
+The model's own build carried the axes the candidate won outright. Treat this as a framework finding, not a counterfactual score: the pre-repair tree was never judged. The full table is in the record, and its framework causes are in `~/ouroboros-runs/tier_20260924-191710/FIX_LIST.md` §§10, 12, 16, 17 and 23.
+
+**Disclosures:**
+- **Judge 2:** used `git diff --no-index` once as a plain diff tool, inside its scratch dir. It read no repository. Disclosed, not corrected.
+- **Packet builder:** when given `staged/armNN`, `make_judge_packet.py` copies `alpha/` plus `judge1/` (its `*/main.py` glob matches). The packet was rebuilt from `alpha/` before any judge launched.
