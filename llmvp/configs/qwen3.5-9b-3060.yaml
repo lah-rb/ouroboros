@@ -1,0 +1,114 @@
+# Qwen 3.5 9B on the 3060 OCR box (ai-debian, 192.168.1.76) — a TRANSLATE and
+# PACK candidate, benched before it takes any lane (operator, 2026-10-04).
+#
+# WHY. The translation queue is about to grow on ONE seat of qwen3-next 80B-A3
+# on the Mac (~60 tok/s): chunk-level patches of ~200 translated papers and the
+# non-English papers of the re-OCR'd failed pile. Gemma 4 12B, the box's repack
+# model, does not translate as well as the Qwen series (operator). The box is
+# free between OCR windows. dev/bench_translate_models.py (arm "qwen35") and
+# dev/bench_pack_gemma.py (GEMMA_MODEL=qwen3.5-9b-3060) bench it on production
+# paths; nothing books from a bench.
+#
+# Like the gemma config, this REPLACES paddle-ocr-vl-3060 as the box's primary
+# while it runs; swap back before OCR resumes.
+#
+# ── ONE REQUEST AT A TIME ────────────────────────────────────────────
+# Qwen 3.5 is a GatedDeltaNet hybrid: measured on the 122B (2026-07-30, cell
+# RC2) the recurrent component blocks the sequence ops the batched engine and
+# the resident cache need (memory_can_shift stays False). qwen3-next is the
+# hybrid that grants them; this family does not. So: pool decode, one
+# instance, replay — and a second context would double the KV beside the
+# layout server on a 12 GB card.
+#
+# ── GEOMETRY (GGUF header, 2026-10-04) ───────────────────────────────
+# 32 blocks, full_attention_interval 4 -> 8 attention layers (4 KV heads x
+# 256, K and V) and 24 DeltaNet layers with a fixed per-sequence state
+# (inner 4096, state 128). KV = 8 x 4 x 512 x 2 B = 32,768 B/token -> 1.5 GiB
+# at 49,152. COMPUTED, not yet measured on the 3060: replace with the first
+# load's figure (the gemma precedent).
+#
+# ── THINKING ─────────────────────────────────────────────────────────
+# The official template thinks when enable_thinking is set ('<think>\n') and
+# otherwise pre-closes an empty block ('<think>\n\n</think>\n\n'); the qwen
+# family reproduces both by prefill. THIS config is thinking OFF, with the
+# incumbent translator's sampling (qwen3-next-80b-a3), so the bench compares
+# models, not settings. qwen3.5-9b-3060-think is the thinking arm.
+#
+# Weights are not in git: unsloth/Qwen3.5-9B-GGUF, Qwen3.5-9B-UD-Q5_K_XL.gguf
+# (6,743,680,224 bytes), copied to the box's models root.
+app:
+  host: "0.0.0.0"
+  port: 8008
+  log_level: "info"
+  cors_origins: ["*"]
+  backend_timeout: 300
+
+graphql:
+  max_query_depth: 10
+  max_tokens: 32768
+  max_aliases: 50
+  introspection_enabled: true
+
+model:
+  name: "qwen3.5-9b-3060"
+  family: "qwen"
+  path: /home/lah-rb/models/unsloth/Qwen3.5-9B-GGUF/Qwen3.5-9B-UD-Q5_K_XL.gguf
+  # A pack turn is ~38k (static head ~2k + window up to 25k + prompt with the
+  # key registry ~2.6k + 8,192 out); a translate turn ~10k.
+  n_ctx: 49152
+  model_max_context: 262144
+  kv_bytes_per_token_measured: 32768
+  n_gpu_layers: -1
+  main_gpu: 0
+  split_mode: none
+  seed: -1
+  verbose: false
+  flash_attn_type: auto
+  n_batch: 2048
+  # NO HOST-RAM CHECKPOINTS: a hybrid keeps context-state copies in host RAM,
+  # and the box is a 10 GB VM (the gemma bench was OOM-killed on its third
+  # pack turn before this was set). Turns are stateless; nothing reuses one.
+  ctx_checkpoints: 0
+  flow_kv_cache: false
+  session_full_replay: true
+  thinking_available: true
+  thinking: "off"
+
+prompt:
+  persona_file: "./knowledge/SOUL.md"
+
+generation:
+  max_tokens_default: 16384
+  # The incumbent translator's block (qwen3-next-80b-a3 via its coder base):
+  # the drain asks 0.3 then 0.7, and the family floor makes both 0.7 there.
+  temperature_default: 1.0
+  temperature_floor: 0.7
+  session_temp_floor: 0.7
+  top_p: 0.95
+  top_k: 40
+  min_p: 0.01
+  presence_penalty: 0.0
+  repeat_penalty: 1.0
+  penalty_last_n: 2048
+  degen_retry_enabled: true
+  degen_retry_temperature: 1.0
+  degen_retry_presence_penalty: 1.5
+  streaming_default: true
+
+knowledge:
+  tokens_bin: "./data/qwen3.5-9b-3060.tokens.bin"
+  token_limit: 16384
+
+cache_strategy: replay
+
+resources:
+  cpu_threads: 4
+  max_concurrent_requests: 1
+
+tools:
+  enabled: false
+  max_iterations: 3
+
+logging:
+  enabled: false
+  directory: "./logs"

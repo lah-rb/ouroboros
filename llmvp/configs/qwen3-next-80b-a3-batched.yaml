@@ -1,0 +1,32 @@
+# qwen3-next 80B-A3 on the Mac, BATCHED — several requests at once (2026-10-04).
+#
+# The remote translate lane runs on ONE seat of this model (pool decode,
+# max_concurrent_requests 1: ~60 tok/s decode, 1,300 tok/s prefill). The queue
+# is about to grow (chunk-level patches of ~200 translated papers, ~11 M source
+# chars, plus the non-English papers of the re-OCR'd failed pile). qwen3-next is
+# the hybrid that grants the sequence ops the batched engine stands on
+# (memory_can_shift, measured on the coder base, cell RC3: flat to depth 16,
+# needle intact) — unlike Qwen 3.5's GatedDeltaNet, which blocks them. So the
+# question (operator) is what several streams in ONE context buy: aggregate
+# chunks/h at 1, 2 and 4 (dev/bench_translate_models.py, arm mac_batched).
+#
+# Four seats share the base's 262,144-cell unified pool, ~64k each; a translate
+# turn is ~10k. Swap to this name over GraphQL (swapModel); swap back to
+# qwen3-next-80b-a3 if the bench says no.
+#
+# Inheritance is one level, so this extends the coder ROOT and restates
+# qwen3-next-80b-a3's own overrides (instruct weights, n_ctx, static tokens);
+# keep the two in step.
+extends: qwen3-next-coder-80b-a3
+
+model:
+  name: "qwen3-next-80b-a3-batched"
+  path: /Users/lah-rb/.lmstudio/models/unsloth/Qwen3-Next-80B-A3B-Instruct-GGUF/Qwen3-Next-80B-A3B-Instruct-UD-Q4_K_XL.gguf
+  n_ctx: 262144
+
+knowledge:
+  tokens_bin: "./data/qwen3-next-80b-a3-batched.tokens.bin"
+
+resources:
+  decode_mode: batched
+  max_concurrent_requests: 4

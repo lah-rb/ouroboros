@@ -1,0 +1,24 @@
+# Qwen 3.5 9B on the 3060 — the THINKING arm of the 2026-10-04 bench.
+#
+# Same weights, geometry and placement as qwen3.5-9b-3060; thinking ON (the
+# template's enable_thinking branch, '<think>\n' by prefill) with the vendor
+# instruct-general profile this family already ran thinking-on with
+# (qwen3.5-122b-a10: temp 0.7, top_p 0.8, top_k 20, presence 1.5 — the
+# vendor's documented mitigation for endless repetition). The operator's
+# concern is that always-on thinking makes the cost per chunk unpredictable:
+# the bench reads generated tokens per chunk and truncations against the
+# drain's 1.5 x source-token output budget, which thinking draws on too.
+extends: qwen3.5-9b-3060
+
+model:
+  name: "qwen3.5-9b-3060-think"
+  thinking: "on"
+
+generation:
+  temperature_default: 0.7
+  temperature_floor: 0.7
+  session_temp_floor: 0.7
+  top_p: 0.8
+  top_k: 20
+  min_p: 0.0
+  presence_penalty: 1.5
