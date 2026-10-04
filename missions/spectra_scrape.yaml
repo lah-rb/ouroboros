@@ -91,6 +91,19 @@ corpus_target: 5000
 # Durable home — /tmp is wiped on reboot and took a corpus with it once.
 working_dir: "~/corpora/ouroboros-spectra"
 effects_profile: local
+
+# HISTORY MUST STAY OFF FOR THIS MISSION — do not remove (operator, 2026-10-04).
+# The history store (agent/history, on by default) writes every inference
+# turn's full prompt and response as parquet rows and versions the WORKSPACE as
+# git trees after every write and step boundary. This mission's workspace IS
+# the corpus: ~10k PDFs and 100k+ figure crops (hashed into stubs on every
+# scan), multi-hundred-MB append-only databank JSONL (a new blob on every
+# append), gigabytes of markdown; and its prompts are thousands of 20-130k-token
+# curate, pack and translate windows a day. The databank is this mission's
+# durable record; replay and rollback are for coding missions. The live
+# mission carries the same value in .agent/mission.json (config.history), set
+# while stopped. Quoted: a bare `off` is YAML for false.
+history: "off"
 llmvp_endpoint: "http://localhost:8008/graphql"
 
 # Run to the research gate's verdict. The wall clock bounds API-pacing

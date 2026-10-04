@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import glob
+import json
 import logging
 import os
 import re
@@ -82,6 +83,21 @@ class PathTraversalError(Exception):
     pass
 
 
+def workspace_history_mode(working_dir: str) -> str:
+    """The history mode of the mission that owns ``working_dir``:
+    OURO_HISTORY > its .agent/mission.json config.history > "full" (no
+    mission, or none chosen)."""
+    from agent.mission_config import resolve_history_mode
+
+    configured = None
+    try:
+        with open(os.path.join(working_dir, ".agent", "mission.json")) as fh:
+            configured = (json.load(fh).get("config") or {}).get("history")
+    except (OSError, ValueError, AttributeError):
+        configured = None
+    return resolve_history_mode(None, configured)
+
+
 class LocalEffects:
     """Real effects implementation — hits actual filesystem and subprocesses.
 
@@ -105,7 +121,7 @@ class LocalEffects:
         trace_prompts: bool | None = None,
         http_transport=None,
         llmvp_domains: dict | None = None,
-        history_mode: str = "full",
+        history_mode: str | None = None,
         history_meta: dict | None = None,
         history_snapshotter: Any = None,
         history_snapshot: bool = True,
@@ -153,6 +169,17 @@ class LocalEffects:
         # keeps the rows but blanks the content; "off" keeps only the
         # in-memory ledger. Two processes on one workspace is an error the
         # store's LOCK makes loud rather than a corruption it hides.
+        #
+        # THE WORKSPACE'S MISSION DECIDES when the caller does not (2026-10-04).
+        # `ouroboros.py start` resolves the mode and passes it, but forty-odd
+        # helpers (booking scripts, benches, repair and re-bank tools) build
+        # LocalEffects on a mission's workspace directly; with a hard "full"
+        # default each one opened the store lazily — snapshotting the
+        # workspace and taking its lock — whatever the mission had chosen. The
+        # scraper's corpus is the case this exists for (history "off": see
+        # missions/spectra_scrape.yaml). OURO_HISTORY still outranks it.
+        if history_mode is None:
+            history_mode = workspace_history_mode(self._working_dir)
         if history_mode not in HISTORY_MODES:
             raise ValueError(
                 f"history_mode must be one of {HISTORY_MODES}, got {history_mode!r}"
