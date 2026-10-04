@@ -172,7 +172,11 @@ def _numeric_leaf_tokens(value, path: str = "") -> list[tuple[str, str]]:
 #:     document is a comma-convention one, which then grounds a
 #:     fabricated "1.2". Caught by test_point_convention_document_is_
 #:     left_alone before this ever ran on the corpus.
-_DECIMAL_COMMA_RE = re.compile(r"(?<=\d),(?=\d{1,2}\b)(?!\d{1,2},)")
+#: 4+ digits after the comma are ALSO a decimal ("0,0571"): a thousands group
+#: is exactly three, so only {3} is ambiguous. Laue 1912 (found 2026-09-07)
+#: writes every ratio as 0,0555 / 0,0563 / 0,0571 — none matched, the paper
+#: grounded at 0.39 while right.
+_DECIMAL_COMMA_RE = re.compile(r"(?<=\d),(?=\d{1,2}\b|\d{4,}\b)(?!\d{1,2},)")
 #: A point used the same way, for deciding which convention a doc follows.
 _DECIMAL_POINT_RE = re.compile(r"\d\.\d")
 
@@ -184,7 +188,12 @@ _DECIMAL_POINT_RE = re.compile(r"\d\.\d")
 #: enumerations all pair single digits, while real measurements
 #: ("57,65 %", "1486,6 eV", "45,3 emu/g") carry a multi-digit integer
 #: part. Counting only those keeps a bibliography from voting.
-_DECIMAL_COMMA_EVIDENCE_RE = re.compile(r"(?<!\d)\d{2,},(?=\d{1,2}\b)(?!\d{1,2},)")
+_DECIMAL_COMMA_EVIDENCE_RE = re.compile(
+    # two-plus digits before + 1-2 after ("57,65"), OR any digits before +
+    # 4-plus after ("0,0571"): a four-digit tail is neither a thousands
+    # group nor a citation pair, so a leading zero still votes.
+    r"(?<!\d)\d{2,},(?=\d{1,2}\b)(?!\d{1,2},)|(?<!\d)\d+,(?=\d{4,}\b)"
+)
 
 
 def _decimal_comma_variant(doc_n: str) -> str:
@@ -227,6 +236,40 @@ def _decimal_comma_variant(doc_n: str) -> str:
     return _DECIMAL_COMMA_RE.sub(".", doc_n)
 
 
+#: A raised/middle dot acting as a DECIMAL POINT between digits: the OCR
+#: renders the pre-1950s typographic decimal ("63·57") as LaTeX
+#: ``63\cdot 57`` inside table cells, or keeps the Unicode dot. Digits on
+#: both sides, optional spaces, and the right-hand side is NOT the start of a
+#: power-of-ten product ("2\cdot 10^{-3}"), which is the one place a raised
+#: dot between digits means multiplication.
+_CDOT_DECIMAL_RE = re.compile(
+    r"(?<=\d) ?(?:\\cdot|[\u00b7\u2219\u2022]) ?(?=\d)(?!10 ?[\^{])"
+)
+
+
+def _cdot_decimal_variant(doc_n: str) -> str:
+    r"""``doc_n`` with raised-dot decimals rewritten as points, or "" when
+    the document has none.
+
+    WHY THIS EXISTS. Measured 2026-09-07 on the binder shelf: Barkla 1911
+    tabulates atomic weights and absorbabilities as "63·57"; paddle writes
+    that as ``63\cdot 57`` in the table cell, so a correctly packed 63.57
+    grounded at 0.30 and the paper was rejected for being right — twice,
+    because the gate feedback told the model to remove values the paper
+    states. 6 of 24 binder papers and ~6% of accepted-corpus markdowns carry
+    the form; the one pre-1935 paper the local model did pack "grounded" at
+    1.0 by packing a single number.
+
+    ADDITIVE, like the decimal-comma variant: this is one more text a token
+    may match, never a replacement for the base document, so it can only
+    turn a rejection of a stated value into an acceptance. Its exposure is a
+    fabricated "a.b" that happens to appear as a product "a\cdot b" in the
+    paper; the power-of-ten exclusion above removes the common case.
+    """
+    out = _CDOT_DECIMAL_RE.sub(".", doc_n)
+    return out if out != doc_n else ""
+
+
 def grounding_check(data: dict, doc: str) -> dict:
     """Every numeric token in ``data`` must appear in the curator doc.
 
@@ -240,6 +283,8 @@ def grounding_check(data: dict, doc: str) -> dict:
     doc_n = _norm(doc)
     doc_compact = re.sub(r"[\s,]", "", doc_n)
     doc_decimal = _decimal_comma_variant(doc_n)
+    doc_cdot = _cdot_decimal_variant(doc_n)
+    doc_cdot_compact = re.sub(r"[\s,]", "", doc_cdot) if doc_cdot else ""
     tokens = _numeric_leaf_tokens(data)
     # Match UNSIGNED: _norm strips '-' from the doc (markdown dash
     # punctuation), so a signed packed token can never match — live,
@@ -253,6 +298,7 @@ def grounding_check(data: dict, doc: str) -> dict:
         if (u := tok.lstrip("-")) not in doc_n
         and u not in doc_compact
         and not (doc_decimal and u in doc_decimal)
+        and not (doc_cdot and (u in doc_cdot or u in doc_cdot_compact))
     ]
     rate = 1.0 if not tokens else 1 - len(ungrounded) / len(tokens)
     return {
