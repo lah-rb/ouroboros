@@ -22,7 +22,12 @@ Usage:
   python dev/refresh_efficacy.py capture    # (re)capture the fixed probe prompt
 """
 
-import json, re, sys, os, glob, urllib.request
+import json
+import re
+import sys
+import os
+import glob
+import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from agent.trace_health import classify
@@ -74,16 +79,16 @@ def capture_probe():
     """Capture the HARDEST file-producing generate_rewrite prompt from a preserved
     CLEAN run — a prompt a healthy server answered with code, so a high stub-rate on
     it later is unambiguously server souring (not spec difficulty)."""
-    cands = glob.glob("runs/marathon_capture/*/traces/*.jsonl") + glob.glob(
-        "runs/marathon_capture/*/.agent/traces/*.jsonl"
+    from agent.history.reader import load_events_any
+
+    # Either era of archive: a history store under .agent, or the retired
+    # JSONL (some captures kept traces/ directly under the run dir).
+    cands = glob.glob("runs/marathon_capture/*/.agent") + glob.glob(
+        "runs/marathon_capture/*"
     )
     best = None
     for f in cands:
-        for l in open(f, errors="ignore"):
-            try:
-                e = json.loads(l)
-            except Exception:
-                continue
+        for e in load_events_any(f):
             if (
                 e.get("step") == "generate_rewrite"
                 and e.get("prompt_content")

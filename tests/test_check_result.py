@@ -1,6 +1,6 @@
 """The shared validation-check-result constructor (dedup of 7 inline sites)."""
 
-from agent.actions.check_result import CHECK_OUTPUT_CAP, check_result
+from agent.actions.check_result import check_result
 
 
 def test_shape_is_the_seven_key_contract():
@@ -28,10 +28,12 @@ def test_required_defaults_true_and_overridable():
     assert check_result("n", "c", True, required=False)["required"] is False
 
 
-def test_output_capped_at_500():
-    big = "x" * 1000
-    r = check_result("n", "c", False, stdout=big, stderr=big)
-    assert len(r["stdout"]) == CHECK_OUTPUT_CAP
-    assert len(r["stderr"]) == CHECK_OUTPUT_CAP
+def test_output_is_kept_whole():
+    """The 500-char head cut kept pytest's header and lost its failures —
+    the part every judge reads. Rows keep the whole output now; the prompt
+    that renders them sizes them to the window (2026-09-26)."""
+    out = "collected 40 items\n" + "." * 2000 + "\nFAILED test_x - AssertionError"
+    r = check_result("n", "c", False, stdout=out, stderr=out)
+    assert r["stdout"] == out and r["stderr"] == out
     # None-safe
     assert check_result("n", "c", True, stdout=None, stderr=None)["stdout"] == ""

@@ -35,19 +35,10 @@ BIN_S = 10.0
 
 
 def _load_trace(workdir: Path) -> list[dict]:
-    traces = [
-        p
-        for p in (workdir / ".agent" / "traces").glob("*.jsonl")
-        if "summary" not in p.name
-    ]
-    if not traces:
-        return []
+    from agent.history.reader import load_events_any  # store, else legacy JSONL
+
     spans = []
-    for line in traces[0].open():
-        try:
-            e = json.loads(line)
-        except json.JSONDecodeError:
-            continue
+    for e in load_events_any(str(workdir / ".agent")):
         if e.get("event_type") != "inference_call":
             continue
         end = float(e.get("timestamp", 0) or 0)

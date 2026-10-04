@@ -21,28 +21,20 @@ Usage:  python dev/mistral_zero_token_check.py <workdir>
 
 from __future__ import annotations
 
-import glob
-import json
 import statistics
 import sys
 from collections import Counter
 
 
 def load_calls(workdir: str) -> list[dict]:
-    traces = sorted(glob.glob(f"{workdir}/.agent/traces/*.jsonl"))
-    if not traces:
-        return []
-    calls = []
-    for path in traces:
-        with open(path, errors="replace") as fh:
-            for line in fh:
-                try:
-                    rec = json.loads(line)
-                except Exception:
-                    continue
-                if rec.get("event_type") == "inference_call":
-                    calls.append(rec)
-    return calls
+    from agent.history.reader import has_history, legacy_jsonl_events, load_events
+
+    agent_dir = f"{workdir}/.agent"
+    if has_history(agent_dir):
+        events = load_events(agent_dir)  # every run
+    else:
+        events = legacy_jsonl_events(agent_dir, newest_only=False)
+    return [rec for rec in events if rec.get("event_type") == "inference_call"]
 
 
 def main() -> None:

@@ -42,7 +42,9 @@ _LLMVP = llmvp_endpoint()
 # degenerate fast-loop. GAIA questions are smaller than SWE instances.
 _MAX_CYCLES = int(os.environ.get("OURO_MAX_CYCLES", "50"))
 _WALL_CLOCK_S = float(os.environ.get("OURO_GAIA_WALL_S", "900") or "900")
-_TRACE = bool(os.environ.get("OURO_TRACE"))
+# Full prompt/response recording is the default; OURO_TRACE=0 keeps the
+# metrics but drops the text (the content opt-out).
+_HISTORY_MODE = "metrics" if os.environ.get("OURO_TRACE") == "0" else "full"
 
 logger = logging.getLogger(__name__)
 
@@ -216,8 +218,7 @@ def run_question(
         effects = LocalEffects(
             working_directory=workspace,
             llmvp_endpoint=_LLMVP,
-            trace_thinking=_TRACE,
-            trace_prompts=_TRACE,
+            history_mode=_HISTORY_MODE,
         )
 
         # Shared isolated harness (agent/mission_runner.py).

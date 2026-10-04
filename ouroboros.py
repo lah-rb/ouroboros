@@ -200,6 +200,14 @@ def cmd_mission_create(args: argparse.Namespace) -> None:
         # editing mission.json after the fact (dev/set_ocr_domain.py).
         llmvp_domains=dict(yaml_config.llmvp_domains) if yaml_config else {},
         synth=dict(yaml_config.synth) if yaml_config else {},
+        history=(
+            getattr(args, "history", None)
+            or (yaml_config.history if yaml_config else None)
+            or "full"
+        ),
+        history_snapshot_excludes=(
+            list(yaml_config.history_snapshot_excludes) if yaml_config else []
+        ),
     )
 
     mission = MissionState(objective=objective, principles=principles, config=config)
@@ -284,9 +292,13 @@ def cmd_mission_status(args: argparse.Namespace) -> None:
         for e in events:
             print(f"    [{e.type}] {e.payload.get('message', e.payload)}")
 
-    artifacts = pm.list_artifacts()
-    if artifacts:
-        print(f"\n  Artifacts: {len(artifacts)} in history")
+    from agent.history import reader as history_reader
+
+    if history_reader.has_history(pm.agent_dir):
+        runs = history_reader.list_runs(pm.agent_dir)
+        turns = sum(int(r.get("turns") or 0) for r in runs)
+        commits = sum(int(r.get("commits") or 0) for r in runs)
+        print(f"\n  History: {turns} turns / {commits} commits / {len(runs)} run(s)")
 
 
 def cmd_mission_pause(args: argparse.Namespace) -> None:
@@ -515,27 +527,16 @@ def cmd_mission_message(args: argparse.Namespace) -> None:
 
 
 def cmd_mission_history(args: argparse.Namespace) -> None:
-    """Show mission history (flow artifacts)."""
-    pm, mission = _load_mission_or_exit(args)
+    """Show the mission's recent turns (``history ls --turns``)."""
+    from agent.history.cli import cmd_history
 
-    artifacts = pm.list_artifacts()
-    if not artifacts:
-        print("No artifacts in history yet.")
-        return
-
-    print(f"Flow history ({len(artifacts)} artifacts):")
-    for filename in artifacts:
-        # Try to load and show summary
-        task_id = filename.rsplit("_", 1)[-1].replace(".json", "")
-        artifact = pm.load_artifact(task_id)
-        if artifact:
-            print(
-                f"  [{artifact.status:10s}] {artifact.flow_name} (task: {artifact.task_id})"
-            )
-            print(f"               Steps: {' → '.join(artifact.steps_executed)}")
-            print(f"               Time: {artifact.timestamp}")
-        else:
-            print(f"  {filename}")
+    args.history_command = "ls"
+    args.turns = True
+    args.runs = False
+    args.commits = False
+    args.run = None
+    args.limit = getattr(args, "limit", None) or 50
+    cmd_history(args)
 
 
 def cmd_lint(args: argparse.Namespace) -> None:
@@ -608,6 +609,7 @@ def cmd_start(args: argparse.Namespace) -> None:
     # started with. Recording the SHA here makes "were the fixes actually
     # in that run?" answerable from the log instead of from memory (the
     # 2026-07-16 bossgame A/B ran 32h on pre-fix code, undetected).
+    agent_sha = ""
     try:
         import subprocess as _sp
 
@@ -618,6 +620,7 @@ def cmd_start(args: argparse.Namespace) -> None:
             text=True,
             timeout=5,
         ).stdout.strip()
+        agent_sha = sha
         dirty = bool(
             _sp.run(
                 ["git", "-C", repo, "status", "--porcelain"],
@@ -632,20 +635,23 @@ def cmd_start(args: argparse.Namespace) -> None:
         pass
     print()
 
-    # Build effects
-    from agent.effects.local import LocalEffects
+    # History recording mode: OURO_HISTORY env > --history > mission config
+    # > "full". The retired --trace-* flags are accepted and do nothing.
+    from agent.mission_config import resolve_history_mode
 
-    effects = LocalEffects(
-        working_directory=working_dir,
-        llmvp_endpoint=mission.config.llmvp_endpoint,
-        llmvp_domains=getattr(mission.config, "llmvp_domains", None),
-        trace_thinking=getattr(args, "trace_thinking", False),
-        trace_prompts=getattr(args, "trace_prompts", False),
-    )
-
-    # Resolve flows directory
-    flows_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "flows")
-    prompts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts")
+    if getattr(args, "trace_thinking", False) or getattr(args, "trace_prompts", False):
+        print(
+            "   note: --trace-thinking/--trace-prompts are retired — recording "
+            "is on by default; use --history metrics|off to reduce it"
+        )
+    try:
+        history_mode = resolve_history_mode(
+            getattr(args, "history", None), getattr(mission.config, "history", None)
+        )
+    except ValueError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+    print(f"   History: {history_mode} (.agent/history/)")
 
     # Entry flow derives from the mission's flow set (registry, not
     # persisted — getattr keeps pre-flow-set mission.json files working).
@@ -653,6 +659,35 @@ def cmd_start(args: argparse.Namespace) -> None:
 
     flow_set = get_flow_set(getattr(mission.config, "flow_set", "code_core"))
     print(f"   Flow set: {flow_set.name} (entry: {flow_set.entry_flow})")
+
+    # Build effects
+    from agent.effects.local import LocalEffects
+    from agent.history.store import HistoryLocked
+
+    effects = LocalEffects(
+        working_directory=working_dir,
+        llmvp_endpoint=mission.config.llmvp_endpoint,
+        llmvp_domains=getattr(mission.config, "llmvp_domains", None),
+        history_mode=history_mode,
+        history_meta={
+            "agent_sha": agent_sha,
+            "flow_set": flow_set.name,
+            "entry_flow": flow_set.entry_flow,
+            "snapshot_excludes": list(
+                getattr(mission.config, "history_snapshot_excludes", None) or []
+            ),
+        },
+    )
+    try:
+        effects.history_open(mission.id)
+    except HistoryLocked as e:
+        print(f"Error: {e}")
+        print("  Another process is running this mission. Pause it first.")
+        sys.exit(1)
+
+    # Resolve flows directory
+    flows_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "flows")
+    prompts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts")
 
     # Termination policy: CLI flags beat mission config beats defaults.
     from agent.mission_config import resolve_run_policy
@@ -920,15 +955,20 @@ def main() -> None:
     )
     start_p.add_argument("-v", "--verbose", action="store_true", help="Debug logging")
     start_p.add_argument(
-        "--trace-thinking",
-        action="store_true",
-        help="Capture chain-of-thought from LLMVP thinking endpoint in trace events",
+        "--history",
+        choices=["full", "metrics", "off"],
+        default=None,
+        help="History recording for this run (default: mission config, else "
+        "full — every turn's prompt/response/thinking, every workspace "
+        "change; metrics = numbers only; off = in-memory ledger only). "
+        "OURO_HISTORY env overrides.",
     )
+    # Retired 2026-09-24: recording is on by default. Accepted so old
+    # invocations keep working; they change nothing.
     start_p.add_argument(
-        "--trace-prompts",
-        action="store_true",
-        help="Capture full rendered prompts and raw model responses in trace events",
+        "--trace-thinking", action="store_true", help=argparse.SUPPRESS
     )
+    start_p.add_argument("--trace-prompts", action="store_true", help=argparse.SUPPRESS)
 
     # ── blueprint subcommand ──────────────────────────────────────
     bp_p = subparsers.add_parser("blueprint", help="Generate architectural blueprint")
@@ -946,6 +986,7 @@ def main() -> None:
     # ── trace subcommand ──────────────────────────────────────────
     trace_p = subparsers.add_parser("trace", help="View runtime trace summaries")
     trace_p.add_argument("--mission", help="Filter by mission ID")
+    trace_p.add_argument("--run", help="History run id (default: the latest run)")
     trace_p.add_argument(
         "--format",
         choices=["summary", "detail"],
@@ -1120,6 +1161,12 @@ def main() -> None:
     )
     create_p.add_argument("--tasks", nargs="*", help="Initial task descriptions")
     create_p.add_argument(
+        "--history",
+        choices=["full", "metrics", "off"],
+        default=None,
+        help="History recording mode for the mission (default full)",
+    )
+    create_p.add_argument(
         "--top-phase",
         dest="top_phase",
         choices=[
@@ -1198,6 +1245,11 @@ def main() -> None:
     hist_p = mission_sub.add_parser("history", help="Show flow execution history")
     hist_p.add_argument("--working-dir", help="Working directory (default: cwd)")
 
+    # ── history subcommand ────────────────────────────────────────
+    from agent.history.cli import add_history_parser
+
+    history_parser = add_history_parser(subparsers)
+
     # ── llmvp subcommand ──────────────────────────────────────────
     llmvp_parser = subparsers.add_parser(
         "llmvp", help="LLMVP server operations (model catalog, hotswap)"
@@ -1266,6 +1318,13 @@ def main() -> None:
             handler(args)
         else:
             mission_parser.print_help()
+    elif args.command == "history":
+        if not getattr(args, "history_command", None):
+            history_parser.print_help()
+        else:
+            from agent.history.cli import cmd_history
+
+            cmd_history(args)
     elif args.command == "llmvp":
         dispatch = {
             "models": cmd_llmvp_models,

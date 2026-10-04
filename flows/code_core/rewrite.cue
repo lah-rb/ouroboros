@@ -61,18 +61,21 @@ rewrite: #FlowDefinition & {
 		// guess. Missing file falls through to generation (rewrite is normally
 		// only dispatched for files that exist).
 		read_target: #StepDefinition & _templates.read_target_file & {
+			params: size_for_rewrite: true
 			resolver: {
 				type: "rule"
 				rules: [
-					// SIZE GATE (2026-08-07): a whole-file rewrite of a
-					// 40KB engine.py built a 39k-token prompt against the
-					// 32k window — the round burned before authoring began.
-					// 24KB is the safe ceiling (file + context bundle +
-					// full regeneration all inside the window); larger
-					// targets need a symbol-scoped patch, which works at
-					// any file size. The too_large headline rides the
-					// failed report into the next diagnose seed.
-					{condition: "result.get('content_bytes', 0) > 24000", transition: "too_large"},
+					// SIZE GATE: a whole-file rewrite reads the file AND
+					// regenerates it, so it runs only when the file fits the
+					// serving model's window by the whole-if-it-fits rule
+					// (agent/context_fit.py), its own regeneration counted as
+					// used. It replaced a fixed 24,000-char gate (2026-09-26)
+					// sized for one 32k window (a 40KB engine.py built a
+					// 39k-token prompt against it, 2026-08-07). Larger targets
+					// need a symbol-scoped patch, which works at any size; the
+					// too_large headline rides the failed report into the
+					// next diagnose seed.
+					{condition: "result.get('whole_rewrite_fits', True) == False", transition: "too_large"},
 					{condition: "true", transition: "gather_context"},
 				]
 			}
@@ -96,16 +99,21 @@ rewrite: #FlowDefinition & {
 		}
 
 		// ── Scope-don't-truncate drill-down (OPEN_TASKS §21) ─────────
-		// Before generating, the model may pull up to 3 FULL symbol bodies
-		// from related files (the operator's menu-one-deeper design). Options
-		// are EMBEDDED, so resolve_options can never come back empty — the
+		// Before generating, the model may pull FULL symbol bodies from
+		// related files (the operator's menu-one-deeper design). Options are
+		// EMBEDDED, so resolve_options can never come back empty — the
 		// EmptyMenuError park path is unreachable from this step — and both
 		// default and no_answer fall through to generate_rewrite, so a mute
-		// model costs nothing. Corrections don't consume picks (the diagnose
-		// trace-correction discipline); both are capped at 3 in the action.
+		// model costs nothing. No pick or correction cap (2026-09-26): each
+		// pulled body is sized by the whole-if-it-fits rule, and degeneration
+		// monitoring is the backstop for a model that will not proceed.
 		offer_context_menu: #StepDefinition & {
+			// The validation errors (whole check output since 2026-09-26) are
+			// sized to the window at render: whole beside the prompt, else
+			// the most recent part — where a traceback's fault line sits.
+			fit: {"input.validation_errors": "tail"}
 			action:      "inference"
-			description: "Optionally pull full symbol bodies from related files before rewriting (max 3)"
+			description: "Optionally pull full symbol bodies from related files before rewriting"
 			context: optional: [
 				"file_context",
 				"repo_map_formatted",
@@ -185,11 +193,11 @@ rewrite: #FlowDefinition & {
 				"drilldown_picks",
 				"drilldown_corrections",
 			]
+			// No pick or correction cap (2026-09-26): the model proceeds when it
+			// has what it needs; degeneration monitoring is the backstop.
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "result.budget_exhausted == true", transition: "generate_rewrite"},
-					{condition: "result.exhausted == true", transition: "generate_rewrite"},
 					{condition: "true", transition: "offer_context_menu"},
 				]
 			}
@@ -202,6 +210,10 @@ rewrite: #FlowDefinition & {
 		}
 
 		generate_rewrite: #StepDefinition & {
+			// The validation errors (whole check output since 2026-09-26) are
+			// sized to the window at render: whole beside the prompt, else
+			// the most recent part — where a traceback's fault line sits.
+			fit: {"input.validation_errors": "tail"}
 			action:      "inference"
 			description: "Generate complete file replacement"
 			context: optional: ["project_manifest", "repo_map_formatted", "target_file", "drilldown_bodies"]

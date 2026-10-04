@@ -25,11 +25,8 @@ Supports both static options (defined in CUE) and dynamic options
 from __future__ import annotations
 
 import logging
-import time
 from typing import Any
-
-
-from agent.trace import InferenceCall, count_tokens, trace_enabled
+from agent.trace import annotate_turn
 
 logger = logging.getLogger(__name__)
 
@@ -339,20 +336,11 @@ async def resolve_llm_menu(
     prompt = _build_menu_prompt(resolver_prompt, options, step_output_text)
     option_names = list(options.keys())
 
-    # Trace helpers
-    _can_trace = trace_enabled(effects)
-    _t_mission = meta.get("mission_id", "") if meta else ""
-    _t_cycle = meta.get("_trace_cycle", 0) if meta else 0
-    _t_flow = meta.get("flow_name", "") if meta else ""
-    _t_step = meta.get("step_id", "") if meta else ""
-
     # No max_tokens cap — let the model generate until it naturally
     # completes. Harmony models need to finish their analysis channel
     # thinking before emitting the final channel with the JSON choice.
     # Any cap risks truncating mid-thought, producing CoT as content.
     config = {"temperature": 0.1}
-    tokens_in = count_tokens(prompt)
-    infer_start = time.monotonic()
 
     # Session-aware: prefer inference_session_id over session_id to avoid
     # deadlocking when a terminal session has pinned the only pool instance.
@@ -386,7 +374,6 @@ async def resolve_llm_menu(
                 max_attempts,
                 last_response[:80],
             )
-            infer_start = time.monotonic()
 
         # Build the prompt — on retries, add correction with examples
         attempt_prompt = prompt
@@ -406,35 +393,19 @@ async def resolve_llm_menu(
                 f"Respond with ONLY the JSON object, nothing else.\n"
             )
 
-        if session_id and hasattr(effects, "session_inference"):
-            result = await effects.session_inference(session_id, attempt_prompt, config)
-        else:
-            result = await effects.run_inference(attempt_prompt, config)
-
-        if _can_trace:
-            _prompt_content = ""
-            _response_content = ""
-            if hasattr(effects, "trace_prompts") and effects.trace_prompts:
-                _prompt_content = prompt if attempt == 0 else "(retry)"
-                _response_content = result.text or ""
-
-            await effects.emit_trace(
-                InferenceCall(
-                    mission_id=_t_mission,
-                    cycle=_t_cycle,
-                    flow=_t_flow,
-                    step=_t_step,
-                    tokens_in=tokens_in if attempt == 0 else 0,
-                    tokens_out=count_tokens(result.text) if result.text else 0,
-                    wall_ms=(time.monotonic() - infer_start) * 1000,
-                    temperature=0.1,
-                    max_tokens=0,
-                    purpose="llm_menu_resolve",
-                    prompt_content=_prompt_content,
-                    response_content=_response_content,
-                    truncated=getattr(result, "truncated", False),
+        # The effect records the turn (one row per attempt); we only say
+        # what it cannot see — that this is a menu resolve, and which retry.
+        with annotate_turn(
+            purpose="llm_menu_resolve",
+            prompt_full=attempt_prompt,
+            call_attempt=attempt + 1,
+        ):
+            if session_id and hasattr(effects, "session_inference"):
+                result = await effects.session_inference(
+                    session_id, attempt_prompt, config
                 )
-            )
+            else:
+                result = await effects.run_inference(attempt_prompt, config)
 
         if result.error:
             logger.warning(

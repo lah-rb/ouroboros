@@ -89,26 +89,49 @@ async def test_symbol_not_found_lists_available():
 
 
 @pytest.mark.asyncio
-async def test_pick_cap_signals_budget_exhausted():
+async def test_there_is_no_pick_cap():
+    """No pick cap (2026-09-26): the model proceeds when it has what it
+    needs, and degeneration monitoring is the backstop. The old cap forced
+    the rewrite after a third pick."""
     ctx = {
         "context_request_arg": "ui.py:helper",
-        "drilldown_picks": 2,
-        "drilldown_bodies": [{"ref": "a", "body": "x"}, {"ref": "b", "body": "y"}],
+        "drilldown_picks": 7,
+        "drilldown_bodies": [{"ref": f"r{i}", "body": "x"} for i in range(7)],
     }
     out = await action_fetch_symbol_body(_si(ctx))
-    assert out.result["fetched"] is True
-    assert out.result["budget_exhausted"] is True
-    assert out.context_updates["drilldown_picks"] == 3
-    assert len(out.context_updates["drilldown_bodies"]) == 3
+    assert out.result == {"fetched": True}
+    assert out.context_updates["drilldown_picks"] == 8
 
 
 @pytest.mark.asyncio
-async def test_correction_cap_signals_exhausted():
+async def test_there_is_no_correction_cap():
     out = await action_fetch_symbol_body(
-        _si({"context_request_arg": "nope", "drilldown_corrections": 2})
+        _si({"context_request_arg": "nope", "drilldown_corrections": 9})
     )
-    assert out.result["exhausted"] is True
-    assert out.context_updates["drilldown_corrections"] == 3
+    assert out.result == {"fetched": False}
+    assert out.context_updates["drilldown_corrections"] == 10
+
+
+@pytest.mark.asyncio
+async def test_a_body_too_large_to_pull_whole_answers_with_the_outline():
+    """Each pull is sized by the whole-if-it-fits rule against what the
+    drill-down already holds; over it, the model gets the file's outline to
+    pull a smaller symbol from."""
+
+    class _Small(MockEffects):
+        async def cache_health(self):
+            return {"nCtxSeq": 4096}
+
+    big = "def huge():\n" + "".join(f"    x{i} = {i}\n" for i in range(800))
+    si = StepInput(
+        context={"context_request_arg": "big.py:huge"},
+        effects=_Small(files={"big.py": big + "\n\ndef small():\n    return 1\n"}),
+        meta=FlowMeta(flow_name="rewrite", step_id="fetch_symbol"),
+    )
+    out = await action_fetch_symbol_body(si)
+    assert out.result == {"fetched": False}
+    fb = out.context_updates["drilldown_feedback"]
+    assert "too large to pull whole here" in fb and "small" in fb
 
 
 @pytest.mark.asyncio

@@ -152,7 +152,7 @@ _FAILED_NODE_RE = re.compile(r"(?m)^(?:FAILED|ERROR) (\S+?\.py)::(\S+)")
 
 
 async def _failing_test_block(effects, error_output: str) -> str:
-    """Extract the body of up to 2 failing tests named in a pytest transcript,
+    """Extract the body of every failing test named in a pytest transcript,
     so the diagnose seed shows how the code under test is actually called.
     Best-effort: returns '' on any miss (no effects, no node ids, unreadable
     file, symbol not found)."""
@@ -163,8 +163,6 @@ async def _failing_test_block(effects, error_output: str) -> str:
         key = (path, node)
         if key not in seen:
             seen.append(key)
-        if len(seen) >= 2:
-            break
     if not seen:
         return ""
 
@@ -193,7 +191,7 @@ async def _failing_test_block(effects, error_output: str) -> str:
             lines = content.splitlines()
             start = max(0, match.line - 1)
             end = match.end_line if match.end_line else match.line
-            body = "\n".join(lines[start:end])[:1500]
+            body = "\n".join(lines[start:end])
             blocks.append(f"# {path}::{node}\n{body}")
         except Exception:  # noqa: BLE001 — seed enrichment is best-effort
             continue
@@ -318,10 +316,14 @@ async def action_start_diagnosis_session(step_input: StepInput) -> StepOutput:
         parts.append("")
 
     # ── ## Transcript ───────────────────────────────────────────
+    # Whole when it fits the session beside the rest of the seed; else
+    # saved in full and shown as a line index the model traces into
+    # (`<saved>:<first>-<last>`). Sized once the other sections are built,
+    # since they are the `used` side of the rule — see the slot fill below.
     if error_output:
         parts.append("## Transcript")
         parts.append("```")
-        parts.append(error_output)
+        parts.append("\x00transcript\x00")
         parts.append("```")
         parts.append("")
 
@@ -355,7 +357,7 @@ async def action_start_diagnosis_session(step_input: StepInput) -> StepOutput:
                 r = dep.get("responsibility", "")
                 defines = dep.get("defines", [])
                 if f:
-                    defines_str = ", ".join(defines[:5]) if defines else ""
+                    defines_str = ", ".join(defines) if defines else ""
                     arch_lines.append(
                         f"  {f}: {r}"
                         + (f" [exports: {defines_str}]" if defines_str else "")
@@ -391,7 +393,12 @@ async def action_start_diagnosis_session(step_input: StepInput) -> StepOutput:
         parts.append("## Data files")
         parts.append(
             "Loaded at runtime — valid trace targets (a bug may live in the "
-            "data, not the code): " + ", ".join(sorted(set(data_file_names)))
+            "data, not the code): "
+            + ", ".join(sorted(set(data_file_names)))
+            + ". Trace a data file whole by its name, or ONE entry by an RFC "
+            f"6901 pointer, e.g. `{sorted(set(data_file_names))[0]}:/<key>/0` "
+            "(JSON, YAML or TOML; a large file comes back as an index of its "
+            "entries to pick from)."
         )
         parts.append("")
 
@@ -451,16 +458,14 @@ async def action_start_diagnosis_session(step_input: StepInput) -> StepOutput:
         )
         parts.append("")
 
-        # Cap at 6 — enough to see a repeat pattern, short enough to
-        # keep the seed prompt from bloating. Show most recent last
-        # so the "## Prior attempts" section reads chronologically.
-        recent = failed_attempts[-6:]
+        # Every attempt (2026-09-26): the last-6 cap hid the earliest
+        # targets of a long goal — exactly the repeat pattern this section
+        # exists to show. Most recent last, so it reads chronologically.
+        recent = failed_attempts
         for idx, att in enumerate(recent):
             if not isinstance(att, dict):
                 continue
-            # 1-based display number relative to the full list, so
-            # "attempt 4 of 6" stays accurate even when we truncate.
-            display_n = n - len(recent) + idx + 1
+            display_n = idx + 1
             target = att.get("target_file", "") or "?"
             symbol = att.get("target_symbol", "") or ""
             pre = att.get("pre_headline", "") or ""
@@ -567,6 +572,25 @@ async def action_start_diagnosis_session(step_input: StepInput) -> StepOutput:
     # fields but can't cover every append site. Cheap, robust.
     seed_prompt = "\n".join(_as_text(p) if not isinstance(p, str) else p for p in parts)
 
+    # Fill the transcript slot: whole if it fits beside the rest of the seed
+    # (a fresh session holds nothing else yet), otherwise saved in full and
+    # indexed — the model traces a range of the saved file.
+    if error_output:
+        from agent.context_fit import measure, output_view
+
+        (rest_tok,), _how = await measure(
+            effects, [seed_prompt.replace("\x00transcript\x00", "")]
+        )
+        transcript = await output_view(
+            effects,
+            error_output,
+            used=rest_tok,
+            save_path=f".agent/outputs/diagnose-{session_id}-transcript.txt",
+            label="the transcript",
+            how="trace",
+        )
+        seed_prompt = seed_prompt.replace("\x00transcript\x00", transcript)
+
     # NOTE: we deliberately do NOT send the seed to the model here.
     # The old pattern was: send seed + "Acknowledge with 'ready'",
     # then send menu. That first ack call required ``max_tokens=20``
@@ -613,11 +637,42 @@ async def action_start_diagnosis_session(step_input: StepInput) -> StepOutput:
 # v10: single-symbol trace with correction injection
 # ══════════════════════════════════════════════════════════════════════
 
-# Cap on FAILED trace targets before forcing conclude. Successful traces are
-# bounded by investigation_turn (check_budget, cap 10); corrections were
-# unbounded — a model naming only invalid targets looped to the flow's max-step
-# crash. 8 invalid targets = clearly oscillating, not converging.
-_MAX_TRACE_CORRECTIONS = 8
+# No separate cap on FAILED trace targets (2026-09-26). Each correction bumps
+# `trace_corrections`, and check_budget's ONE engine-crash guard counts every
+# lap — traces and corrections alike — under the 200-step sub-flow ceiling.
+# The old 8-correction cap (from before diagnose was uncapped on 08-19)
+# forced a conclusion the model had not reached; a looping model is the
+# degeneration monitor's to catch.
+
+
+async def _trace_data_view(
+    effects: Any, path: str, content: str, pointer: str, used: int
+) -> tuple[str, bool]:
+    """(view, found) for a data-file trace target: the file (``pointer`` "")
+    or one entry (an RFC 6901 pointer, JSON/YAML/TOML) WHOLE when it fits the
+    session, else an index of its children by pointer to trace next. A pointer
+    that does not resolve returns the nearest existing level as a map
+    (found=False) so the correction is also a way forward.
+
+    Replaces the silent whole-file dump the seed's "valid trace targets"
+    promise used to lead to — the diagnosis could not read one entry."""
+    from agent import context_fit as cf
+
+    if pointer in ("", "/"):
+        text, found = content, True
+    else:
+        text, found = cf.read_data(path, content, pointer)
+    if not found:
+        return text, False
+    label = f"{path}:{pointer}" if pointer not in ("", "/") else path
+    f = await cf.fit(effects, text, used=used)
+    if f.whole:
+        return f"=== {label} (data) ===\n{text}", True
+    return (
+        f"=== {label} (data — too large to show whole here: {f.describe()}) ===\n"
+        f"{cf.data_index(path, content, '' if pointer == '/' else pointer)}\n"
+        f"Trace one entry to read it whole: `{path}:/pointer`."
+    ), True
 
 
 async def action_execute_symbol_trace(step_input: StepInput) -> StepOutput:
@@ -671,9 +726,9 @@ async def action_execute_symbol_trace(step_input: StepInput) -> StepOutput:
     ctx = step_input.context
     turn = int(ctx.get("investigation_turn", 0))
     # Total FAILED traces so far. investigation_turn only counts SUCCESSFUL
-    # traces, so a model that keeps naming invalid targets loops on corrections
-    # forever (the 10-trace cap never advances) until the flow's max-step safety
-    # raises and crashes the whole agent. Bound the corrections too.
+    # traces; check_budget's crash guard adds these so a model that keeps
+    # naming invalid targets parks with a report instead of reaching the
+    # flow's max-step ceiling.
     corrections = int(ctx.get("trace_corrections", 0))
 
     # Pull the compound-option arg. The runtime publishes every
@@ -688,19 +743,16 @@ async def action_execute_symbol_trace(step_input: StepInput) -> StepOutput:
     def _correction(msg: str, trace_ok: bool = False) -> StepOutput:
         """Queue a correction injection, return without incrementing turn.
 
-        Bounds total failed traces: after _MAX_TRACE_CORRECTIONS invalid
-        targets the model is oscillating, not converging — signal ``exhausted``
-        so the loop routes to conclude instead of spinning until the flow's
-        max-step safety crashes the agent."""
+        A correction does not spend the investigation, but it is a lap:
+        ``trace_corrections`` feeds check_budget's engine-crash guard, which
+        counts traces and corrections together."""
         pending: dict[str, Any] = {}
         queue_injection(pending, ctx, f"Trace failed — {msg}")
         result: dict[str, Any] = {"trace_ok": trace_ok}
         if not trace_ok:
             new_corr = corrections + 1
             pending["trace_corrections"] = new_corr
-            if new_corr >= _MAX_TRACE_CORRECTIONS:
-                result["exhausted"] = True
-            note = f" ({new_corr}/{_MAX_TRACE_CORRECTIONS})"
+            note = f" #{new_corr}"
         else:
             note = ""
         return StepOutput(
@@ -714,6 +766,12 @@ async def action_execute_symbol_trace(step_input: StepInput) -> StepOutput:
             result={"trace_ok": False},
             observations="No effects interface — cannot trace",
         )
+
+    # What the diagnosis session already holds — the "used" side of the
+    # whole-if-it-fits rule for everything this trace injects.
+    from agent.context_fit import session_used
+
+    trace_used = await session_used(effects, str(ctx.get("diagnosis_session_id", "")))
 
     # ── 1. Validate the reference format ────────────────────────
     if not symbol_ref:
@@ -737,17 +795,14 @@ async def action_execute_symbol_trace(step_input: StepInput) -> StepOutput:
                 fc = None
             content = getattr(fc, "content", "") if getattr(fc, "exists", False) else ""
             if content:
-                pending: dict[str, Any] = {}
-                queue_injection(
-                    pending,
-                    ctx,
-                    f"=== {symbol_ref} (data file — showing full content) ===\n{content}",
+                view, _found = await _trace_data_view(
+                    effects, symbol_ref, content, "", trace_used
                 )
+                pending: dict[str, Any] = {}
+                queue_injection(pending, ctx, view)
                 return StepOutput(
                     result={"trace_ok": True},
-                    observations=(
-                        f"Turn {turn + 1}: traced {symbol_ref} as full-file data target"
-                    ),
+                    observations=f"Turn {turn + 1}: traced {symbol_ref} as a data target",
                     context_updates={**pending, "investigation_turn": turn + 1},
                 )
         return _correction(
@@ -759,6 +814,48 @@ async def action_execute_symbol_trace(step_input: StepInput) -> StepOutput:
     file_part, _, symbol_part = symbol_ref.partition(":")
     file_part = file_part.strip()
     symbol_part = symbol_part.strip()
+
+    # A DATA file's "symbol" is a pointer to one entry (`world.json:/rooms/3`;
+    # `world.json:` or a missing leading slash are accepted).
+    from agent import languages as _languages
+
+    _ext = file_part.rsplit(".", 1)[-1].lower() if "." in file_part else ""
+    if file_part and _languages.is_data(_ext):
+        pointer = (
+            symbol_part
+            if symbol_part.startswith("/") or not symbol_part
+            else ("/" + symbol_part)
+        )
+        canonical = f"{file_part}:{pointer}" if pointer else file_part
+        if canonical in (ctx.get("traced_symbols") or []):
+            return _correction(
+                f"`{canonical}` was already traced in this session — see the "
+                f"earlier observation above. Trace a different entry or pick "
+                f"`conclude` if you have enough evidence."
+            )
+        try:
+            fc = await effects.read_file(file_part)
+        except Exception:  # noqa: BLE001
+            fc = None
+        content = getattr(fc, "content", "") if getattr(fc, "exists", False) else ""
+        if not content:
+            return _correction(f"data file `{file_part}` not found.")
+        view, found = await _trace_data_view(
+            effects, file_part, content, pointer, trace_used
+        )
+        if not found:
+            return _correction(view)
+        pending = {}
+        queue_injection(pending, ctx, view)
+        return StepOutput(
+            result={"trace_ok": True},
+            observations=f"Turn {turn + 1}: traced {canonical} as a data target",
+            context_updates={
+                **pending,
+                "investigation_turn": turn + 1,
+                "traced_symbols": list(ctx.get("traced_symbols") or []) + [canonical],
+            },
+        )
 
     if not file_part or not symbol_part:
         return _correction(
@@ -822,6 +919,41 @@ async def action_execute_symbol_trace(step_input: StepInput) -> StepOutput:
         )
         return _correction(f"file `{file_part}` not found. {files_hint}")
 
+    # ── 2b. A line range reads one part of ANY file ─────────────
+    # `path:<first>-<last>` — the way back into text the seed could not
+    # show whole (a transcript saved under .agent/outputs/) or a file shown
+    # as an index. Sized like every other read: whole when it fits.
+    if re.fullmatch(r"\d+\s*-\s*\d+", symbol_part):
+        from agent import context_fit as _cf
+
+        text, found = _cf.read_part(
+            file_part, target_file.get("content", ""), symbol_part
+        )
+        if not found:
+            return _correction(text)
+        _f = await _cf.fit(effects, text, used=trace_used)
+        if _f.whole:
+            view = f"=== {canonical_ref} ===\n{text}"
+        else:
+            a, b = (int(x) for x in re.findall(r"\d+", symbol_part))
+            mid = (a + b) // 2
+            view = (
+                f"=== {canonical_ref} — too large to show whole here: "
+                f"{_f.describe()}. Trace a narrower range, e.g. "
+                f"`{file_part}:{a}-{mid}` then `{file_part}:{mid + 1}-{b}`. ==="
+            )
+        pending = {}
+        queue_injection(pending, ctx, view)
+        return StepOutput(
+            result={"trace_ok": True},
+            observations=f"Turn {turn + 1}: traced {canonical_ref} (lines)",
+            context_updates={
+                **pending,
+                "investigation_turn": turn + 1,
+                "traced_symbols": [*traced_symbols, canonical_ref],
+            },
+        )
+
     # ── 3. Extract symbols from the file ────────────────────────
     extract_input = StepInput(
         context={"target_file": target_file},
@@ -835,12 +967,18 @@ async def action_execute_symbol_trace(step_input: StepInput) -> StepOutput:
         # tree-sitter couldn't extract. Inject the full file content
         # as evidence so the investigation still gets something.
         content = target_file.get("content", "")
+        from agent import context_fit as _cf
+
+        _f = await _cf.fit(effects, content, used=trace_used)
+        if _f.whole:
+            view = f"=== {file_part} (no parseable symbols — showing full content) ===\n{content}"
+        else:
+            view = (
+                f"=== {file_part} (no parseable symbols; too large to show whole "
+                f"here: {_f.describe()}) ===\n{_cf.text_index(content)}"
+            )
         pending: dict[str, Any] = {}
-        queue_injection(
-            pending,
-            ctx,
-            f"=== {file_part} (no parseable symbols — showing full content) ===\n{content}",
-        )
+        queue_injection(pending, ctx, view)
         return StepOutput(
             result={"trace_ok": True},
             observations=(
@@ -857,8 +995,10 @@ async def action_execute_symbol_trace(step_input: StepInput) -> StepOutput:
             "symbol_table": symbol_table,
             "target_file": target_file,
             "file_context": ctx.get("file_context"),
+            "trace_used_tokens": trace_used,
         },
         meta=FlowMeta(flow_name="diagnose_issue", step_id="execute_trace"),
+        effects=effects,
     )
     trace_output = await trace_function(trace_input)
     traced = trace_output.context_updates.get("traced_context", "")
@@ -882,11 +1022,11 @@ async def action_execute_symbol_trace(step_input: StepInput) -> StepOutput:
                 if parent and name:
                     available.append(f"{parent}.{name}")
 
-        available_str = ", ".join(sorted(set(available))[:30]) or "(none detected)"
+        available_str = ", ".join(sorted(set(available))) or "(none detected)"
         return _correction(
             f"symbol `{symbol_part}` not found in `{file_part}`. "
             f"Symbols defined in that file: {available_str}. "
-            f"Pick one and try again."
+            f"Pick one, or trace a line range `{file_part}:<first>-<last>`."
         )
 
     # ── 4b. Data-aware trace: surface connected data file content ──
@@ -907,6 +1047,7 @@ async def action_execute_symbol_trace(step_input: StepInput) -> StepOutput:
                 file_content=target_file.get("content", ""),
                 file_context=ctx.get("file_context"),
                 effects=effects,
+                used=trace_used,
             )
             if data_evidence:
                 traced = f"{traced}\n\n{data_evidence}"
@@ -1219,9 +1360,9 @@ async def _conclude_diagnosis(
                 related_symbols = [
                     str(s).strip() for s in raw_related if str(s).strip()
                 ]
-            # Cap + dedupe + drop primary; compile_diagnosis repeats
-            # this defensively, but we do the light-weight version
-            # here so the published value is already reasonable.
+            # Dedupe + drop primary; compile_diagnosis repeats this
+            # defensively. No count cap (2026-09-26): a cut here made a
+            # 9-symbol diagnosis patch 6 and report the batch done.
             seen: set[str] = {target_symbol} if target_symbol else set()
             deduped: list[str] = []
             for s in related_symbols:
@@ -1229,7 +1370,7 @@ async def _conclude_diagnosis(
                     continue
                 seen.add(s)
                 deduped.append(s)
-            related_symbols = deduped[:6]
+            related_symbols = deduped
     except Exception:
         pass
 
@@ -1325,7 +1466,42 @@ async def _existence_check_siblings(effects: Any, siblings: list[str]) -> list[s
 _ACCESS_RE = re.compile(r"\b([a-z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)\b")
 # Roots that are never useful defect carriers (module refs, dunder noise).
 _ACCESS_STOPWORDS = {"self", "cls", "py", "os", "sys", "re", "json"}
-_MAX_SCAN_FILES = 200
+
+
+async def _files_mentioning(effects: Any, attrs: list[str]) -> list[str] | None:
+    """Project .py files whose text contains ``.attr`` for any of ``attrs`` —
+    one grep over the workspace, vendor/cache dirs excluded (the shared
+    history excludes). Over-inclusive by design (`.name` also finds
+    `.names`); the tree-sitter pass decides. None when grep is unavailable,
+    and the caller reads every file instead."""
+    if not attrs:
+        return []
+    from agent.history.excludes import EXCLUDED_DIR_PATTERNS
+
+    pattern = r"\.(" + "|".join(re.escape(a) for a in attrs) + ")"
+    cmd = [
+        "grep",
+        "-rlE",
+        "--include=*.py",
+        *(f"--exclude-dir={d}" for d in EXCLUDED_DIR_PATTERNS),
+        "-e",
+        pattern,
+        ".",
+    ]
+    try:
+        res = await effects.run_command(cmd, timeout=60)
+    except Exception:  # noqa: BLE001 — fall back to reading every file
+        return None
+    rc = getattr(res, "return_code", 2)
+    if rc == 1:
+        return []  # grep ran and found nothing
+    if rc != 0:
+        return None
+    return [
+        ln[2:] if ln.startswith("./") else ln
+        for ln in (getattr(res, "stdout", "") or "").splitlines()
+        if ln.strip()
+    ]
 
 
 async def _find_systemic_access_sites(
@@ -1364,26 +1540,34 @@ async def _find_systemic_access_sites(
     if not candidates:
         return "", []
 
-    # 2. Read project Python files (best-effort). Effects are already bound to
-    #    the mission workspace, so list "." rather than an absolute
-    #    working_directory (which would resolve relative to the bound root).
+    # 2. Read every project Python file that can hold a site — one whose text
+    #    mentions `.attr` for a candidate attr. No file-count cap (2026-09-26;
+    #    was the first 200 listed, so bigger repos were silently half
+    #    scanned): one grep narrows the reads, and without grep every file is
+    #    read and filtered by the same test. Effects are bound to the mission
+    #    workspace, so paths are relative to ".".
+    attrs = sorted({attr for _root, attr in candidates})
+    paths = await _files_mentioning(effects, attrs)
+    if paths is None:
+        try:
+            listing = await effects.list_directory(".", recursive=True)
+        except Exception:  # noqa: BLE001 - no listing → no structural scan
+            return "", []
+        paths = [
+            getattr(e, "path", "")
+            for e in getattr(listing, "entries", []) or []
+            if not getattr(e, "is_dir", False)
+            and getattr(e, "path", "").endswith(".py")
+        ]
     files: dict[str, str] = {}
-    try:
-        listing = await effects.list_directory(".", recursive=True)
-    except Exception:  # noqa: BLE001 - no listing → no structural scan
-        return "", []
-    for entry in getattr(listing, "entries", []) or []:
-        path = getattr(entry, "path", "")
-        if getattr(entry, "is_dir", False) or not path.endswith(".py"):
-            continue
-        if len(files) >= _MAX_SCAN_FILES:
-            break
+    for path in paths:
         try:
             fc = await effects.read_file(path)
         except Exception:  # noqa: BLE001 - skip unreadable, keep scanning
             continue
-        if getattr(fc, "exists", False) and getattr(fc, "content", ""):
-            files[path] = fc.content
+        content = getattr(fc, "content", "") if getattr(fc, "exists", False) else ""
+        if content and any(f".{a}" in content for a in attrs):
+            files[path] = content
     if not files:
         return "", []
 
@@ -1413,7 +1597,7 @@ async def _find_systemic_access_sites(
             f"  `{root}.{attr}` — {len(sites)} access site(s) "
             f"across {loc_count} function(s):"
         )
-        for s in sites[:12]:
+        for s in sites:
             lines.append(f"    - {s.file_path}:{s.line} in {s.function}")
 
     if not lines:
@@ -1521,12 +1705,13 @@ async def action_systemic_scan(step_input: StepInput) -> StepOutput:
 
     confirmed = await _existence_check_siblings(effects, named)
 
-    # Dedupe against the primary target + existing related; cap total at 8.
+    # Dedupe against the primary target + existing related. Every confirmed
+    # sibling rides the patch — no count cap (2026-09-26).
     seen = set(related)
     if target_symbol:
         seen.add(target_symbol)
     added = [s for s in confirmed if not (s in seen or seen.add(s))]
-    related = (related + added)[:8]
+    related = related + added
 
     pattern_spec = (
         str(parsed.get("pattern_change_spec", "") or "").strip()
@@ -1629,7 +1814,7 @@ async def action_goal_search_gate(step_input: StepInput) -> StepOutput:
             except Exception:  # noqa: BLE001 - gate must not die on a save
                 logger.debug("goal-escalation: save failed", exc_info=True)
         check_cmds = [
-            str(c.get("command"))[:140]
+            str(c.get("command"))
             for c in (getattr(goal, "acceptance_checks", None) or [])
             if c.get("required", True)
         ]
@@ -1643,7 +1828,7 @@ async def action_goal_search_gate(step_input: StepInput) -> StepOutput:
                 and note_tag in (getattr(n, "tags", None) or [])
                 and "stderr=" in str(getattr(n, "content", ""))
             ):
-                last_failure = str(n.content)[:400]
+                last_failure = str(n.content)
                 break
         evidence = (
             f"Goal (functional): {goal.description.strip()}\n\n"
@@ -1679,8 +1864,8 @@ async def action_goal_search_gate(step_input: StepInput) -> StepOutput:
             ),
             context_updates={
                 "mission": mission,
-                "search_brief": evidence[:4000],
-                "expected_outcome": expected[:1000],
+                "search_brief": evidence,
+                "expected_outcome": expected,
                 "force_consult": goal.escalation_count >= 3,
             },
         )
@@ -1708,8 +1893,8 @@ async def action_goal_search_gate(step_input: StepInput) -> StepOutput:
     attempt_lines = [
         f"- {getattr(a, 'flow', '?')} on "
         f"{getattr(a, 'target_file', '?')}:{getattr(a, 'target_symbol', '') or ''}"
-        f" — {getattr(a, 'reason', '') or getattr(a, 'diagnosis_summary', '')}"[:160]
-        for a in (getattr(goal, "failed_attempts", None) or [])[-6:]
+        f" — {getattr(a, 'reason', '') or getattr(a, 'diagnosis_summary', '')}"
+        for a in (getattr(goal, "failed_attempts", None) or [])
     ]
     evidence = (
         f"Goal (functional): {goal.description.strip()}\n"
@@ -1719,7 +1904,7 @@ async def action_goal_search_gate(step_input: StepInput) -> StepOutput:
     if headline:
         evidence += f"Latest observed failure: {headline}\n"
     if attempt_lines:
-        evidence += "Prior fix attempts (most recent):\n" + "\n".join(attempt_lines)
+        evidence += "Prior fix attempts:\n" + "\n".join(attempt_lines)
     expected = (
         f"A behavioural test session can observe this working: "
         f"{goal.description.strip()}"
@@ -1733,8 +1918,8 @@ async def action_goal_search_gate(step_input: StepInput) -> StepOutput:
         ),
         context_updates={
             "mission": mission,
-            "search_brief": evidence[:4000],
-            "expected_outcome": expected[:1000],
+            "search_brief": evidence,
+            "expected_outcome": expected,
             "force_consult": force_consult,
         },
     )
@@ -1813,7 +1998,7 @@ async def _input_data_files(effects, transients: list[str]) -> list[str]:
         ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
         if languages.is_data(ext) and path not in transient_set:
             out.append(path)
-    return sorted(out)[:12]
+    return sorted(out)
 
 
 async def action_gate_author_test(step_input: StepInput) -> StepOutput:
@@ -2076,7 +2261,7 @@ async def action_store_goal_search_findings(step_input: StepInput) -> StepOutput
         or step_input.context.get("research_summary", "")
         or ""
     ).strip()
-    goal.search_findings = summary[:4000] or "(escalation produced no summary)"
+    goal.search_findings = summary or "(escalation produced no summary)"
     if effects:
         await effects.save_mission(mission)
     stored = bool(summary)

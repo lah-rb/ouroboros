@@ -89,7 +89,7 @@ class TestBatchedDeclaresItsRefusals:
         """Previously log.debug per request — invisible at the default level."""
         src = self._src()
         assert "POOL-ONLY, ignored under batched" in src
-        assert "resident_strip_reasoning" in src
+        assert "strip_prior_reasoning / resident_strip_reasoning" in src
         assert "degen_retry" in src
 
     def test_the_flow_fork_disable_is_a_warning_not_an_info(self):

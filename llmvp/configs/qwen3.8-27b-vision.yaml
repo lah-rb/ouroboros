@@ -127,8 +127,7 @@ model:
   # Native four-tier support: low / medium / high / xhigh, with high and xhigh
   # collapsing onto the same sentence because the OFFICIAL template aliases
   # them. No clamp ladder needed — this family answers every canonical name.
-  # Kept from the 3.6 slot so the swap reads like-for-like. NOTE this makes
-  # resident_strip_reasoning inert either way (no resident session to strip).
+  # Kept from the 3.6 slot so the swap reads like-for-like.
   session_full_replay: true
   # ── STEP 3c: THE MULTI-TURN THINKING CONVENTION FLIPPED IN 3.8 ─────
   # Read from the assistant-history branch, which is the only place that ever
@@ -139,8 +138,11 @@ model:
   #                                                 -> ALL turns, by default
   # So 3.8 is trained to SEE its own prior reasoning: the canonical history
   # keeps it, and stripping would put a resident session out of distribution —
-  # the inverse of the muse-glimmer verdict. If this config is ever moved onto
-  # resident_seq_cache, `resident_strip_reasoning` must stay FALSE.
+  # the inverse of the muse-glimmer verdict. The flag is NOT inert on replay
+  # any more (2026-09-22): a hybrid's replay sessions strip by turn rollback
+  # (reference.yaml step 3c), so FALSE here is the live template verdict. The
+  # APEX flash-next config overrides the same template for cost; flip this
+  # one only on an A/B of its own.
   # (It renders '<think>\n\n</think>\n\n' for a turn with no reasoning, i.e.
   # the same empty-block shape as the thinking-off prefill — consistent.)
   resident_strip_reasoning: false

@@ -18,7 +18,6 @@ from agent import languages
 from agent.loader import load_prompt_text
 from agent.models import StepInput, StepOutput
 from agent.goal_factory import functional_goal, quality_goal, structural_goal
-from agent.actions.pipeline_actions import _cap_diagnostic
 from agent.actions.reporting_actions import (
     is_infrastructure_file,
     structural_block_reason,
@@ -1129,7 +1128,7 @@ async def action_derive_project_goals(step_input: StepInput) -> StepOutput:
     # Runs at t*1.0 — community default temperature for creative work.
     if effects and objective and data_file_goals:
         data_summary = "\n".join(
-            f"- {d['file_path']} (consumed by {d['consumed_by']}): {d['structure'][:200]}"
+            f"- {d['file_path']} (consumed by {d['consumed_by']}): {d['structure']}"
             for d in data_file_goals
         )
         content_brief_prompt = (
@@ -1724,7 +1723,7 @@ def _related_goal_context(mission: Any, goal: Any, files: list[str]) -> str:
     for g in mission.goals:
         if g.id == goal.id or not (set(g.associated_files or []) & file_set):
             continue
-        desc = " ".join(str(g.description).split())[:220]
+        desc = " ".join(str(g.description).split())
         (done_sibs if g.status == "complete" else open_sibs).append(desc)
     if not open_sibs and not done_sibs:
         return ""
@@ -1733,13 +1732,12 @@ def _related_goal_context(mission: Any, goal: Any, files: list[str]) -> str:
         parts.append(
             "Other OPEN goals on this file — one edit should satisfy ALL of "
             "these together, they are one constraint set:\n"
-            + "\n".join(f"  - {d}" for d in open_sibs[:8])
+            + "\n".join(f"  - {d}" for d in open_sibs)
         )
     if done_sibs:
         parts.append(
             "COMPLETED goals on this file — do NOT regress these; an edit "
-            "that breaks one reopens it:\n"
-            + "\n".join(f"  - {d}" for d in done_sibs[:8])
+            "that breaks one reopens it:\n" + "\n".join(f"  - {d}" for d in done_sibs)
         )
     return "\n\n".join(parts)
 
@@ -2141,7 +2139,7 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
                 file_path,
                 ", ".join(per_file.get("checks_failed", []) or []) or "?",
             )
-            recert_gate_output = _cap_diagnostic(per_file.get("output") or "", 800)
+            recert_gate_output = per_file.get("output") or ""
         else:
             recert_gate_output = ""
 
@@ -2211,7 +2209,7 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
                             f"Fix the environment/tooling issue blocking "
                             f"{file_path}'s validation gate — the diagnosis "
                             f"found no code defect.\n"
-                            f"Diagnosis: {diag_summary[:500]}"
+                            f"Diagnosis: {diag_summary}"
                         ),
                         "recent_reports": [],
                     }
@@ -2270,16 +2268,14 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
                         "A freshly created file failed its validation gate. "
                         "Diagnose the root cause and identify the specific "
                         f"file and symbol to change:\n{issue}"
-                        + (
-                            f"\n\nGate output:\n{error_output[:800]}"
-                            if error_output
-                            else ""
-                        )
                         + (f"\n\n{diag_siblings}" if diag_siblings else "")
                     ),
                     "what_happened": issue,
                     "error_headline": issue[:80],
-                    "error_output": error_output[:800],
+                    # Whole (2026-09-26): the diagnosis seed sizes its
+                    # transcript to the window; an 800-char head kept
+                    # the gate's banner and lost its finding.
+                    "error_output": error_output,
                     "recent_reports": [],
                 }
                 await _note_repair_econ(
@@ -2312,7 +2308,7 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
                 f"import, or importing a name that does not exist — FIX it now. "
                 f"If it fails ONLY because a project module you depend on has "
                 f"not been created yet, make NO change; it will resolve once "
-                f"that module exists. {getattr(last, 'summary', '')[:200]}"
+                f"that module exists. {getattr(last, 'summary', '')}"
             )
             logger.info("Structural sweep: import review for %s", file_path)
         elif block_reason == "lint" and goal.reports:
@@ -2328,7 +2324,7 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
             goal.lint_reviewed = True
             if effects:
                 await effects.save_mission(mission)
-            lint_out = _cap_diagnostic(getattr(last, "terminal_output", "") or "", 800)
+            lint_out = getattr(last, "terminal_output", "") or ""
             fix_directive = (
                 f"{file_path} compiles and imports but FAILS LINT "
                 f"({', '.join(getattr(last, 'checks_failed', []))}). The "
@@ -2350,7 +2346,7 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
                     f"{', '.join(last.checks_failed)}"
                 )
             elif getattr(last, "summary", ""):
-                fix_directive = f"Fix {file_path}: {last.summary[:200]}"
+                fix_directive = f"Fix {file_path}: {last.summary}"
 
         # Thread the actual gate output (import traceback, lint finding with
         # file:line) into the dispatch. Scan back to the NEWEST report that
@@ -2364,7 +2360,7 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
             if getattr(rep, "checks_failed", None) and getattr(
                 rep, "terminal_output", ""
             ):
-                gate_output = _cap_diagnostic(str(rep.terminal_output), 800)
+                gate_output = str(rep.terminal_output)
                 break
         # A failed verify-only re-cert produced FRESH gate output moments ago
         # (and such goals have no reports to scan) — it wins over stale finds.
@@ -2595,7 +2591,7 @@ async def _phase_exit_seam_gate(mission: Any, effects: Any) -> StepOutput | None
     ).items():
         if not entry.get("passed", True):
             out = entry.get("output") or "typecheck failed"
-            problems.setdefault(f, []).append(out[:500])
+            problems.setdefault(f, []).append(out)
 
     # ── reachability split ────────────────────────────────────────────
     # A seam every one of whose access sites is unreachable cannot affect the
@@ -2663,7 +2659,7 @@ async def _phase_exit_seam_gate(mission: Any, effects: Any) -> StepOutput | None
                 content=(
                     "seam gate: structural cruft that does not affect behaviour "
                     "(NOT blocking, no fix attempt spent): "
-                    + "; ".join(unreachable + cruft)[:600]
+                    + "; ".join(unreachable + cruft)
                 ),
                 category="failure_analysis",
                 tags=["seam_gate_advisory"],
@@ -2697,15 +2693,16 @@ async def _phase_exit_seam_gate(mission: Any, effects: Any) -> StepOutput | None
     problems = blocking
 
     target = sorted(problems)[0]
-    # Per-problem caps (§21): the old global [:800] truncated later problems
-    # out of the fix directive entirely on multi-problem gates. Regressions
-    # lead — they are the highest-signal entries — then everything else,
-    # each capped alone, total bounded.
+    # Every problem, whole (2026-09-26). The old global [:800] truncated
+    # later problems out of the fix directive entirely on multi-problem
+    # gates, and the per-problem 300/1,600 caps that replaced it still cut
+    # the file:line evidence a repair needs. Regressions lead — they are
+    # the highest-signal entries — then everything else.
     _ordered = sorted(
         (v for vs in problems.values() for v in vs),
         key=lambda v: 0 if v.startswith("REGRESSION:") else 1,
     )
-    seams = "\n".join(v[:300] for v in _ordered)[:1600]
+    seams = "\n".join(_ordered)
     # Direction: a missing DEFINITION is not a wrong call. The old directive
     # said "fix {target} so its cross-module calls match", which points the
     # model at the call site — so a missing method got its caller re-edited
@@ -2728,7 +2725,7 @@ async def _phase_exit_seam_gate(mission: Any, effects: Any) -> StepOutput | None
             content=(
                 f"seam gate: cross-module interface check failed at structural "
                 f"phase exit (attempt {attempts + 1}/{_SEAM_GATE_MAX_ATTEMPTS}): "
-                f"{seams[:300]}"
+                f"{seams}"
             ),
             category="failure_analysis",
             tags=["seam_gate"],
@@ -3143,7 +3140,7 @@ async def _sweep_after_file_ops(
                             "syntax breakage (this is collateral damage, "
                             "not the original bug):\n" + goal.description
                         ),
-                        "error_output": cout[:4000],
+                        "error_output": cout,
                         "what_happened": "the fix broke test collection",
                         "error_headline": "test collection failed after edit",
                         "failed_attempts_context": [
@@ -3346,7 +3343,7 @@ async def _sweep_after_project_ops(
             target_file=_ENV_ATTEMPT_TARGET,
             target_symbol="",
             flow="project_ops",
-            reason=(getattr(last_report, "summary", "") or "no details")[:500],
+            reason=(getattr(last_report, "summary", "") or "no details"),
             diagnosis_summary=prior_diag_summary,
             pre_headline=prior_interact_headline,
         )
@@ -3381,7 +3378,7 @@ async def _sweep_after_project_ops(
         # project_ops failed — re-diagnose to find a different approach
         error_description = (
             f"Environment fix failed for: {goal.description}\n\n"
-            f"project_ops reported: {getattr(last_report, 'summary', 'no details')[:500]}\n"
+            f"project_ops reported: {getattr(last_report, 'summary', 'no details')}\n"
         )
         dispatch_config = {
             "goal_id": goal.id,
@@ -3596,7 +3593,7 @@ async def _sweep_after_diagnose(
     if recommended_flow == "project_ops":
         fix_directive = (
             f"Fix the environment/dependency issue that prevents: {goal.description}\n"
-            f"Diagnosis: {diag_summary[:500]}"
+            f"Diagnosis: {diag_summary}"
         )
         dispatch_config = {
             "goal_id": goal.id,
@@ -3636,7 +3633,7 @@ async def _sweep_after_diagnose(
 
         fix_directive = (
             f"Fix the issue in {fix_target} that prevents: {goal.description}\n"
-            f"Diagnosis: {diag_summary[:500]}"
+            f"Diagnosis: {diag_summary}"
         )
         dispatch_config = {
             "goal_id": goal.id,
@@ -3687,7 +3684,7 @@ async def _sweep_after_diagnose(
             "target_file_path": "",
             "flow_directive": (
                 f"Fix the issue that prevents: {goal.description}\n"
-                f"Diagnosis: {diag_summary[:500]}"
+                f"Diagnosis: {diag_summary}"
             ),
             "diagnosis_summary": diag_summary,
         }
@@ -4192,7 +4189,7 @@ def _goal_repro_block(goal: Any) -> str:
     )
     evidence = str(getattr(goal, "verification_evidence", "") or "").strip()
     if evidence:
-        block += f"\nObserved when reproduced: {evidence[:300]}"
+        block += f"\nObserved when reproduced: {evidence}"
     return block
 
 
@@ -4384,9 +4381,9 @@ def _fileops_dispatch_from_quality_diagnosis(
                 "do not convert it to another tool's format, and do not add keys "
                 "from one (Poetry, PDM, setuptools) to a manifest written in "
                 "another.\n"
-                f"Finding: {(goal_description or '')[:200]}\n"
-                f"Diagnosis: {summary_txt[:500]}"
-                + (f"\nRequired change: {change_spec[:300]}" if change_spec else "")
+                f"Finding: {goal_description or ''}\n"
+                f"Diagnosis: {summary_txt}"
+                + (f"\nRequired change: {change_spec}" if change_spec else "")
             ),
             "change_spec": change_spec,
             "recent_reports": [],
@@ -4407,8 +4404,8 @@ def _fileops_dispatch_from_quality_diagnosis(
             "flow_directive": (
                 "Fix the environment/tooling/manifest issue behind this "
                 "quality finding — the diagnosis found no code defect.\n"
-                f"Finding: {(goal_description or '')[:200]}\n"
-                f"Diagnosis: {summary_txt[:500]}"
+                f"Finding: {goal_description or ''}\n"
+                f"Diagnosis: {summary_txt}"
             ),
             "recent_reports": [],
         }
@@ -4422,7 +4419,7 @@ def _fileops_dispatch_from_quality_diagnosis(
         "goal_files": [target_file],
         "flow": "file_ops",
         "target_file_path": target_file,
-        "flow_directive": f"Fix the quality issue in {target_file}:\n{summary[:500]}",
+        "flow_directive": f"Fix the quality issue in {target_file}:\n{summary}",
         "target_symbol": target_symbol,
         "change_spec": change_spec,
         "diagnosis_kind": str(_rget(report, "diagnosis_kind", "") or ""),
@@ -4480,7 +4477,7 @@ async def _untested_already_covered(effects: Any, mission: Any, text: str) -> bo
     try:
         prompt = load_prompt_text("quality_gate/untested_equivalence").format(
             finding=subject,
-            completed_goals="\n".join(f"  - {c[:160]}" for c in completed),
+            completed_goals="\n".join(f"  - {c}" for c in completed),
         )
         # none: the question is a comparison, not a deliberation, and this
         # runs once per candidate inside a gate that is already expensive.
@@ -4663,7 +4660,7 @@ async def action_harvest_quality_findings(step_input: StepInput) -> StepOutput:
                     FailedAttempt(
                         target_file=_ENV_ATTEMPT_TARGET,
                         flow="quality_gate",
-                        reason=f"gate re-reported after a claimed fix: {reason[:400]}",
+                        reason=f"gate re-reported after a claimed fix: {reason}",
                         diagnosis_summary=prior_diag,
                         pre_headline=prior_headline,
                     )
@@ -4674,11 +4671,11 @@ async def action_harvest_quality_findings(step_input: StepInput) -> StepOutput:
             reopened = False
             mission.goals.append(
                 quality_goal(
-                    # 200 chars truncated a two-defect manifest report to the
-                    # first defect and half a sentence. This description IS the
-                    # diagnosis brief — the only channel to the model — so it
-                    # gets room for a deterministic check's full finding.
-                    description=f"Quality gate failed: {reason[:900]}",
+                    # Whole. This description IS the diagnosis brief — the only
+                    # channel to the model. 200 chars truncated a two-defect
+                    # manifest report to the first defect and half a sentence;
+                    # the 900 that replaced it still cut a long finding.
+                    description=f"Quality gate failed: {reason}",
                     origin="quality_gate",
                     finding_signature=sig,
                 )
@@ -5165,8 +5162,8 @@ async def action_regression_sweep(step_input: StepInput) -> StepOutput:
             common_cause = True
             env_goal_ids = list(distinct)
             goal_lines = "\n".join(
-                f"- {g.description[:80]}\n    check: {str(c.get('command'))[:140]}"
-                for g, c, _ in members[:8]
+                f"- {g.description}\n    check: {c.get('command')}"
+                for g, c, _ in members
             )
             env_evidence = (
                 f"{len(distinct)} previously-verified goals' acceptance "
@@ -5354,7 +5351,7 @@ async def action_store_env_escalation_findings(step_input: StepInput) -> StepOut
     ids = {str(i) for i in (step_input.context.get("env_affected_goal_ids") or [])}
     stored = 0
     if summary:
-        text = f"[common-cause escalation] {summary}"[:4000]
+        text = f"[common-cause escalation] {summary}"
         for g in getattr(mission, "goals", []) or []:
             if g.id in ids:
                 # Same replace-don't-append contract as the stuck-goal path:
@@ -5365,7 +5362,7 @@ async def action_store_env_escalation_findings(step_input: StepInput) -> StepOut
             NoteRecord(
                 content=(
                     f"common-cause escalation concluded across {len(ids)} "
-                    f"goal(s): {summary[:600]}"
+                    f"goal(s): {summary}"
                 ),
                 category="failure_analysis",
                 tags=["regression", "common_cause"],
@@ -5446,20 +5443,30 @@ async def action_run_test_suite_gate(step_input: StepInput) -> StepOutput:
     # Resolve the suite command: union of goals' already-derived repair tests
     # (their test files), else derive from the objective (reuses the repair-test
     # selection). A repair mission's functional goals already carry repair_tests.
-    test_files: list[str] = []
+    #
+    # One BATCH per goal's own selection (each ≤2 files, the pair its
+    # baseline witnessed), run one after another. Every file a goal chose
+    # runs; the 90 s bound holds per batch. The old single run of
+    # `test_files[:3]` over the union certified the suite with a fourth
+    # goal's files never run (2026-09-26).
+    batches: list[list[str]] = []
+    seen_files: set[str] = set()
     baseline_collect_ok = True
     for g in mission.goals:
         rt = getattr(g, "repair_tests", None) or {}
-        for tf in rt.get("test_files", []) or []:
-            if tf not in test_files:
-                test_files.append(tf)
+        batch = [tf for tf in rt.get("test_files", []) or [] if tf not in seen_files]
+        if batch:
+            seen_files.update(batch)
+            batches.append(batch)
         if rt.get("collect_ok") is False:
             baseline_collect_ok = False
-    if not test_files:
+    if not batches:
         derived = await derive_repair_tests(effects, getattr(mission, "objective", ""))
-        test_files = derived.get("test_files", []) or []
+        if derived.get("test_files"):
+            batches = [list(derived["test_files"])]
         if derived.get("collect_ok") is False:
             baseline_collect_ok = False
+    test_files = [tf for batch in batches for tf in batch]
 
     if not test_files:
         # No suite discoverable. auto/on both pass (nothing to run); the
@@ -5472,40 +5479,50 @@ async def action_run_test_suite_gate(step_input: StepInput) -> StepOutput:
         # flag certified a still-failing repo. Re-check collection NOW; stand
         # down only if it is STILL broken (a genuinely unbuildable checkout —
         # never loop on an environmental failure).
+        collect_ok_now = True
         try:
-            cres = await effects.run_command(
-                [
-                    "/bin/sh",
-                    "-c",
-                    "python -m pytest --collect-only -q " + " ".join(test_files[:3]),
-                ],
-                timeout=60,
-            )
-            cout = (getattr(cres, "stdout", "") or "") + (
-                getattr(cres, "stderr", "") or ""
-            )
-            _n, collect_ok_now = _parse_pytest_output(cout)
+            for batch in batches:
+                cres = await effects.run_command(
+                    [
+                        "/bin/sh",
+                        "-c",
+                        "python -m pytest --collect-only -q " + " ".join(batch),
+                    ],
+                    timeout=60,
+                )
+                cout = (getattr(cres, "stdout", "") or "") + (
+                    getattr(cres, "stderr", "") or ""
+                )
+                _n, ok = _parse_pytest_output(cout)
+                collect_ok_now = collect_ok_now and ok
         except Exception:
             collect_ok_now = False
         if not collect_ok_now:
             return _pass("suite still does not collect — standing down")
         logger.info("Test gate: stale baseline — collection now clean, proceeding")
 
-    command = "python -m pytest -q --no-header " + " ".join(test_files[:3])
-    try:
-        # 90s cap — see the b5c teardown race note in derive_repair_tests.
-        res = await effects.run_command(["/bin/sh", "-c", command], timeout=90)
-        out = (getattr(res, "stdout", "") or "") + (getattr(res, "stderr", "") or "")
-        rc = getattr(res, "return_code", 1)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("Test gate: suite run failed (%s) — standing down", e)
-        return _pass(f"suite run errored ({type(e).__name__}) — standing down")
-
-    failing_nodes, collect_ok = _parse_pytest_output(out)
-    if not collect_ok:
-        # Post-hoc collection break with a clean baseline → a fix broke imports;
-        # harvest it as a fix goal like any other failure (node = the file).
-        failing_nodes = failing_nodes or [f"{tf}::collection" for tf in test_files[:1]]
+    failing_nodes: list[str] = []
+    rc = 0
+    for batch in batches:
+        command = "python -m pytest -q --no-header " + " ".join(batch)
+        try:
+            # 90s per batch — see the b5c teardown race note in
+            # derive_repair_tests.
+            res = await effects.run_command(["/bin/sh", "-c", command], timeout=90)
+            out = (getattr(res, "stdout", "") or "") + (
+                getattr(res, "stderr", "") or ""
+            )
+            rc = rc or getattr(res, "return_code", 1)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Test gate: suite run failed (%s) — standing down", e)
+            return _pass(f"suite run errored ({type(e).__name__}) — standing down")
+        nodes, collect_ok = _parse_pytest_output(out)
+        if not collect_ok and not nodes:
+            # Post-hoc collection break with a clean baseline → a fix broke
+            # imports; harvest it as a fix goal like any other failure
+            # (node = the batch's first file).
+            nodes = [f"{batch[0]}::collection"]
+        failing_nodes += [n for n in nodes if n not in failing_nodes]
     if rc == 0 and not failing_nodes:
         return _pass(f"suite passed ({len(test_files)} file(s))")
 
@@ -5727,7 +5744,7 @@ async def action_quality_sweep_next(step_input: StepInput) -> StepOutput:
                     "provisions the environment and cannot edit an existing "
                     "manifest"
                     if status == "success" and not touched
-                    else (str(_rget(last, "summary", "") or "no details"))[:500]
+                    else (str(_rget(last, "summary", "") or "no details"))
                 ),
                 diagnosis_summary=_prior_diagnosis_context(goal)[0],
             )
@@ -5781,7 +5798,7 @@ async def action_quality_sweep_next(step_input: StepInput) -> StepOutput:
                 target_file="",
                 flow="diagnose_issue",
                 reason="diagnosis produced no dispatchable fix",
-                diagnosis_summary=str(_rget(last, "summary", "") or "")[:300],
+                diagnosis_summary=str(_rget(last, "summary", "") or ""),
             )
         )
         goal.status = "complete"
@@ -5966,7 +5983,7 @@ async def action_apply_fix_target(step_input: StepInput) -> StepOutput:
     goal_desc = dispatch_config.get("goal_description", "")
     dispatch_config["flow_directive"] = (
         f"Fix the issue in {selected_file} that prevents: {goal_desc}\n"
-        f"Diagnosis: {diagnosis[:500]}"
+        f"Diagnosis: {diagnosis}"
     )
 
     # Regress the structural goal for the selected file (with provenance)

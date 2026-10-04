@@ -84,37 +84,34 @@ COMPILED = [(k, re.compile(p, re.I), w) for k, p, w in SIGNALS]
 # audit still works after the machine cycles. Duplicate paths are harmless:
 # the same call appearing in both places is the same trace, and archives are
 # snapshots of workspaces that have since been wiped.
-TRACE_GLOBS = (
-    "/tmp/tier/*/.agent/traces/*.jsonl",
-    str(
-        Path.home()
-        / "ouroboros-runs"
-        / "_workspace_archive_*"
-        / "*"
-        / ".agent"
-        / "traces"
-        / "*.jsonl"
-    ),
+AGENT_DIR_GLOBS = (
+    "/tmp/tier/*/.agent",
+    str(Path.home() / "ouroboros-runs" / "_workspace_archive_*" / "*" / ".agent"),
 )
 
 
 def cot_calls():
-    """Every traced inference_call carrying reasoning, live or archived."""
+    """Every recorded inference_call carrying reasoning, live or archived —
+    from the history store, or the retired JSONL where an archive predates
+    it."""
+    from agent.history.reader import has_history, legacy_jsonl_events, load_events
+
     seen: set = set()
     paths = []
-    for g in TRACE_GLOBS:
+    for g in AGENT_DIR_GLOBS:
         paths += sorted(Path("/").glob(g.lstrip("/")))
-    for tr in paths:
-        # workspace label = the dir two levels above traces/
-        model = tr.parent.parent.parent.name
-        if tr.name in seen:
+    for agent_dir in paths:
+        # workspace label = the dir above .agent
+        model = agent_dir.parent.name
+        key = str(agent_dir.resolve())
+        if key in seen:
             continue
-        seen.add(tr.name)
-        for line in tr.open(errors="replace"):
-            try:
-                r = json.loads(line)
-            except Exception:
-                continue
+        seen.add(key)
+        if has_history(str(agent_dir)):
+            events = load_events(str(agent_dir))
+        else:
+            events = legacy_jsonl_events(str(agent_dir), newest_only=False)
+        for r in events:
             if r.get("event_type") != "inference_call":
                 continue
             if not r.get("thinking_content"):

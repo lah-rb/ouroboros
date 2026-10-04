@@ -13,12 +13,13 @@ import pytest
 from agent.actions.refinement_actions import (
     _MAX_FILE_SIZE,
     _MAX_SCAN_FILES,
+    _NOT_SCANNED,
     _SIGNATURE_MAX_CHARS,
     _excluded,
     action_scan_project,
 )
 from agent.effects.mock import MockEffects
-from agent.formatters import _LISTING_MAX_CHARS, format_project_listing
+from agent.formatters import _listing_max_chars, format_project_listing
 from agent.models import FlowMeta, StepInput
 
 
@@ -71,10 +72,14 @@ async def test_scan_excludes_vendor_and_skips_large_files():
 
 
 @pytest.mark.asyncio
-async def test_scan_caps_file_count():
-    files = {f"f{i}.py": "x = 1" for i in range(_MAX_SCAN_FILES + 50)}
+async def test_scan_names_files_past_the_read_limit():
+    # Past the read limit a file is listed by NAME, never dropped: the
+    # model sees it and trace can read it (2026-09-26).
+    files = {f"f{i:03d}.py": "x = 1" for i in range(_MAX_SCAN_FILES + 50)}
     out = await action_scan_project(_si(files))
-    assert len(out.context_updates["project_manifest"]) == _MAX_SCAN_FILES
+    m = out.context_updates["project_manifest"]
+    assert len(m) == _MAX_SCAN_FILES + 50
+    assert sum(v == _NOT_SCANNED for v in m.values()) == 50
     assert out.result["scan_omitted"] == 50
 
 
@@ -88,11 +93,15 @@ async def test_scan_byte_caps_minified_signature():
     assert len(sig) <= _SIGNATURE_MAX_CHARS + 80
 
 
-def test_listing_total_budget_and_omit_note():
+def test_listing_total_budget_names_the_rest():
+    # The budget is one read's share of the window; what it cannot hold is
+    # listed by NAME, so no file is invisible to the model (2026-09-26).
     big = {f"f{i}.py": "x" * 200 for i in range(1000)}
     out = format_project_listing({"source": big}, {})
-    assert len(out) < _LISTING_MAX_CHARS + 500
-    assert "more files omitted" in out
+    body, _, rest = out.partition("… ")
+    assert len(body) < _listing_max_chars() + 500
+    assert "more files, names only" in rest and "f999.py" in rest
+    assert "x" * 200 not in rest  # names, not signatures
 
 
 def test_listing_small_manifest_unchanged():

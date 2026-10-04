@@ -41,10 +41,10 @@ class TestTheEvidenceBlock:
         assert _frame_evidence("", "") == ""
         assert _frame_evidence("   ", "\n") == ""
 
-    def test_long_fields_are_capped(self):
-        """Mirrors the caps LOCALIZE_PROMPT applies to the same fields."""
+    def test_long_fields_are_whole(self):
+        """A diagnosis is never cut mid-sentence (2026-09-26)."""
         out = _frame_evidence("r" * 5000, "c" * 5000)
-        assert len(out) < 1600
+        assert "r" * 5000 in out and "c" * 5000 in out
 
 
 class TestItReachesTheModel:

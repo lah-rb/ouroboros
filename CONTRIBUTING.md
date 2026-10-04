@@ -184,6 +184,26 @@ directly. See `AGENT.md` for the full `uv` command reference.
 transformers, mlx, the editable tau-bench install). Use `uv pip install <pkg>` or
 `uv sync --inexact`.
 
+## The History Store (`.agent/history/`)
+
+Every mission records itself by default: one parquet row per inference turn
+(full prompt, response, thinking, every id and metric the server returns),
+one per trace event, one per workspace tree change, and the workspace itself
+as git trees in a bare dulwich store (`repo.git`). `ouroboros.py history ls|
+show|diff|rollback|replay|compact|gc|import-traces` read and operate on it;
+`ouroboros.py trace` renders the finite-time summary from it. See
+`agent/history/` (schema.py is the column contract).
+
+**It is sensitive.** Prompts quote file contents, tool output and environment
+values verbatim. Treat `.agent/history/` like a credentials file: never commit
+it, never copy it into a shared logging directory unredacted, and prefer
+`--history metrics` (or `OURO_HISTORY=metrics`) on shared machines — the
+numbers stay, the text goes. `OURO_HISTORY_REDACT=1` scrubs secret-shaped
+strings on the way in; `--history off` keeps only the in-memory ledger.
+
+The JSONL trace (`.agent/traces/`) is retired. A finished run that still has
+one is loaded with `ouroboros.py history import-traces --working-dir <ws>`.
+
 ## Designing Swarm-Type Workflows
 
 Hard-won guidance from the swarm-class economics study (2026-07-24; full

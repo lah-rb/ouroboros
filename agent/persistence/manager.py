@@ -27,7 +27,6 @@ from typing import Any
 
 from agent.persistence.models import (
     Event,
-    FlowArtifact,
     MissionState,
 )
 
@@ -45,8 +44,9 @@ MISSION_DOC_FILE = "mission.loro"
 MISSION_DOC_STAT_FILE = "mission.loro.stat"
 EVENTS_FILE = "events.json"
 CONFIG_FILE = "config.json"
+# The per-turn history store (agent/history) lives here: parquet tables and
+# the bare dulwich object store. Created empty; the store fills it.
 HISTORY_DIR = "history"
-SNAPSHOTS_DIR = "snapshots"
 
 
 class PersistenceError(Exception):
@@ -56,7 +56,7 @@ class PersistenceError(Exception):
 
 
 class PersistenceManager:
-    """File-backed persistence for mission state, events, and artifacts.
+    """File-backed persistence for mission state and events.
 
     All paths are relative to a working directory. The .agent/ directory
     is created within that working directory.
@@ -94,7 +94,6 @@ class PersistenceManager:
         """Create the .agent/ directory structure if it doesn't exist."""
         os.makedirs(self._agent_dir, exist_ok=True)
         os.makedirs(os.path.join(self._agent_dir, HISTORY_DIR), exist_ok=True)
-        os.makedirs(os.path.join(self._agent_dir, SNAPSHOTS_DIR), exist_ok=True)
         logger.debug("Initialized agent directory at %s", self._agent_dir)
 
     def agent_dir_exists(self) -> bool:
@@ -516,80 +515,6 @@ class PersistenceManager:
         except Exception as e:
             logger.error("Failed to clear events: %s", e)
             return False
-
-    # ── Flow Artifacts ────────────────────────────────────────────
-
-    def save_artifact(self, artifact: FlowArtifact) -> bool:
-        """Save a flow artifact to .agent/history/.
-
-        Filename is {timestamp}_{task_id}.json for chronological ordering.
-
-        Returns:
-            True on success.
-        """
-        history_dir = os.path.join(self._agent_dir, HISTORY_DIR)
-        os.makedirs(history_dir, exist_ok=True)
-
-        # Create filename from timestamp (sanitized) and task_id
-        ts = artifact.timestamp.replace(":", "-").replace("+", "_")
-        filename = f"{ts}_{artifact.task_id}.json"
-        path = os.path.join(history_dir, filename)
-
-        try:
-            self._atomic_write(path, artifact.model_dump_json(indent=2))
-            logger.debug("Saved artifact: %s", filename)
-            return True
-        except Exception as e:
-            logger.error("Failed to save artifact: %s", e)
-            return False
-
-    def load_artifact(self, task_id: str) -> FlowArtifact | None:
-        """Load the most recent artifact for a task_id.
-
-        Searches .agent/history/ for files ending with _{task_id}.json.
-
-        Returns:
-            FlowArtifact if found, None otherwise.
-        """
-        history_dir = os.path.join(self._agent_dir, HISTORY_DIR)
-        if not os.path.isdir(history_dir):
-            return None
-
-        suffix = f"_{task_id}.json"
-        matching = sorted(
-            [f for f in os.listdir(history_dir) if f.endswith(suffix)],
-            reverse=True,  # Most recent first
-        )
-
-        if not matching:
-            return None
-
-        path = os.path.join(history_dir, matching[0])
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            return FlowArtifact.model_validate(data)
-        except Exception as e:
-            logger.error("Failed to load artifact %s: %s", matching[0], e)
-            return None
-
-    def list_artifacts(self, filter_str: str | None = None) -> list[str]:
-        """List artifact filenames in .agent/history/.
-
-        Args:
-            filter_str: Optional substring filter on filenames.
-
-        Returns:
-            List of artifact filenames (sorted chronologically).
-        """
-        history_dir = os.path.join(self._agent_dir, HISTORY_DIR)
-        if not os.path.isdir(history_dir):
-            return []
-
-        files = sorted(f for f in os.listdir(history_dir) if f.endswith(".json"))
-        if filter_str:
-            files = [f for f in files if filter_str in f]
-        return files
 
     # ── Generic Key-Value State ───────────────────────────────────
 

@@ -813,7 +813,12 @@ class TestEvaluationIsStatelessAndBounded:
     memoryful session, so a 77-turn transcript's KV plus the eval prompt
     overflowed the 32k window and the session's verdict was LOST — any
     session deep enough to pass the e2e finale would overflow its own
-    evaluation. The turn is now stateless over a bounded session tail."""
+    evaluation. The turn is now stateless over a transcript fitted to the
+    serving window.
+
+    Stateless for real since 2026-09-25: leaving inference_session_id
+    undeclared never did it (the key is ambient), so the branch now ends the
+    tester's session first — see TestEvaluationRoutesTheCallItClaims."""
 
     def test_evaluate_outcome_declares_no_session(self):
         step = _compiled()["interact"]["steps"]["evaluate_outcome"]
@@ -821,21 +826,54 @@ class TestEvaluationIsStatelessAndBounded:
             step["context"].get("optional", []) + step["context"].get("required", [])
         )
 
-    def test_evidence_is_the_bounded_tail(self):
+    def test_the_stateless_branch_releases_the_session_first(self):
+        steps = _compiled()["interact"]["steps"]
+        release = steps["release_session_for_eval"]
+        assert release["action"] == "end_inference_session"
+        assert [r["transition"] for r in release["resolver"]["rules"]] == [
+            "evaluate_outcome"
+        ]
+
+    def test_evidence_is_the_whole_transcript_fitted_at_render(self):
         step = _compiled()["interact"]["steps"]["evaluate_outcome"]
         evidence = next(s for s in step["turn"]["sections"] if s["type"] == "evidence")
         assert evidence["ref"] == {"$ref": "context.eval_session_tail"}
+        assert evidence["fit"] == "tail"
         tail_pc = next(
             p for p in step["pre_compute"] if p["formatter"] == "format_session_tail"
         )
         assert tail_pc["output_key"] == "eval_session_tail"
-        assert tail_pc["params"]["max_chars"] == 16000
+        assert "max_chars" not in tail_pc["params"]
 
-    def test_the_tail_formatter_actually_bounds(self):
+
+class TestSessionEvidenceIsWhole:
+    """derive_acceptance's session evidence was cut to its last 3,000 chars
+    with no marker (2026-09-25): 2 of 22 prompts began mid-line, launch
+    command gone. No step cuts a transcript by characters any more; the one
+    that must fit a window (the stateless evaluator) declares fit: "tail"."""
+
+    def test_the_formatter_returns_the_whole_transcript(self):
         from agent.formatters import format_session_tail
 
-        out = format_session_tail({"source": "x" * 100000, "max_chars": 16000}, {})
-        assert len(out) == 16000
+        src = "[Turn 0] (shell_command)\n  > python main.py\n" + "y" * 100000
+        assert format_session_tail({"source": src}, {}) == src
+
+    def test_the_formatter_refuses_a_character_cut(self):
+        from agent.formatters import format_session_tail
+
+        with pytest.raises(ValueError, match="fit"):
+            format_session_tail({"source": "x" * 100, "max_chars": 16000}, {})
+
+    def test_no_step_cuts_a_session_by_characters(self):
+        cut = sorted(
+            f"{name}.{step_name}"
+            for name, flow in _compiled().items()
+            for step_name, step in (flow.get("steps") or {}).items()
+            for pc in step.get("pre_compute") or []
+            if pc.get("formatter") == "format_session_tail"
+            and "max_chars" in (pc.get("params") or {})
+        )
+        assert cut == []
 
 
 class TestRewriteSizeGate:
@@ -845,10 +883,16 @@ class TestRewriteSizeGate:
     fast with a headline that steers the next diagnosis to a symbol-scoped
     target — patch works at any file size."""
 
-    def test_read_target_gates_on_size(self):
+    def test_read_target_gates_on_the_window(self):
+        """The fixed 24,000-char gate became the whole-if-it-fits rule
+        (2026-09-26): read_target asks read_files to size the file for a
+        whole-file regeneration, and routes on that."""
         rw = _compiled()["rewrite"]["steps"]
+        assert rw["read_target"]["params"]["size_for_rewrite"] is True
         rules = rw["read_target"]["resolver"]["rules"]
-        assert rules[0]["condition"] == "result.get('content_bytes', 0) > 24000"
+        assert (
+            rules[0]["condition"] == "result.get('whole_rewrite_fits', True) == False"
+        )
         assert rules[0]["transition"] == "too_large"
         tl = rw["too_large"]
         assert tl["terminal"] is True and tl["status"] == "failed"
@@ -876,6 +920,29 @@ class TestRewriteSizeGate:
             )
         )
         assert out.result["content_bytes"] == 30000
+        assert "whole_rewrite_fits" not in out.result  # only when asked
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("n_ctx,fits", [(262144, True), (32768, False)])
+    async def test_a_rewrite_is_sized_against_the_serving_window(self, n_ctx, fits):
+        """A 40KB file (~13k tokens) fits a whole-file rewrite on a 262k
+        window, not on a 32k one: it must fit the share AND leave room for
+        its own regeneration."""
+        from agent.actions.registry import action_read_files
+
+        class _Fx(MockEffects):
+            async def cache_health(self):
+                return {"nCtxSeq": n_ctx}
+
+        out = await action_read_files(
+            StepInput(
+                context={},
+                params={"target": "engine.py", "size_for_rewrite": True},
+                meta=FlowMeta(flow_name="rewrite", step_id="read_target"),
+                effects=_Fx(files={"engine.py": "x = 1\n" * 6700}),
+            )
+        )
+        assert out.result["whole_rewrite_fits"] is fits
 
     @pytest.mark.asyncio
     async def test_the_flag_action_writes_the_steering_headline(self):
@@ -897,8 +964,10 @@ class TestRewriteSizeGate:
 class TestEvaluationModeRouter:
     """Operator (2026-08-07): 'the original behavior should be the default
     with bigger context models.' In-session evaluation (full transcript in
-    KV) runs when health.nCtxSeq >= 64k; the stateless bounded tail — which
-    cannot lose a verdict to depth — runs below that or when unknown."""
+    KV) runs when the verdict FITS in the tester's session — occupancy +
+    evaluation prompt + reserve within the real window (2026-09-26; it was
+    nCtxSeq >= 64k). The stateless fallback runs otherwise, and whenever the
+    occupancy or the window is unknown."""
 
     @pytest.mark.asyncio
     async def test_probe_defaults_to_stateless_when_unknown(self):
@@ -912,25 +981,49 @@ class TestEvaluationModeRouter:
                 effects=MockEffects(),  # no cache_health
             )
         )
-        assert out.result["big_context"] is False
+        assert out.result["in_session_fits"] is False
 
-    @pytest.mark.asyncio
-    async def test_probe_picks_in_session_on_big_windows(self):
-        from agent.actions.interactive_actions import action_probe_eval_context
-
+    @staticmethod
+    def _tracking(n_ctx: int, held: int):
         class _Fx(MockEffects):
             async def cache_health(self):
-                return {"nCtxSeq": 131072}
+                return {"nCtxSeq": n_ctx}
+
+            def session_tokens(self, session_id):
+                return held
+
+        return _Fx()
+
+    @pytest.mark.asyncio
+    async def test_probe_picks_in_session_when_the_verdict_fits(self):
+        from agent.actions.interactive_actions import action_probe_eval_context
 
         out = await action_probe_eval_context(
             StepInput(
-                context={},
+                context={"inference_session_id": "tester-1"},
                 params={},
                 meta=FlowMeta(flow_name="interact", step_id="choose_eval_mode"),
-                effects=_Fx(),
+                effects=self._tracking(131072, 20000),
             )
         )
-        assert out.result["big_context"] is True
+        assert out.result["in_session_fits"] is True
+
+    @pytest.mark.asyncio
+    async def test_a_session_that_filled_the_window_evaluates_stateless(self):
+        """tier_20260924-191710: a 124-turn tester session reached 262,715
+        tokens of a 262,144 window, and the in-session evaluation (265,673)
+        lost its verdict. The window alone said "big — go in-session"."""
+        from agent.actions.interactive_actions import action_probe_eval_context
+
+        out = await action_probe_eval_context(
+            StepInput(
+                context={"inference_session_id": "tester-1"},
+                params={},
+                meta=FlowMeta(flow_name="interact", step_id="choose_eval_mode"),
+                effects=self._tracking(262144, 259000),
+            )
+        )
+        assert out.result["in_session_fits"] is False
 
     def test_router_wiring(self):
         steps = _compiled()["interact"]["steps"]
@@ -938,8 +1031,8 @@ class TestEvaluationModeRouter:
             r["condition"]: r["transition"]
             for r in steps["choose_eval_mode"]["resolver"]["rules"]
         }
-        assert cm["result.big_context == true"] == "evaluate_in_session"
-        assert cm["true"] == "evaluate_outcome"
+        assert cm["result.in_session_fits == true"] == "evaluate_in_session"
+        assert cm["true"] == "release_session_for_eval"
         # both acceptance paths enter through the router
         for entry in ("load_stored_checks", "acceptance_verdict"):
             assert any(
@@ -953,6 +1046,119 @@ class TestEvaluationModeRouter:
         problem = next(s for s in step["turn"]["sections"] if s["type"] == "problem")
         assert problem["ref"] == {"$ref": "context.eval_objective"}
         assert step["pre_compute"][0]["formatter"] == "strip_test_guidance"
+
+    @pytest.mark.asyncio
+    async def test_the_probe_reads_the_window_through_the_real_effects(self, tmp_path):
+        """The probe's own tests handed it an effects double WITH
+        cache_health; LocalEffects had none, so in production the probe read
+        "unknown" every time (tier_20260924-191710: 45 of 45 stateless on a
+        262k window)."""
+        from agent.actions.interactive_actions import action_probe_eval_context
+        from agent.effects.local import LocalEffects
+
+        class _Inference:
+            async def cache_health(self):
+                return {"nCtxSeq": 262144}
+
+        (tmp_path / ".agent").mkdir()
+        fx = LocalEffects(str(tmp_path), history_mode="off")
+        fx._get_inference = lambda domain="": _Inference()  # type: ignore[method-assign]
+        fx._session_tokens["tester-1"] = 30000
+        out = await action_probe_eval_context(
+            StepInput(
+                context={"inference_session_id": "tester-1"},
+                params={},
+                meta=FlowMeta(flow_name="interact", step_id="choose_eval_mode"),
+                effects=fx,
+            )
+        )
+        assert out.result["in_session_fits"] is True
+        assert out.result["n_ctx"] == 262144 and out.result["session_tokens"] == 30000
+
+
+class TestEvaluationRoutesTheCallItClaims:
+    """Drive the REAL compiled router, release and evaluation steps and
+    check the inference call each branch actually makes. The declaration-only
+    test above passed for seven weeks while every evaluation ran in the
+    tester's session: inference_session_id is ambient, so leaving it
+    undeclared never made the turn stateless."""
+
+    _VERDICT = '```json\n{"goal_met": true, "headline": "h", "summary": "s"}\n```'
+
+    def _slice(self):
+        import copy
+
+        from agent.models import FlowDefinition
+
+        interact = _compiled()["interact"]
+        names = (
+            "choose_eval_mode",
+            "release_session_for_eval",
+            "evaluate_outcome",
+            "evaluate_in_session",
+        )
+        steps = {n: copy.deepcopy(interact["steps"][n]) for n in names}
+        for n in ("evaluate_outcome", "evaluate_in_session"):
+            steps[n]["turn"]["transitions"] = {"default": "stop", "no_answer": "stop"}
+        steps["stop"] = {
+            "action": "noop",
+            "description": "end",
+            "terminal": True,
+            "status": "success",
+        }
+        return FlowDefinition.model_validate(
+            {"flow": "interact", "entry": "choose_eval_mode", "steps": steps}
+        )
+
+    async def _run(self, n_ctx: int, held: int):
+        from agent.actions.registry import build_action_registry
+        from agent.runtime import execute_flow
+
+        class _Fx(MockEffects):
+            async def cache_health(self):
+                return {"nCtxSeq": n_ctx}
+
+            def session_tokens(self, session_id):
+                return held  # what the tester session holds
+
+        fx = _Fx(inference_responses=[self._VERDICT])
+        await execute_flow(
+            flow_def=self._slice(),
+            inputs={
+                "inference_session_id": "tester-1",
+                "terminal_output": "[Turn 0] (shell_command)\n  > python main.py\n>",
+                "flow_directive": "Test this capability: Examine works.",
+            },
+            action_registry=build_action_registry(),
+            effects=fx,
+        )
+        return [c.method for c in fx.calls], fx
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("n_ctx,held", [(32768, 30000), (262144, 259000)])
+    async def test_a_session_that_cannot_hold_the_verdict_ends_then_goes_stateless(
+        self, n_ctx, held
+    ):
+        """Whatever the window: a tester session too full for the verdict is
+        released and the evaluation runs stateless over the fitted transcript
+        (the 262k case is the 124-turn session that lost its verdict)."""
+        calls, fx = await self._run(n_ctx, held)
+        assert "session_inference" not in calls
+        assert calls.index("end_inference_session") < calls.index("run_inference")
+        (ended,) = fx.calls_to("end_inference_session")
+        assert ended.args == {"session_id": "tester-1"}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("n_ctx,held", [(32768, 4000), (262144, 30000)])
+    async def test_a_session_with_room_evaluates_in_the_testers_session(
+        self, n_ctx, held
+    ):
+        """In-session whenever the verdict fits — on a 32k window too, now
+        that the decision reads the session rather than a 64k threshold."""
+        calls, fx = await self._run(n_ctx, held)
+        assert "run_inference" not in calls and "end_inference_session" not in calls
+        (turn,) = fx.calls_to("session_inference")
+        assert turn.args["session_id"] == "tester-1"
 
 
 # ── grounded-empty: the verification gap (2026-08-26) ─────────────────

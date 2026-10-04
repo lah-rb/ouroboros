@@ -9,6 +9,8 @@ is W1b).
 from __future__ import annotations
 
 
+import pytest
+
 import agent.projections as pj
 from agent.data_trace import render_data_file
 from agent.renderers import render_dependency_excerpts
@@ -164,30 +166,99 @@ class TestRenderDataFile:
         assert render_data_file("", "w.yaml", 100) == ""
 
 
-class TestWorkerScoping:
-    def test_line_mapped_symbols_full_bodies(self):
-        from agent.actions.contract_swarm_actions import _scope_worker_content
+class TestInteractionMapIsWhole:
+    """The play-tester's map of the world arrives WHOLE (2026-09-26). The
+    4,000-char sampling kept only whole top-level entries, so a world shaped
+    {starting_room, rooms, items, npcs, monsters} reached the charter author
+    as "starting_room: … (4 more items)" and nine goals of
+    tier_20260924-191710 failed on routes and items the tester had to guess."""
 
-        big = UI_PY + "\n# pad\n" * 2000
+    def test_a_world_over_the_old_budget_reaches_the_tester_whole(self, tmp_path):
+        import json
+
+        from agent.persistence.models import (
+            ArchitectureState,
+            DataShapeContract,
+            MissionConfig,
+            MissionState,
+            ModuleSpec,
+        )
+
+        world = {
+            "starting_room": "room_bell_tower",
+            "rooms": [
+                {
+                    "id": f"room_{i}",
+                    "name": f"Room {i}",
+                    "description": "x" * 120,
+                    "exits": [{"direction": "south", "room_id": f"room_{i + 1}"}],
+                }
+                for i in range(40)
+            ],
+            "items": [{"id": "item_vial_of_saints_tears", "name": "Vial"}],
+        }
+        content = json.dumps(world, indent=2)
+        assert len(content) > 4000
+        (tmp_path / "world.json").write_text(content)
+        mission = MissionState(
+            objective="Build a game.",
+            status="active",
+            config=MissionConfig(working_directory=str(tmp_path)),
+            architecture=ArchitectureState(
+                run_command="python main.py",
+                modules=[ModuleSpec(file="engine.py", responsibility="engine")],
+                data_shapes=[
+                    DataShapeContract(
+                        file="world.json",
+                        consumed_by="loader.py",
+                        structure="{starting_room, rooms, items}",
+                    )
+                ],
+            ),
+        )
+        out = pj.project_interaction_context(mission, {})
+        shown = out["data_file_contents"]["world.json"]
+        assert shown == content
+        assert "room_39" in shown and "item_vial_of_saints_tears" in shown
+        assert "more items)" not in shown
+
+
+class TestWorkerScoping:
+    # MockEffects reports no window, so the rule assumes 32,768 tokens and a
+    # 8,192-token share; a file over ~25k chars is not whole.
+
+    @pytest.mark.asyncio
+    async def test_line_mapped_symbols_full_bodies(self):
+        from agent.actions.contract_swarm_actions import _scope_worker_content
+        from agent.effects.mock import MockEffects
+
+        big = UI_PY + "\n# pad\n" * 20000
         gate = "ui.py:{}:1: F821 whatever".format(UI_PY.count("\n"))  # prompt's line
-        out = _scope_worker_content("ui.py", big, gate)
+        out = await _scope_worker_content(MockEffects(), "ui.py", big, gate)
         assert "symbol-scoped view" in out
         assert "def prompt(self, text: str)" in out
         assert "all definitions in the file" in out
 
-    def test_no_mappable_lines_head_plus_tail(self):
+    @pytest.mark.asyncio
+    async def test_no_mappable_lines_gets_the_index(self):
+        # Not a head+tail cut of arbitrary code any more: the file's index,
+        # so the worker can still name the symbol to change (2026-09-26).
         from agent.actions.contract_swarm_actions import _scope_worker_content
+        from agent.effects.mock import MockEffects
 
-        raw = "HEAD\n" + ("x" * 9000) + "\nTAIL"
-        out = _scope_worker_content("m.py", raw, "no line info here")
-        assert out.startswith("HEAD")
-        assert out.rstrip().endswith("TAIL")
-        assert "[middle elided]" in out
+        raw = "HEAD = 1\n" + "x = 2\n" * 40000 + "TAIL = 3\n"
+        out = await _scope_worker_content(
+            MockEffects(), "m.py", raw, "no line info here"
+        )
+        assert out.startswith("(index of m.py — too large to show whole here")
+        assert "[middle elided]" not in out
 
-    def test_small_file_untouched(self):
+    @pytest.mark.asyncio
+    async def test_small_file_whole(self):
         from agent.actions.contract_swarm_actions import _scope_worker_content
+        from agent.effects.mock import MockEffects
 
-        assert _scope_worker_content("m.py", "tiny", "x") == "tiny"
+        assert await _scope_worker_content(MockEffects(), "m.py", "tiny", "x") == "tiny"
 
 
 class TestSeamEvidenceCaps:

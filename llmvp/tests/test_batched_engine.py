@@ -202,6 +202,7 @@ def test_seqslot_duck_types_instance_telemetry_surface():
         "_last_flow_hit",
         "_last_flow_key",
         "_last_cache_hit",
+        "_last_temperature",
     ):
         assert hasattr(slot, attr), attr
     assert StreamPhase.PREFILL is not StreamPhase.DECODING
@@ -626,6 +627,8 @@ def test_retire_stashes_per_stream_timing():
     assert slot._last_prefill_s >= 0.0
     assert slot._last_decode_s >= 0.0
     assert slot._last_completion_tokens == [10]
+    # The sampler's temperature, reported back as what the stream used.
+    assert slot._last_temperature == 0.0
 
 
 def test_prepare_and_clear_seat_fork_semantics():

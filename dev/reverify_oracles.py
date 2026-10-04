@@ -35,20 +35,18 @@ ROOT = Path(__file__).resolve().parent.parent
 
 def _trace_text(mission_dir: Path) -> str:
     """Everything the session printed: mcp result previews + inference contents."""
+    from agent.history.reader import has_history, legacy_jsonl_events, load_events
+
     parts: list[str] = []
-    for jl in sorted((mission_dir / "traces").glob("*.jsonl")):
-        for line in jl.read_text(errors="replace").splitlines():
-            line = line.strip()
-            if not line.startswith("{"):
-                continue
-            try:
-                e = json.loads(line)
-            except Exception:
-                continue
-            for k in ("result_preview", "prompt_content", "response_content"):
-                v = e.get(k)
-                if isinstance(v, str) and v:
-                    parts.append(v)
+    if has_history(str(mission_dir)):
+        events = load_events(str(mission_dir))
+    else:
+        events = legacy_jsonl_events(str(mission_dir), newest_only=False)
+    for e in events:
+        for k in ("result_preview", "prompt_content", "response_content"):
+            v = e.get(k)
+            if isinstance(v, str) and v:
+                parts.append(v)
     return "\n".join(parts)
 
 

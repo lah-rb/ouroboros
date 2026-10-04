@@ -20,17 +20,19 @@ from pathlib import Path
 
 import pytest
 
+from agent.actions.roundtrip_contract import (
+    PayloadFlow,
+    declared_persisted_contracts,
+    parse_declared_shape,
+    roundtrip_contract_findings,
+)
 from agent.actions.session_structural_actions import (
     _implicated_file,
-    _payload_methods,
-    _roundtrip_keys,
-    _serializer_functions,
     _SESSION_REPAIR_ATTEMPTS,
     _binding_vocabulary,
     _data_registry_violations,
     _observed_ids,
     _observed_symbols,
-    _serialized_roundtrip_violations,
     action_check_session_file,
     action_session_next_file,
     action_write_session_file,
@@ -42,6 +44,7 @@ from agent.persistence.models import (
     GoalRecord,
     MissionConfig,
     MissionState,
+    StateShapeContract,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -77,13 +80,19 @@ def _mission(files: list[str], **arch_kw) -> MissionState:
 
 
 # ══════════════════════════════════════════════════════════════════════
-# The serialized round trip — the check the shipped seam needed
+# The serialized round trip — held to the contract the design DECLARED
 # ══════════════════════════════════════════════════════════════════════
 #
 # handle_save serialized four world tables; handle_load read none of them. Both
 # sides were valid Python, both agreed on every call shape, and save_load.py
 # typed the payload Dict[str, Any] — the seam lived entirely inside the `Any`,
 # so every existing gate passed it.
+#
+# The check is scoped to a persisted shape the design declared (a state shape
+# naming the save file, its owner and a schema) and follows the data from the
+# json.dump / json.load calls under any function name. A side it cannot follow
+# is not a finding: on 2026-09-22 the previous checker's "UNVERIFIED" verdict,
+# charged to the current file, produced 330 dead lines in main.py.
 
 _SAVE_LOAD = """
 import json
@@ -115,58 +124,229 @@ _GAME_WHOLE = _GAME_BROKEN.replace(
 )
 
 
-def test_the_shipped_seam_is_flagged():
-    """The exact bytes, two modules, mediated by a helper call."""
-    out = _serialized_roundtrip_violations(
-        {"save_load.py": _SAVE_LOAD, "game.py": _GAME_BROKEN}
+def _shape(
+    structure: str,
+    owner: str = "save_load.py",
+    consumed_by: str = "game.py",
+    name: str = "savegame.json",
+) -> StateShapeContract:
+    return StateShapeContract(
+        name=name, owner=owner, consumed_by=consumed_by, structure=structure
     )
-    assert out, "the seam that shipped must not pass"
-    joined = " ".join(out)
-    for key in ("rooms", "items", "monsters", "npcs"):
-        assert key in joined
-    assert "player" not in joined.split("written into")[0]  # player IS read back
+
+
+_SHIPPED = _shape(
+    "{player: {...}, rooms: {...}, items: {...}, monsters: {...}, npcs: {...}}"
+)
+
+
+def _rt(sources: dict[str, str], *shapes: StateShapeContract, transient=()):
+    m = _mission(
+        [p for p in sources if p.endswith(".py")],
+        state_shapes=list(shapes),
+        transient_files=list(transient),
+    )
+    return roundtrip_contract_findings(sources, declared_persisted_contracts(m))
+
+
+def test_the_shipped_seam_is_flagged_on_the_loader():
+    """The exact bytes, two modules, mediated by a helper call. The READER
+    owns the defect — the writer stored the state and the loader dropped it
+    — and the finding names that file."""
+    out = _rt({"save_load.py": _SAVE_LOAD, "game.py": _GAME_BROKEN}, _SHIPPED)
+    flagged = {
+        k
+        for k in ("rooms", "items", "monsters", "npcs")
+        if any(f"`{k}`" in m for _, m in out)
+    }
+    assert flagged == {"rooms", "items", "monsters", "npcs"}
+    assert not any("`player`" in m for _, m in out), "player IS read back"
+    assert {f for f, _ in out} == {"game.py"}
+    assert all("File to fix: game.py" in m for _, m in out)
 
 
 def test_a_complete_round_trip_is_silent():
-    assert (
-        _serialized_roundtrip_violations(
-            {"save_load.py": _SAVE_LOAD, "game.py": _GAME_WHOLE}
-        )
-        == []
-    )
+    assert _rt({"save_load.py": _SAVE_LOAD, "game.py": _GAME_WHOLE}, _SHIPPED) == []
 
 
 def test_it_follows_the_call_hop_not_just_the_module():
-    """REGRESSION ON MY OWN FIRST VERSION. v1 looked for the dict literals in
-    the same module as the json call and returned ZERO on the very artifact it
-    was written for — game.py builds the payload, save_load.py does the I/O.
-    That indirection is exactly what defeats _transfer_shape_violations, so
-    reproducing it would have shipped a check that passes its motivating case."""
-    # The payload keys and the json call are in DIFFERENT files here.
+    """The payload keys and the json call are in DIFFERENT files: game.py
+    builds the payload, save_load.py does the I/O. That indirection is what
+    defeats _transfer_shape_violations."""
     assert "json" not in _GAME_BROKEN
     assert '"rooms"' not in _SAVE_LOAD
-    assert _serialized_roundtrip_violations(
-        {"save_load.py": _SAVE_LOAD, "game.py": _GAME_BROKEN}
-    )
+    assert _rt({"save_load.py": _SAVE_LOAD, "game.py": _GAME_BROKEN}, _SHIPPED)
 
 
 def test_the_direct_shape_is_flagged_too():
     w = 'import json\ndef save(self):\n    p = {"a":1,"b":2}\n    json.dump(p, open("s.json","w"))\n'
     r = 'import json\ndef load(self):\n    d = json.load(open("s.json"))\n    return d["a"]\n'
-    out = _serialized_roundtrip_violations({"w.py": w, "r.py": r})
-    assert out and "b" in " ".join(out)
+    # load() returns d["a"] to nobody: the element is opaque, "a" is read.
+    out = _rt(
+        {"w.py": w, "r.py": r},
+        _shape("{a: int, b: int}", owner="w.py", consumed_by="r.py", name="s.json"),
+    )
+    assert [(f, "`b`" in m) for f, m in out] == [("r.py", True)]
 
 
-def test_one_module_alone_has_no_seam_to_find():
-    w = 'import json\ndef save(self):\n    json.dump({"a":1}, open("s","w"))\n'
-    assert _serialized_roundtrip_violations({"only.py": w}) == []
+def test_no_declared_contract_no_check():
+    """Scope: with no persisted shape in the design there is nothing to hold
+    the code to — the same broken seam is not this check's to report."""
+    assert _rt({"save_load.py": _SAVE_LOAD, "game.py": _GAME_BROKEN}) == []
 
 
-def test_no_serializer_no_finding():
-    """Modules that never serialize must not be dragged into this check."""
-    a = "def f():\n    return {'x': 1}\n"
-    b = "def g(d):\n    return d['y']\n"
-    assert _serialized_roundtrip_violations({"a.py": a, "b.py": b}) == []
+def test_a_state_shape_that_is_not_a_persisted_file_is_out_of_scope():
+    in_memory = _shape("{rooms: {...}, items: {...}}", name="GameState.world")
+    assert _rt({"save_load.py": _SAVE_LOAD, "game.py": _GAME_BROKEN}, in_memory) == []
+
+
+def test_a_transient_file_declared_by_name_is_in_scope():
+    shape = _shape(_SHIPPED.structure, name="the save")
+    assert _rt(
+        {"save_load.py": _SAVE_LOAD, "game.py": _GAME_BROKEN},
+        shape,
+        transient=["the save"],
+    )
+
+
+def test_a_shape_named_by_its_format_is_in_scope():
+    """tier_20260923-165314 declared its save as "Saved game JSON" — no file
+    token — and a file-token rule selected nothing."""
+    shape = _shape(_SHIPPED.structure, name="Saved game JSON")
+    assert _rt({"save_load.py": _SAVE_LOAD, "game.py": _GAME_BROKEN}, shape)
+
+
+def test_a_declared_key_both_halves_spell_differently_is_not_a_finding():
+    """tier_20260730 qwen3.5: the design nests `player: {...}`; writer AND
+    loader both use flat `player_health`. The pair agrees — design drift is
+    not a broken round trip, and reporting it sends a repair to restructure
+    working code."""
+    src = """
+import json
+def save_game(state, path):
+    with open(path, "w") as f:
+        json.dump({"player_health": state.hp, "rooms": state.rooms}, f)
+def load_game(path):
+    with open(path) as f:
+        data = json.load(f)
+    return data["player_health"], data["rooms"]
+"""
+    shape = _shape(
+        "{player: {health: int}, rooms: {...}}", owner="s.py", consumed_by="s.py"
+    )
+    assert _rt({"s.py": src}, shape) == []
+
+
+def test_an_input_file_named_by_format_is_never_paired_with_the_save():
+    """qwen3-next declared "World data (loaded from YAML)" as a state shape.
+    Its reader is the world loader and nothing writes YAML — pairing it with
+    the JSON save's dump compared a world schema against a save payload."""
+    src = """
+import json, yaml
+def load_world(path):
+    with open(path) as f:
+        data = yaml.safe_load(f)
+    return data["rooms"], data["npcs"]
+def save_game(state):
+    with open("save.json", "w") as f:
+        json.dump({"rooms": state.rooms}, f)
+"""
+    world = _shape(
+        "{rooms: {...}, npcs: {...}}",
+        owner="w.py",
+        consumed_by="w.py",
+        name="World data (loaded from YAML)",
+    )
+    assert _rt({"w.py": src}, world) == []
+
+
+def test_a_prose_structure_is_out_of_scope():
+    prose = _shape("identical to GameState schema, persisted as JSON")
+    assert declared_persisted_contracts(_mission(["a.py"], state_shapes=[prose])) == []
+
+
+def test_a_save_outside_the_contracts_reach_is_never_searched():
+    """The contract names engine.py; a save/load pair in an unrelated module
+    that engine.py never calls is not this contract's round trip."""
+    engine = "def run():\n    return 1\n"
+    out = _rt(
+        {"engine.py": engine, "save_load.py": _SAVE_LOAD, "game.py": _GAME_BROKEN},
+        _shape(_SHIPPED.structure, owner="engine.py", consumed_by="engine.py"),
+    )
+    assert out == []
+
+
+def test_a_save_the_owner_delegates_is_followed():
+    """The design said engine.py; the code put the I/O in save.py and engine.py
+    calls it. Following the owner's calls is following the data."""
+    engine = """
+from save_load import save_state, load_state
+class Engine:
+    def save(self):
+        save_state({"player": self.p, "rooms": self.r})
+    def load(self):
+        data = load_state()
+        self.p = data["player"]
+"""
+    out = _rt(
+        {"engine.py": engine, "save_load.py": _SAVE_LOAD},
+        _shape(
+            "{player: {...}, rooms: {...}}", owner="engine.py", consumed_by="engine.py"
+        ),
+    )
+    assert [(f, "`rooms`" in m) for f, m in out] == [("engine.py", True)]
+
+
+def test_a_design_path_resolves_to_its_written_file():
+    out = _rt(
+        {"src/save_load.py": _SAVE_LOAD, "src/game.py": _GAME_BROKEN},
+        _SHIPPED,  # declared as save_load.py / game.py
+    )
+    assert out and {f for f, _ in out} == {"src/game.py"}
+
+
+# ══════════════════════════════════════════════════════════════════════
+# The declared schema, parsed
+# ══════════════════════════════════════════════════════════════════════
+#
+# Shapes below are verbatim from archived missions: unquoted, quoted and
+# bare-name keys, map placeholders keyed by an id or a type, generics.
+
+
+def test_the_schema_parser_reads_records_maps_and_lists():
+    node = parse_declared_shape(
+        "{version: int 1, player: {location_id: str, inventory: [str]}, "
+        "rooms: {room_id: {items: [str], visited: bool}}, "
+        "npcs: dict[str, {current_node: str}], log: [{turn: int}], "
+        "flags: {str: bool}}"
+    )
+    assert set(node.fields) == {"version", "player", "rooms", "npcs", "log", "flags"}
+    assert set(node.fields["player"].fields) == {"location_id", "inventory"}
+    rooms = node.fields["rooms"]
+    assert rooms.is_collection and set(rooms.element.fields) == {"items", "visited"}
+    assert set(node.fields["npcs"].element.fields) == {"current_node"}
+    assert set(node.fields["log"].element.fields) == {"turn"}
+    flags = node.fields["flags"]
+    assert flags.is_collection and flags.element is None
+
+
+def test_quoted_and_bare_keys_parse():
+    quoted = parse_declared_shape(
+        """{'player': {'health': int}, "game": {"room": str}}"""
+    )
+    assert set(quoted.fields) == {"player", "game"}
+    bare = parse_declared_shape(
+        "{player: {health, equipment, inventory}, state: {current_room}}"
+    )
+    assert set(bare.fields["player"].fields) == {"health", "equipment", "inventory"}
+
+
+def test_prose_after_the_schema_is_ignored():
+    node = parse_declared_shape(
+        "JSON object: {player: {hp: int}, won: bool} — exactly these top-level keys"
+    )
+    assert set(node.fields) == {"player", "won"}
+    assert parse_declared_shape("identical to GameState schema") is None
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -258,6 +438,35 @@ def test_the_vocabulary_carries_both_sources_and_states_the_precedence():
     # The disagreement rule must be stated, not left to be inferred.
     assert "BINDING" in out
     assert "IDS" in out and "SIGNATURES" in out
+
+
+def test_a_large_contract_block_never_crowds_out_what_is_on_disk():
+    """REGRESSION (2026-09-22): the block was capped at 4,000 chars and cut
+    from the END, contracts first. A real walk's contracts filled the cap and
+    the "Already written" index — save.py's actual state_to_dict / save_game /
+    load_game — was cut whole from the repair turn that needed exactly those
+    names. It shipped 330 dead lines. No cap: every section, every symbol."""
+    shapes = [
+        {
+            "file": f"data/table_{i}.yaml",
+            "consumed_by": "save.py",
+            "structure": "rows: list of {id: str, name: str, weight: int} " * 6,
+        }
+        for i in range(40)
+    ]
+    m = _mission(["save.py"], data_shapes=shapes)
+    save_src = "".join(f"def helper_{i}(x):\n    return x\n\n" for i in range(60))
+    save_src += (
+        "def state_to_dict(state):\n    return {}\n\n"
+        "def save_game(state, path):\n    return None\n\n"
+        "def load_game(path):\n    return None\n"
+    )
+    out = _binding_vocabulary(m, {"save.py": save_src}, [])
+    assert len(out) > 4000, "fixture must exceed the old cap to mean anything"
+    assert "truncated" not in out
+    assert "Already written" in out
+    for name in ("state_to_dict", "save_game", "load_game", "helper_59"):
+        assert name in out, f"{name} dropped from the on-disk index"
 
 
 def test_the_vocabulary_is_empty_when_nothing_is_written_and_nothing_declared():
@@ -382,6 +591,9 @@ async def test_exemplar_echo_fence_does_not_lose_the_turn():
 # ══════════════════════════════════════════════════════════════════════
 
 
+_SHIPPED_MISSION = _mission(["save_load.py", "game.py"], state_shapes=[_SHIPPED])
+
+
 @pytest.mark.asyncio
 async def test_the_checkpoint_flags_a_cross_file_seam_and_offers_repairs():
     fx = MockEffects(files={"save_load.py": _SAVE_LOAD, "game.py": _GAME_BROKEN})
@@ -390,6 +602,7 @@ async def test_the_checkpoint_flags_a_cross_file_seam_and_offers_repairs():
             fx,
             current_file="game.py",
             session_files_written=["save_load.py", "game.py"],
+            mission=_SHIPPED_MISSION,
             session_repairs=0,
         )
     )
@@ -409,6 +622,7 @@ async def test_repairs_are_bounded():
             fx,
             current_file="game.py",
             session_files_written=["save_load.py", "game.py"],
+            mission=_SHIPPED_MISSION,
             session_repairs=_SESSION_REPAIR_ATTEMPTS,
         )
     )
@@ -424,6 +638,7 @@ async def test_a_clean_fileset_passes_the_checkpoint():
             fx,
             current_file="game.py",
             session_files_written=["save_load.py", "game.py"],
+            mission=_SHIPPED_MISSION,
         )
     )
     assert out.result["file_ok"] is True
@@ -620,13 +835,220 @@ def test_the_manifest_key_is_declared_publishable():
 
 
 # ══════════════════════════════════════════════════════════════════════
-# The third hop — to_dict / from_dict / asdict
+# The 2026-09-22 miss — module functions, helpers, any name
 #
-# Fixtures below are the REAL shape lifted from a shipped artifact
-# (tier_20260810-140320, src/state.py), not a shape I imagined. The
-# two-hop check unit-tested green against invented dict-literal and
-# cross-module fixtures, then read ZERO keys off this one and reported
-# "0 violations" — a clean bill over a pair it had never parsed.
+# The shape the previous checker could not read, lifted from the APEX
+# session-walk artifact (tier_20260922-233228 save.py, trimmed): the payload
+# is built by a MODULE-level to_dict through per-entity helpers, every value
+# passes through small coercion helpers, and one shared `_as_dict` returns
+# its argument to a dozen callers. It read zero keys, reported UNVERIFIED as
+# a violation naming no file, the walk charged main.py, and two repair turns
+# wrote a 330-line shadow serializer there. The first draft of THIS checker
+# then flagged every player field unread: it returned `_as_dict`'s argument
+# to every caller at once. Returns go back to the call they came from.
+# ══════════════════════════════════════════════════════════════════════
+
+_MODULE_FNS = """
+import json
+from typing import Any
+from models import GameState, Player, Room
+
+
+def _as_dict(value: Any) -> dict:
+    if isinstance(value, dict):
+        return value
+    return {}
+
+
+def _as_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _player_to_dict(player: Player) -> dict:
+    return {
+        "location_id": str(getattr(player, "location_id", "")),
+        "health": _as_int(getattr(player, "health", 0)),
+        "max_health": _as_int(getattr(player, "max_health", 0)),
+        "inventory": list(getattr(player, "inventory", [])),
+    }
+
+
+def _player_from_dict(data: Any) -> Player:
+    data = _as_dict(data)
+    return Player(
+        location_id=str(data.get("location_id", "")),
+        health=_as_int(data.get("health", 0)),
+        max_health=_as_int(data.get("max_health", 0)),
+        inventory=list(data.get("inventory", [])),
+    )
+
+
+def _room_to_dict(room: Room) -> dict:
+    return {"items": list(room.items), "visited": bool(room.visited)}
+
+
+def _room_from_dict(data: Any) -> Room:
+    data = _as_dict(data)
+    return Room(items=list(data.get("items", [])), visited=bool(data.get("visited")))
+
+
+def to_dict(state: GameState) -> dict:
+    return {
+        "version": 1,
+        "player": _player_to_dict(state.player),
+        "rooms": {key: _room_to_dict(room) for key, room in state.rooms.items()},
+        "flags": dict(state.flags),
+    }
+
+
+def from_dict(data: Any) -> GameState:
+    data = _as_dict(data)
+    rooms = {
+        str(key): _room_from_dict(value)
+        for key, value in _as_dict(data.get("rooms", {})).items()
+    }
+    return GameState(
+        player=_player_from_dict(data.get("player", {})),
+        rooms=rooms,
+        flags=dict(data.get("flags", {})),
+    )
+
+
+def save_game(state: GameState, path: str = "save.json") -> None:
+    payload = to_dict(state)
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2)
+
+
+def load_game(path: str = "save.json") -> GameState:
+    with open(path, encoding="utf-8") as handle:
+        payload = json.load(handle)
+    return from_dict(payload)
+"""
+
+_MODULE_GAME = """
+from save import save_game, load_game
+class Game:
+    def cmd_save(self):
+        save_game(self.state)
+    def cmd_load(self):
+        self.state = load_game()
+"""
+
+_MODULE_SHAPE = _shape(
+    "{version: int, player: {location_id: str, health: int, max_health: int, "
+    "inventory: [str]}, rooms: {room_id: {items: [str], visited: bool}}, "
+    "flags: {str: bool}}",
+    owner="save.py",
+    consumed_by="game.py",
+    name="save.json",
+)
+
+
+def _module_rt(save_src: str):
+    return _rt({"save.py": save_src, "game.py": _MODULE_GAME}, _MODULE_SHAPE)
+
+
+def test_module_level_helpers_are_followed_under_any_name(caplog):
+    caplog.set_level("INFO", logger="agent.actions.roundtrip_contract")
+    assert _module_rt(_MODULE_FNS) == []
+    # A pass and a blind pass must not read the same.
+    compared = [r.getMessage() for r in caplog.records if "compared" in r.getMessage()]
+    assert compared and "10 declared key(s) compared" in compared[0], compared
+
+
+def test_renaming_every_function_changes_nothing():
+    """The blind spot was never the NAME. Rename every def and call site."""
+    renamed = _MODULE_FNS
+    for old, new in [
+        ("_player_to_dict", "pack_p"),
+        ("_player_from_dict", "unpack_p"),
+        ("_room_to_dict", "pack_r"),
+        ("_room_from_dict", "unpack_r"),
+        ("to_dict", "enc"),
+        ("from_dict", "dec"),
+        ("_as_dict", "coerce"),
+    ]:
+        renamed = renamed.replace(old, new)
+    assert _module_rt(renamed) == []
+
+
+def test_a_dropped_nested_field_is_flagged_on_the_owner():
+    broken = _MODULE_FNS.replace(
+        '        max_health=_as_int(data.get("max_health", 0)),\n', ""
+    )
+    out = _module_rt(broken)
+    assert [(f, "`player.max_health`" in m) for f, m in out] == [("save.py", True)]
+
+
+def test_a_dropped_field_of_a_map_element_is_flagged():
+    broken = _MODULE_FNS.replace(', visited=bool(data.get("visited"))', "")
+    out = _module_rt(broken)
+    assert len(out) == 1 and "`rooms[*].visited`" in out[0][1]
+
+
+def test_a_key_read_but_never_written_is_booked_on_the_writer():
+    broken = _MODULE_FNS.replace('        "flags": dict(state.flags),\n', "")
+    out = _module_rt(broken)
+    assert len(out) == 1
+    assert out[0][0] == "save.py" and "never puts it" in out[0][1]
+
+
+def test_a_shared_helper_returns_to_its_own_call_site():
+    """`_as_dict(value)` is called for the player, each room and the root.
+    Returned to all of them at once, the player's reads land on the root and
+    the player's own subtree comes back empty."""
+    srcs = {"save.py": _MODULE_FNS, "game.py": _MODULE_GAME}
+    flow = PayloadFlow(srcs)
+    load = next(fn for fn in flow.funcs if fn.name == "load_game")
+    _, loads = flow.anchors([load])
+    r = flow.read_value(loads[0][1], loads[0][0])
+    assert {"location_id", "health", "max_health", "inventory"} <= set(r["player"])
+    assert "health" not in r, "a player field must not surface at the root"
+
+
+def test_sibling_loops_reusing_a_name_do_not_pool_their_reads():
+    """The artifact's from_dict runs four comprehensions, each `for key,
+    value in …`. Pooled by name, the item loader's read of `locked` would
+    cover the room loader's drop of it."""
+    src = """
+import json
+def _room(d):
+    return {"items": d["items"]}
+def _item(d):
+    return {"name": d["name"], "locked": d["locked"]}
+def save_game(state, path):
+    payload = {
+        "rooms": {k: {"items": r.items, "locked": r.locked} for k, r in state.rooms.items()},
+        "items": {k: {"name": i.name, "locked": i.locked} for k, i in state.items.items()},
+    }
+    with open(path, "w") as f:
+        json.dump(payload, f)
+def load_game(path):
+    with open(path) as f:
+        data = json.load(f)
+    rooms = {key: _room(value) for key, value in data["rooms"].items()}
+    items = {key: _item(value) for key, value in data["items"].items()}
+    return rooms, items
+"""
+    shape = _shape(
+        "{rooms: {room_id: {items: [str], locked: bool}}, "
+        "items: {item_id: {name: str, locked: bool}}}",
+        owner="save.py",
+        consumed_by="save.py",
+    )
+    out = _rt({"save.py": src}, shape)
+    assert len(out) == 1 and "`rooms[*].locked`" in out[0][1], out
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Shapes from the corpus, carried over from the previous checker
+#
+# Each was a live miss or a live false positive of the idiom matcher. They
+# stay as regression shapes for the data-following version.
 # ══════════════════════════════════════════════════════════════════════
 
 _REAL_STATE = """
@@ -669,46 +1091,46 @@ def load_game(path: str) -> GameState:
 
 _OTHER = "from state import save_game, load_game\n"
 
-
-def test_the_dataclass_round_trip_is_actually_parsed():
-    """The regression: keys must come back off BOTH sides. A zero from an
-    unparsed pair is the vacuous pass, not a clean artifact."""
-    srcs = {"state.py": _REAL_STATE, "game.py": _OTHER}
-    writers, readers = _serializer_functions(srcs)
-    prod, cons = _payload_methods(srcs)
-    assert writers == {"save_game"} and readers == {"load_game"}
-    # asdict(self) resolves to the dataclass's annotated fields.
-    assert prod["to_dict"] == {
-        "current_room_id",
-        "player",
-        "inventory",
-        "equipment",
-        "defeated_monsters",
-        "npc_dialogue_progress",
-    }
-    assert cons["from_dict"] == prod["to_dict"]
-    w, r = _roundtrip_keys(_REAL_STATE, writers, readers, prod, cons)
-    assert len(w) == 6 and w == r
-    assert _serialized_roundtrip_violations(srcs) == []
+_REAL_STATE_KEYS = (
+    "current_room_id: str, player: {...}, inventory: [str], equipment: {...}, "
+    "defeated_monsters: [str], npc_dialogue_progress: {...}"
+)
 
 
-def test_a_field_the_loader_forgot_is_flagged():
+def test_the_dataclass_round_trip_is_actually_parsed(caplog):
+    """tier_20260810-140320 src/state.py. asdict(self) resolves to the
+    dataclass's annotated fields; from_dict is reached through the class."""
+    caplog.set_level("INFO", logger="agent.actions.roundtrip_contract")
+    shape = _shape(
+        "{" + _REAL_STATE_KEYS + "}", owner="state.py", consumed_by="game.py"
+    )
+    assert _rt({"state.py": _REAL_STATE, "game.py": _OTHER}, shape) == []
+    assert any("6 declared key(s) compared" in r.getMessage() for r in caplog.records)
+
+
+def test_a_declared_field_the_loader_forgot_is_flagged():
     """asdict picks up a newly added field automatically; a hand-written
-    from_dict does not. That silent divergence IS the value-key seam."""
+    from_dict does not. That silent divergence IS the seam."""
     drifted = _REAL_STATE.replace(
         "    npc_dialogue_progress: dict = field(default_factory=dict)",
         "    npc_dialogue_progress: dict = field(default_factory=dict)\n"
         "    quest_flags: dict = field(default_factory=dict)",
     )
-    out = _serialized_roundtrip_violations({"state.py": drifted, "game.py": _OTHER})
-    assert len(out) == 1
-    assert "quest_flags" in out[0]
-    assert "never read back" in out[0]
+    shape = _shape(
+        "{" + _REAL_STATE_KEYS + ", quest_flags: {str: bool}}",
+        owner="state.py",
+        consumed_by="game.py",
+    )
+    out = _rt({"state.py": drifted, "game.py": _OTHER}, shape)
+    assert [(f, "`quest_flags`" in m) for f, m in out] == [("state.py", True)]
 
 
-def test_an_unparseable_round_trip_reports_unverified_not_clean():
-    """A serializer pair whose keys cannot be recovered must NOT return the
-    same empty list a symmetric pair returns."""
+def test_an_unfollowable_round_trip_is_not_charged_to_any_file(caplog):
+    """The previous checker reported this as an UNVERIFIED violation and the
+    walk charged it to whatever file was current. The payload comes from a
+    method no project file defines: nothing to compare, nothing to charge —
+    the runtime save/load goals decide it."""
+    caplog.set_level("INFO", logger="agent.actions.roundtrip_contract")
     opaque = """
 import json
 def save_game(state, path):
@@ -719,25 +1141,14 @@ def load_game(path):
     with open(path) as f:
         return json.load(f)
 """
-    out = _serialized_roundtrip_violations({"state.py": opaque, "game.py": _OTHER})
-    assert len(out) == 1
-    assert "UNVERIFIED" in out[0]
+    shape = _shape(
+        "{player: {...}, rooms: {...}}", owner="state.py", consumed_by="game.py"
+    )
+    assert _rt({"state.py": opaque, "game.py": _OTHER}, shape) == []
+    assert any(
+        "cannot be followed statically" in r.getMessage() for r in caplog.records
+    )
 
-
-# ══════════════════════════════════════════════════════════════════════
-# The direct-read shape — a LIVE false positive, verbatim
-#
-# Lifted from tier_20260810-173519 game.py, which the checkpoint flagged
-# for writing six keys that "no reader consumes at all" while the loader
-# three lines down read every one of them. The model spent three repair
-# turns trying to fix a save/load pair that was already correct.
-#
-# The cause was an asymmetry in this module, not in the artifact:
-# direct_write (one function builds the dict AND dumps it) was handled
-# from the start; its mirror, one method that calls json.load AND
-# subscripts the result, was not — because the assignment is an
-# Attribute call, not a bare reader Name.
-# ══════════════════════════════════════════════════════════════════════
 
 _REAL_DIRECT = """
 import json, os
@@ -769,73 +1180,30 @@ class Game:
         self.npc_dialogue_progress = data["npc_progress"]
 """
 
+_DIRECT_SHAPE = _shape(
+    "{location: str, stats: {...}, inventory: [str], equipment: {...}, "
+    "defeated_monsters: [str], npc_progress: {npc_id: int}}",
+    owner="game.py",
+    consumed_by="game.py",
+    name="save.json",
+)
+
 
 def test_the_direct_read_shape_is_not_a_false_positive():
-    """The exact artifact the checkpoint wrongly failed. Symmetric."""
+    """tier_20260810-173519 game.py — the checkpoint once failed it for keys
+    the loader three lines down read, and three repair turns went on a pair
+    that was already correct."""
     srcs = {"game.py": _REAL_DIRECT, "world.py": "def load_world():\n    return {}\n"}
-    writers, readers = _serializer_functions(srcs)
-    assert writers == {"_save_state"} and readers == {"_load_state"}
-    w, r = _roundtrip_keys(_REAL_DIRECT, writers, readers, *_payload_methods(srcs))
-    assert len(w) == 6, "writer keys must still be found"
-    assert w == r, f"loader reads every key it writes; unread={sorted(w - r)}"
-    assert _serialized_roundtrip_violations(srcs) == []
+    assert _rt(srcs, _DIRECT_SHAPE) == []
 
 
 def test_the_direct_read_shape_still_catches_a_real_orphan():
-    """The fix must not blind the check: drop one read and it fires."""
     broken = _REAL_DIRECT.replace(
         '        self.defeated_monsters = data["defeated_monsters"]\n', ""
     )
-    out = _serialized_roundtrip_violations(
-        {"game.py": broken, "world.py": "def load_world():\n    return {}\n"}
-    )
-    assert len(out) == 1 and "defeated_monsters" in out[0]
+    out = _rt({"game.py": broken}, _DIRECT_SHAPE)
+    assert [(f, "`defeated_monsters`" in m) for f, m in out] == [("game.py", True)]
 
-
-def test_the_repair_backstop_cannot_revoke_a_files_budget():
-    """meta.attempt counts step_visits for the step across the WHOLE flow
-    run, not per file. At <= 8 a 9-file walk lost every repair after the
-    8th check — files 8 and 9 failed holding 2 repairs and got none."""
-    rules = _steps()["check_file"]["resolver"]["rules"]
-    repair = [r for r in rules if r.get("transition") == "repair_file"]
-    assert len(repair) == 1
-    cond = repair[0]["condition"]
-    assert "repairs_left > 0" in cond, "per-file budget must remain the real bound"
-    import re
-
-    m = re.search(r"meta\.attempt\s*<=\s*(\d+)", cond)
-    assert m, "a runaway backstop must still exist"
-    # files x (1 check + 2 repairs) for any plausible walk, with margin.
-    assert (
-        int(m.group(1)) >= 100
-    ), f"backstop {m.group(1)} is low enough to revoke a real repair budget"
-
-
-# ══════════════════════════════════════════════════════════════════════
-# Blind spots 4 and 5 — found by measuring 64 finished artifacts
-#
-# Shapes below are real. Running the check over every staged artifact on
-# disk (64 with a save/load pair) is what surfaced them; unit fixtures
-# never would have, because I keep inventing the shapes I already handle.
-# After these fixes: 55 clean, 6 orphan findings — all six independently
-# confirmed true (their keys appear in no reader function body) — and 3
-# unverified. Precision on findings: 6/6.
-# ══════════════════════════════════════════════════════════════════════
-
-_ANNOTATED_LOADER = """
-import json
-def save_state(state, path):
-    with open(path, "w") as f:
-        json.dump(state, f)
-
-def load_save(path):
-    with open(path, encoding="utf-8") as handle:
-        save_data: dict = json.load(handle)
-    if "player" not in save_data:
-        raise KeyError("missing player")
-    player_dict = save_data["player"]
-    return player_dict
-"""
 
 _NESTED_PAYLOAD = """
 import json
@@ -860,43 +1228,42 @@ class Game:
         self.world_state = data["world"]
 """
 
-_SIB = "def helper():\n    return 1\n"
-
-
-def test_an_annotated_payload_assignment_is_still_a_payload():
-    """`save_data: dict = json.load(f)` is an AnnAssign. An Assign-only walk
-    sees no payload at all, and typed loaders are the idiomatic ones."""
-    srcs = {"loader.py": _ANNOTATED_LOADER, "s.py": _SIB}
-    w, r = _serializer_functions(srcs)
-    _, rd = _roundtrip_keys(_ANNOTATED_LOADER, w, r, *_payload_methods(srcs))
-    assert "player" in rd
-
-
-def test_a_membership_guard_counts_as_a_read():
-    """`if "player" not in save_data: raise` is often the only mention
-    before the value is handed onward."""
-    srcs = {"loader.py": _ANNOTATED_LOADER, "s.py": _SIB}
-    w, r = _serializer_functions(srcs)
-    _, rd = _roundtrip_keys(_ANNOTATED_LOADER, w, r, *_payload_methods(srcs))
-    assert "player" in rd
+_NESTED_SHAPE = _shape(
+    "{player: {location: str, health: int, attack: int}, world: {...}}",
+    owner="game.py",
+    consumed_by="game.py",
+)
 
 
 def test_a_nested_payload_read_is_followed():
-    """The grouped save: the writer unions every dict it built, so the INNER
-    keys are all in `written`, and the reader reaches them one subscript
-    deeper via `p = data["player"]`. Without propagation the entire player
-    block reads as written-and-never-read."""
-    srcs = {"game.py": _NESTED_PAYLOAD, "s.py": _SIB}
-    assert _serialized_roundtrip_violations(srcs) == []
-    w, r = _serializer_functions(srcs)
-    wr, rd = _roundtrip_keys(_NESTED_PAYLOAD, w, r, *_payload_methods(srcs))
-    assert {"location", "health", "attack"} <= rd
+    """`p = data["player"]` then `p["location"]` — the inner keys are one
+    subscript deeper on both sides."""
+    assert _rt({"game.py": _NESTED_PAYLOAD}, _NESTED_SHAPE) == []
 
 
-def test_nested_propagation_still_catches_a_dropped_inner_key():
+def test_a_dropped_inner_key_is_flagged_with_its_path():
     broken = _NESTED_PAYLOAD.replace('        self.player.attack = p["attack"]\n', "")
-    out = _serialized_roundtrip_violations({"game.py": broken, "s.py": _SIB})
-    assert len(out) == 1 and "attack" in out[0]
+    out = _rt({"game.py": broken}, _NESTED_SHAPE)
+    assert len(out) == 1 and "`player.attack`" in out[0][1]
+
+
+def test_an_annotated_loader_and_a_membership_guard_are_reads():
+    """`save_data: dict = json.load(f)` is an AnnAssign; `if "player" not in
+    save_data: raise` is often the only mention before the value moves on."""
+    src = """
+import json
+def load_save(path):
+    with open(path, encoding="utf-8") as handle:
+        save_data: dict = json.load(handle)
+    if "rooms" not in save_data:
+        raise KeyError("missing rooms")
+    player_dict = save_data["player"]
+    return player_dict
+"""
+    flow = PayloadFlow({"loader.py": src})
+    _, loads = flow.anchors(flow.funcs)
+    r = flow.read_value(loads[0][1], loads[0][0])
+    assert {"rooms", "player"} <= set(r)
 
 
 def test_audit_fields_are_not_orphans():
@@ -914,7 +1281,101 @@ def load_game(path):
         data = json.load(f)
     return data["rooms"]
 """
-    assert _serialized_roundtrip_violations({"s.py": src, "o.py": _SIB}) == []
+    shape = _shape(
+        "{rooms: {...}, version: int, saved_at: str}", owner="s.py", consumed_by="s.py"
+    )
+    assert _rt({"s.py": src}, shape) == []
+
+
+def test_a_value_the_class_declares_derived_needs_no_round_trip():
+    """tier_20260810-133719 main.py: attack/defense are saved, and the loader
+    deliberately recomputes them — the dataclass declares them
+    `field(init=False)`. Not reading them back is correct."""
+    entities = """
+from dataclasses import dataclass, field
+@dataclass
+class Player:
+    location: str = ""
+    base_attack: int = 5
+    attack: int = field(init=False)
+    def recalculate(self):
+        self.attack = self.base_attack
+"""
+    main = """
+import json
+from entities import Player
+class Engine:
+    player: Player
+def save_game(engine: Engine) -> None:
+    data = {"player": {"location": engine.player.location, "attack": engine.player.attack}}
+    with open("save.json", "w") as f:
+        json.dump(data, f)
+def load_game(engine: Engine) -> None:
+    with open("save.json") as f:
+        data = json.load(f)
+    engine.player.location = data["player"]["location"]
+    engine.player.recalculate()
+"""
+    shape = _shape(
+        "{player: {location: str, attack: int}}",
+        owner="main.py",
+        consumed_by="main.py",
+        name="save.json",
+    )
+    assert _rt({"entities.py": entities, "main.py": main}, shape) == []
+    # The same key, NOT declared derived, is a real drop.
+    plain = entities.replace("attack: int = field(init=False)", "attack: int = 5")
+    out = _rt({"entities.py": plain, "main.py": main}, shape)
+    assert len(out) == 1 and "`player.attack`" in out[0][1]
+
+
+def test_a_shipped_data_file_load_is_not_the_save_coming_back():
+    """The contract's files also load world.yaml. Its reads are not the save
+    loader's — a key only the world loader reads must not look like a save
+    key 'read but never written'."""
+    src = """
+import json, yaml
+def load_world():
+    with open("world.yaml") as f:
+        data = yaml.safe_load(f)
+    return data["npcs"]
+def save_game(state):
+    with open("save.json", "w") as f:
+        json.dump({"rooms": state.rooms, "npcs": state.npcs}, f)
+def load_game():
+    with open("save.json") as f:
+        data = json.load(f)
+    return data["rooms"]
+"""
+    shape = _shape(
+        "{rooms: {...}, npcs: {...}}",
+        owner="game.py",
+        consumed_by="game.py",
+        name="save.json",
+    )
+    out = _rt({"game.py": src, "world.yaml": "npcs: {}\n"}, shape)
+    # With the world load set aside, the save's own loader is judged alone:
+    # it drops `npcs`. Pooled with the world loader's read, it would pass.
+    assert len(out) == 1 and "`npcs` is written" in out[0][1], out
+
+
+def test_the_repair_backstop_cannot_revoke_a_files_budget():
+    """meta.attempt counts step_visits for the step across the WHOLE flow
+    run, not per file. At <= 8 a 9-file walk lost every repair after the
+    8th check — files 8 and 9 failed holding 2 repairs and got none."""
+    rules = _steps()["check_file"]["resolver"]["rules"]
+    repair = [r for r in rules if r.get("transition") == "repair_file"]
+    assert len(repair) == 1
+    cond = repair[0]["condition"]
+    assert "repairs_left > 0" in cond, "per-file budget must remain the real bound"
+    import re
+
+    m = re.search(r"meta\.attempt\s*<=\s*(\d+)", cond)
+    assert m, "a runaway backstop must still exist"
+    # files x (1 check + 2 repairs) for any plausible walk, with margin.
+    assert (
+        int(m.group(1)) >= 100
+    ), f"backstop {m.group(1)} is low enough to revoke a real repair budget"
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -929,22 +1390,21 @@ def load_game(path):
 #
 # And a cross-file violation booked against whatever file was current is
 # how a defect in game.py's save payload became a diagnosis aimed at
-# data/world.yaml — which was then patched to satisfy it.
+# data/world.yaml — which was then patched to satisfy it. The round trip
+# now returns its file; the registry's messages name theirs.
 # ══════════════════════════════════════════════════════════════════════
 
 
 def test_the_implicated_file_is_recovered_from_the_message():
     written = ["game.py", "save_load.py", "data/world.yaml"]
-    msg = "serialized round trip: rooms are written into the saved payload (game.py) and never read back (save_load.py)."
-    # The READER owns a round-trip defect: the writer stored the state and
-    # the loader dropped it. Length-based matching got this right by luck.
-    assert _implicated_file(msg, written) == "save_load.py"
+    msg = "entity registry: data/world.yaml was to define cellar — not present"
+    assert _implicated_file(msg, written) == "data/world.yaml"
     assert _implicated_file("no file named here", written) == ""
 
 
-def test_longest_path_wins_so_a_bare_name_cannot_shadow_it():
+def test_the_full_path_wins_over_a_bare_name_inside_it():
     written = ["game.py", "src/game.py"]
-    msg = "written into the saved payload (src/game.py)"
+    msg = "entity registry: src/game.py was to define hall"
     assert _implicated_file(msg, written) == "src/game.py"
 
 
@@ -959,6 +1419,7 @@ async def test_fileset_checks_do_not_run_mid_walk():
             current_file="game.py",
             session_files_written=["save_load.py", "game.py"],
             pending_files=["main.py"],
+            mission=_SHIPPED_MISSION,
         )
     )
     assert out.result["file_ok"] is True, "mid-walk must not fire fileset checks"
@@ -977,6 +1438,7 @@ async def test_fileset_checks_run_on_the_last_file():
             current_file="game.py",
             session_files_written=["save_load.py", "game.py"],
             pending_files=[],
+            mission=_SHIPPED_MISSION,
         )
     )
     assert out.result["file_ok"] is False
@@ -985,31 +1447,82 @@ async def test_fileset_checks_run_on_the_last_file():
 
 @pytest.mark.asyncio
 async def test_a_violation_owned_by_another_file_does_not_repair_a_bystander():
-    """A defect in game.py's payload booked against whatever file happened
-    to be current is how a game.py seam became a diagnosis aimed at
-    data/world.yaml, which was then patched to satisfy it."""
-    fx = MockEffects(
-        files={
-            "save_load.py": _SAVE_LOAD,
-            "game.py": _GAME_BROKEN,
-            "notes.py": _SIB,
-        }
-    )
+    """The loader in game.py drops four tables. The file written LAST is
+    save_load.py — innocent, and it must not be sent to a repair turn; the
+    finding is booked on game.py for the sweep."""
+    fx = MockEffects(files={"save_load.py": _SAVE_LOAD, "game.py": _GAME_BROKEN})
     out = await action_check_session_file(
         _si(
             fx,
-            current_file="notes.py",
-            session_files_written=["save_load.py", "game.py", "notes.py"],
+            current_file="save_load.py",
+            session_files_written=["game.py", "save_load.py"],
             pending_files=[],
+            mission=_SHIPPED_MISSION,
         )
     )
-    # notes.py is innocent: it must not be sent to a repair turn.
     assert out.result["file_ok"] is True
     results = out.context_updates["batch_check_results"]
-    owner = next(
+    owners = {
         p for p, e in results.items() if "cross_file" in (e.get("checks_failed") or [])
+    }
+    assert owners == {"game.py"}
+
+
+@pytest.mark.asyncio
+async def test_an_unfollowable_round_trip_never_fails_the_current_file():
+    """THE 2026-09-22 FAILURE, end to end: a save/load pair the checker cannot
+    follow must leave the file just written alone — the old UNVERIFIED
+    violation was charged to main.py and bought 330 dead lines."""
+    opaque = """
+import json
+def save_game(state, path):
+    with open(path, "w") as f:
+        json.dump(state.serialize(), f)
+def load_game(path):
+    with open(path) as f:
+        return json.load(f)
+"""
+    main = "from save import save_game, load_game\ndef main():\n    return 0\n"
+    m = _mission(
+        ["save.py", "main.py"],
+        state_shapes=[
+            _shape(
+                "{player: {...}}",
+                owner="save.py",
+                consumed_by="main.py",
+                name="save.json",
+            )
+        ],
     )
-    assert owner != "notes.py"
+    fx = MockEffects(files={"save.py": opaque, "main.py": main})
+    out = await action_check_session_file(
+        _si(
+            fx,
+            current_file="main.py",
+            session_files_written=["save.py", "main.py"],
+            pending_files=[],
+            mission=m,
+        )
+    )
+    assert out.result["file_ok"] is True
+    assert not any(
+        "round trip" in v for v in out.context_updates.get("violations") or []
+    )
+
+
+@pytest.mark.asyncio
+async def test_no_declared_contract_no_round_trip_at_the_checkpoint():
+    fx = MockEffects(files={"save_load.py": _SAVE_LOAD, "game.py": _GAME_BROKEN})
+    out = await action_check_session_file(
+        _si(
+            fx,
+            current_file="game.py",
+            session_files_written=["save_load.py", "game.py"],
+            pending_files=[],
+            mission=_mission(["save_load.py", "game.py"]),
+        )
+    )
+    assert out.result["file_ok"] is True
 
 
 def test_the_checkpoint_step_declares_pending_files():
@@ -1019,19 +1532,14 @@ def test_the_checkpoint_step_declares_pending_files():
 
 
 # ══════════════════════════════════════════════════════════════════════
-# Blind spots 6 and 7 — found by pointing the check at a FRONTIER anchor
-#
-# Two artifacts outside the usual corpus shape exposed these. Both were
-# false positives, and the second was hidden BY the first: the ambiguous
-# name union fabricated a read that masked a genuine gap.
+# Blind spots 6 and 7 of the previous checker — found by pointing it at a
+# FRONTIER anchor. Both were false positives there; both must stay clean.
 # ══════════════════════════════════════════════════════════════════════
 
 
 def test_two_classes_with_the_same_method_name_do_not_pool_their_keys():
-    """Game.to_dict returns the OUTER keys; Player.to_dict returns the
-    player's own. Keyed by bare method name they union, so the inner keys
-    look written at the top level where nothing reads them — 12 keys
-    reported unread against a loader that reads every one."""
+    """Game.to_dict returns the OUTER keys; Player.to_dict the player's own.
+    Pooled by bare name, the inner keys look written at the top level."""
     src = """
 import json
 class Player:
@@ -1043,6 +1551,8 @@ class Player:
         return Player(hp=data["hp"], inventory=data["inventory"])
 
 class Game:
+    player: Player
+
     def to_dict(self):
         return {"player": self.player.to_dict(), "rooms": self.rooms}
 
@@ -1059,17 +1569,19 @@ class Game:
             data = json.load(f)
         self.load_from_data(data)
 """
-    prod, cons = _payload_methods({"game.py": src})
-    assert "to_dict" not in prod, "an ambiguous producer name must be dropped"
-    assert "from_dict" not in cons or cons["from_dict"] == {"hp", "inventory"}
-    assert _serialized_roundtrip_violations({"game.py": src, "o.py": _SIB}) == []
+    shape = _shape(
+        "{player: {hp: int, inventory: [str]}, rooms: {...}}",
+        owner="game.py",
+        consumed_by="game.py",
+    )
+    assert _rt({"game.py": src}, shape) == []
+    # Resolved per class, the player's own keys are compared, not skipped.
+    dropped = src.replace(', inventory=data["inventory"]', "")
+    out = _rt({"game.py": dropped}, shape)
+    assert len(out) == 1 and "`player.inventory`" in out[0][1], out
 
 
-def test_a_tuple_unpacked_payload_is_still_a_payload():
-    """`player, save_data = load_save(path)` is what a loader returning BOTH
-    a rebuilt object and the raw payload looks like — common precisely
-    because the caller needs top-level keys the object does not carry."""
-    loader = """
+_TUPLE_LOADER = """
 import json
 def load_save(path, world):
     with open(path) as f:
@@ -1080,7 +1592,8 @@ def save_state(state, path):
     with open(path, "w") as f:
         json.dump(state, f)
 """
-    engine = """
+
+_TUPLE_ENGINE = """
 from loader import load_save, save_state
 class Engine:
     def save(self, path):
@@ -1095,45 +1608,36 @@ class Engine:
         self.player.defeated = save_data.get("defeated_monsters", [])
         self.player.won = save_data.get("game_won", False)
 """
+
+_TUPLE_SHAPE = _shape(
+    "{defeated_monsters: [str], game_won: bool}",
+    owner="loader.py",
+    consumed_by="engine.py",
+    name="save.json",
+)
+
+
+def test_a_tuple_returned_payload_is_followed_to_its_position():
+    """`player, save_data = load_save(path)` — the payload is one position of
+    the returned tuple."""
     assert (
-        _serialized_roundtrip_violations({"loader.py": loader, "engine.py": engine})
+        _rt({"loader.py": _TUPLE_LOADER, "engine.py": _TUPLE_ENGINE}, _TUPLE_SHAPE)
         == []
     )
 
 
-def test_the_tuple_fix_still_catches_a_genuinely_dropped_key():
-    loader = """
-import json
-def load_save(path, world):
-    with open(path) as f:
-        data = json.load(f)
-    return None, data
-
-def save_state(state, path):
-    with open(path, "w") as f:
-        json.dump(state, f)
-"""
-    engine = """
-from loader import load_save, save_state
-class Engine:
-    def save(self, path):
-        save_data = {"defeated_monsters": self.d, "game_won": self.w}
-        save_state(save_data, path)
-
-    def load(self, path):
-        player, save_data = load_save(path, self.world)
-        self.d = save_data.get("defeated_monsters", [])
-"""
-    out = _serialized_roundtrip_violations({"loader.py": loader, "engine.py": engine})
-    assert len(out) == 1 and "game_won" in out[0]
+def test_the_tuple_position_still_catches_a_dropped_key():
+    broken = _TUPLE_ENGINE.replace(
+        '        self.player.won = save_data.get("game_won", False)\n', ""
+    )
+    out = _rt({"loader.py": _TUPLE_LOADER, "engine.py": broken}, _TUPLE_SHAPE)
+    assert [(f, "`game_won`" in m) for f, m in out] == [("engine.py", True)]
 
 
-def test_an_asymmetric_ambiguity_drop_reports_unverified_not_orphans():
-    """to_dict defined once, from_dict defined twice: only the consumer side
-    is dropped, so `written` stays populated and `read` empties. Without a
-    guard the check names keys as unread about a loader that calls the very
-    consumer it discarded. Found on a finished artifact whose loader is
-    GameState.from_dict(json.load(f)) alongside an Item.from_dict."""
+def test_a_classmethod_consumer_is_resolved_through_its_class():
+    """Item.from_dict and GameState.from_dict share a name. The previous
+    checker dropped the name and reported UNVERIFIED; the call site names
+    its class, so there is nothing ambiguous to drop."""
     src = """
 import json
 class Item:
@@ -1158,7 +1662,12 @@ def load_state(path):
         data = json.load(f)
     return GameState.from_dict(data)
 """
-    out = _serialized_roundtrip_violations({"models.py": src, "o.py": _SIB})
-    assert len(out) == 1
-    assert "UNVERIFIED" in out[0]
-    assert "player" not in out[0], "must not name keys it cannot resolve"
+    shape = _shape(
+        "{player: {...}, rooms_state: {...}}",
+        owner="models.py",
+        consumed_by="models.py",
+    )
+    assert _rt({"models.py": src}, shape) == []
+    drifted = src.replace(', rooms=data["rooms_state"]', "")
+    out = _rt({"models.py": drifted}, shape)
+    assert [(f, "`rooms_state`" in m) for f, m in out] == [("models.py", True)]

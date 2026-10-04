@@ -41,7 +41,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
-from inference.decode_constants import BUFFER_MODE_MAX_TOKENS
+from inference.decode_constants import BUFFER_MODE_MAX_TOKENS, END_LENGTH
 from inference.token_pipeline import (  # noqa: F401 — Verdict re-exported
     TokenPipeline,
     Verdict,
@@ -254,6 +254,8 @@ class SeqSlot:
     # for the global tracker's eval/generation durations.
     _last_prefill_s: float = 0.0
     _last_decode_s: float = 0.0
+    # The temperature the last stream actually sampled at (None until one ran).
+    _last_temperature: Optional[float] = None
     # Engine backref (set at seat creation) — lets session-layer KV surgery
     # route through the decode thread without knowing about the engine.
     _engine_ref: Any = field(default=None, repr=False)
@@ -449,7 +451,7 @@ _END_KV_PRESSURE = "kv_pressure_truncated"
 # "completed" because the ENGINE's budget can be lower than the caller's
 # max_tokens (admission sizes against free cells), so the caller's
 # `tokens_generated >= max_tokens` test cannot detect this cut either.
-_END_LENGTH = "length"
+_END_LENGTH = END_LENGTH  # shared with the pool loop (decode_constants)
 # Held back from the pool when sizing admissions: the batch being decoded, the
 # transient cells of a stream mid-join, and ordinary accounting drift. The
 # reactive ladder (_relieve_pressure) remains the backstop — this is a margin,
@@ -1416,6 +1418,9 @@ class BatchedEngine:
             (s.req.flow_build or ("",))[0] if s.req.flow_build else ""
         )
         slot._last_end_reason = s.end_reason or ""
+        slot._last_temperature = float(
+            s.req.sampling_kwargs.get("temp", s.req.temperature)
+        )
         # Flow BUILD capture: on a NORMAL completion only (an errored,
         # abandoned, or pressure-truncated stream may hold a partial/poisoned
         # prefix), range-copy [0, prefix_len) — the tail and the generation

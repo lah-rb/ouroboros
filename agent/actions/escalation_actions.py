@@ -38,6 +38,7 @@ import logging
 from agent.llm_json import parse_llm_json
 from agent.models import StepInput, StepOutput
 from agent.session_injections import queue as queue_injection
+from agent.session_loop import correction, observe, tool_budget
 from agent.loader import load_prompt_text
 
 logger = logging.getLogger(__name__)
@@ -45,8 +46,9 @@ logger = logging.getLogger(__name__)
 # ONE budget number, kept in agreement across the constant, the instruction
 # template, and escalate.cue's check_budget rule (the diagnose template's
 # 8-vs-10 drift is the cautionary tale).
-MAX_ESCALATION_TURNS = 6
-MAX_ESCALATION_CORRECTIONS = 4
+# The loop's limits live in flows/shared/escalate.cue (_escalate_budget,
+# _escalate_correction_limit), enforced by its tool_loop_gate step; the
+# seed states the budget from params.tool_budget (agent/session_loop.py).
 
 # Static session head (the flow-fork pattern: invariant persona pinned once
 # per instance; key changes iff the text changes).
@@ -61,9 +63,32 @@ def _flow_key() -> str:
     )
 
 
-def _bounded(s: str, n: int) -> str:
-    s = (s or "").strip()
-    return s if len(s) <= n else s[:n] + " …[truncated]"
+async def _session_used(step_input: StepInput) -> int:
+    """What the escalation session holds — the "used" side of the
+    whole-if-it-fits rule (agent/context_fit.py) for everything it reads."""
+    from agent.context_fit import session_used
+
+    return await session_used(
+        step_input.effects, str(step_input.context.get("escalation_session_id", ""))
+    )
+
+
+async def _sized(step_input: StepInput, text: str, kind: str, label: str) -> str:
+    """Output, evidence or findings WHOLE when they fit the session; else
+    saved under .agent/outputs and shown as a line index to read from. It
+    replaces 4,000-char head cuts that kept the start and lost the error at
+    the end."""
+    from agent.context_fit import output_view
+
+    sid = str(step_input.context.get("escalation_session_id", "") or "session")
+    turn = int(step_input.context.get("escalation_turn", 0) or 0)
+    return await output_view(
+        step_input.effects,
+        (text or "").strip(),
+        used=await _session_used(step_input),
+        save_path=f".agent/outputs/escalation-{sid}-{turn}-{kind}.txt",
+        label=label,
+    )
 
 
 async def action_open_escalation_session(step_input: StepInput) -> StepOutput:
@@ -98,9 +123,15 @@ async def action_open_escalation_session(step_input: StepInput) -> StepOutput:
     parts.append("## What failed")
     parts.append(f"The `{invoking}` step hit a deterministic failure:")
     parts.append("```")
+    from agent.context_fit import estimate_tokens, output_view
+
     parts.append(
-        _bounded(
-            str(inputs.get("failure_evidence", "") or "(no evidence provided)"), 4000
+        await output_view(
+            effects,
+            str(inputs.get("failure_evidence", "") or "(no evidence provided)").strip(),
+            used=estimate_tokens(SYSTEM_PROMPT),
+            save_path=f".agent/outputs/escalation-{session_id}-evidence.txt",
+            label="the failure evidence",
         )
     )
     parts.append("```")
@@ -135,7 +166,9 @@ async def action_open_escalation_session(step_input: StepInput) -> StepOutput:
     else:
         parts.append("`web_search` is unavailable in this mission — rely on the repo.")
     parts.append("")
-    parts.append(f"You have up to {MAX_ESCALATION_TURNS} tool actions.")
+    budget = tool_budget(step_input)
+    if budget:
+        parts.append(f"You have up to {budget} tool actions.")
 
     updates: dict = {
         "inference_session_id": session_id,
@@ -174,56 +207,37 @@ async def action_open_escalation_session(step_input: StepInput) -> StepOutput:
 
 
 def _correction(step_input: StepInput, msg: str) -> StepOutput:
-    """Queue a correction and bump the corrections counter — NOT the turn
-    budget (honest mistakes recover without pressure). Signals exhausted once
-    the model oscillates past the correction cap."""
-    corrections = int(step_input.context.get("escalation_corrections", 0) or 0) + 1
-    updates: dict = {"escalation_corrections": corrections}
-    queue_injection(updates, step_input.context, f"Action failed — {msg}")
-    exhausted = corrections >= MAX_ESCALATION_CORRECTIONS
-    return StepOutput(
-        result={"action_ok": False, "exhausted": exhausted},
-        observations=f"escalation correction ({corrections}): {msg[:120]}",
-        context_updates=updates,
+    """A failed action (agent/session_loop.py)."""
+    return correction(
+        step_input, msg, corrections_key="escalation_corrections", label="escalation"
     )
 
 
 def _observe(
     step_input: StepInput, message: str, extra: dict | None = None
 ) -> StepOutput:
-    """Queue an observation and bump the turn budget."""
-    turn = int(step_input.context.get("escalation_turn", 0) or 0) + 1
-    updates: dict = {"escalation_turn": turn}
-    if extra:
-        updates.update(extra)
-    queue_injection(updates, step_input.context, message)
-    return StepOutput(
-        result={"action_ok": True},
-        observations=f"escalation turn {turn}/{MAX_ESCALATION_TURNS}",
-        context_updates=updates,
+    """An action that ran (agent/session_loop.py)."""
+    return observe(
+        step_input, message, turn_key="escalation_turn", label="escalation", extra=extra
     )
 
 
 async def action_escalation_read(step_input: StepInput) -> StepOutput:
-    """read_file tool: inject a bounded view of the named file.
+    """read_file tool: the named file — or one part of it, `path:<Symbol>`,
+    `path:/pointer`, `path:<first>-<last>` — WHOLE when it fits the session,
+    else the file's index to read a part from (agent/context_fit.py).
 
     Context: escalation_choice_arg (the path), counters.
     """
-    effects = step_input.effects
-    path = str(step_input.context.get("escalation_choice_arg", "") or "").strip()
-    if not path:
-        return _correction(step_input, "read_file needs a path argument.")
-    try:
-        fc = await effects.read_file(path)
-    except Exception as e:  # noqa: BLE001
-        return _correction(step_input, f"could not read {path}: {e}")
-    if not getattr(fc, "exists", False):
-        return _correction(step_input, f"{path} does not exist.")
-    content = _bounded(getattr(fc, "content", "") or "", 6000)
-    return _observe(
-        step_input,
-        f"Observation (read {path}):\n```\n{content}\n```",
+    from agent.context_fit import read_file_view
+
+    ref = str(step_input.context.get("escalation_choice_arg", "") or "").strip()
+    view, error = await read_file_view(
+        step_input.effects, ref, used=await _session_used(step_input)
     )
+    if error:
+        return _correction(step_input, error)
+    return _observe(step_input, view)
 
 
 async def action_escalation_run(step_input: StepInput) -> StepOutput:
@@ -241,10 +255,8 @@ async def action_escalation_run(step_input: StepInput) -> StepOutput:
         return _correction(step_input, f"command failed to run: {e}")
     out = (getattr(res, "stdout", "") or "") + (getattr(res, "stderr", "") or "")
     rc = getattr(res, "return_code", None)
-    return _observe(
-        step_input,
-        f"Observation:\n$ {cmd}\n[exit {rc}]\n{_bounded(out, 4000)}",
-    )
+    shown = await _sized(step_input, out, "run", "the command output")
+    return _observe(step_input, f"Observation:\n$ {cmd}\n[exit {rc}]\n{shown}")
 
 
 # Abbreviation markers. A body carrying any of these is not a file, it is a
@@ -395,7 +407,7 @@ async def action_escalation_write(step_input: StepInput) -> StepOutput:
             rejections.append(err or f"write failed for {path}")
 
     if not written:
-        return _correction(step_input, " / ".join(rejections)[:400])
+        return _correction(step_input, " / ".join(rejections))
 
     files = list(step_input.context.get("escalation_files", []) or [])
     for p in written:
@@ -403,7 +415,7 @@ async def action_escalation_write(step_input: StepInput) -> StepOutput:
             files.append(p)
     msg = f"Observation: wrote {', '.join(written)}."
     if rejections:
-        msg += f" Rejected: {' / '.join(rejections)[:300]}"
+        msg += f" Rejected: {' / '.join(rejections)}"
     return _observe(step_input, msg, extra={"escalation_files": files})
 
 
@@ -434,7 +446,7 @@ async def action_conclude_escalation(step_input: StepInput) -> StepOutput:
             "deferred",
         ):
             outcome = parsed["outcome"]
-            summary = str(parsed.get("summary", "") or "")[:400]
+            summary = str(parsed.get("summary", "") or "")
         else:
             summary = "conclusion unparseable — deferred (fail-safe)"
     except Exception as e:  # noqa: BLE001
@@ -477,7 +489,8 @@ async def action_escalation_fold_search(step_input: StepInput) -> StepOutput:
         )
     return _observe(
         step_input,
-        f"Observation (web_search findings):\n{_bounded(summary, 4000)}",
+        "Observation (web_search findings):\n"
+        + await _sized(step_input, summary, "web", "the findings"),
     )
 
 
@@ -502,5 +515,6 @@ async def action_escalation_fold_consult(step_input: StepInput) -> StepOutput:
         )
     return _observe(
         step_input,
-        f"Observation (supervisor direction):\n{_bounded(guidance, 4000)}",
+        "Observation (supervisor direction):\n"
+        + await _sized(step_input, guidance, "consult", "the direction"),
     )

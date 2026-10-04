@@ -187,6 +187,23 @@ class InferenceResult:
     # of a 45k-token orbit, discarded whole). Empty = no id was minted
     # (remote passthrough or older path).
     request_id: str = ""
+    # Session turns only. The server's id for this turn — what
+    # rewind_inference_session_turn takes back — and whether the turn entered
+    # the session's context (False: it produced no answer and the server rolled
+    # it out at commit). None = not a session turn, or an older server.
+    session_turn_id: int | None = None
+    turn_committed: bool = True
+    # Why generation stopped, as the server saw it ("length" = the budget or
+    # the context ceiling; "" = not reported).
+    end_reason: str = ""
+    # The sampling temperature LLMVP ACTUALLY used, after its per-model floor,
+    # session-depth floor and degenerate-retry recipe. LLMVP owns the model's
+    # parameters; the client only requests one. None = not reported (an
+    # older server, a remote provider, or a failed call).
+    temperature: float | None = None
+    # What this client asked for — the resolved number it sent (a "t*0.1"
+    # spec resolved against the client's base). None = no temperature sent.
+    temperature_sent: float | None = None
 
 
 # ── Terminal output limits ────────────────────────────────────────────
@@ -513,6 +530,19 @@ class Effects(Protocol):
         """
         ...
 
+    async def rewind_inference_session_turn(
+        self, session_id: str, turn_id: int
+    ) -> dict:
+        """Take back the session's LAST turn, by the id its InferenceResult
+        carried (``session_turn_id``) — one level of undo, so a retry starts
+        from the context before the failed attempt instead of on top of it.
+
+        Best-effort: never raises. Returns ``{"ok": bool, "reason": str, ...}``
+        (reasons: rolled_back, history_truncated, already_absent,
+        not_last_turn, in_flight, refused, or an error string).
+        """
+        ...
+
     async def end_open_inference_sessions(self) -> int:
         """End every session this effects instance opened but never closed —
         the mission-teardown drain, so a parked/killed mission never strands a
@@ -627,30 +657,6 @@ class Effects(Protocol):
         """
         ...
 
-    async def save_artifact(self, artifact: Any) -> bool:
-        """Save a flow artifact to history.
-
-        Returns:
-            True on success.
-        """
-        ...
-
-    async def load_artifact(self, task_id: str) -> Any:
-        """Load the most recent artifact for a task.
-
-        Returns:
-            FlowArtifact if found, None otherwise.
-        """
-        ...
-
-    async def list_artifacts(self, filter_str: str | None = None) -> list[str]:
-        """List artifact filenames.
-
-        Returns:
-            List of artifact filenames.
-        """
-        ...
-
     async def read_state(self, key: str) -> Any:
         """Read a value from generic key-value state.
 
@@ -721,7 +727,8 @@ class Effects(Protocol):
     # ── Tracing ───────────────────────────────────────────────────
 
     async def emit_trace(self, event: Any) -> None:
-        """Record a trace event. Appends to in-memory buffer.
+        """Record a trace event: a row in the history store
+        (``.agent/history/``, LocalEffects) and a fold into the ledger.
 
         Args:
             event: A TraceEvent dataclass instance.
@@ -729,11 +736,18 @@ class Effects(Protocol):
         ...
 
     async def flush_traces(self) -> None:
-        """Persist buffered trace events to disk (JSONL).
+        """Cycle-boundary flush of the history store (buffered rows written,
+        the cycle's part files compacted, the summary head refreshed).
 
         Called at cycle boundaries by loop.py. Implementations may
-        no-op (MockEffects) or write to .agent/traces/ (LocalEffects).
+        no-op (MockEffects).
         """
+        ...
+
+    async def history_close(self, final_status: str = "ended") -> None:
+        """Finalize and close the history store (drain_effects calls it after
+        the inference sessions end, before MCP disconnects). Optional —
+        implementations without a store omit it."""
         ...
 
     # ── Effects log ───────────────────────────────────────────────

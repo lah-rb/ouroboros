@@ -26,13 +26,27 @@ from agent.models import StepInput, StepOutput
 
 logger = logging.getLogger(__name__)
 
-# Probe budget: findings beyond this pass through unverified (tagged) —
-# spending dispatches on an unverified claim beats dropping it silently.
-MAX_VERIFY_FINDINGS = 8
-# Repro lines beyond this are truncated (mirrors _normalize_repro's cap).
-MAX_REPRO_COMMANDS = 10
-# Transcript tail preserved as evidence on each finding.
-_EVIDENCE_TAIL_CHARS = 500
+# No judgment cap on how many findings are probed (2026-09-26; was 8). A
+# probe — one run and one judge turn — costs less than the ~3 dispatches a
+# false finding burns, so every functional finding with a repro is checked.
+# The only bound is the engine's: each probe is _PROBE_STEPS quality_gate
+# steps (flush → run_probe → judge → record) against the sub-flow step
+# ceiling, less a generous allowance for the rest of the gate. Past that a
+# finding passes through tagged ``unverified-ceiling`` — loud, never dropped.
+_PROBE_STEPS = 4
+_GATE_STEPS_OUTSIDE_PROBES = 80
+
+
+def probe_capacity() -> int:
+    """How many probes fit under quality_gate's step ceiling."""
+    from agent.runtime import _subflow_max_steps
+
+    ceiling = _subflow_max_steps("quality_gate")
+    return max(1, (ceiling - _GATE_STEPS_OUTSIDE_PROBES) // _PROBE_STEPS)
+
+
+# The probe transcript rides WHOLE on each finding as its evidence
+# (2026-09-26; a 500-char tail lost the line that showed the defect).
 
 
 def _finding_text(task: Any) -> str:
@@ -45,7 +59,8 @@ def _usable_repro(task: Any, *launch_commands: str) -> list[str]:
     """Extract the probe-ready repro from a finding, or [] if unusable.
 
     Strips a leading line that duplicates a launch command (the prompt
-    forbids it, but models include it anyway) and re-applies the length cap.
+    forbids it, but models include it anyway). Every other line is kept:
+    a repro cut short stops before the defect and refutes a real finding.
     """
     if not isinstance(task, dict):
         return []
@@ -56,11 +71,6 @@ def _usable_repro(task: Any, *launch_commands: str) -> list[str]:
     launches = {lc.strip() for lc in launch_commands if lc and lc.strip()}
     if lines and lines[0] in launches:
         lines = lines[1:]
-    if len(lines) > MAX_REPRO_COMMANDS:
-        logger.warning(
-            "Probe repro truncated from %d to %d lines", len(lines), MAX_REPRO_COMMANDS
-        )
-        lines = lines[:MAX_REPRO_COMMANDS]
     return lines
 
 
@@ -145,7 +155,8 @@ async def action_prepare_finding_verification(step_input: StepInput) -> StepOutp
     - quality-class findings: no behavioral repro is possible — pass
       through tagged ``not-applicable``.
     - functional findings with a usable repro (and a known run command):
-      queued for probing, up to MAX_VERIFY_FINDINGS.
+      queued for probing — all of them, up to what the step ceiling can
+      hold (``probe_capacity``).
     - functional findings without a repro: governed by
       ``params.no_repro_policy`` — ``permissive`` (default) passes them
       through tagged ``unverified-no-repro``; ``strict`` refutes them
@@ -172,6 +183,7 @@ async def action_prepare_finding_verification(step_input: StepInput) -> StepOutp
     queue: list[dict] = []
     passthrough: list[dict] = []
     refuted: list[dict] = []
+    capacity = probe_capacity()
 
     for task in fix_tasks:
         if not isinstance(task, dict):
@@ -193,13 +205,14 @@ async def action_prepare_finding_verification(step_input: StepInput) -> StepOutp
             else:
                 passthrough.append({**task, "verification": "unverified-no-repro"})
             continue
-        if len(queue) >= MAX_VERIFY_FINDINGS:
+        if len(queue) >= capacity:
             logger.warning(
-                "Probe queue full (%d) — passing through unverified: %s",
-                MAX_VERIFY_FINDINGS,
-                _finding_text(task)[:80],
+                "Probe queue at the quality_gate step ceiling (%d probes) — "
+                "passing through unverified: %s",
+                capacity,
+                _finding_text(task),
             )
-            passthrough.append({**task, "verification": "unverified-cap"})
+            passthrough.append({**task, "verification": "unverified-ceiling"})
             continue
         queue.append(task)
 
@@ -261,7 +274,7 @@ async def action_record_finding_verification(step_input: StepInput) -> StepOutpu
         )
 
     task = queue.pop(0)
-    evidence_tail = transcript[-_EVIDENCE_TAIL_CHARS:] if transcript else ""
+    evidence_tail = transcript or ""
     confirmed: bool | None = None
 
     if probe_failed:
@@ -276,9 +289,7 @@ async def action_record_finding_verification(step_input: StepInput) -> StepOutpu
     else:
         parsed = parse_llm_json(str(step_input.context.get("inference_response", "")))
         verdict = parsed.get("confirmed") if isinstance(parsed, dict) else None
-        reason = (str(parsed.get("reason") or "") if isinstance(parsed, dict) else "")[
-            :300
-        ]
+        reason = str(parsed.get("reason") or "") if isinstance(parsed, dict) else ""
         if not isinstance(verdict, bool):
             verified.append(
                 {
@@ -295,7 +306,7 @@ async def action_record_finding_verification(step_input: StepInput) -> StepOutpu
                     **task,
                     "verification": "confirmed",
                     "verification_evidence": (
-                        f"{reason}\n--- probe transcript tail ---\n{evidence_tail}"
+                        f"{reason}\n--- probe transcript ---\n{evidence_tail}"
                     ).strip(),
                 }
             )
@@ -307,7 +318,7 @@ async def action_record_finding_verification(step_input: StepInput) -> StepOutpu
                     **task,
                     "verification": "refuted",
                     "verification_evidence": (
-                        f"{reason}\n--- probe transcript tail ---\n{evidence_tail}"
+                        f"{reason}\n--- probe transcript ---\n{evidence_tail}"
                     ).strip(),
                 }
             )

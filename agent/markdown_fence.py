@@ -208,6 +208,13 @@ def _join_body(lines: list[str]) -> str:
 _FENCE_LINE_RE = re.compile(r"^\s{0,3}`{3,}")
 _BARE_CLOSE_RE = re.compile(r"^\s{0,3}```\s*$")
 
+# A fence opener that does NOT start its line: `Let's produce final.```python`.
+# CommonMark says that is inline code, not a fence, and _FENCE_LINE_RE agrees
+# — so the file inside it is invisible to the block scan. Requiring non-space
+# BEFORE the ticks is what distinguishes this from a well-formed opener (a
+# real fence line has at most three spaces there, never text).
+_INLINE_FENCE_OPEN_RE = re.compile(r"^.*\S[ \t]*`{3,}[ \t]*[A-Za-z0-9_+.-]*[ \t]*$")
+
 
 def _fence_parity_odd(content: str) -> bool:
     return sum(1 for ln in content.split("\n") if _FENCE_LINE_RE.match(ln)) % 2 == 1
@@ -315,6 +322,11 @@ def parse_file_blocks(text: str, fallback_path: str = "") -> list[tuple[str, str
     """
     blocks: list[tuple[str, str]] = []
     seen_paths: set[str] = set()
+    # Paths claimed by an explicit `# === FILE: x ===` marker, as opposed to
+    # paths assumed from ``fallback_path``. A declaration is stronger evidence
+    # than an assumption, and the inline-fence recovery below uses this to
+    # decide whether it may replace an incumbent block.
+    marker_sourced: set[str] = set()
 
     def _upgrade_block(path: str, content: str) -> bool:
         """Replace a retained EMPTY block with meaningful content for
@@ -409,6 +421,7 @@ def parse_file_blocks(text: str, fallback_path: str = "") -> list[tuple[str, str
                         restitch_resumes.append(resume_at)
                     blocks.append((cand_path, cand_content))
                     seen_paths.add(cand_path)
+                    marker_sourced.add(cand_path)
             if len(candidates) > 1:
                 logger.info(
                     "Fence carried %d FILE markers; split into %d files",
@@ -466,6 +479,87 @@ def parse_file_blocks(text: str, fallback_path: str = "") -> list[tuple[str, str
                     seen_paths.add(sub_path)
                 else:
                     _upgrade_block(sub_path, sub_content)
+
+    # INLINE-OPENED FENCE RECOVERY (2026-09-20). A fence is only a fence when
+    # its opener starts the line. A model that ends a sentence and opens the
+    # fence on the same line — `Let's produce final.```python` — is writing
+    # inline code as far as CommonMark is concerned, so the file inside it is
+    # invisible to the scan above and the path falls to whatever unmarked
+    # draft came earlier.
+    #
+    # WHAT IT COST: qwen3.8-flash-next wrote a complete, valid 9,007-char
+    # parser.py behind exactly that malformation. The scan returned ONE block
+    # — a 355-char fragment from a mid-deliberation draft fence, prose bleeding
+    # through a line of it — and that is what was written to disk. Neither
+    # structural gate caught it (the syntax tier is skipped before the env
+    # phase, and the AST typecheck returns [] on SyntaxError), so a file that
+    # could not parse was reported "clean" and the goal was scored complete.
+    #
+    # SAFETY. Three conditions, all required, keep this from firing on prose:
+    # the line must carry text AND a trailing fence opener; the next
+    # substantive line must be a fully-anchored FILE marker; and the recovered
+    # body must be meaningful. A marker-sourced path is never overwritten —
+    # only an unseen path, or one assumed from fallback_path, can be claimed.
+    # This is recovery, not a relaxation: the protocol is still "open the
+    # fence on its own line".
+    _all_lines = text.split("\n")
+    _recovered: dict[str, str] = {}
+    for _i, _line in enumerate(_all_lines):
+        if not _INLINE_FENCE_OPEN_RE.match(_line):
+            continue
+        _j = next(
+            (k for k in range(_i + 1, len(_all_lines)) if _all_lines[k].strip()),
+            None,
+        )
+        if _j is None or not _FILE_MARKER_RE.match(_all_lines[_j]):
+            continue
+        _end = next(
+            (
+                k
+                for k in range(_j + 1, len(_all_lines))
+                if _BARE_CLOSE_RE.match(_all_lines[k])
+            ),
+            len(_all_lines),
+        )
+        for _path, _body in _segment_lines(_all_lines[_j:_end], 0):
+            # LONGEST WINS, not first. A 170k-char deliberation can open a
+            # draft of the same file mid-thought and refine it later; the
+            # observed case put the real file last. Length is the only
+            # ordering this module can judge without knowing the language.
+            if (
+                _path
+                and _is_meaningful_content(_body)
+                and len(_body) > len(_recovered.get(_path, ""))
+            ):
+                _recovered[_path] = _body
+
+    for _path, _body in _recovered.items():
+        if _path in marker_sourced:
+            continue  # a properly fenced declaration already won
+        if _path in seen_paths:
+            for _bi, (_bp, _bc) in enumerate(blocks):
+                if _bp == _path:
+                    logger.warning(
+                        "Inline-opened fence: %r recovered (%d chars) and "
+                        "REPLACES a %d-char block that only had the path by "
+                        "fallback — the model opened its fence mid-line, so "
+                        "the real file parsed as inline code",
+                        _path,
+                        len(_body),
+                        len(_bc),
+                    )
+                    blocks[_bi] = (_path, _body)
+                    break
+        else:
+            logger.warning(
+                "Inline-opened fence: recovered %r (%d chars) from a fence "
+                "opened mid-line",
+                _path,
+                len(_body),
+            )
+            blocks.append((_path, _body))
+            seen_paths.add(_path)
+        marker_sourced.add(_path)
 
     # UNFENCED MULTI-FILE RECOVERY (2026-08-03). A model can honour the FILE
     # marker protocol and omit the fences: DeepSeek-V4's first batch emitted
@@ -530,7 +624,7 @@ def parse_file_blocks(text: str, fallback_path: str = "") -> list[tuple[str, str
 # ── Text content extraction ──────────────────────────────────────
 
 
-def extract_first_text_content(text: str, max_length: int = 200) -> str:
+def extract_first_text_content(text: str, max_length: int | None = None) -> str:
     """Extract the first substantive text content from markdown.
 
     Uses markdown-it-py to parse the token stream and find the first
@@ -540,7 +634,8 @@ def extract_first_text_content(text: str, max_length: int = 200) -> str:
 
     Args:
         text: Raw markdown text (e.g. from an LLM response).
-        max_length: Truncate result to this many characters.
+        max_length: Truncate result to this many characters; None (the
+            default) keeps the whole first block.
 
     Returns:
         The first substantive text found, or the first line of the
@@ -594,7 +689,7 @@ def _extract_text_with_markdown_it(text: str) -> str:
     return ""
 
 
-def _extract_text_with_fallback(text: str, max_length: int) -> str:
+def _extract_text_with_fallback(text: str, max_length: int | None) -> str:
     """Regex fallback: skip markdown headers, take first content line."""
     for line in text.strip().splitlines():
         stripped = line.strip()

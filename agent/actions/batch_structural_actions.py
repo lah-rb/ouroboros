@@ -35,7 +35,6 @@ from agent.actions.pipeline_actions import (
     _parse_data_file,
     action_run_validation_checks_from_env,
 )
-from agent.actions.pipeline_actions import _cap_diagnostic
 from agent.markdown_fence import parse_file_blocks
 from agent.models import FlowMeta, StepInput, StepOutput
 
@@ -482,9 +481,9 @@ def _edge_targets(room: dict) -> list[str]:
 #
 # A blind panel found the decisive defect of a shipped artifact and BOTH
 # existing checks were blind to it. `_transfer_shape_violations` indexes
-# dict-literal producers; `_serialized_roundtrip_violations` reads keys off
-# a SERIALIZED payload. Neither can see two functions disagreeing about what
-# a single in-memory state field holds:
+# dict-literal producers; the round-trip check (roundtrip_contract.py) reads
+# keys off a SERIALIZED payload. Neither can see two functions disagreeing
+# about what a single in-memory state field holds:
 #
 #     game.py:231   self.state.player["equipped_weapon"] = item.name   # NAME
 #     game.py:426   self.state.player["equipped_weapon"] = loot_id     # ID
@@ -580,18 +579,18 @@ def _field_vocabulary_violations(sources: dict[str, str]) -> list[str]:
         name_sites = kinds.get("name") or []
         id_sites = kinds.get("id") or []
         if name_sites and id_sites:
-            where = ", ".join(f"{f}:{ln}" for f, ln in (name_sites + id_sites)[:4])
+            where = ", ".join(f"{f}:{ln}" for f, ln in name_sites + id_sites)
             out.append(
                 f"field vocabulary: '{field}' is written as a DISPLAY NAME in one "
                 f"place and an ID in another ({where}). Whichever consumer is "
                 f"right, the other half of the writes will silently miss."
             )
         elif name_sites and field in id_reads:
-            where = ", ".join(f"{f}:{ln}" for f, ln in name_sites[:3])
+            where = ", ".join(f"{f}:{ln}" for f, ln in name_sites)
             out.append(
                 f"field vocabulary: '{field}' is written as a DISPLAY NAME "
                 f"({where}) but read back as an id in "
-                f"{', '.join(sorted(set(id_reads[field]))[:3])}. The lookup "
+                f"{', '.join(sorted(set(id_reads[field])))}. The lookup "
                 f"cannot match what the writer stored."
             )
     return out
@@ -653,7 +652,7 @@ def _graph_placement_violations(
         if dangling:
             out.append(
                 f"world graph ({path}): {len(dangling)} exit(s) lead to a room that "
-                f"does not exist — {', '.join(sorted(dangling)[:6])}. Walking that "
+                f"does not exist — {', '.join(sorted(dangling))}. Walking that "
                 f"direction cannot work."
             )
 
@@ -688,7 +687,7 @@ def _graph_placement_violations(
                 qualifier = ""
                 if in_code:
                     qualifier = (
-                        f" NOTE: {', '.join(in_code[:4])} "
+                        f" NOTE: {', '.join(in_code)} "
                         f"{'is' if len(in_code) == 1 else 'are'} named as a string "
                         f"literal in the code, so the engine may synthesise this "
                         f"exit (an item-gated secret passage looks exactly like "
@@ -697,7 +696,7 @@ def _graph_placement_violations(
                 out.append(
                     f"world graph ({path}): {len(unreachable)} room(s) cannot be "
                     f"reached from '{start}' by the authored exits — "
-                    f"{', '.join(unreachable[:6])}. A room no path leads to is "
+                    f"{', '.join(unreachable)}. A room no path leads to is "
                     f"content the player can never see.{qualifier}"
                 )
 
@@ -732,7 +731,7 @@ def _graph_placement_violations(
             if misplaced:
                 out.append(
                     f"world graph ({path}): {len(misplaced)} {coll_key} name a room "
-                    f"that does not exist — {', '.join(sorted(misplaced)[:6])}."
+                    f"that does not exist — {', '.join(sorted(misplaced))}."
                 )
             # Only meaningful when SOME entity of this kind is placed; a
             # world that places none of them uses a convention this cannot
@@ -740,7 +739,7 @@ def _graph_placement_violations(
             if unplaced and len(unplaced) < len(entities):
                 out.append(
                     f"world graph ({path}): {len(unplaced)} {coll_key} are in no "
-                    f"room — {', '.join(sorted(unplaced)[:6])}. Authored but "
+                    f"room — {', '.join(sorted(unplaced))}. Authored but "
                     f"unreachable."
                 )
     return out
@@ -1376,11 +1375,11 @@ async def action_run_batch_file_checks(step_input: StepInput) -> StepOutput:
                 "tier": "syntax",
                 "required": True,
                 "stdout": "",
-                "stderr": "" if ok else detail[:500],
+                "stderr": "" if ok else detail,
             }
             line = f"[{'PASS' if ok else 'FAIL'}] syntax: {f}"
             if not ok:
-                line += f"\n  stderr: {detail[:500]}"
+                line += f"\n  stderr: {detail}"
             _record(f, [check], line)
         elif ext in env_config:
             code_by_ext.setdefault(ext, []).append(f)
@@ -1442,7 +1441,7 @@ async def action_run_batch_file_checks(step_input: StepInput) -> StepOutput:
                             "tier": "data_boundary",
                             "required": True,
                             "stdout": "",
-                            "stderr": v[:500],
+                            "stderr": v,
                         }
                     )
             # Transfer-shape check: this file reads dict keys a cross-module
@@ -1455,7 +1454,7 @@ async def action_run_batch_file_checks(step_input: StepInput) -> StepOutput:
                         "tier": "transfer_shape",
                         "required": True,
                         "stdout": "",
-                        "stderr": v[:500],
+                        "stderr": v,
                     }
                 )
             file_output = "\n".join(
@@ -1559,7 +1558,7 @@ async def action_apply_batch_results(step_input: StepInput) -> StepOutput:
             + ("" if passed else " (gate failed)"),
             files_affected=[file_path],
             checks_failed=checks_failed,
-            terminal_output=_cap_diagnostic(checks.get("output") or "", 1000),
+            terminal_output=(checks.get("output") or ""),
         )
         goal.reports.append(report)
         if passed and structural_block_reason(goal, checks_failed) is None:

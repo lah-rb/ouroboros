@@ -452,7 +452,7 @@ async def _author(step_input, effects, session_id, brief, goal_id, _out) -> Step
                 ["python", "-m", "py_compile", path], timeout=20
             )
             if int(getattr(comp, "return_code", 1) or 0) != 0:
-                detail = (getattr(comp, "stderr", "") or "")[:200]
+                detail = (getattr(comp, "stderr", "") or "").strip()
                 return await _drop(
                     effects,
                     step_input,
@@ -525,7 +525,7 @@ async def _author(step_input, effects, session_id, brief, goal_id, _out) -> Step
             reason = (
                 "passed against the broken code (vacuous)"
                 if v1 == "green"
-                else f"not a usable red: {d1 or _head(out1)}"
+                else f"not a usable red: {d1 or out1.strip()}"
             )
             return await _drop(effects, step_input, goal_id, written_path, reason, _out)
 
@@ -541,7 +541,7 @@ async def _author(step_input, effects, session_id, brief, goal_id, _out) -> Step
                 step_input,
                 goal_id,
                 written_path,
-                f"leaves files behind: {', '.join(leftovers[:5])}",
+                f"leaves files behind: {', '.join(leftovers)}",
                 _out,
             )
         slowest = max(t1, t2)
@@ -567,11 +567,13 @@ async def _author(step_input, effects, session_id, brief, goal_id, _out) -> Step
                 "command": command,
                 "language": "python",
                 "red_rc": 1,
-                "red_nodes": nodes1[:8],
-                "red_evidence": _head(out1, 600),
+                "red_nodes": nodes1,
+                # Whole (2026-09-26): the 600-char head kept pytest's
+                # banner and lost the failure that made the red genuine.
+                "red_evidence": out1,
                 "timeout": stored_timeout,
                 "seconds": round(slowest, 2),
-                "flushed_before_probe": flushed[:10],
+                "flushed_before_probe": flushed,
             },
             _out,
         )
@@ -587,23 +589,13 @@ async def _author(step_input, effects, session_id, brief, goal_id, _out) -> Step
     )
 
 
-def _head(text: str, limit: int = 240) -> str:
-    return " ".join((text or "").split())[:limit]
-
-
 def _render_fix_prompt(reason: str, output: str) -> str:
-    """The bounded repair turn for a self-inflicted failure — carries the real
-    traceback, which is the only thing that can correct a wrong signature."""
+    """The one repair turn for a self-inflicted failure — carries the real
+    traceback WHOLE (2026-09-26), which is the only thing that can correct a
+    wrong signature."""
     return AUTHOR_FIX_PROMPT.replace("{failure_reason}", reason).replace(
-        "{failure_output}", _tail(output, 1800)
+        "{failure_output}", (output or "").strip()
     )
-
-
-def _tail(text: str, limit: int) -> str:
-    """Keep the END of pytest output — the failure block and the location line
-    live there; the header is noise."""
-    s = (text or "").strip()
-    return s if len(s) <= limit else "…\n" + s[-limit:]
 
 
 def _render_prompt(brief: dict) -> str:
@@ -614,11 +606,9 @@ def _render_prompt(brief: dict) -> str:
     authoring turn into a KeyError at run time.
     """
     transients = brief.get("transient_files") or []
-    transient_line = ", ".join(str(t) for t in transients[:20]) or "(none declared)"
+    transient_line = ", ".join(str(t) for t in transients) or "(none declared)"
     data = brief.get("data_files") or []
-    data_line = ", ".join(str(d) for d in data[:12]) or (
-        "its data files, wherever they are"
-    )
+    data_line = ", ".join(str(d) for d in data) or ("its data files, wherever they are")
     fields = {
         "{goal_description}": str(brief.get("goal_description", "")),
         "{target_file}": str(brief.get("target_file", "")),

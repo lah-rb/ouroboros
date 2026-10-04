@@ -2,7 +2,9 @@
 
 Lightweight, always-on trace instrumentation.
 All events share a common base with event_type, timestamps, and flow context.
-Events are emitted via effects.emit_trace() and flushed to JSONL at cycle boundaries.
+Events are emitted via effects.emit_trace(); the history store (agent/history)
+records each one as a parquet row under .agent/history/ and the finite-time
+ledger below folds it live, so the ledger and the tables never disagree.
 
 These are plain Python dataclasses (not Pydantic — this is instrumentation, not runtime).
 """
@@ -11,6 +13,7 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import hashlib
 import time
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
@@ -55,6 +58,10 @@ def step_context(
     cycle: int,
     flow: str,
     step: str,
+    *,
+    attempt: int = 1,
+    goal_id: str = "",
+    flow_directive: str = "",
 ):
     """Bind step metadata for the duration of an action's execution.
 
@@ -63,6 +70,9 @@ def step_context(
         cycle: Current cycle number (may be 0).
         flow: CUE flow name (e.g. "diagnose_issue").
         step: Step name within the flow (e.g. "start_session").
+        attempt: The step's visit count within this flow run (FlowMeta.attempt).
+        goal_id / flow_directive: The dispatched goal, when the flow has one —
+            so a turn row can be found by the goal it served.
 
     Yields:
         None. Effects called inside the block can read the bound
@@ -87,6 +97,9 @@ def step_context(
             "cycle": cycle,
             "flow": flow,
             "step": step,
+            "attempt": int(attempt or 1),
+            "goal_id": goal_id or "",
+            "flow_directive": flow_directive or "",
         }
     )
     try:
@@ -103,6 +116,61 @@ def get_step_context() -> dict | None:
     that's currently executing.
     """
     return _step_context.get()
+
+
+# ── Branch and turn annotations ──────────────────────────────────────
+#
+# Two more contextvars in the same shape. ``branch_context`` is set by
+# ChildEffects around every delegated inference so a row the PARENT effect
+# emits still names the lane/branch it ran for (ChildEffects.emit_trace only
+# stamps events the runtime emits — an effect-emitted row bypassed it).
+# ``annotate_turn`` carries what the CALLER knows about an inference the
+# effect is about to record and cannot see from the result alone: the full
+# rendered prompt when only its dynamic tail was sent, the render/injection/
+# pre_compute time spent before the clock started, the retry index, and the
+# purpose. The effect reads both when it builds the InferenceCall, so every
+# path — runtime steps, llm_menu, actions calling run_inference directly —
+# produces exactly one row through the same builder.
+
+_current_branch: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "ouroboros_branch", default=""
+)
+_turn_annotations: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
+    "ouroboros_turn_annotations", default=None
+)
+
+
+@contextlib.contextmanager
+def branch_context(branch: str):
+    """Name the parallel branch/lane every inference inside runs for."""
+    token = _current_branch.set(branch or "")
+    try:
+        yield
+    finally:
+        _current_branch.reset(token)
+
+
+def get_current_branch() -> str:
+    return _current_branch.get()
+
+
+@contextlib.contextmanager
+def annotate_turn(**fields):
+    """Attach caller-side knowledge to the inference call(s) made inside.
+
+    Recognised keys: ``purpose``, ``prompt_full``, ``prompt_static``,
+    ``prompt_dynamic``, ``prompt_render_ms``, ``injection_ms``,
+    ``pre_compute_ms``, ``call_attempt``. Unknown keys are ignored.
+    """
+    token = _turn_annotations.set(dict(fields))
+    try:
+        yield
+    finally:
+        _turn_annotations.reset(token)
+
+
+def get_turn_annotations() -> dict:
+    return dict(_turn_annotations.get() or {})
 
 
 # ── Base Event ────────────────────────────────────────────────────────
@@ -222,7 +290,11 @@ class InferenceCall(TraceEvent):
     tokens_in: int = 0  # Real input tokens when available, else whitespace-split
     tokens_out: int = 0  # Real generated tokens when available, else whitespace
     wall_ms: float = 0.0  # Wall clock for the inference round-trip only
-    temperature: float = 0.0
+    # The temperature the model ACTUALLY sampled at — LLMVP's report (it owns
+    # the model's parameters), else what the client sent. None = unknown.
+    temperature: float | None = None
+    # What the step asked for, verbatim ("t*0.1", "0.3"); "" = nothing asked.
+    temperature_requested: str = ""
     max_tokens: int = 0
     purpose: str = ""  # "step_inference" | "llm_menu_resolve"
     thinking_content: str = ""  # Chain-of-thought from thinking models
@@ -261,6 +333,157 @@ class InferenceCall(TraceEvent):
     # config_overrides["reasoning"] (cue-authored or adaptive router) so token
     # breakdowns can attribute decode cost to reasoning effort per step.
     reasoning: str = ""
+    # ── Identity and outcome (history store columns) ──────────────────
+    # Where in the run this call sat: the step's visit count, the retry
+    # index within the step, and the goal it served.
+    step_attempt: int = 1
+    call_attempt: int = 1
+    goal_id: str = ""
+    flow_directive: str = ""
+    # What the server said about it: the correlation id (client-minted
+    # "ouro-<hex>" for stateless calls, the session id for session turns),
+    # the session and its turn id, whether the turn entered the session's
+    # context, how the generation ended, and the degeneration verdict.
+    request_id: str = ""
+    session_id: str = ""
+    session_turn_id: int | None = None
+    turn_committed: bool | None = None
+    end_reason: str = ""
+    error: str = ""
+    finished: bool = True
+    degenerate: bool | None = None
+    degenerate_reason: str = ""
+    degenerate_tokens: int | None = None
+    prompt_tokens: int = 0
+    # Where it went: the model override (if any), the endpoint and the
+    # routing domain; the flow-KV split when one was used (prompt_content is
+    # then static + dynamic — the prompt as the model saw it).
+    model: str = ""
+    endpoint: str = ""
+    domain: str = ""
+    static_prefix_hash: str = ""
+    prompt_static: str = ""
+    prompt_dynamic: str = ""
+
+
+def _safe_float(value) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _turn_temperature(result, cfg: dict) -> float | None:
+    """The temperature a turn actually sampled at: LLMVP's report when it
+    gives one, else the number this client sent, else a plain number in the
+    request. A relative spec ("t*0.1") is never coerced: float() on it
+    recorded 0.0 for every such turn while the server floored them at 0.7
+    (tier_20260924-191710)."""
+    for v in (
+        getattr(result, "temperature", None),
+        getattr(result, "temperature_sent", None),
+        cfg.get("temperature"),
+    ):
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            return float(v)
+    return None
+
+
+def _safe_int(value) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def build_inference_call(
+    result,
+    *,
+    prompt: str,
+    response_text: str,
+    thinking: str,
+    wall_ms: float,
+    config_overrides: dict | None,
+    purpose: str,
+    session_id: str = "",
+    endpoint: str = "",
+    domain: str = "",
+    static_prefix: str | None = None,
+    flow_key: str | None = None,
+) -> InferenceCall:
+    """The one builder every inference path records through.
+
+    Reads the bound step context (attribution), the current branch, and the
+    caller's turn annotations; everything else comes off the InferenceResult
+    (duck-typed — the mock's minimal result works too). Real backend token
+    counts win; the whitespace count is the fallback, exactly as before.
+    """
+    ctx = get_step_context() or {}
+    ann = get_turn_annotations()
+    cfg = config_overrides or {}
+    static = str(ann.get("prompt_static") or static_prefix or "")
+    dynamic = str(ann.get("prompt_dynamic") or (prompt if static else ""))
+    full = str(ann.get("prompt_full") or ((static + prompt) if static else prompt))
+    cp = _safe_int(getattr(result, "cached_prefix_tokens", 0))
+    fp = _safe_int(getattr(result, "fresh_prefill_tokens", 0))
+    gen = _safe_int(getattr(result, "generated_tokens", 0))
+    ws_in = count_tokens(full)
+    ws_out = count_tokens(response_text) if response_text else 0
+    return InferenceCall(
+        mission_id=str(ctx.get("mission_id", "") or ""),
+        cycle=int(ctx.get("cycle", 0) or 0),
+        flow=str(ctx.get("flow", "") or ""),
+        step=str(ctx.get("step", "") or ""),
+        branch=get_current_branch(),
+        step_attempt=int(ctx.get("attempt", 1) or 1),
+        call_attempt=int(ann.get("call_attempt", 1) or 1),
+        goal_id=str(ctx.get("goal_id", "") or ""),
+        flow_directive=str(ctx.get("flow_directive", "") or ""),
+        tokens_in=(cp + fp) if (cp or fp) else ws_in,
+        tokens_out=gen if gen else ws_out,
+        wall_ms=float(wall_ms or 0.0),
+        temperature=_turn_temperature(result, cfg),
+        temperature_requested=(
+            "" if cfg.get("temperature") is None else str(cfg.get("temperature"))
+        ),
+        max_tokens=_safe_int(cfg.get("max_tokens", 0)),
+        purpose=str(ann.get("purpose") or purpose),
+        thinking_content=thinking or "",
+        prompt_content=full,
+        response_content=response_text or "",
+        truncated=bool(getattr(result, "truncated", False)),
+        prompt_render_ms=_safe_float(ann.get("prompt_render_ms", 0.0)),
+        injection_ms=_safe_float(ann.get("injection_ms", 0.0)),
+        pre_compute_ms=_safe_float(ann.get("pre_compute_ms", 0.0)),
+        cached_prefix_tokens=cp,
+        fresh_prefill_tokens=fp,
+        generated_tokens=gen,
+        reasoning_tokens=_safe_int(getattr(result, "reasoning_tokens", 0)),
+        cache_hit=bool(getattr(result, "cache_hit", False)),
+        flow_key=str(flow_key or getattr(result, "flow_key", "") or ""),
+        prefill_ms=_safe_float(getattr(result, "prefill_ms", 0.0)),
+        decode_ms=_safe_float(getattr(result, "decode_ms", 0.0)),
+        reasoning=str(cfg.get("reasoning", "") or ""),
+        request_id=str(getattr(result, "request_id", "") or ""),
+        session_id=session_id or "",
+        session_turn_id=getattr(result, "session_turn_id", None),
+        turn_committed=getattr(result, "turn_committed", None),
+        end_reason=str(getattr(result, "end_reason", "") or ""),
+        error=str(getattr(result, "error", "") or ""),
+        finished=bool(getattr(result, "finished", True)),
+        degenerate=getattr(result, "degenerate", None),
+        degenerate_reason=str(getattr(result, "degenerate_reason", "") or ""),
+        degenerate_tokens=getattr(result, "degenerate_tokens", None),
+        prompt_tokens=_safe_int(getattr(result, "prompt_tokens", 0)),
+        model=str(cfg.get("model", "") or ""),
+        endpoint=endpoint or "",
+        domain=domain or "",
+        static_prefix_hash=(
+            hashlib.md5(static.encode("utf-8")).hexdigest()[:10] if static else ""
+        ),
+        prompt_static=static,
+        prompt_dynamic=dynamic,
+    )
 
 
 # ── Sub-flow Events ──────────────────────────────────────────────────
@@ -429,6 +652,28 @@ class HealthSample(TraceEvent):
 
     event_type: str = "health_sample"
     health: dict = field(default_factory=dict)
+
+
+@dataclass
+class PromptBackstop(TraceEvent):
+    """The last-resort prompt guard fired (Guard G1): a prompt reached
+    inference too large for what the serving window had free. Every
+    firing means an upstream fit missed, so it is recorded as a row, not
+    only a log line. ``bounded`` False: nothing could be done (the context
+    was already full) and the prompt was sent as it was."""
+
+    event_type: str = "prompt_backstop"
+    step: str = ""
+    session_id: str = ""
+    window: int = 0
+    used: int = 0
+    reserve: int = 0
+    static_tokens: int = 0
+    prompt_tokens: int = 0
+    prompt_chars: int = 0
+    kept_chars: int = 0
+    bounded: bool = True
+    how: str = ""  # "exact" (server tokenizer) | "estimated"
 
 
 @dataclass

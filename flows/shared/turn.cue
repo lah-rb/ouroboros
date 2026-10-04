@@ -146,9 +146,24 @@ package ouroboros
 	// Default: false (omit empty sections).
 	required: bool | *false
 
+	// "tail": fit this section to the serving model's window at render
+	// time — the runtime measures the rest of the prompt, reserves the
+	// output, keeps the most recent part of this content that fits, and
+	// marks what it left out. Only for a ref to a top-level key: the
+	// runtime writes the fitted text back into that slot.
+	fit?: "tail" | "index"
+
 	// Renderer-produced sections must not declare content sources.
 	if type == "options" || type == "envelope" {
 		ref?:      _|_
+		template?: _|_
+		literal?:  _|_
+		fit?:      _|_
+	}
+
+	// A fitted section is always ref-sourced.
+	if fit != _|_ {
+		ref:       #Ref
 		template?: _|_
 		literal?:  _|_
 	}
@@ -477,6 +492,14 @@ _stock_options: {
 	// empirical recovery behavior: models that emit a malformed
 	// response typically correct by turn 3. 0 disables retries.
 	retries: int & >=0 & <=5 | *3
+
+	// SESSION turns: take the failed attempt back (rewindSessionTurn)
+	// before each retry, so the retry runs on the context BEFORE the
+	// failed attempt instead of on top of it. Off by default — some
+	// session steps retry by design on top of the bad reply (a
+	// correction that quotes it). Best-effort: an unsupported server
+	// leaves the retry as it always was.
+	rewind_on_retry: bool | *false
 }
 
 // Shape-specific fields, conjoined into #Turn by shared definition

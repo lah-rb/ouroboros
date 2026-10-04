@@ -115,6 +115,22 @@ class MissionConfig(BaseModel):
     # gracefully when on but unreachable — the research step's failure
     # branch proceeds without a summary.
     web_research: bool = True
+    # THE HISTORY STORE (agent/history). "full" (default): every inference
+    # turn's full prompt, response and thinking, every trace event, every
+    # workspace tree change and the per-turn metrics land as parquet rows
+    # under .agent/history/, with the workspace versioned as git trees in a
+    # bare dulwich store there — rollback and replay of any turn need all of
+    # it. "metrics" keeps the rows but blanks the text (shared machines,
+    # bench logging dirs that get copied around); "off" keeps only the
+    # in-memory ledger. Recording is the DEFAULT and this is the opt-out:
+    # the 2026-09-22/23 APEX runs could only be reconstructed by cross-
+    # matching a server-global log by timestamp because capture was opt-in
+    # and nobody had opted in.
+    history: Literal["full", "metrics", "off"] = "full"
+    # Extra directory names / fnmatch patterns the workspace snapshotter
+    # prunes, on top of agent/history/excludes.py (large generated trees a
+    # particular project keeps in-tree).
+    history_snapshot_excludes: list[str] = Field(default_factory=list)
     # TDD repair loop kill switch (2026-08-09). "auto" (default): on a repair
     # round, the diagnose session authors a regression test for the goal and
     # keeps it only if it probes RED against the still-broken code. "on" is
@@ -1520,19 +1536,3 @@ class Event(BaseModel):
     ] = "user_message"
     timestamp: str = Field(default_factory=_now_iso)
     payload: dict[str, Any] = Field(default_factory=dict)
-
-
-# ── Flow Artifacts ────────────────────────────────────────────────────
-
-
-class FlowArtifact(BaseModel):
-    """Artifact from a completed flow execution — saved to .agent/history/."""
-
-    flow_name: str
-    goal_id: str = ""
-    status: str
-    result: dict[str, Any] = Field(default_factory=dict)
-    steps_executed: list[str] = Field(default_factory=list)
-    observations: list[str] = Field(default_factory=list)
-    timestamp: str = Field(default_factory=_now_iso)
-    schema_version: int = 2

@@ -15,6 +15,43 @@ package ouroboros
 
 _templates: {
 
+	// ── Tool-loop budget gate ─────────────────────────────────
+	//
+	// One gate for a memoryful tool loop (escalate, classify). Every
+	// lap — a tool action (bumps _turn_key) or a correction (bumps
+	// _corrections_key) — routes here, and the loop concludes when
+	// either reaches its limit. The two numbers are the loop's own,
+	// declared once in its flow and passed to the seed step as
+	// params.tool_budget for the prompt, so the rule, the prompt and
+	// the Python can no longer drift apart (the diagnose 8-vs-10 drift
+	// was the cautionary tale). The actions hold no limits.
+	//
+	// Usage:
+	//   check_budget: #StepDefinition & _templates.tool_loop_gate & {
+	//       _turn_key: "x_turn", _corrections_key: "x_corrections"
+	//       _budget: _x_budget, _correction_limit: _x_correction_limit
+	//       _conclude: "conclude", _continue: "work"
+	//   }
+	tool_loop_gate: {
+		_turn_key:         string
+		_corrections_key:  string
+		_budget:           int
+		_correction_limit: int
+		_conclude:         string
+		_continue:         string
+		action:            "noop"
+		description:       "Tool-loop gate (\(_budget) actions, \(_correction_limit) corrections)"
+		context: optional: [_turn_key, _corrections_key]
+		resolver: {
+			type: "rule"
+			rules: [
+				{condition: "context.get('\(_turn_key)', 0) >= \(_budget) or context.get('\(_corrections_key)', 0) >= \(_correction_limit)", transition: _conclude},
+				{condition: "true", transition: _continue},
+			]
+		}
+		...
+	}
+
 	// ── Note Persistence ──────────────────────────────────────
 
 	push_note: {

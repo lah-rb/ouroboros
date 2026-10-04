@@ -64,13 +64,18 @@ class RepoMap:
 
     def format_for_prompt(
         self,
-        max_chars: int = 4000,
+        max_chars: int | None = None,
         focus_files: list[str] | None = None,
     ) -> str:
         """Format the repo map for LLM consumption within a character budget.
 
+        Rank order, so what the budget cannot hold is the least connected;
+        a file that does not fit in full is a one-line stub, and files past
+        even the stubs are listed by name — never dropped (2026-09-26).
+
         Args:
-            max_chars: Maximum characters for the formatted output.
+            max_chars: Character budget; None means one read's share of the
+                serving window (agent/context_fit.py).
             focus_files: Files to boost in ranking (e.g., files being modified).
 
         Returns:
@@ -95,8 +100,14 @@ class RepoMap:
         # Sort files by effective rank
         ranked_files = sorted(effective_ranks.items(), key=lambda x: x[1], reverse=True)
 
+        if max_chars is None:
+            from agent.context_fit import share_chars
+
+            max_chars = share_chars()
+
         lines: list[str] = []
         chars_used = 0
+        names_only: list[str] = []
 
         for file_path, rank in ranked_files:
             file_info = self.files.get(file_path)
@@ -115,16 +126,26 @@ class RepoMap:
 
             section = "\n".join(file_lines) + "\n"
             if chars_used + len(section) > max_chars:
-                # Try to fit at least the filename
+                # At least the filename and its definition count
                 stub = f"{file_path}: ({len(file_info.definitions)} definitions)\n"
                 if chars_used + len(stub) <= max_chars:
                     lines.append(stub)
                     chars_used += len(stub)
-                break
+                else:
+                    names_only.append(file_path)
+                continue
 
             lines.append(section)
             chars_used += len(section)
 
+        if names_only:
+            from agent.context_fit import name_list
+
+            lines.append(
+                f"… {len(names_only)} more files with definitions, names only: "
+                + name_list(names_only, max_chars)
+                + "\n"
+            )
         return "".join(lines)
 
     def get_related_files(self, file_path: str, max_files: int = 10) -> list[str]:

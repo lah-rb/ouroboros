@@ -24,6 +24,7 @@ import logging
 from typing import Any
 
 from agent.errors import FlowRuntimeError
+from agent.trace import branch_context
 
 logger = logging.getLogger(__name__)
 
@@ -81,12 +82,27 @@ class ChildEffects:
         if self._inference_domain and not (config_overrides or {}).get("domain"):
             config_overrides = dict(config_overrides or {})
             config_overrides["domain"] = self._inference_domain
-        return await self._parent.run_inference(
-            prompt,
-            config_overrides,
-            static_prefix=static_prefix,
-            flow_key=flow_key,
-        )
+        # The PARENT effect records the turn; name the branch it ran for
+        # (ChildEffects.emit_trace only stamps events the runtime emits).
+        with branch_context(self._branch):
+            return await self._parent.run_inference(
+                prompt,
+                config_overrides,
+                static_prefix=static_prefix,
+                flow_key=flow_key,
+            )
+
+    async def session_inference(
+        self,
+        session_id: str,
+        prompt: str,
+        config_overrides: dict | None = None,
+    ):
+        """Delegate under this branch's name (see run_inference)."""
+        with branch_context(self._branch):
+            return await self._parent.session_inference(
+                session_id, prompt, config_overrides
+            )
 
     async def run_vision(
         self,

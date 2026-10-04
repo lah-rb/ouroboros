@@ -4461,3 +4461,182 @@ green on the framework's word; the judge disproved it by winning without the
 medallion. Likewise a room-graph audit reported "8 reachable, zero unplaced" —
 true, and blind to one of those rooms being hollow. **Reachability and
 placement do not measure content, and goal state does not measure behaviour.**
+
+## 2026-09-21 — FRONTIER SCORECARD: qwen3.8-flash-next APEX, STRUCTURAL-ONLY, loses 1–3 / 2–4
+
+**Delivery: FRONTIER 3–1 · Character: FRONTIER 4–2 · OVERALL: FRONTIER.**
+Panels agreed, no split, not flagged CLOSE. Out-of-band scorecard, NOT
+ladder-bearing and NOT a tier placement; METHODS §5 family caveat applies
+(Opus judge, Claude-authored frontier). Record:
+`dev/blind_panel/records/flight_20260921_apex_vs_frontier.md`.
+
+**THE CEILING IS THE HEADLINE. This artifact stopped at `top_phase:
+structural`** — no functional phase, no test gate, no quality gate, no polish.
+The 2026-08-22 scorecard that TIED the frontier on Delivery was a COMPLETED
+artifact; reading 1–3 against that 2–2 measures the four missing phases, not
+the model. Do not put these two numbers in the same column.
+
+All three Delivery-deciding defects are functional/quality-phase work, and all
+three were verified in the tree after the verdict:
+  * **`flee` does not exist** — advertised in help and README, and the only
+    occurrence in the artifact is `README.md:31`.
+  * **`examine` is a cross-module seam bug** — `parser.py:63` aliases it to
+    `look` and drops the target, `engine.py:435` is `_look(self)`. All 11
+    authored `description` strings are unreachable.
+  * **`?` crashes the process** — `parser.py:144`, `tokens[0]` unguarded after
+    non-alphanumerics are stripped. Uncaught `IndexError` in the main loop.
+
+**What the structural phase alone delivered is the real finding.** WON,
+**45/47 NEAR-FULL**, **12/12 rooms reachable with ZERO unplaced entities**
+(the campaign's most common decisive defect, absent again), the flight's
+**only schema-versioned save** — which took **A2** outright, the frontier
+tracebacking `KeyError` where this refuses cleanly — plus **B5 ambition** and
+**B9 workability**, the latter on the cleanest modification probe of the two:
+a new room, a new weapon and a damage change entirely in `world.json`, zero
+Python. A structural-ceiling artifact took three axes off the frontier.
+
+**Campaign first:** a cross-module seam bug that degraded a CONTENT layer
+instead of blocking the win. That class has been terminal seven times.
+
+**Quant provenance.** This is Myric APEX MIDDLE. The Unsloth UD-IQ4_XS build
+of the same checkpoint was measured head-to-head on matched missions the same
+day and deleted afterwards: it orbited three times (parser 105k tokens, engine
+105k, main ~40k of thinking), its engine.py turn ended mid-thought without
+ever emitting the file, and an escalation shipped an **852-byte stub** whose
+`process_command` returns `'Nothing happens.'` APEX produced a 43 KB engine in
+**1.46 h against 5.97 h**. The orbit is reduced, not removed — both quants had
+exactly one turn over 32k tokens.
+
+**Framework, not charged to the model:** the structural phase reported `8/8
+files clean` over a tree containing all three defects above. `.py` files are
+only syntax-checked `elif ext in env_config` and there is no env config before
+the environment phase; the AST typecheck returns `[]` on `SyntaxError`.
+Neither gate can see a wrong binding between two files that each parse.
+
+## 2026-09-23 — FRONTIER SCORECARD: qwen3.8-flash-next APEX, strip ON, functional phase, Delivery LEVEL 2–2 / Character 1–5
+
+**Delivery: 2–2 · Character: FRONTIER 5–1 · OVERALL: FRONTIER.** No panel
+split (a level panel points nowhere), not flagged CLOSE — "the nearest this
+flight comes to a CLOSE case". Out-of-band scorecard, NOT ladder-bearing and
+NOT a tier placement; METHODS §5 family caveat applies (Opus judge,
+Claude-authored frontier). Record:
+`dev/blind_panel/records/flight_20260923_apex_strip_vs_frontier.md`.
+
+**Tally corrected by the judge.** Its first report said "Delivery: A 3–1"
+over axis choices summing 2–2; asked to reconcile (no re-play), it confirmed
+the slip and kept every axis. Always re-add the axis lines before recording.
+
+Local took **A2 state integrity** (whole-world save round-trips a fight in
+progress; the frontier's save drops its boss's phase-2 bonus), **A3
+robustness** (zero tracebacks, EOF clean at every prompt, against the
+frontier's three EOF tracebacks), **B5 ambition** (topic-menu dialogue graph,
+a re-forming boss with a timed weakness window, a lock-and-key/room-change
+layer — the last authored and never wired).
+
+Against the structural-only arm of 09-21 (FRONTIER 3–1 / 4–2): Delivery closed
+to level, Character lost B9. Different designs, n=1 each.
+
+**Cycle-capped, not complete:** 30 cycles, 24/57 goals, 33 functional goals
+untested. Verified B defects: `talk to <name>` seam bug (parser keeps `to`,
+substring name match), monsters that never block, `equip armour` failing (fix
+diagnosed, cap landed first), the unwired lock/flag layer.
+
+**Framework, charged to B9 by the judge — produced by the flows, not forced:**
+330 dead lines in `main.py`, a shadow `to_dict`/`from_dict` from the two
+in-session repairs of `main.py`. The round-trip checker reported its OWN blind
+spot (it follows payload producers only as class methods) as an UNVERIFIED
+violation naming no file; the session check defaulted it onto `main.py`; the
+repair instruction ("Rewrite the SAME file … not opinions") framed it as
+`main.py`'s defect; the loop repeated a byte-identical prompt and the second
+repair escalated to a full serializer. The model's own thinking named
+`save.py` as the real target; returning `main.py` unchanged was available and
+never considered. The sweep then renamed correct code in `save.py` on an
+INFERRED theory of the checker and closed the goal on the patch's own
+validation — the round-trip check was never re-run, and re-run today it
+still reports UNVERIFIED (it follows class methods only, under any name).
+Chain and fix candidates in the flight record.
+
+**Strip ON did its job** (the reason this arm exists): structural walk 305 →
+144 min, 7/7 files in-session, depth at file 5 184k → 21k tokens, 0 context
+overflows; the judge judged the model's design, not a keystone rebuilt from a
+fragment of its own thinking.
+
+## 2026-09-24 — FRONTIER SCORECARD: qwen3.8-flash-next APEX, contract round-trip checker, loses 1–3 / 1–5
+
+**Delivery: FRONTIER 3–1 · Character: FRONTIER 5–1 · OVERALL: FRONTIER.** No
+panel split, not flagged CLOSE. Out-of-band scorecard, NOT ladder-bearing and
+NOT a tier placement; METHODS §5 family caveat applies (Opus judge,
+Claude-authored frontier). Axis lines re-added: they sum to the reported
+tallies. Record:
+`dev/blind_panel/records/flight_20260924_apex_contract_checker_vs_frontier.md`.
+
+Both artifacts WON and NEAR-FULL (local 46/47, unmet #16). Local took **A3
+robustness** (EOF clean at every prompt vs the frontier's three EOF
+tracebacks + corrupt-save traceback) and **B9 workability** (both probes
+data-only in one file; the loader names cross-reference placement errors).
+
+Against 09-23 (Delivery 2–2 / Character FRONTIER 5–1; local A2, A3, B5): the
+swing axis is **A2** — this design's load fails after the first kill. Verified
+in the tree: `engine._apply_save` builds `defeated_monsters` as id STRINGS (as
+the declared contract says) and twenty lines later calls `.behavior` on them —
+a value-vocabulary slip inside one function (the judge labelled it a
+cross-module seam; corrected in the record). The key-level round-trip check
+cannot see it (every key agrees); a static type check or the untested
+save/load runtime goals would. Different designs each flight, n=1.
+
+**Cycle-capped:** 30 cycles, 27/80 goals, 18/71 functional verified, 53
+untested (combat, NPCs, boss, save/load among them).
+
+**Framework:** the round-trip ride is gone — 9/9 files, zero repair turns,
+the checker comparing the declared save shape. Two smaller rides cost 3 of
+30 cycles: a derived acceptance check's `.out` file charged to the project by
+the runtime-file observer (1 cycle), and an authored regression test
+asserting a room name's CASE vetoing a working, freshly fixed `examine`
+(2 cycles at the cap; ships as the judge's "one failing test"). Hybrid
+rollback recovered two degenerate turns (an engine.py thinking orbit caught
+at 79,872 tokens; a tester token run) with no history replay.
+
+## 2026-10-03 — FRONTIER SCORECARD: qwen3.8-flash-next APEX, functional phase COMPLETE (114/114), 3-judge panel: LEVEL 2–2 / 3–3, overall FRONTIER 3–0 (CLOSE ×2)
+
+**Panel (axis majority): Delivery 2–2 · Character 3–3 · OVERALL: FRONTIER, 3–0 across judges.**
+
+| judge | Delivery | Character | flag |
+|---|---|---|---|
+| judge 1 | 2–2 | 3–3 | CLOSE |
+| judge 2 | FRONTIER 3–1 | FRONTIER 4–2 | not CLOSE |
+| judge 3 | 2–2 | 3–3 | CLOSE |
+
+Judge 1's self-flagged CLOSE fired the §6(a) escalation to a 3-judge panel. This is an out-of-band scorecard: it does NOT bear on the ladder and is NOT a tier placement. The METHODS §5 family caveat applies (Opus judges, Claude-authored frontier). Axis lines were re-added for every judge, and each sums to the tally that judge reported. Record: `dev/blind_panel/records/flight_20261003_apex_functional_complete_vs_frontier.md`.
+
+**The arm.** Mission `4cee1f5fbc74` completed 114/114 in 12,593 min: session mode, `top_phase: functional`, contemplator league, no cap. It produced 38 files, 0 py_fail and 5 degenerations. The game was judged as shipped, including every repair-loop edit (operator direction: judge the framework and model together). The candidate sat on B, which is the position-bias swap from 09-24.
+
+**Both artifacts WON and both scored 47/47 NEAR-FULL.** All 9 rooms are reachable in each, with no unplaced entities.
+
+**The local artifact took five axes:**
+- **unanimously:** A4 delivered scope, B5 ambition, B6 imagination;
+- **2–1:** A3 robustness, B9 workability.
+
+**The frontier took the other five unanimously:** A1, A2, B7, B8, B10. It won on flee as a silent soft-trap, a boss weakness that gates nothing (phase 1 never attacks, phase 2 is auto-exposed, and all three judges won without the chalice), and monster flavour leaking across monsters.
+
+**Firsts for the epoch:**
+- **B6 imagination** was taken from the frontier for the first time.
+- **Character 3–3** is the best Character result yet (the previous best was 2–4).
+- **Delivery 2–2** ties the earlier best (08-19, 08-22, 09-23).
+
+**Post-verdict attribution (history store):** most of B's decisive defects entered through the functional-phase repair loop, not the model's original build.
+
+| defect | commit | origin |
+|---|---|---|
+| flee trap | patch `3ffeff05e6c4`, seq 26712 | the re-fix that blocks every exit while a monster lives |
+| phase 2 auto-exposed | patch `920b995b47e5`, seq 75423 | the "second phase is exposed" fix sets `weakness_triggered` on every phase advance |
+| phase 1 never attacks | `68c1d3f63376` | a blind-diagnosis design change |
+| shriek leak | `7e0f7979b9cf` | |
+| "Bone Sentinel steps aside" hardcoded | `ffe839d3e53f` | |
+| meta hint line | `44d64627a20d` | |
+| "You use the relic" | `9f2923a26543` | |
+
+The model's own build carried the axes the candidate won outright. Treat this as a framework finding, not a counterfactual score: the pre-repair tree was never judged. The full table is in the record, and its framework causes are in `~/ouroboros-runs/tier_20260924-191710/FIX_LIST.md` §§10, 12, 16, 17 and 23.
+
+**Disclosures:**
+- **Judge 2:** used `git diff --no-index` once as a plain diff tool, inside its scratch dir. It read no repository. Disclosed, not corrected.
+- **Packet builder:** when given `staged/armNN`, `make_judge_packet.py` copies `alpha/` plus `judge1/` (its `*/main.py` glob matches). The packet was rebuilt from `alpha/` before any judge launched.

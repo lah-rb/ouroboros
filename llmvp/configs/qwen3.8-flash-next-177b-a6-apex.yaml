@@ -1,0 +1,418 @@
+# THE qwen4exp CONFIG. Myric's APEX "MIDDLE" build (85.4 GiB, file_type 18)
+# — the only quant of this checkpoint we keep. It began as an A/B arm against
+# Unsloth's UD-IQ4_XS (87.25 GiB, file_type 30); APEX won decisively, the
+# IQ4_XS weights were deleted 2026-09-21, and this file was promoted from an
+# `extends:` child to the primary. The comparison below is kept as the reason
+# the fleet runs this quant, not as a live arm.
+#
+# WHAT THE A/B MEASURED (2026-09-21, matched missions — same objective, same
+# structural_mode: session, same flow_set, same sampling, same n_ctx; the
+# mission configs diffed to ZERO deltas):
+#
+#                      IQ4_XS        APEX
+#   wall (turn span)   5.97 h        1.46 h      ~4.1x
+#   turns              26            18
+#   total est tokens   145,362       96,957
+#   max single turn    40,773        34,779
+#   engine.py          852 B STUB    43,310 B
+#   final gate         7/7 clean     8/8 clean
+#
+# The artifact difference matters more than the speed. IQ4_XS orbited three
+# times (parser 105k, engine 105k, main ~40k of thinking) and its engine.py
+# turn ended mid-thought without ever emitting the file — an escalation then
+# wrote an 852-byte stub whose process_command returns 'Nothing happens.',
+# and the phase completed with a hollow keystone. APEX's long turn produced a
+# 43 KB engine and also emitted the world.json data file the other arm never
+# built. Both arms parsed and imported clean otherwise.
+#
+# SO THE ORBIT IS REDUCED, NOT REMOVED — both arms had exactly one turn over
+# 32k tokens. What the quantizer appears to change is whether the model lands
+# the plane after elaborating, which matches the operator's report from the
+# other qwen MoEs. n=1 per arm, and the two designs differed (54 goals vs 74),
+# so treat the speed ratio as indicative and the artifact gap as the finding.
+#
+# FAMILY STILL APPLIES, and this was checked rather than assumed. The APEX
+# template is the UPSTREAM Qwen original (8,952 chars); the Unsloth one
+# (9,993) carries Unsloth's own fixes — merged system messages, a developer
+# role, tool-call guards, and a `high` -> `xhigh` alias. None of that reaches
+# us: LLMVP renders from formats/qwen38.yaml, not from the GGUF's jinja. What
+# DOES have to match, matches byte-for-byte — both reasoning-effort sentences
+# verbatim, <|im_start|>/<|im_end|>, the `<think>\n` prefill and the
+# `<think>\n\n</think>\n\n` closed literal, and the same
+# add_generation_prompt branch. The vendor sampling block agrees too
+# (temp 1.0 / top_p 0.95 / top_k 20).
+#
+# KV GEOMETRY was compared field-by-field against the IQ4_XS build before
+# 27,648 B/tok was carried across as a measurement rather than a guess:
+# block_count 48, head_count_kv 2,
+# key/value_length 256, full_attention_interval 4 — compared field by field.
+# KV is f16 regardless of how the WEIGHTS are quantized, so the quantizer
+# cannot move that number. probe_verified_* below are THIS file's own
+# --probe-context measurements (262144 PASS, kv 6912 MiB, peak_wired
+# 104.8 GB), not carried over.
+# ── UNRANKED (2026-09-20). First intake of the `qwen4exp` architecture.
+# No tier placement: it has never faced a panel. Earn one from a flight.
+#
+# WHAT THIS MODEL IS (measured from the GGUF headers, not the model card):
+#   177B total / ~6B active — 512 experts, 10 used per token, 48 blocks.
+#   It is qwen3-next's geometry WIDENED (embedding 2048→2560, attn heads
+#   16→24, ssm.inner 4096→6144) plus two things qwen3-next does not have:
+#
+#   1. A SPARSE-ATTENTION INDEXER (attention.indexer.{head_count=4,
+#      key_length=128, top_k=2048}) — the reason this needs b11058's new
+#      llama-memory-hybrid-idx. It carries its OWN KV cache that no header
+#      formula accounts for; it was the one term this intake could not
+#      predict, and it is now measured at 3,072 B/tok (see
+#      kv_bytes_per_token_measured).
+#   2. A 26.8 GiB PER-LAYER EMBEDDING TABLE (per_layer_token_embd:
+#      16 heads × ~20M vocab × 160 dim = 51.2B params — 29% of the whole
+#      file, and more parameters than most models have in total). It is a
+#      SPARSE LOOKUP: a token reads 16×160 values from it, so its compute
+#      cost is nil and its memory cost is all residency. llama-cpp-python
+#      0.4.0's new lazy_mode=AUTO (lazy for marked tensors >4 GiB, needs
+#      mmap) exists for exactly this tensor — we pass neither load_mode nor
+#      lazy_mode, so we inherit AUTO deliberately. At boot llama.cpp places it
+#      in a CPU buffer (`CPU_Mapped model buffer size = 27465.95 MiB`) rather
+#      than on Metal; the GGUF calls it an n-gram hash embedding
+#      (ple.ngram_size=3, ple.heads_per_ngram=8).
+#
+# The vendor's own description of the file is "A Preview of the Qwen4
+# Architecture" — hence the `qwen4exp` arch string on a 3.8-named checkpoint.
+#
+# HYBRID-RECURRENT, so the qwen3-next rule carries over unchanged: per-turn
+# state save/load splicing is unsound on recurrent components (upstream
+# llama.cpp #22384) — sessions re-prefill from history.
+#
+# NO RESIDENT CLAIM, AND NOW IT IS SETTLED. qwen3-next earned
+# `resident_seq_cache: true` by measurement, and its own header records how
+# narrow that finding was — its GDN siblings measure can_shift=False with the
+# same flags forced on. The claim does not transfer, and the cells run
+# (2026-09-20, block at the foot of this file) confirms it: memory_can_shift
+# came back FALSE. This checkpoint sits with the GDN qwens, not with its
+# DeltaNet cousin. Full replay is not a placeholder here, it is the ceiling.
+
+# ── Intake strategy (TOP-LEVEL — it is not a `model:` key; nested, it is
+# silently ignored and you ship a no-op). Expands to
+# resident_seq_cache=false + session_full_replay + pool decode.
+#
+# `replay` is NOT a judgement that this model refuses better: `resident` is a
+# claim that needs the step-5 boot verdict (memory_can_shift) and a cells run,
+# and neither has happened yet. The lineage makes it genuinely open —
+# qwen3-next (DeltaNet) grants can_shift while the GDN qwens refuse — and the
+# indexer is new memory machinery on top of that. Deliberately does NOT touch
+# swa_full, which is architecture-determined and stated in `model:` below.
+cache_strategy: replay
+
+app:
+  host: "0.0.0.0"
+  port: 8008
+  log_level: "info"
+  cors_origins: ["*"]
+  backend_timeout: 180
+
+graphql:
+  max_query_depth: 10
+  max_tokens: 262144
+  max_aliases: 50
+  introspection_enabled: true
+
+model:
+  name: "qwen3.8-flash-next-177b-a6-apex"
+  # qwen38, NOT qwen or chatml. Verified the hard way rather than assumed:
+  # this checkpoint's embedded chat template is BYTE-IDENTICAL (9,993 chars)
+  # to the Qwen3.8-27B template that formats/qwen38.yaml was split out for
+  # and is parity-pinned against. Same reasoning_effort dial
+  # (xhigh/medium/low, `high` aliased to xhigh by the template itself), same
+  # independent enable_thinking prefill axis.
+  family: "qwen38"
+  path: /Users/lah-rb/.lmstudio/models/Myric/Qwen3.8-Flash-Next-APEX-GGUF/qwen3.8-flash-next-MIDDLE.gguf
+  # THE FULL TRAINED RANGE, and measured rather than assumed. This was held at
+  # 131,072 for intake while the indexer cache was an unknown term; the
+  # --probe-context run of 2026-09-20 passed the TOP rung on its first attempt
+  # (ok=3 fail=0, kv=6912 MiB, peak_wired=106.9 GB against a 123.7 GB gate)
+  # and reported "ceiling is the trained range — nothing here limits it".
+  # The probe's own KV figure, 27 KiB/tok, independently reproduces the
+  # boot-log measurement recorded below.
+  n_ctx: 262144
+  probe_verified_weights_bytes: 91655638816
+  probe_verified_n_ctx: 262144
+  # KV geometry is qwen3-next's EXACTLY (block_count 48, full_attention_
+  # interval 4, head_count_kv 2, key/value_length 256 — compared field by
+  # field), so the same 4.00x formula overshoot applies: the header formula
+  # assumes a full cache on all 48 layers, but only 12 are full-attention
+  # and the other 36 are recurrent (no KV cache at all, which is why
+  # swa_full cannot inflate them). 12 × 2 × (256+256) × 2 = 24,576 B/tok.
+  #
+  # NOW MEASURED, from the 8,192-cell boot log rather than derived:
+  #     llama_kv_cache        MTL0 KV buffer  192.00 MiB  -> 24,576 B/tok
+  #     llama_kv_cache        MTL0 KV buffer   24.00 MiB  ->  3,072 B/tok
+  #   = 27,648 B/tok
+  # The first is the 12 full-attention layers and lands exactly on the
+  # qwen3-next-derived figure; the second is the sparse-attention INDEXER
+  # cache, which no header formula accounts for and which is the term this
+  # intake could not predict. Separately, `llama_memory_recurrent` reserves a
+  # FIXED 112.57 MiB for the 36 recurrent layers — flat in n_ctx, so it is not
+  # in the per-token number.
+  # Declaring this re-arms the preflight against real geometry instead of the
+  # 98,304 B/tok formula (3.56x over — it assumes a full cache on all 48
+  # layers). That matters at the top rung: the formula computes 25.8 GB at
+  # 262,144 and would refuse a load that actually costs 7.25 GB.
+  kv_bytes_per_token_measured: 27648
+  n_gpu_layers: -1
+  seed: -1
+  verbose: false
+  # STATED FROM THE ARCHITECTURE (step 4), and the boot log agrees twice over:
+  # `print_info: n_swa = 0 / is_swa_any = 0`, every layer `is_swa = 0`, and the
+  # binding refuses it outright — "swa_full is not supported by this model, it
+  # will be disabled". There is no sliding window here: 12 of 48 layers are
+  # full attention and the other 36 are recurrent (no KV cache at all). An
+  # earlier draft of this file said `true`, copied from the qwen3-next sibling
+  # that needs it for its resident seq band. That would have shipped a config
+  # whose own boot log contradicts it.
+  swa_full: false
+  # true unless there is a reason: under false the per-seq window is
+  # n_ctx / n_seq_max, which has silently amputated contexts three times.
+  kv_unified: true
+  session_full_replay: true
+  # Thinking is ALWAYS-ON with a depth dial (the template prefills an open
+  # <think> on every generation prompt); only `thinking: off` seals it via
+  # the family's prefill_closed_literal.
+  thinking_available: true
+  thinking: "on"
+  # STRIP ON — an OPERATOR OVERRIDE of the template (step 3c), recorded as one.
+  # The template's assistant-history branch keeps prior reasoning by default:
+  #     {%- if preserve_thinking is undefined or preserve_thinking is true
+  #            or loop.index0 > ns.last_query_index %}
+  #         ... '\n<think>\n' + reasoning_content + '\n</think>\n\n' + content
+  # so the vendor default is "keep". Kept, it cost this model its keystone: the
+  # 2026-09-22 contemplator session walk carried every turn's thinking, reached
+  # 184k tokens by file 5 of 6, decoded at 9.7 tok/s (31 at the start), and the
+  # engine.py turn hit the context ceiling mid-thought — a 187-byte fragment of
+  # that thinking shipped as the file, and the functional phase spent four of
+  # its five fixes rebuilding it. Stripped, a session keeps each turn's prompt
+  # and answer in the template's OWN preserve_thinking=false shape
+  # ('<|im_start|>assistant\n' + content; tests/test_strip_template_golden.py).
+  #
+  # HOW, on this replay config: turn rollback (inference/turn_checkpoint.py) —
+  # the recurrent state (112.6 MiB, PARTIAL_ONLY) is checkpointed at each turn
+  # boundary; the strip restores it, drops the tail, and re-evaluates only the
+  # turn's prompt + answer. Gated before this flip (2026-09-22,
+  # ~/ouroboros-runs/rollback_probe_20260922/): capture 6-13 ms, restore 3-5 ms,
+  # size flat at 2k/30k/100k; rollback and strip BIT-identical to the inline
+  # path at 2k. Past ~30k this model does not reproduce itself run-to-run on
+  # Metal (two identical inline passes: max|Δlogit| ~1-1.6, a top-1 flip at
+  # margin 0.58), and rollback/strip differences sit inside that noise (100k
+  # strip vs inline mean KL 4.5e-4 vs inline-vs-inline 2.6e-3). Live server
+  # smoke (dev/turn_rollback_smoke.py): strip, answerless drop, abandon repair,
+  # rewind — all PASS, needle recalled through each.
+  strip_prior_reasoning: true
+  # MTP NOT WIRED. Unsloth ships a separate shared-MTP draft
+  # (mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf, --spec-type draft-mtp
+  # --spec-draft-n-max 5) claiming 1.3-1.7x. Two reasons it is off here: our
+  # own MTP measurement was 0-1% acceptance, and the MTP/nextn symbols went
+  # missing from this binding lineage at 0.3.44 (vendor stopped exporting
+  # them). Revisit only with a measurement, not the vendor's number.
+  speculative: false
+
+prompt:
+  persona_file: "./knowledge/SOUL.md"
+
+generation:
+  max_tokens_default: 262144
+  # VENDOR THINKING PROFILE — card: https://huggingface.co/Qwen/Qwen3.8-Flash-Next
+  #   thinking : temp 1.0, top_p 0.95, top_k 20, min_p 0.0,
+  #              presence_penalty 0.0, repetition_penalty 1.0   <- WE RUN THIS
+  #   instruct : temp 0.7, top_p 0.80, top_k 20, min_p 0.0,
+  #              presence_penalty 1.5                           <- REJECTED
+  # Rejected because `thinking: on` below: the instruct profile is the
+  # non-thinking one, and its presence_penalty 1.5 is a degeneration remedy,
+  # not a default. The GGUF corroborates the choice independently — it embeds
+  # general.sampling.{temp=1.0, top_p=0.95, top_k=20}.
+  #
+  # An earlier draft of this file ran temp 0.7 copied from the qwen3.8-27b
+  # sibling: the same family and dial, but a different checkpoint's number,
+  # inside no published envelope for THIS one. That is the exact failure the
+  # onboarding procedure's step 2 is written about.
+  temperature_default: 1.0
+  # Flows scale temp DOWN per task; the floors keep a scaled value from
+  # landing in the basement well under every published Qwen profile.
+  temperature_floor: 0.7
+  session_temp_floor: 0.7
+  top_p: 0.95
+  top_k: 20
+  min_p: 0.00
+  presence_penalty: 0.0
+  repeat_penalty: 1.0
+  penalty_last_n: 2048
+  degen_retry_enabled: true
+  degen_retry_temperature: 1.0
+  degen_retry_presence_penalty: 1.5
+  streaming_default: true
+
+knowledge:
+  tokens_bin: "./data/qwen3.8-flash-next-177b-a6-apex.tokens.bin"
+  token_limit: 32768
+
+resources:
+  cpu_threads: 15
+  max_concurrent_requests: 1
+  jit_concurrency_limit: null
+
+tools:
+  enabled: false
+  max_iterations: 3
+
+logging:
+  enabled: true
+  directory: "./logs"
+
+# ── TIER EXPECTATION (doc-only; see DOC_ONLY_KEYS in core/config.py) ─
+# PRE-REGISTERED under TIER_RUBRIC v2.1 §6: written before the run, never
+# shown to a judge, never revised afterwards. Its job is not to be right — it
+# is to make a SURPRISE legible.
+#
+# CARD WARNING WORTH HOLDING AGAINST OUR OWN DIAL MAPPING: Qwen states that
+# in MULTI-TURN AGENTIC tasks a lower reasoning effort does not reliably cut
+# total time — it can produce "insufficient analysis, more failures, and
+# repeated retries", raising end-to-end latency and token spend. Ouroboros is
+# exactly that workload, and formats/qwen38.yaml maps canonical MEDIUM onto
+# the LOW sentence (a deliberate collapse, measured on the 27B: its neutral
+# ran near-xhigh and cost 1.3 cyc/h). So this checkpoint inherits a mapping
+# tuned on a sibling against a vendor warning aimed at our exact use case.
+# Watch retry/failure counts, not just cycle rate, on the first arm.
+#
+# Expectation: contemplator, alongside its qwen3.8-27b sibling — same family,
+# same always-on dial. The open question is whether ~6B active with a 512-way
+# expert pool and a 51B-parameter embedding table behaves like a much larger
+# dense model on reasoning-tier work, or whether the thin active path shows
+# up as shallow verdicts under load.
+# OUT-OF-BAND SCORECARD 2026-09-21 (NOT a placement — status stays
+# not_yet_run because no tier flight has been run): a STRUCTURAL-ONLY artifact
+# lost to the FRONTIER anchor Delivery 1-3 / Character 2-4, taking A2 state
+# integrity, B5 ambition and B9 workability. WON, 45/47 NEAR-FULL, 12/12 rooms
+# reachable with zero unplaced entities. All three Delivery-deciding defects
+# (`flee` absent, `examine` aliased to `look` with the target dropped, `?`
+# crashing the main loop) are functional/quality-phase work this run never
+# reached. Do NOT compare the tally to the 2026-08-22 completed-artifact
+# scorecard. Record: dev/blind_panel/records/flight_20260921_apex_vs_frontier.md
+tier:
+  league: contemplator  # LOAD-BEARING — agent/tier/runner.py:config_league
+  status: not_yet_run  # history: llmvp/configs/archive/TIER_JUDGEMENTS.md
+
+# ── MEASURED CACHE BEHAVIOUR (doc-only; dev/cache_compat_matrix.py) ──
+# Depth 16, ~900 tok/turn — the same workload as the rest of the fleet, so
+# these numbers are directly comparable to qwen3-next's RC3 block.
+#
+# THE STEP-5 VERDICT CAME BACK NEGATIVE, which settles the open question in
+# this file's header: memory_can_shift=False. This checkpoint sits with the
+# GDN qwens (refuse), NOT with its DeltaNet cousin qwen3-next (grants). So
+# `cache_strategy: replay` is now a measurement rather than a placeholder,
+# and no cache feature can be layered on it.
+#
+# TWO THINGS A READER SHOULD NOT MISREAD:
+#   • strategy_matches_behaviour=false is NOT a misdeclaration. The probe
+#     infers the mode from the fresh-token curve and ours is FLAT
+#     (1111 x10 then 1144 x4, curve_growth 0.02), which it reads as
+#     resident-live. That flatness is the full_replay APPEND FAST PATH
+#     doing its job — continuation is not gated by can_shift, only removal
+#     is. Declared full-replay, behaves flat: both true.
+#   • fork_needle_ok FALSE is the real finding, and it is where this model
+#     parts company with qwen3-next (which forks hot AND keeps the needle).
+#     A hot snapshot fork here returns in 4.9s and has LOST the needle, so
+#     the fork is not a trustworthy state carrier on this arch — consistent
+#     with recurrent state that cannot be spliced. Do not build on it.
+probe_verified_cache:
+  run_id: cells_20260920-qwen38flashnext
+  strategy: full_replay
+  can_shift: False
+  n_ctx_seq: 262144
+  depth: 16
+  turn_tokens: 900
+  turn1_fresh: 1534
+  fresh_t2_last: [1111, 1144]
+  curve_growth: 0.02
+  prefill_total_s: 39.2
+  needle_at_depth: True
+  early_fact_ok: True
+  snapshot_fork: hot
+  fork_fresh: 24
+  fork_s: 4.9
+  fork_needle_ok: False
+
+# ── MEASURED THROUGHPUT, AND THE HYPOTHESIS THAT DIED (doc-only) ─────
+# Isolated decode (n_ctx 8192, 256 tokens greedy, prefill subtracted as
+# (N-1)/(t_N - t_1), two trials per arm — spread within 0.4 tok/s):
+#
+#   baseline                       36.7 / 36.8 tok/s
+#   lazy_mode=OFF                  36.4 / 36.7
+#   no_host=True                   36.3 / 36.7
+#   per_layer_token_embd -> Metal  36.6 / 36.6   (override REFUSED, see below)
+#   n_cpu_moe=2 (control)          33.8 / 33.7
+#
+# THE PLE HYPOTHESIS IS REFUTED. An earlier version of this file guessed that
+# the 26.8 GiB CPU-buffer PLE table cost a host-side gather per token. It does
+# not: nothing moves the number. Three findings came out of testing it —
+#
+#   1. The table is never resident. b11058 logs "add: tensor
+#      per_layer_token_embd.weight (size = 27465 MiB) lazy read enabled" —
+#      0.4.0's lazy_mode=AUTO pulling rows on demand from mmap. Forcing
+#      lazy_mode=OFF materialises it (CPU_Mapped 644 + 27466 MiB merge into
+#      one 28110 MiB buffer) and buys NOTHING, so the lazy read is free.
+#   2. per_layer_token_embd CANNOT be moved to Metal. A tensor_buft_override
+#      pointing it at MTL0 is silently ignored — placement and buffer sizes
+#      are byte-identical to baseline (and the process then aborts on a Metal
+#      residency-set assert at teardown). It is special-cased, consistent with
+#      lazy read requiring a host mapping. The control proves the mechanism
+#      itself works: n_cpu_moe=2 moves CPU_Mapped 644 -> 3053 MiB and costs
+#      3 tok/s, exactly as it should.
+#   3. The rate is explained by ACTIVE PARAMETERS, not placement. Same
+#      harness, same box, its closest structural sibling:
+#
+#        qwen3-next 80B-A3B   48 layers  5071 graph nodes  ~3.9B act  62.3 tok/s
+#        qwen4exp   177B      48 layers  6768 graph nodes  ~7.3B act  36.8 tok/s
+#
+#      1.89x the active parameters for 1.69x the time — this checkpoint is
+#      slightly MORE efficient per active parameter than the sibling. There is
+#      no throughput being left on the table by how we configure it.
+#
+# MTP: TESTED, AND IT IS AN UPSTREAM GAP — NOT A CONFIG WE GOT WRONG.
+# Both Q4_K_M sidecars were tried through SpecConfig(spec_type=DRAFT_MTP,
+# draft_model_path=...) on 2026-09-20. BOTH FAIL TO LOAD:
+#   shared    (1.91 GB, 32 tensors, 2.61B) -> "tensor 'token_embd.weight'
+#                                              not found"
+#   nonshared (2.79 GB, 34 tensors, 3.88B) -> "tensor 'output_hc_norm.weight'
+#                                              not found"
+# The failure is not shared-vs-nonshared. The sidecar is being loaded as a
+# STANDALONE qwen4exp model, so the builder demands the full 49-block trunk
+# that a 1-block MTP head does not have. The shared one is the REAL head
+# (2.61B — it reuses the trunk's LM head, which is why it ships no
+# token_embd/output); the nonshared one just bundles a redundant copy of
+# those and dies one tensor later.
+#
+# ROOT CAUSE, located in the vendor source rather than guessed:
+# `ml.load_mtp` IS honoured, but per-architecture in src/models/*.cpp —
+# qwen3next.cpp, qwen35.cpp, deepseek4.cpp, glm4-moe.cpp and others each
+# carry `int mtp_flags = !ml.load_mtp ? TENSOR_SKIP : 0` plus an `mtp_only`
+# sidecar detection. src/models/qwen4exp.cpp contains NO mtp/nextn handling
+# at all — verified on our pin (b11058) AND on ggml-org master as of
+# 2026-09-20. So `load_mtp` reaches qwen4exp and does nothing.
+#
+# THE WORK EXISTS BUT IS NOT MERGED: ggml-org/llama.cpp PR #27836
+# ("qwen4exp : add NextN/MTP draft head"), open as a DRAFT since 2026-08-27.
+# Its own listed blockers include "tensor whitelist corrections for
+# standalone MTP-only checkpoint loading" — precisely the error above.
+# Unsloth's documented `--spec-type draft-mtp` command works against THEIR
+# fork (unslothai/llama.cpp PR #144), not upstream; ik_llama.cpp has its own
+# (PR #2369).
+#
+# WHAT IT IS WORTH, so the revisit is a decision and not a re-derivation.
+# PR #27836's own bench, M3 Max 128GB, UD-IQ4_XS — the same quant we run:
+#     baseline            27.43 tok/s
+#     spec-draft-n-max 2  37.22 tok/s  (+35.7%, 89.2% acceptance)
+#     spec-draft-n-max 3  38.83 tok/s  (+41.6%, 85.7% acceptance)
+# ~86-89% acceptance is a different world from the 0-1% that made MTP a
+# NO-GO for us before, so that prior does NOT transfer here — this is worth
+# re-testing the day it lands. Trigger: PR #27836 merges AND the JamePeng
+# fork advances its vendor past it (the fork's own MTP commits are all
+# binding-side plumbing; the gap is in vendored llama.cpp).
+# Until then `speculative: false` stands, tested rather than assumed.

@@ -137,15 +137,16 @@ def test_execute_trace_declares_traced_symbols_in_compiled_flow():
 
 # ── Failed-trace corrections cap ───────────────────────────────────────
 #
-# investigation_turn (the 10-trace budget) only counts SUCCESSFUL traces, so a
-# model that names only invalid targets loops on corrections forever — past the
-# flow's max-step safety, which RAISES and crashes the whole agent (seen live:
-# qwen3.5 issued ~50 invalid traces on a fresh mission). The corrections cap
-# signals ``exhausted`` to route the loop to conclude instead.
+# investigation_turn only counts SUCCESSFUL traces, so a model that names only
+# invalid targets would loop on corrections past the flow's max-step safety,
+# which RAISES and crashes the whole agent (seen live: qwen3.5 issued ~50
+# invalid traces on a fresh mission). Since 2026-09-26 there is no separate
+# corrections cap: every lap routes through check_budget, whose ONE crash
+# guard counts traces and corrections together.
 
 
 @pytest.mark.asyncio
-async def test_corrections_below_cap_keeps_looping():
+async def test_a_correction_is_counted_but_spends_no_investigation():
     effects = MockEffects(files={"engine.py": _ENGINE_SRC})
     out = await action_execute_symbol_trace(
         _step_input(
@@ -156,35 +157,17 @@ async def test_corrections_below_cap_keeps_looping():
         )
     )
     assert out.result.get("trace_ok") is False
-    assert not out.result.get("exhausted")  # still retrying
+    assert "exhausted" not in out.result  # no separate cap any more
     assert out.context_updates.get("trace_corrections") == 3
     assert (
         "investigation_turn" not in out.context_updates
     )  # corrections don't cost budget
 
 
-@pytest.mark.asyncio
-async def test_corrections_at_cap_signals_exhausted():
-    effects = MockEffects(files={"engine.py": _ENGINE_SRC})
-    out = await action_execute_symbol_trace(
-        _step_input(
-            effects,
-            diagnosis_session_id="s1",
-            investigation_choice_arg="",
-            trace_corrections=7,
-        )
-    )
-    assert out.result.get("trace_ok") is False
-    assert (
-        out.result.get("exhausted") is True
-    )  # 7+1 == _MAX_TRACE_CORRECTIONS → bail to conclude
-    assert out.context_updates.get("trace_corrections") == 8
-
-
-def test_execute_trace_resolver_routes_exhausted_to_conclude():
-    """The compiled flow must route an exhausted correction to conclude (not
-    loop back to investigate), so a runaway invalid-trace loop can't reach the
-    max-step crash."""
+def test_every_trace_lap_passes_the_crash_guard():
+    """A correction routes through check_budget like a trace does, and the
+    guard counts both — so a runaway invalid-trace loop parks with a report
+    instead of reaching the max-step crash."""
     from agent.resolvers.rule import resolve_rule
 
     compiled = json.loads(
@@ -198,18 +181,9 @@ def test_execute_trace_resolver_routes_exhausted_to_conclude():
 
     assert (
         resolve_rule(
-            resolver,
-            step_output=_Out({"trace_ok": False, "exhausted": True}),
-            context={},
-            meta={},
-        )
-        == "conclude"
-    )
-    assert (
-        resolve_rule(
             resolver, step_output=_Out({"trace_ok": False}), context={}, meta={}
         )
-        == "investigate"
+        == "check_budget"
     )
     assert (
         resolve_rule(
@@ -219,9 +193,34 @@ def test_execute_trace_resolver_routes_exhausted_to_conclude():
     )
 
 
+def test_the_crash_guard_counts_corrections():
+    from agent.resolvers.rule import resolve_rule
+
+    compiled = json.loads(
+        (Path(__file__).resolve().parent.parent / "flows" / "compiled.json").read_text()
+    )
+    step = compiled["diagnose_issue"]["steps"]["check_budget"]
+    assert "trace_corrections" in step["context"]["optional"]
+
+    class _Out:
+        result: dict = {}
+
+    def _route(turn, corr):
+        ctx = {"investigation_turn": turn}
+        if corr is not None:
+            ctx["trace_corrections"] = corr
+        return resolve_rule(step["resolver"], step_output=_Out(), context=ctx, meta={})
+
+    assert _route(3, None) == "investigate"
+    assert _route(3, 51) == "investigate"  # 54 laps
+    assert _route(3, 52) == "conclude"  # 55 laps — corrections count
+    assert _route(55, 0) == "conclude"
+
+
 def test_execute_trace_persists_trace_corrections_in_compiled_flow():
     """Wiring contract for the corrections counter — the bug that made the cap
-    DEAD across two overnight runs. The action reads ``trace_corrections`` from
+    DEAD across two overnight runs (it now feeds check_budget's crash guard).
+    The action reads ``trace_corrections`` from
     context each turn and bumps it; the runtime filters readable context to
     declared keys, so without BOTH ``context.optional`` (read) and ``publishes``
     (persist) the counter resets to 0 every turn, never reaches the cap, and the
@@ -265,7 +264,7 @@ async def test_bare_data_file_traces_full_content():
     assert out.context_updates.get("investigation_turn") == 3
     injected = out.context_updates.get(INJECTION_KEY, [])
     joined = " ".join(injected) if isinstance(injected, list) else str(injected)
-    assert "world/rooms.yaml" in joined and "data file" in joined
+    assert "=== world/rooms.yaml (data) ===" in joined
     assert "exits" in joined  # actual content surfaced
 
 
@@ -286,3 +285,85 @@ async def test_bare_code_file_without_colon_still_corrected():
     injected = out.context_updates.get(INJECTION_KEY, [])
     joined = " ".join(injected) if isinstance(injected, list) else str(injected)
     assert "file:symbol" in joined
+
+
+# ── Data files: trace one entry by pointer (2026-09-26) ──────────────
+#
+# The seed advertised data files as "valid trace targets", but a bare name or
+# any `file:x` returned the whole file — the diagnosis could not read one
+# entry. A data file's "symbol" is now an RFC 6901 pointer, and a file too big
+# for the session comes back as an index of its entries.
+
+_WORLD = json.dumps(
+    {
+        "starting_room": "room_a",
+        "rooms": [
+            {"id": "room_a", "name": "Hall", "exits": [{"direction": "north"}]},
+            {"id": "room_b", "name": "Crypt", "items": ["item_vial"]},
+        ],
+    },
+    indent=2,
+)
+
+
+def _joined(out) -> str:
+    injected = out.context_updates.get(INJECTION_KEY, [])
+    return " ".join(injected) if isinstance(injected, list) else str(injected)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ref", ["world.json:/rooms/1", "world.json:rooms/1"])
+async def test_a_data_entry_is_traced_by_pointer(ref):
+    effects = MockEffects(files={"world.json": _WORLD})
+    out = await action_execute_symbol_trace(
+        _step_input(
+            effects,
+            diagnosis_session_id="s1",
+            investigation_choice_arg=ref,
+            investigation_turn=2,
+        )
+    )
+    assert out.result.get("trace_ok") is True
+    joined = _joined(out)
+    assert "=== world.json:/rooms/1 (data) ===" in joined
+    assert "Crypt" in joined and "item_vial" in joined and "Hall" not in joined
+    assert out.context_updates["traced_symbols"] == ["world.json:/rooms/1"]
+
+
+@pytest.mark.asyncio
+async def test_a_wrong_pointer_is_corrected_with_the_nearest_map():
+    effects = MockEffects(files={"world.json": _WORLD})
+    out = await action_execute_symbol_trace(
+        _step_input(
+            effects,
+            diagnosis_session_id="s1",
+            investigation_choice_arg="world.json:/rooms/7",
+            investigation_turn=2,
+        )
+    )
+    assert out.result.get("trace_ok") is False
+    joined = _joined(out)
+    assert "no data at /rooms/7" in joined
+    assert "/rooms/1" in joined and "room_b" in joined  # a way forward
+
+
+@pytest.mark.asyncio
+async def test_a_data_file_too_big_for_the_session_comes_back_as_an_index():
+    class _Small(MockEffects):
+        async def cache_health(self):
+            return {"nCtxSeq": 16384}
+
+    rooms = [{"id": f"room_{i}", "desc": "x" * 300} for i in range(60)]
+    effects = _Small(files={"world.json": json.dumps({"rooms": rooms})})
+    out = await action_execute_symbol_trace(
+        _step_input(
+            effects,
+            diagnosis_session_id="s1",
+            investigation_choice_arg="world.json",
+            investigation_turn=2,
+        )
+    )
+    assert out.result.get("trace_ok") is True
+    joined = _joined(out)
+    assert "too large to show whole here" in joined
+    assert "/rooms" in joined and "x" * 300 not in joined

@@ -26,7 +26,8 @@ async def action_build_and_query_repomap(step_input: StepInput) -> StepOutput:
     Params:
         root: Directory to scan (default ".")
         include_patterns: File glob patterns to include.
-        max_chars: Max characters for the formatted map output.
+        max_chars: Optional character budget for the map; the default is
+            one read's share of the serving window (agent/context_fit.py).
         focus_files: List of files to boost in ranking.
 
     Context:
@@ -45,7 +46,8 @@ async def action_build_and_query_repomap(step_input: StepInput) -> StepOutput:
         "include_patterns",
         ["*.py", "*.yaml", "*.yml", "*.js", "*.ts", "*.rs"],
     )
-    max_chars = int(params.get("max_chars", 4000))
+    _mc = params.get("max_chars")
+    max_chars = int(_mc) if _mc else None
 
     # Determine focus files from context or params
     focus_files = params.get("focus_files", [])
@@ -135,24 +137,29 @@ async def action_build_and_query_repomap(step_input: StepInput) -> StepOutput:
             seen.add(fp)
             unique_related.append(fp)
 
-    # Step 6: Build schema context (Level 1 + 2 — always on). CAPPED: on a
-    # repo-scale checkout this block dwarfs everything else (swe-bench-astropy
-    # ingest: 107KB of Data Schemas inside a 154KB / 47k-token prompt that took
-    # 167s to prefill — 15% of the task budget before any work started). The
-    # repomap itself is budgeted via max_chars; hold the schema appendix to
-    # twice that budget so huge repos degrade to "the biggest schemas" instead
-    # of "every schema".
-    from agent.schema_extract import build_schema_context
+    # Step 6: Schema context (Level 1 + 2 — always on), fitted like the map.
+    # On a repo-scale checkout this block dwarfs everything else (swe-bench-
+    # astropy ingest: 107KB of Data Schemas inside a 154KB / 47k-token prompt,
+    # 167s to prefill). Whole sections in order while they fit the same share
+    # the map gets; the rest are named — never a mid-section cut (2026-09-26).
+    from agent.context_fit import share_chars
+    from agent.schema_extract import build_schema_sections
 
-    schema_context = build_schema_context(file_contents)
-    if schema_context:
-        schema_budget = max_chars * 2
-        if len(schema_context) > schema_budget:
-            schema_context = (
-                schema_context[:schema_budget]
-                + f"\n… (schema context truncated at {schema_budget} chars — repo-scale checkout)"
-            )
-        formatted += f"\n\n## Data Schemas\n{schema_context}"
+    sections = build_schema_sections(file_contents)
+    if sections:
+        budget = max_chars if max_chars else share_chars()
+        shown: list[str] = []
+        used = 0
+        for i, (path, text) in enumerate(sections):
+            if shown and used + len(text) > budget:
+                shown.append(
+                    f"… schemas for {len(sections) - i} more files not shown "
+                    f"(read the file): " + ", ".join(p for p, _ in sections[i:])
+                )
+                break
+            shown.append(text)
+            used += len(text)
+        formatted += "\n\n## Data Schemas\n" + "\n\n".join(shown)
 
     # Count total definitions
     total_defs = sum(
@@ -435,7 +442,7 @@ async def action_validate_cross_file_consistency(step_input: StepInput) -> StepO
     infos = [i for i in issues if i["severity"] == "info"]
     if warnings:
         summary_lines.append(f"{len(warnings)} structural warnings:")
-        for w in warnings[:10]:
+        for w in warnings:
             summary_lines.append(f"  - {w['message']}")
     if infos:
         summary_lines.append(f"{len(infos)} unresolved references (informational)")

@@ -203,10 +203,23 @@ def format_workspace_ledger(params: dict, namespaces: dict) -> str:
 
 
 def format_session_tail(params: dict, namespaces: dict) -> str:
-    """Tail of a terminal session transcript, for the completion judge."""
-    out = str(params.get("source") or "")
-    n = int(params.get("max_chars", 2000))
-    return out[-n:] if len(out) > n else out
+    """A terminal session transcript, WHOLE, for a step that judges or derives
+    from it.
+
+    It used to cut to the last ``max_chars`` (2,000 by default) with no
+    marker: derive_acceptance received a transcript that began mid-line,
+    launch command gone (2026-09-25). A step that must fit a window now
+    declares ``fit: "tail"`` on the section that shows it, and the runtime
+    sizes it against the model's real window at render time. ``max_chars``
+    is refused rather than ignored, so a character cut cannot come back
+    quietly.
+    """
+    if "max_chars" in params:
+        raise ValueError(
+            'format_session_tail no longer cuts: declare fit: "tail" on the '
+            "section that renders it"
+        )
+    return str(params.get("source") or "")
 
 
 def strip_test_guidance(params: dict, namespaces: dict) -> str:
@@ -316,10 +329,16 @@ def format_project_file_list(params: dict, namespaces: dict) -> str:
     return str(manifest)
 
 
-# Total rendered project-listing budget (Guard G2 backstop). Even after the scan
-# caps the count + size + per-file signature, render no more than this — beyond it
-# the agent traces/greps a path rather than reading a wall of skeletons.
-_LISTING_MAX_CHARS = 40000
+# Total rendered project-listing budget (Guard G2 backstop): one read's share of
+# the serving window (agent/context_fit.py; was a fixed 40,000 chars). Beyond it
+# the remaining files are listed by NAME — never dropped — and the agent traces
+# or greps a path rather than reading a wall of skeletons.
+
+
+def _listing_max_chars() -> int:
+    from agent.context_fit import share_chars
+
+    return share_chars()
 
 
 # Sidecar suffixes mirror refinement_actions._VL_SIDECAR_SUFFIX /
@@ -412,7 +431,7 @@ def format_verified_behaviours(params: dict, namespaces: dict) -> str:
         if status == "complete" and gtype in ("functional", "quality"):
             text = str(desc or "").strip()
             if text:
-                lines.append(f"- {text[:160]}")
+                lines.append(f"- {text}")
     return "\n".join(lines) if lines else "(none verified yet)"
 
 
@@ -423,6 +442,7 @@ def format_project_listing(params: dict, namespaces: dict) -> str:
     items = list(manifest.items())
     lines: list[str] = []
     total = 0
+    budget = _listing_max_chars()
     for i, (filepath, sig) in enumerate(items):
         block = [f"- {filepath}"]
         if sig:
@@ -430,9 +450,13 @@ def format_project_listing(params: dict, namespaces: dict) -> str:
             # each file's block reads cleanly.
             block += [f"    {sig_line}" for sig_line in str(sig).splitlines()]
         block_text = "\n".join(block)
-        if lines and total + len(block_text) > _LISTING_MAX_CHARS:
+        if lines and total + len(block_text) > budget:
+            from agent.context_fit import name_list
+
+            rest = [str(p) for p, _ in items[i:]]
             lines.append(
-                f"… ({len(items) - i} more files omitted — trace or grep a path to inspect)"
+                f"… {len(rest)} more files, names only (trace a path to "
+                f"inspect it): " + name_list(rest, budget)
             )
             break
         lines.append(block_text)
@@ -458,8 +482,7 @@ def format_project_docs(params: dict, namespaces: dict) -> str:
     failure instead.
     """
     manifest = params.get("source") or {}
-    blocks: list[str] = []
-    total = 0
+    docs: list[tuple[str, str]] = []
     for filepath, content in manifest.items():
         low = str(filepath).lower()
         name = low.rsplit("/", 1)[-1]
@@ -467,11 +490,20 @@ def format_project_docs(params: dict, namespaces: dict) -> str:
         if not (low.endswith(_DOC_SUFFIXES) and stem in _DOC_STEMS):
             continue
         body = str(content or "").strip()
-        if not body:
-            continue
+        if body:
+            docs.append((str(filepath), body))
+    blocks: list[str] = []
+    total = 0
+    budget = _listing_max_chars()
+    for i, (filepath, body) in enumerate(docs):
         block = f"--- {filepath} ---\n{body}"
-        if blocks and total + len(block) > _LISTING_MAX_CHARS:
-            blocks.append("… (further documentation omitted)")
+        if blocks and total + len(block) > budget:
+            # Never dropped silently: the rest by name and size, so the
+            # reader knows what shipped and can read it directly.
+            blocks.append(
+                "… not shown here (read them directly): "
+                + ", ".join(f"{p} ({len(b):,} chars)" for p, b in docs[i:])
+            )
             break
         blocks.append(block)
         total += len(block)
@@ -566,15 +598,31 @@ def format_validation_results(params: dict, namespaces: dict) -> str:
 
 
 # Per-turn terminal-output bounds for the rendered session view (Guard G3). The
-# full output stays in mission state (history); only the PROMPT view is bounded,
-# so a single chatty command (a build, a data dump) can't balloon the next prompt
-# past the context window — the llama_decode overflow crash. Beyond the limit we
-# show head+tail and TEACH the agent to re-query via its own shell: it drives a
-# real terminal, so `| grep` / `| tail` / a redirect IS the search tool (nothing
-# is lost; it re-fetches what it needs). Prior turns are bounded tighter than the
-# current turn, which the agent needs in full to act on.
-_HISTORY_TURN_MAX = 2500
-_LAST_TURN_MAX = 8000
+# full output stays in mission state (history) and, past a threshold, in a file
+# the agent's own shell can grep; only the PROMPT view is bounded, so a single
+# chatty command (a build, a data dump) can't balloon the next prompt past the
+# context window — the llama_decode overflow crash. Beyond the bound we show
+# head+tail and TEACH the agent to re-query: it drives a real terminal, so
+# `| grep` / `| tail` / a redirect IS the search tool (nothing is lost).
+#
+# The bounds follow the serving window (2026-09-26, agent/context_fit.py) in
+# place of the fixed 8,000 / 2,500 chars: the current turn — which the agent
+# needs whole to act on — may take the quarter-window share every other read
+# gets; the recent prior turns that render in full divide that share between
+# them. Formatters are synchronous, so they size against the window LLMVP
+# last reported to a fit in this process.
+
+
+def _last_turn_max() -> int:
+    from agent.context_fit import share_chars
+
+    return share_chars()
+
+
+def _history_turn_max() -> int:
+    return max(1, _last_turn_max() // _RECENT_TURNS_FULL)
+
+
 _REQUERY_HINT = (
     "re-run with a filter to inspect fully — append `| grep PATTERN`, "
     "`| tail -100`, or redirect `> /tmp/out.txt 2>&1` then `grep PATTERN /tmp/out.txt`"
@@ -650,7 +698,7 @@ def format_session_history(params: dict, namespaces: dict) -> str:
         if entry.get("output"):
             lines.append(
                 _bound_output(
-                    entry["output"], _HISTORY_TURN_MAX, entry.get("output_file")
+                    entry["output"], _history_turn_max(), entry.get("output_file")
                 )
             )
         if entry.get("return_code", 0) != 0:
@@ -710,7 +758,7 @@ def format_last_turn(params: dict, namespaces: dict) -> str:
 
     lines = [header, ""]
     if output:
-        lines.append(_bound_output(output, _LAST_TURN_MAX, last.get("output_file")))
+        lines.append(_bound_output(output, _last_turn_max(), last.get("output_file")))
     if last.get("return_code", 0) != 0:
         lines.append(f"(exit code: {last['return_code']})")
     lines.append("")
@@ -1185,8 +1233,8 @@ def _format_call_graph(params: dict, namespaces: dict) -> str:
         if key not in seen:
             seen.add(key)
             uniq_callers.append(c)
-    # Limit: 10 call sites is plenty; more becomes noise
-    uniq_callers = uniq_callers[:10]
+    # Every call site (2026-09-26): the one that matters is as likely the
+    # eleventh as the first, and a dropped site is invisible to the model.
 
     # ── Extract callees from target body ────────────────────────
     # Heuristic: look for `self.<name>(` and `<namespace>.<name>(` patterns.
@@ -1220,9 +1268,6 @@ def _format_call_graph(params: dict, namespaces: dict) -> str:
                 if snippet not in seen_callees:
                     seen_callees.add(snippet)
                     callees.append(snippet)
-
-    # Keep the callee list focused — 15 is plenty
-    callees = callees[:15]
 
     # ── Format the output block ─────────────────────────────────
     if not uniq_callers and not callees:
@@ -1283,25 +1328,46 @@ def _format_already_rewritten(params: dict, namespaces: dict) -> str:
     )
     lines.append("")
 
-    for qname, body in already.items():
-        if not body:
-            continue
-        # Normalize: show just the signature plus the first few body
-        # lines if the body is long. Full body is sometimes big (large
-        # class), and the purpose here is contract visibility, not
-        # redundant re-authoring.
-        body_str = body.rstrip()
-        body_lines = body_str.splitlines()
-        if len(body_lines) <= 20:
-            display = body_str
-        else:
-            # Show first 18 lines + tail marker
-            display = "\n".join(body_lines[:18]) + "\n    # ... (truncated)"
+    # Whole when they fit one read's share of the window; otherwise a
+    # SKELETON (2026-09-26): every changed symbol is always named with its
+    # signatures, and bodies are shown whole newest-first while they fit —
+    # the rest as their outline. The 18-line cut hid exactly the method
+    # signatures a later rewrite has to match, and a tail cut would drop the
+    # EARLIEST rewrites; either is the patch silently disagreeing with the
+    # diagnosis.
+    from agent.context_fit import code_index, share_chars
+
+    entries = [(q, b.rstrip()) for q, b in already.items() if b]
+    budget = share_chars()
+    whole: set[str] = set()
+    used = 0
+    for qname, body in reversed(entries):  # newest first
+        if used + len(body) > budget and whole:
+            break
+        if used + len(body) <= budget:
+            whole.add(qname)
+            used += len(body)
+    for qname, body in entries:
         lines.append(f"### {qname}")
         lines.append("")
-        lines.append("```python")
-        lines.append(display)
-        lines.append("```")
+        if qname in whole:
+            lines.append("```python")
+            lines.append(body)
+            lines.append("```")
+        else:
+            path = qname.rpartition(":")[0] or "rewritten.py"
+            outline = code_index(path, body) or "\n".join(
+                ln
+                for ln in body.splitlines()
+                if ln.lstrip().startswith(("def ", "async def ", "class "))
+            )
+            lines.append(
+                "(outline only — the whole body does not fit beside the newer "
+                "rewrites; its signatures are what this rewrite must match)"
+            )
+            lines.append("```")
+            lines.append(outline or body.splitlines()[0])
+            lines.append("```")
         lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"

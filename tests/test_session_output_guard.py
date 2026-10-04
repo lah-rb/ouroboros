@@ -3,15 +3,16 @@
 Pins the contract: a single chatty command can't balloon the prompt past the
 context window (the llama_decode overflow crash), while head + error-tail are
 preserved and the agent is taught to re-query via its own shell. The full output
-stays in mission state; only the PROMPT view is bounded.
+stays in mission state; only the PROMPT view is bounded — to a share of the
+serving window (agent/context_fit.py), not a fixed number.
 """
 
 from __future__ import annotations
 
 from agent.formatters import (
-    _HISTORY_TURN_MAX,
-    _LAST_TURN_MAX,
     _bound_output,
+    _history_turn_max,
+    _last_turn_max,
     format_last_turn,
     format_session_history,
 )
@@ -19,15 +20,15 @@ from agent.formatters import (
 
 def test_bound_output_keeps_head_tail_and_teaches_requery():
     big = "HEAD_START\n" + "x" * 100_000 + "\nTAIL_END"
-    b = _bound_output(big, _LAST_TURN_MAX)
-    assert len(b) < _LAST_TURN_MAX + 300  # bounded near the limit
+    b = _bound_output(big, _last_turn_max())
+    assert len(b) < _last_turn_max() + 300  # bounded near the limit
     assert "HEAD_START" in b and "TAIL_END" in b  # head + tail preserved
     assert "grep PATTERN" in b  # re-query hint present
 
 
 def test_bound_output_leaves_small_output_untouched():
-    assert _bound_output("short", _LAST_TURN_MAX) == "short"
-    assert _bound_output("", _LAST_TURN_MAX) == ""
+    assert _bound_output("short", _last_turn_max()) == "short"
+    assert _bound_output("", _last_turn_max()) == ""
 
 
 def test_history_bounds_a_flooding_turn_but_keeps_error_tail():
@@ -43,7 +44,7 @@ def test_history_bounds_a_flooding_turn_but_keeps_error_tail():
         {"turn": 2, "command": "echo done", "output": "done"},
     ]
     out = format_session_history({"source": hist}, {})
-    assert len(out) < _HISTORY_TURN_MAX + 400
+    assert len(out) < _history_turn_max() + 400
     assert "BUILD_HEAD" in out and "ERROR_AT_END" in out  # the actionable parts survive
 
 
@@ -57,7 +58,7 @@ def test_last_turn_bounds_current_flood_keeps_final():
         }
     ]
     out = format_last_turn({"source": last}, {})
-    assert len(out) < _LAST_TURN_MAX + 400
+    assert len(out) < _last_turn_max() + 400
     assert "FINAL" in out  # the just-produced result's tail is preserved
 
 
@@ -115,7 +116,7 @@ def test_last_turn_collapses_to_ledger_in_history_nonlast_full():
 
 def test_bound_output_points_at_saved_file():
     b = _bound_output(
-        "A" + "x" * 100_000 + "Z", _LAST_TURN_MAX, saved_path="/tmp/.ouro_out/t3.log"
+        "A" + "x" * 100_000 + "Z", _last_turn_max(), saved_path="/tmp/.ouro_out/t3.log"
     )
     assert "/tmp/.ouro_out/t3.log" in b and "grep PATTERN" in b
 

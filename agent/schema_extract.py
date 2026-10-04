@@ -807,6 +807,35 @@ def _describe_shape(value: Any, depth: int = 0, max_depth: int = 4) -> str:
 # ══════════════════════════════════════════════════════════════════════
 
 
+def build_schema_sections(files: dict[str, str]) -> list[tuple[str, str]]:
+    """The schema context as (file_path, section) pairs, data skeletons
+    first — so a caller can fit whole sections to a budget and name the
+    rest (build_schema_context joins them)."""
+    sections: list[tuple[str, str]] = []
+
+    data_extensions = {".yaml", ".yml", ".json", ".toml"}
+    code_extensions = {".py", ".js", ".ts", ".rs"}
+
+    for file_path, content in sorted(files.items()):
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext not in data_extensions:
+            continue
+        skeleton = extract_data_skeleton(content, file_path)
+        if skeleton:
+            sections.append((file_path, skeleton))
+
+    for file_path, content in sorted(files.items()):
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext not in code_extensions:
+            continue
+        patterns = extract_key_access_patterns(content, file_path)
+        if patterns:
+            formatted = format_key_patterns(patterns, file_path)
+            if formatted:
+                sections.append((file_path, formatted))
+    return sections
+
+
 def build_schema_context(
     files: dict[str, str],
 ) -> str:
@@ -822,32 +851,7 @@ def build_schema_context(
     Returns:
         Formatted schema context string, or empty string if nothing extracted.
     """
-    sections: list[str] = []
-
-    data_extensions = {".yaml", ".yml", ".json", ".toml"}
-    code_extensions = {".py", ".js", ".ts", ".rs"}
-
-    # Level 2 first — data file skeletons (most valuable for format alignment)
-    for file_path, content in sorted(files.items()):
-        ext = os.path.splitext(file_path)[1].lower()
-        if ext not in data_extensions:
-            continue
-        skeleton = extract_data_skeleton(content, file_path)
-        if skeleton:
-            sections.append(skeleton)
-
-    # Level 1 — key-access patterns from code files
-    for file_path, content in sorted(files.items()):
-        ext = os.path.splitext(file_path)[1].lower()
-        if ext not in code_extensions:
-            continue
-        patterns = extract_key_access_patterns(content, file_path)
-        if patterns:
-            formatted = format_key_patterns(patterns, file_path)
-            if formatted:
-                sections.append(formatted)
-
+    sections = [text for _, text in build_schema_sections(files)]
     if not sections:
         return ""
-
     return "\n\n".join(sections)

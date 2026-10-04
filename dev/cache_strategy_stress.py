@@ -18,6 +18,9 @@ Run with --swa-full on/off on SWA models (gpt-oss) and plain on recurrent models
 Usage:
   python dev/cache_strategy_stress.py --model PATH [--swa-full] [--label NAME]
                                       [--n-ctx 4096] [--prefix-tokens 200] [--gen 8]
+  Turn-rollback gate (hybrids; run under llmvp/.venv, seat must be free):
+  python dev/cache_strategy_stress.py --model PATH --mode rollback \
+      --n-ctx 131072 --depths 2000,30000,100000 --gen 16
 """
 
 from __future__ import annotations
@@ -283,6 +286,232 @@ def test_depth_sweep(llm, depths, vocab_filler):
     return rows
 
 
+# ── ROLLBACK: per-turn recurrent checkpoint (llmvp inference/turn_checkpoint.py) ──
+#
+# Gates LLMVP's turn rollback on real hardware before any config relies on it.
+# Arms, all on ONE context shaped like production (n_seq_max=1, the binding's
+# own checkpoint FIFO off):
+#   B  rollback — eval(P); capture; eval(G) [the turn to drop]; restore; eval(T)
+#   A  inline   — eval(P); eval(T)   (same batch composition as B → expect BIT-identical)
+#   C  fresh    — eval(P + T)        (different batching → near-tie tolerant)
+# Controls: a naive tail rm without the restore must be REFUSED on a hybrid; a
+# checkpoint must not survive memory_clear; the checkpoint size must not grow
+# with depth. Strip arm: a turn [K + think + answer] rolled back and replayed as
+# [K + answer] must continue identically to an inline eval of the same stream.
+# Comparison is teacher-forced over the reference's greedy tokens, so every
+# position is aligned even if an arm would diverge; the verdict FAILS when no
+# position was comparable (a gate on zero checkable items passes vacuously).
+
+
+def _last_logits(llm: Llama) -> np.ndarray:
+    ptr = llm._ctx.get_logits_ith(-1)
+    return np.array(
+        np.ctypeslib.as_array(ptr, shape=(llm._model.n_vocab(),)), dtype=np.float64
+    )
+
+
+def _teacher_forced(llm: Llama, forced: list[int]) -> list[np.ndarray]:
+    out = []
+    for tok in forced:
+        out.append(_last_logits(llm))
+        llm.eval([tok])
+    return out
+
+
+def _compare(ref: list[np.ndarray], got: list[np.ndarray], eps: float) -> dict:
+    compared = agree = 0
+    max_abs = 0.0
+    kls = []
+    flip_margins = []
+    for r, g in zip(ref, got):
+        max_abs = max(max_abs, float(np.max(np.abs(r - g))))
+        top2 = np.partition(r, -2)[-2:]
+        margin = float(top2[1] - top2[0])
+        same = int(np.argmax(r)) == int(np.argmax(g))
+        if not same:
+            flip_margins.append(round(margin, 4))
+        if margin >= eps:
+            compared += 1
+            agree += int(same)
+        pr = np.exp(r - r.max())
+        pr /= pr.sum()
+        pg = np.exp(g - g.max())
+        pg /= pg.sum()
+        kls.append(float(np.sum(pr * (np.log(pr + 1e-30) - np.log(pg + 1e-30)))))
+    return {
+        "compared": compared,
+        "agree": agree,
+        "max_abs": max_abs,
+        "mean_kl": float(np.mean(kls)) if kls else float("nan"),
+        "flip_margins": flip_margins,
+        "ok": compared > 0 and agree == compared,
+    }
+
+
+def test_turn_rollback(
+    llm: Llama, fill, depths: list[int], gen: int, eps: float
+) -> bool:
+    import time
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "llmvp"))
+    from inference.turn_checkpoint import (  # noqa: E402
+        MODE_PARTIAL,
+        RestoreOutcome,
+        TurnCheckpointStore,
+    )
+
+    tok = lambda b: llm.tokenize(b, add_bos=False)  # noqa: E731
+    T = tok(b"\nQ: Name the capital of France, then explain why in one sentence. A:")
+    G = tok(b"\nQ: Describe a sunset over the ocean in vivid detail. A: The sky")
+    K = tok(b"\nQ: What is 2 + 2? A:")
+    THINK = tok(b" Let me think step by step about this simple sum.")
+    ANS = tok(b" 4.")
+    NEXT = tok(b"\nQ: And what is 3 + 3? A:")
+    all_ok = True
+    sizes = set()
+    for depth in depths:
+        P = fill(depth)
+        if len(P) + len(G) + len(T) + gen + 64 >= llm.n_ctx():
+            print(f"  depth {depth}: skipped (n_ctx {llm.n_ctx()})", flush=True)
+            continue
+        print(f"\n-- depth {depth} (P={len(P)} tok) --", flush=True)
+
+        # A: inline reference; its greedy tokens are the teacher sequence.
+        _hard_reset(llm)
+        llm.eval(P)
+        llm.eval(T)
+        forced = []
+        a_logits = []
+        for _ in range(gen):
+            lg = _last_logits(llm)
+            a_logits.append(lg)
+            t = int(np.argmax(lg))
+            forced.append(t)
+            llm.eval([t])
+
+        # A': the SAME inline path again — the determinism control. If the model
+        # is not bit-reproducible at this depth (MoE routing / sparse-attention
+        # top-k on Metal), B cannot be held to bit identity with A either.
+        _hard_reset(llm)
+        llm.eval(P)
+        llm.eval(T)
+        a2_logits = _teacher_forced(llm, forced)
+
+        # B: rollback.
+        _hard_reset(llm)
+        store = TurnCheckpointStore(MODE_PARTIAL)
+        llm.eval(P)
+        ck = store.capture(llm)
+        if ck is None:
+            print("  capture FAILED", flush=True)
+            all_ok = False
+            continue
+        sizes.add(ck.nbytes)
+        llm.eval(G)
+        # Negative control first — the rm alone must be refused while G is in.
+        naive = llm._ctx.memory_seq_rm(0, len(P), -1)
+        t0 = time.perf_counter()
+        outcome = store.restore(llm, len(P))
+        restore_ms = (time.perf_counter() - t0) * 1000
+        print(
+            f"  checkpoint {ck.nbytes / 2**20:.1f} MiB  save {ck.save_ms:.1f} ms  "
+            f"restore {restore_ms:.1f} ms  outcome={outcome.value}  "
+            f"naive_rm_refused={naive is False}",
+            flush=True,
+        )
+        if outcome is not RestoreOutcome.OK:
+            all_ok = False
+            continue
+        llm.eval(T)
+        b_logits = _teacher_forced(llm, forced)
+
+        # C: fresh single prefill.
+        _hard_reset(llm)
+        llm.eval(P + T)
+        c_logits = _teacher_forced(llm, forced)
+
+        ab = _compare(a_logits, b_logits, eps=0.0)
+        aa = _compare(a_logits, a2_logits, eps=0.0)
+        bc = _compare(c_logits, b_logits, eps=eps)
+        bit_identical = ab["max_abs"] == 0.0
+        reproducible = aa["max_abs"] == 0.0
+        print(
+            f"  A vs A' (determinism control): max|Δ|={aa['max_abs']:.3g} "
+            f"reproducible={reproducible}",
+            flush=True,
+        )
+        print(
+            f"  B vs A (same batching): max|Δ|={ab['max_abs']:.3g} "
+            f"bit_identical={bit_identical} top1 {ab['agree']}/{ab['compared']}",
+            flush=True,
+        )
+        if reproducible and not bit_identical:
+            # The model reproduces itself exactly, so any B/A difference IS
+            # the rollback's doing.
+            print("  rollback is NOT exact on a reproducible model", flush=True)
+            all_ok = False
+        # On a model that does not reproduce itself, exactness is not
+        # observable; hold the rollback to the same near-tie criterion as the
+        # fresh prefill, and show how big the model's own noise is.
+        tie_eps = 0.0 if reproducible else eps
+        if not reproducible:
+            ab = _compare(a_logits, b_logits, eps=eps)
+            print(
+                f"  (not reproducible → near-tie tolerant: A/A' top1 "
+                f"{aa['agree']}/{aa['compared']} flips at margins {aa['flip_margins']}; "
+                f"B/A top1 {ab['agree']}/{ab['compared']} flips at {ab['flip_margins']})",
+                flush=True,
+            )
+        print(
+            f"  B vs C (fresh prefill): max|Δ|={bc['max_abs']:.3g} "
+            f"mean_KL={bc['mean_kl']:.3g} top1 {bc['agree']}/{bc['compared']} "
+            f"(margin ≥ {eps})",
+            flush=True,
+        )
+        all_ok &= bool(ab["ok"] and bc["ok"])
+
+        # Stale control: a cleared context must not be rolled back.
+        llm.eval(G)
+        _hard_reset(llm)
+        stale = store.restore(llm, len(P))
+        print(f"  stale control: {stale.value} (want refused)", flush=True)
+        all_ok &= stale is RestoreOutcome.REFUSED_UNTOUCHED
+
+        # Strip arm: [K + THINK + ANS] rolled back and replayed as [K + ANS].
+        _hard_reset(llm)
+        store = TurnCheckpointStore(MODE_PARTIAL)
+        llm.eval(P)
+        store.capture(llm)
+        llm.eval(K + THINK + ANS)
+        if store.restore(llm, len(P)) is not RestoreOutcome.OK:
+            print("  strip arm: restore FAILED", flush=True)
+            all_ok = False
+            continue
+        llm.eval(K + ANS)
+        llm.eval(NEXT)
+        s_logits = _teacher_forced(llm, forced)
+        _hard_reset(llm)
+        llm.eval(P)
+        llm.eval(K + ANS)
+        llm.eval(NEXT)
+        r_logits = _teacher_forced(llm, forced)
+        st = _compare(r_logits, s_logits, eps=tie_eps)
+        print(
+            f"  strip arm vs inline stripped stream: max|Δ|={st['max_abs']:.3g} "
+            f"top1 {st['agree']}/{st['compared']} (margin ≥ {tie_eps}; flips at "
+            f"{st['flip_margins']})",
+            flush=True,
+        )
+        all_ok &= bool(st["ok"])
+
+    if len(sizes) > 1:
+        print(f"  checkpoint size VARIED with depth: {sorted(sizes)}", flush=True)
+        all_ok = False
+    print(f"\n== ROLLBACK VERDICT: {'PASS' if all_ok else 'FAIL'} ==", flush=True)
+    return all_ok
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True)
@@ -293,9 +522,18 @@ def main() -> int:
     ap.add_argument("--gen", type=int, default=8)
     ap.add_argument("--n-gpu-layers", type=int, default=-1)
     ap.add_argument(
-        "--mode", default="tiers", choices=["tiers", "multiseq", "depth", "all"]
+        "--mode",
+        default="tiers",
+        choices=["tiers", "multiseq", "depth", "all", "rollback"],
     )
     ap.add_argument("--depths", default="1000,4000,16000,32000")
+    ap.add_argument(
+        "--eps",
+        type=float,
+        default=0.05,
+        help="rollback mode: top-1/top-2 logit margin below which a position "
+        "is a near-tie and not compared against the fresh prefill",
+    )
     args = ap.parse_args()
 
     label = args.label or args.model.split("/")[-1]
@@ -304,15 +542,19 @@ def main() -> int:
         flush=True,
     )
     print("loading model… (large GGUF, may take minutes)", flush=True)
+    rollback = args.mode == "rollback"
     llm = Llama(
         model_path=args.model,
         n_ctx=args.n_ctx,
         n_gpu_layers=args.n_gpu_layers,
-        n_seq_max=2,  # need seq 0 + seq 1 for T1
+        # T1 needs seq 0 + seq 1; rollback mirrors production (one seq, and the
+        # binding's own checkpoint FIFO off — llmvp _FORK_CTX_CHECKPOINTS).
+        n_seq_max=1 if rollback else 2,
         swa_full=bool(args.swa_full),
         kv_unified=True,  # single unified KV (Metal); pairs with swa_full
         logits_all=False,
         verbose=False,
+        **({"ctx_checkpoints": 0} if rollback else {}),
     )
     print(
         f"loaded. n_swa={llm._model.n_swa()} is_recurrent={llm._model.is_recurrent()} "
@@ -368,6 +610,11 @@ def main() -> int:
             f"{r['tier']:<20} run={r['run']} correct={r['correct']}  {r['detail']}",
             flush=True,
         )
+
+    if rollback:
+        depths = [int(x) for x in args.depths.split(",")]
+        print("\n== ROLLBACK (per-turn recurrent checkpoint) ==", flush=True)
+        return 0 if test_turn_rollback(llm, fill, depths, args.gen, args.eps) else 1
 
     if args.mode in ("depth", "all"):
         depths = [int(x) for x in args.depths.split(",")]

@@ -17,7 +17,6 @@ model is shown the real file.
 from __future__ import annotations
 
 import logging
-import time
 from typing import Any
 
 from agent.data_ops import DataOp, detect_fmt, patch_text
@@ -27,8 +26,6 @@ from agent.schema_extract import extract_data_skeleton
 from agent.loader import load_prompt_text
 
 logger = logging.getLogger(__name__)
-
-_MAX_INLINE = 8000  # include the whole current file when under this; else skeleton-only
 
 DATA_OPS_PROMPT = load_prompt_text("data_patch/translate")
 
@@ -76,67 +73,6 @@ def _defer(reason: str) -> StepOutput:
     )
 
 
-async def _trace_turn(effects: Any, prompt: str, res: Any, start: float) -> None:
-    """Emit the InferenceCall this turn would otherwise never produce.
-
-    THE WALKER'S TURN WAS INVISIBLE. It calls ``effects.run_inference``
-    directly rather than being an ``action: "inference"`` step, and the runtime
-    emits its InferenceCall inside the step path it renders — so with BOTH
-    --trace-prompts and --trace-thinking on, the trace held nothing for this
-    call. Live on 2026-08-10 the flow reported success over a byte-identical
-    write and there was no way to ask what ops it had proposed; the answer had
-    to be reconstructed from an mtime and a byte comparison, and the fix that
-    made the eventual repair legible was a logger.info line.
-
-    Emitted HERE rather than in the effects layer, deliberately: the runtime
-    already emits for the calls it originates, so emitting inside
-    ``run_inference`` would double-log every inference step. This mirrors
-    ``LocalEffects.session_inference``, which emits at the call site for
-    exactly the same reason. flow/step/mission/cycle come from the bound
-    ``agent.trace.step_context``; unbound (tests, mocks) it degrades to a
-    no-op rather than a mis-attributed row.
-
-    Best-effort throughout — a telemetry failure must never fail a patch.
-    """
-    try:
-        from agent.trace import InferenceCall, get_step_context, trace_enabled
-
-        if not trace_enabled(effects):
-            return
-        ctx = get_step_context() or {}
-        prompt_content = response_content = ""
-        if getattr(effects, "trace_prompts", False):
-            prompt_content = prompt
-            response_content = getattr(res, "text", "") or ""
-        thinking = ""
-        if getattr(effects, "trace_thinking", False) and hasattr(
-            effects, "fetch_thinking"
-        ):
-            try:
-                thinking = await effects.fetch_thinking()
-            except Exception:  # noqa: BLE001
-                thinking = ""
-        await effects.emit_trace(
-            InferenceCall(
-                mission_id=ctx.get("mission_id", ""),
-                cycle=ctx.get("cycle", 0),
-                flow=ctx.get("flow", "data_patch"),
-                step=ctx.get("step", "translate_ops"),
-                tokens_in=len(prompt.split()),
-                tokens_out=len((getattr(res, "text", "") or "").split()),
-                wall_ms=(time.monotonic() - start) * 1000,
-                purpose="step_inference",
-                thinking_content=thinking,
-                prompt_content=prompt_content,
-                response_content=response_content,
-                truncated=bool(getattr(res, "truncated", False)),
-                generated_tokens=int(getattr(res, "generated_tokens", 0) or 0),
-            )
-        )
-    except Exception:  # noqa: BLE001 — telemetry never breaks the patch
-        logger.debug("data_patch: could not emit inference trace", exc_info=True)
-
-
 async def action_translate_data_ops_turn(step_input: StepInput) -> StepOutput:
     """Translate the prose change_spec → structured DataOps, validate, and
     dry-run them. Publishes ``data_patched_text`` + ``ops_ready`` on success;
@@ -161,27 +97,41 @@ async def action_translate_data_ops_turn(step_input: StepInput) -> StepOutput:
         return _defer("no effects available")
 
     skeleton = extract_data_skeleton(content, path) or "(shape unavailable)"
+
+    def _render(current: str) -> str:
+        return DATA_OPS_PROMPT.format(
+            fmt=fmt.value,
+            change_spec=change_spec or "(none given)",
+            skeleton=skeleton,
+            path=path,
+            current=current,
+        )
+
+    # The current file WHOLE when it fits beside the rest of this prompt (the
+    # whole-if-it-fits rule, agent/context_fit.py); else its entries by
+    # pointer, two levels deep, so the ops can still name precise paths. It
+    # replaces an 8,000-char threshold that dropped the file to the skeleton.
+    from agent import context_fit as cf
+
+    (rest,), _how = await cf.measure(effects, [_render("")])
+    f = await cf.fit(effects, content, used=rest)
     current = (
         content
-        if len(content) <= _MAX_INLINE
-        else "(file too large to inline — use the shape above and name precise paths)"
+        if f.whole
+        else (
+            f"(the file is too large to show whole here: {f.describe()}. Its "
+            f"entries by pointer — name precise paths from these:)\n"
+            + cf.data_overview(path, content)
+        )
     )
-    prompt = DATA_OPS_PROMPT.format(
-        fmt=fmt.value,
-        change_spec=change_spec or "(none given)",
-        skeleton=skeleton,
-        path=path,
-        current=current,
-    )
+    prompt = _render(current)
 
-    start = time.monotonic()
     try:
         res = await effects.run_inference(prompt)
         text = getattr(res, "text", "") or ""
     except Exception as e:  # noqa: BLE001
         logger.debug("data-ops translation inference failed", exc_info=True)
         return _defer(f"translation inference failed ({type(e).__name__})")
-    await _trace_turn(effects, prompt, res, start)
 
     ops = _coerce_ops(parse_llm_json(text))
     logger.info(

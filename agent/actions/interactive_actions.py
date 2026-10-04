@@ -1395,34 +1395,51 @@ async def action_confirm_close_gate(step_input: StepInput) -> StepOutput:
 # ══════════════════════════════════════════════════════════════════════
 
 
-# Context window at or above which the evaluation joins the tester's
-# memoryful session (the original design: full transcript in KV, no
-# re-prefill). Below it, the stateless bounded-tail fallback runs — a 77-turn
-# session at 32k lost its verdict to a 63k-token in-session eval prompt.
-# Operator (2026-08-07): "the original behavior should be the default with
-# bigger context models."
-_BIG_CONTEXT_MIN = 65536
-
-
 async def action_probe_eval_context(step_input: StepInput) -> StepOutput:
-    """Choose the evaluation mode from the serving model's real context
-    window (health.nCtxSeq — read from health, never config: resident is a
-    request the arch can refuse). Unknown/unreported defaults to the
-    stateless fallback — the mode that cannot lose a verdict."""
+    """Choose the evaluation mode: in the tester's session when the verdict
+    FITS there, else stateless over the fitted transcript.
+
+    In-session is the original design (operator, 2026-08-07: "the original
+    behavior should be the default with bigger context models") — the full
+    transcript is already in KV. It used to be chosen by the WINDOW alone
+    (nCtxSeq >= 64k), which could not see a session that had itself filled the
+    window: on tier_20260924-191710 a 124-turn tester session reached
+    262,715 tokens of a 262,144 window and the in-session evaluation
+    (265,673) lost its verdict. Now the whole-if-it-fits rule decides
+    (agent/context_fit.py): in-session iff the session's occupancy + the
+    evaluation prompt + the output reserve fit the window. When the effects
+    cannot report the session's occupancy, the stateless mode — the one that
+    cannot lose a verdict — runs."""
+    from agent import context_fit as cf
+    from agent.loader import load_prompt_text
+
     effects = step_input.effects
-    n_ctx = 0
-    if effects is not None and hasattr(effects, "cache_health"):
+    session_id = str(step_input.context.get("inference_session_id", "") or "")
+    window, reported = await cf.serving_window(effects)
+    tracked = getattr(effects, "session_tokens", None) is not None
+    if not (session_id and tracked and reported):
+        why = (
+            "no tester session"
+            if not session_id
+            else ("occupancy unknown" if not tracked else "window unknown")
+        )
+        return StepOutput(
+            result={"in_session_fits": False, "n_ctx": window},
+            observations=f"evaluation mode: stateless tail ({why})",
+        )
+    parts = [str(step_input.inputs.get("flow_directive") or "")]
+    for tid in ("personas/interact_evaluator", "interact/evaluate_rules"):
         try:
-            h = await effects.cache_health()
-            n_ctx = int(h.get("nCtxSeq") or 0)
-        except Exception:  # noqa: BLE001 - telemetry never breaks a run
-            n_ctx = 0
-    big = n_ctx >= _BIG_CONTEXT_MIN
+            parts.append(load_prompt_text(tid))
+        except Exception:  # noqa: BLE001 — a missing template only undercounts
+            pass
+    used = await cf.session_used(effects, session_id)
+    f = await cf.fit(effects, "\n\n".join(parts), used=used, window=window)
     return StepOutput(
-        result={"big_context": big, "n_ctx": n_ctx},
+        result={"in_session_fits": f.whole, "n_ctx": window, "session_tokens": used},
         observations=(
-            f"evaluation mode: {'in-session' if big else 'stateless tail'} "
-            f"(n_ctx={n_ctx or 'unknown'})"
+            f"evaluation mode: {'in-session' if f.whole else 'stateless tail'} "
+            f"(session holds {used} of {window}; {f.describe()})"
         ),
     )
 
@@ -1983,3 +2000,144 @@ async def _note_flush_mismatch(
         logger.info("flush_transient_files: pushed contamination note for diagnosis")
     except Exception:  # noqa: BLE001
         logger.debug("flush_transient_files: note push failed", exc_info=True)
+
+
+# ── The play-tester's world view: whole if it fits, else drill in ────────
+#
+# The charter author plans routes from the world's data files. They reach it
+# WHOLE (the interaction projection, 2026-09-26) — unless a file does not fit
+# the author's prompt by the whole-if-it-fits rule (agent/context_fit.py).
+# Such a file is shown as a two-level pointer overview instead, and the
+# author pulls the entries it needs (``offer_world_menu`` → ``fetch_world_
+# entry``) before writing the charter. No pick or correction cap: the menu's
+# proceed ends the loop; degeneration monitoring is the backstop.
+
+
+def _charter_rest_text(ictx: dict, directive: str) -> str:
+    """The charter author's prompt apart from the world's data files: the
+    brief without them, the objective and the fixed templates it renders."""
+    from agent.loader import load_prompt_text
+    from agent.renderers import render_interaction_context
+
+    brief = render_interaction_context(
+        {"source": {**ictx, "data_file_contents": {}}}, {}
+    )
+    parts = [brief, directive]
+    for tid in ("personas/charter_author", "interact/charter_function"):
+        try:
+            parts.append(load_prompt_text(tid))
+        except Exception:  # noqa: BLE001 — a missing template only undercounts
+            pass
+    return "\n\n".join(parts)
+
+
+async def action_size_world_view(step_input: StepInput) -> StepOutput:
+    """Size the world's data files for the charter author: each file WHOLE
+    while it fits (smallest first), else its pointer overview.
+
+    Result: world_indexed (routes to the drill-down menu).
+    Publishes: interaction_context_view (the projection with oversized files
+    replaced by their overview), world_base_tokens (the author's prompt apart
+    from pulled entries), and empty world_pulls / world_pulls_block /
+    world_feedback."""
+    from agent import context_fit as cf
+
+    effects = step_input.effects
+    ictx = dict(step_input.inputs.get("interaction_context") or {})
+    files = dict(ictx.get("data_file_contents") or {})
+    directive = str(step_input.inputs.get("flow_directive") or "")
+    (rest,), _how = await cf.measure(effects, [_charter_rest_text(ictx, directive)])
+    kept: dict[str, str] = {}
+    indexed: list[str] = []
+    used = rest
+    for path, content in sorted(files.items(), key=lambda kv: len(kv[1] or "")):
+        f = await cf.fit(effects, content or "", used=used)
+        if f.whole:
+            kept[path] = content
+            used += f.tokens
+        else:
+            indexed.append(path)
+            kept[path] = (
+                f"(too large to show whole here: {f.describe()} — pull the "
+                f"entries the test needs by pointer, e.g. `{path}:/<key>/0`)\n"
+                + cf.data_overview(path, content or "")
+            )
+            logger.info("world view: %s indexed — %s", path, f.describe())
+    view = {**ictx, "data_file_contents": kept}
+    return StepOutput(
+        result={"world_indexed": bool(indexed)},
+        observations=(
+            f"world view: {len(files) - len(indexed)} data file(s) whole"
+            + (f", {len(indexed)} indexed: {', '.join(indexed)}" if indexed else "")
+        ),
+        context_updates={
+            "interaction_context_view": view,
+            "world_base_tokens": used,
+            "world_pulls": [],
+            "world_pulls_block": "",
+            "world_feedback": "",
+        },
+    )
+
+
+async def action_fetch_world_entry(step_input: StepInput) -> StepOutput:
+    """Read one world entry the charter author asked for (``file:/pointer``)
+    from the WHOLE data file, sized against what the author's prompt already
+    holds. A wrong pointer, or an entry still too large, answers with the
+    index at that level so the next pull can go one level deeper.
+
+    Context: world_request_arg, world_pulls, world_base_tokens.
+    Publishes: world_pulls, world_pulls_block, world_feedback."""
+    from agent import context_fit as cf
+
+    ctx = step_input.context
+    effects = step_input.effects
+    ref = str(ctx.get("world_request_arg") or "").strip()
+    pulls: list[dict] = list(ctx.get("world_pulls") or [])
+    files = dict(
+        (step_input.inputs.get("interaction_context") or {}).get("data_file_contents")
+        or {}
+    )
+
+    def _feedback(msg: str) -> StepOutput:
+        return StepOutput(
+            result={"fetched": False},
+            observations=f"world entry correction: {msg[:120]}",
+            context_updates={"world_feedback": msg},
+        )
+
+    path, _, pointer = ref.partition(":")
+    path, pointer = path.strip(), pointer.strip()
+    if path not in files:
+        return _feedback(
+            f"'{ref}' is not an entry of the world's data files "
+            f"({', '.join(sorted(files)) or 'none'}). The form is file:/pointer."
+        )
+    if pointer and not pointer.startswith("/"):
+        pointer = "/" + pointer
+    content = files[path] or ""
+    text, found = cf.read_data(path, content, pointer)
+    if not found:
+        return _feedback(text)
+    (pulled,), _how = await cf.measure(
+        effects, ["\n\n".join(p.get("text", "") for p in pulls)]
+    )
+    f = await cf.fit(
+        effects, text, used=int(ctx.get("world_base_tokens") or 0) + pulled
+    )
+    if not f.whole:
+        return _feedback(
+            f"{ref} is too large to pull whole here ({f.describe()}). Pull one "
+            f"of its entries instead:\n{cf.data_index(path, content, pointer)}"
+        )
+    pulls.append({"ref": f"{path}:{pointer}", "text": text})
+    block = "\n\n".join(f"── {p['ref']} ──\n{p['text']}" for p in pulls)
+    return StepOutput(
+        result={"fetched": True},
+        observations=f"world entry pulled: {path}:{pointer}",
+        context_updates={
+            "world_pulls": pulls,
+            "world_pulls_block": block,
+            "world_feedback": "",
+        },
+    )

@@ -425,7 +425,6 @@ def _summarize_flow_effects(flow_ir: FlowIR, ir: BlueprintIR) -> list[str]:
         "save_mission": f"{SYM_PERSIST_WRITE} save mission",
         "read_events": f"{SYM_PERSIST_READ} read events",
         "push_event": f"{SYM_PERSIST_WRITE} push event",
-        "save_artifact": f"{SYM_PERSIST_WRITE} save artifact",
         "read_state": f"{SYM_PERSIST_READ} read state",
         "write_state": f"{SYM_PERSIST_WRITE} write state",
         "start_interactive_session": f"{SYM_SUBPROCESS} terminal (MCP)",

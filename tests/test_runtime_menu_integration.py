@@ -372,13 +372,30 @@ async def test_publish_selection_absent_no_key_published(
 
 class _TracingNoSessionEffects:
     """run_inference + emit_trace, but deliberately NO session_inference, so
-    hasattr(effects, 'session_inference') is False."""
+    hasattr(effects, 'session_inference') is False. Like every real effects
+    object it RECORDS the turns it serves (the runtime only annotates them)."""
 
     def __init__(self):
         self.trace_events: list = []
 
     async def run_inference(self, prompt, config_overrides=None):
-        return InferenceResult(text='```json\n{"choice": "a"}\n```', tokens_generated=3)
+        from agent.trace import build_inference_call
+
+        result = InferenceResult(
+            text='```json\n{"choice": "a"}\n```', tokens_generated=3
+        )
+        await self.emit_trace(
+            build_inference_call(
+                result,
+                prompt=prompt,
+                response_text=result.text,
+                thinking="",
+                wall_ms=0.0,
+                config_overrides=config_overrides,
+                purpose="action_inference",
+            )
+        )
+        return result
 
     async def emit_trace(self, event):
         self.trace_events.append(event)
@@ -390,9 +407,9 @@ async def test_inference_traced_when_session_id_set_but_no_session_inference(
 ) -> None:
     """A step whose context carries session_id but whose effects lack
     session_inference falls through to run_inference — and MUST still be
-    traced. The pre-fix guard gated emission on `not session_id`, leaving that
-    inference invisible; the fix gates on `actually_session` (did we route to a
-    real session?), so exactly one InferenceCall is emitted."""
+    recorded, exactly once, with the runtime's annotation (purpose
+    step_inference). The effect that served the call records it; the runtime
+    never emits a second row for the fallthrough."""
     turn = _menu_turn_with_projection()
     flow = _wrap_in_flow(turn)
     effects = _TracingNoSessionEffects()

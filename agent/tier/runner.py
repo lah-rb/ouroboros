@@ -93,7 +93,32 @@ CONTEMPLATOR_SAFETY_WALL = "4h"
 # Every arm's workspace. Keyed by LABEL alone, with nothing tying it to a
 # run — which is precisely why `tier extend` must verify mission identity
 # before resuming one (see snapshot_mission_id).
-TIER_WORK_ROOT = Path("/tmp/tier")
+# Arm workspaces. NOT /tmp: macOS tmp_cleaner runs at Hour 0 and deletes
+# regular files it judges stale by access time, which is exactly the profile
+# of a walk file written early and not touched again. It has already gutted a
+# live campaign's .venv and two test files mid-run (82 -> 66 goals, a night
+# spent re-proving correct code), and a tier arm with no wall now routinely
+# runs past midnight. The resume path below still carries its "/tmp was
+# cleared" message because arms created before 2026-09-22 live under the
+# legacy root and are still resumable from it.
+TIER_WORK_ROOT = Path.home() / "ouroboros-runs" / "tier_work"
+_LEGACY_TIER_WORK_ROOT = Path("/tmp/tier")
+
+
+def tier_work_dir(label: str, *, for_create: bool = False) -> Path:
+    """Workspace for ``label``, preferring the durable root.
+
+    ``for_create`` is the safety half: the run path passes it so a fresh arm
+    ALWAYS resolves to the new root. Without it the caller's ``rm -rf`` could
+    resolve onto a legacy workspace and delete an arm that is still running.
+    Read-only callers (status, extend eligibility, resume) omit it so an
+    in-flight legacy arm is still found rather than reported as vanished.
+    """
+    new = TIER_WORK_ROOT / label
+    if for_create or (new / ".agent").is_dir():
+        return new
+    legacy = _LEGACY_TIER_WORK_ROOT / label
+    return legacy if (legacy / ".agent").is_dir() else new
 
 
 def config_league(config: str) -> str:
@@ -266,7 +291,7 @@ def extend_candidates(base: Path) -> list[dict]:
         if not isinstance(label, str):
             continue
         cfg, league = arm_league(label)
-        work = TIER_WORK_ROOT / label
+        work = tier_work_dir(label)
         row: dict = {
             "arm": label,
             "config": cfg,
@@ -814,7 +839,7 @@ class TierRun:
         # mission consume. Workspace/logs/results key by the LABEL so a both-
         # model's two arms stay distinct.
         cfg, league = arm_league(config)
-        work = TIER_WORK_ROOT / config
+        work = tier_work_dir(config, for_create=resume is None)
         if resume is None:
             subprocess.run(["rm", "-rf", str(work)])
             work.mkdir(parents=True, exist_ok=True)
@@ -965,7 +990,6 @@ class TierRun:
                     str(work),
                     "--max-wall-clock",
                     str(int(remaining)),
-                    "--trace-thinking",
                 ]
                 + (
                     ["--max-cycles", str(remaining_cycles)]

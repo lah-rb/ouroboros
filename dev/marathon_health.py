@@ -12,24 +12,22 @@ and no brace-expansion surface — and it's independently testable.
   side effect: writes <W>/.agent/.health  {slug, stub_rate, rewrites, state}
 """
 
-import json, glob, os, sys
+import json
+import os
+import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from agent.trace_health import classify  # single source of truth for the stub shape
+from agent.history.reader import load_events_any  # store, else legacy JSONL
 
 W, THR, SLUG = sys.argv[1], float(sys.argv[2]), sys.argv[3]
 m = json.load(open(os.path.join(W, ".agent", "mission.json")))
 g = m.get("goals", [])
 
 hc = rw = st = 0
-fs = glob.glob(os.path.join(W, ".agent", "traces", "*.jsonl"))
-if fs:
-    T = sorted(fs, key=os.path.getmtime)[-1]
-    for line in open(T, errors="ignore"):
-        try:
-            e = json.loads(line)
-        except Exception:
-            continue
+_events = load_events_any(os.path.join(W, ".agent"))
+if _events:
+    for e in _events:
         if e.get("event_type") != "inference_call":
             continue
         if (e.get("generated_tokens") or 0) >= 674:

@@ -1,4 +1,4 @@
-"""Persistence — file-backed JSON storage for mission state, events, and artifacts.
+"""Persistence — file-backed JSON storage for mission state and events.
 
 All data lives in a `.agent/` directory within the mission's working directory.
 The agent runs one cycle at a time (tail-call model), so there's no concurrent
@@ -12,7 +12,6 @@ from agent.persistence.models import (
     GoalRecord,
     NoteRecord,
     Event,
-    FlowArtifact,
 )
 from agent.persistence.manager import PersistenceManager
 
@@ -23,6 +22,5 @@ __all__ = [
     "GoalRecord",
     "NoteRecord",
     "Event",
-    "FlowArtifact",
     "PersistenceManager",
 ]

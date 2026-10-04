@@ -111,22 +111,36 @@
 # headers (step 1 already has them open):
 #   • reasoning rendered only when the caller passes it back
 #     (`message.get('reasoning_content')`, no last-turn gate) → stripped
-#     history is the canonical shape → resident_strip_reasoning: true
+#     history is the canonical shape → strip_prior_reasoning: true
 #     (muse-glimmer is this shape);
-#   • reasoning rendered last-turn-only (harmony/gpt-oss) → same verdict;
-#   • reasoning rendered unconditionally for all turns → the model
-#     expects its thoughts kept → leave the strip OFF.
+#   • reasoning rendered last-turn-only (harmony/gpt-oss; the qwen3.5/3.6
+#     `loop.index0 > ns.last_query_index` gate) → same verdict;
+#   • reasoning rendered unconditionally for all turns (qwen3.8's
+#     `preserve_thinking` default) → the model expects its thoughts kept →
+#     the template says strip OFF. An operator may still override that for
+#     cost — record it in the config header as an OVERRIDE with the evidence
+#     (qwen3.8-flash-next APEX, 2026-09-22: kept thinking took a 6-file walk
+#     to 184k tokens and decode to 9.7 tok/s; the template's own
+#     preserve_thinking=false branch is the stripped shape).
 # Then verify the strip's replay on a REAL completion before trusting it:
 # reasoning_span's replayed turn must match the template's own content-
 # turn rendering byte-for-byte — the strip is format-yaml-derived and
 # inherits every caveat of step 3b.
 #
-# THE FLAG IS INERT IN TWO CONFIGURATIONS — check before setting it, or you
-# ship a no-op and believe otherwise (fleet audit 2026-08-15):
-#   • `decode_mode: "batched"` — strip_reasoning_replay returns False for
-#     batched seats (pool-only, deferred in batched v1), logging at DEBUG.
-#   • `resident_seq_cache` unset/false — there is no live resident session
-#     to strip; full-replay history is rebuilt from token_history instead.
+# WHERE THE STRIP RUNS (2026-09-22 — it was resident-only until then). Read
+# the boot line `🧩 turn rollback: <mode> (...)` before trusting it:
+#   • resident sessions — in place: tail rm + replay the clean answer.
+#   • full-replay sessions, turn rollback `partial` (hybrid/recurrent memory:
+#     qwen4exp, the GDN qwens) — each turn's recurrent state is checkpointed
+#     at its boundary; the strip restores it, drops the tail, and re-evaluates
+#     only the turn's prompt + clean answer. Never a history replay.
+#   • INERT on `decode_mode: "batched"` (turn rollback `none`; the resident
+#     batched strip is deferred too) and on a memory that refuses tail
+#     removal (turn rollback `none`: iSWA without swa_full). Check the boot
+#     line, or you ship a no-op and believe otherwise (the 2026-08-15 audit).
+# Verify the stripped history against the template: tests/
+# test_strip_template_golden.py renders the session's stripped turn beside the
+# template's no-reasoning branch; add the family there when you set the flag.
 #
 # ── 3d. WIRE THE REASONING DIAL, THEN PROVE IT SWAPS ─────────────────
 # Thinking dials are the fleet's most-repeated silent-no-op site — muse ran
@@ -182,9 +196,18 @@
 # `resident_seq_cache` is a REQUEST. Watch for:
 #   🧩 session strategy: resident (resident_requested=True, memory_can_shift=True, …)
 # If can_shift came back False the model is on full replay whatever the config
-# says, and it can layer NO cache features — that is a model-selection fact,
-# not a config bug. Hybrid-recurrent is not automatically disqualifying:
-# qwen3-next (DeltaNet) grants it while the GDN qwens refuse.
+# says and the RESIDENT features are off — a model-selection fact, not a config
+# bug. Hybrid-recurrent is not automatically disqualifying: qwen3-next
+# (DeltaNet) grants it while the GDN qwens refuse. can_shift=False is NOT "no
+# rollback": on the GDN qwens and qwen4exp it is IMROPE positions talking (the
+# attention cache's answer, forwarded by the hybrid memory). Read the second
+# line too:
+#   🧩 turn rollback: partial (recurrent-state checkpoint per turn; …)
+# `partial` means replay sessions append, and roll a turn back (strip, drop an
+# answerless turn, repair an abandoned/degenerate one) from a per-turn
+# recurrent checkpoint instead of replaying the history. It is resolved from
+# the architecture, not the config; LLMVP_TURN_ROLLBACK=0 turns it off
+# (every repair goes back to restore-and-replay).
 #
 # ── 6. PROBE THE CONTEXT CEILING ─────────────────────────────────────
 #   nohup .venv/bin/python api/main.py --probe-context <config> &
@@ -586,14 +609,23 @@ model:
   # (swa_full on SWA models); the warm-up gate falls back to the legacy
   # path when unavailable. The production path. Default: false
   resident_seq_cache: true
-  # [O] Type: bool — strip prior-turn CoT from resident sessions in-place
-  # (truncate-and-replay the clean answer): harmony-compliant multi-turn
-  # form + large context savings on deep thinking sessions. Validated on
-  # gpt-oss/harmony; validate chatml before enabling there. Set from the
-  # family's own multi-turn convention — step 3c above — not from taste:
-  # a template whose history branch renders reasoning only on request
-  # expects it stripped. Default: false
+  # [O] Type: bool — the legacy, resident-only spelling of
+  # strip_prior_reasoning (below), kept as an alias: strip_prior_reasoning
+  # unset inherits it; both stated and different is refused at load.
+  # Default: false
   resident_strip_reasoning: false
+  # [O] Type: bool|null — strip each finished turn's reasoning from the
+  # session context, keeping the answer in the template's no-reasoning
+  # form: resident sessions in place, full-replay sessions on a hybrid by
+  # turn rollback (see step 3c for where it runs and where it is inert).
+  # Set from the family's multi-turn convention — step 3c — or as a
+  # recorded operator override. Default: null (inherit the alias)
+  strip_prior_reasoning: false
+  # [O] Type: bool|null — roll a turn that produced NO answer (a prefilled
+  # think that never closed, or a closed think with empty content) out of a
+  # replay session's context instead of committing it. null = auto: on
+  # wherever turn rollback exists. Default: null
+  drop_answerless_turns: null
   # [O] Type: bool — turn-0 fork of [global static + flow head] for
   # sessions passing flow_key + static_prefix (reclaims cross-session
   # persona re-prefill, ~15% of wall on session-heavy runs). Pure no-op

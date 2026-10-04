@@ -33,15 +33,20 @@ def test_plan_queries_is_turn_based(compiled_research_flow) -> None:
 
 
 def test_plan_queries_sections_match_record(compiled_research_flow) -> None:
-    """Site #13's section plan: role, problem, evidence, instruction, envelope."""
+    """Site #13's section plan: role, problem, evidence, the guidance
+    instruction, then the query-count instruction (the count interpolated
+    from research.cue's single _research_max_queries), envelope."""
     turn = compiled_research_flow.steps["plan_queries"].turn
     assert [s.type for s in turn.sections] == [
         "role",
         "problem",
         "evidence",
         "instruction",
+        "instruction",
         "envelope",
     ]
+    assert turn.sections[3].template == "research/plan_queries_guidance"
+    assert turn.sections[4].literal and "at most" in turn.sections[4].literal
     # problem is ref-sourced from input.research_query
     assert turn.sections[1].ref.ref == "input.research_query"
     # evidence is ref-sourced from input.research_context (optional)

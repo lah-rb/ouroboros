@@ -83,7 +83,9 @@ try:
 except ValueError:
     _TIMEOUT_MULTIPLIER = 1.0
 _LLMVP = llmvp_endpoint()
-_TRACE = os.environ.get("OURO_TRACE", "1") != "0"
+# Full prompt/response recording is the default; OURO_TRACE=0 keeps the
+# metrics but drops the text (the content opt-out).
+_HISTORY_MODE = "metrics" if os.environ.get("OURO_TRACE") == "0" else "full"
 
 
 class OuroborosHarborAgent(BaseAgent):
@@ -170,8 +172,7 @@ class OuroborosHarborAgent(BaseAgent):
             host_pty_scratch=pty_scratch,
             llmvp_endpoint=_LLMVP,
             exec_user=exec_user,
-            trace_thinking=_TRACE,
-            trace_prompts=_TRACE,
+            history_mode=_HISTORY_MODE,
         )
 
         # Run the entire Ouroboros loop — and its MCP/anyio machinery and

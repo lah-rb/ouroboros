@@ -85,6 +85,9 @@ class ContainerEffects(LocalEffects):
     ) -> None:
         # Host temp dir backs persistence/traces (LocalEffects requires a real
         # host dir); the container cwd is a separate concept for command routing.
+        # No tree snapshots: the workspace is inside the container; the host
+        # dir holds only .agent. Turns/events/metrics are recorded as usual.
+        kwargs.setdefault("history_snapshot", False)
         super().__init__(
             working_directory=host_working_directory,
             llmvp_endpoint=llmvp_endpoint,

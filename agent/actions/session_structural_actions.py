@@ -24,11 +24,12 @@ vocabulary the earlier files actually declared.
 
 Two checks here are new because two blind spots are proven:
 
-  * ``_serialized_roundtrip_violations`` — ``_transfer_shape_violations``
-    (batch_structural_actions.py) only indexes producers that return dict
-    LITERALS, so a contract mediated by a FILE (``save_state`` dumps ->
-    ``load_state`` returns ``json.load(f)``) has nothing to bind. That is
-    exactly the seam that shipped.
+  * the serialized round trip (``roundtrip_contract.py``) —
+    ``_transfer_shape_violations`` (batch_structural_actions.py) only indexes
+    producers that return dict LITERALS, so a contract mediated by a FILE
+    (``save_state`` dumps -> ``load_state`` returns ``json.load(f)``) has
+    nothing to bind. That is exactly the seam that shipped. It is held to the
+    persisted shape the design DECLARED, and names the file to fix.
   * ``_data_registry_violations`` — nothing anywhere re-reads a written data
     file to confirm its ids. The registry is enforced by prompt injection only.
 
@@ -55,485 +56,20 @@ logger = logging.getLogger(__name__)
 # repair loop is the shape that produced a 12-round live-lock on 2026-08-10.
 _SESSION_REPAIR_ATTEMPTS = 2
 
-# How much observed vocabulary to carry into a turn. The session already holds
-# every earlier file verbatim; this block is the DETERMINISTIC index of it, not
-# a replacement for it, so it is a digest rather than a dump.
-_VOCAB_CHAR_CAP = 4000
-
 
 # ══════════════════════════════════════════════════════════════════════
 # The two checks the batch path structurally cannot make
 # ══════════════════════════════════════════════════════════════════════
 
 
-def _dict_keys(node: Any) -> set[str] | None:
-    """String keys of a dict literal, or None if it is not one / is dynamic."""
-    import ast as stdlib_ast
-
-    if not isinstance(node, stdlib_ast.Dict):
-        return None
-    keys: set[str] = set()
-    for k in node.keys:
-        if k is None:  # ** unpacking — the key set is not knowable
-            return None
-        if not (isinstance(k, stdlib_ast.Constant) and isinstance(k.value, str)):
-            return None
-        keys.add(k.value)
-    return keys
-
-
-def _payload_methods(
-    sources: dict[str, str],
-) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
-    """(producer_keys, consumer_keys) keyed by METHOD NAME — the third hop.
-
-    THE SHAPE THE FIRST TWO HOPS COULD NOT SEE, and the one this model
-    actually writes. `_roundtrip_keys` follows a dict literal to a writer and
-    a reader's return into a subscript, but the idiomatic Python round trip
-    puts the keys in neither place:
-
-        json.dump(state.to_dict(), f)      # producer is a METHOD
-        return GameState.from_dict(data)   # consumer is a METHOD
-
-    Measured against a real artifact both sides came back EMPTY, so the check
-    reported "0 violations" over a save/load pair it had not read a single key
-    of. A zero from zero checkable items is the vacuous pass, not a clean bill.
-
-    A producer is a method returning a dict literal, or returning
-    `asdict(self)` / `dataclasses.asdict(self)` — in which case the keys are
-    the enclosing class's annotated fields. That case is worth its own hop:
-    `asdict` picks up a newly added field automatically and a hand-written
-    `from_dict` does not, which is precisely the value/key vocabulary seam.
-
-    A consumer is a method that reads string keys off its payload parameter —
-    the first parameter that is not self/cls.
-    """
-    import ast as stdlib_ast
-
-    producers: dict[str, set[str]] = {}
-    consumers: dict[str, set[str]] = {}
-    _prod_sets: dict[str, list[set[str]]] = {}
-    _cons_sets: dict[str, list[set[str]]] = {}
-
-    for src in sources.values():
-        try:
-            tree = stdlib_ast.parse(src)
-        except SyntaxError:
-            continue
-        for cls in stdlib_ast.walk(tree):
-            if not isinstance(cls, stdlib_ast.ClassDef):
-                continue
-            fields = {
-                n.target.id
-                for n in cls.body
-                if isinstance(n, stdlib_ast.AnnAssign)
-                and isinstance(n.target, stdlib_ast.Name)
-            }
-            for fn in cls.body:
-                if not isinstance(
-                    fn, (stdlib_ast.FunctionDef, stdlib_ast.AsyncFunctionDef)
-                ):
-                    continue
-
-                # ── producer ──────────────────────────────────────────
-                for n in stdlib_ast.walk(fn):
-                    if not isinstance(n, stdlib_ast.Return) or n.value is None:
-                        continue
-                    lit = _dict_keys(n.value)
-                    if lit:
-                        producers.setdefault(fn.name, set()).update(lit)
-                        _prod_sets.setdefault(fn.name, []).append(set(lit))
-                        continue
-                    # asdict(self) / dataclasses.asdict(self)
-                    v = n.value
-                    if isinstance(v, stdlib_ast.Call):
-                        f = v.func
-                        name = (
-                            f.id
-                            if isinstance(f, stdlib_ast.Name)
-                            else (f.attr if isinstance(f, stdlib_ast.Attribute) else "")
-                        )
-                        if name == "asdict" and fields:
-                            producers.setdefault(fn.name, set()).update(fields)
-                            _prod_sets.setdefault(fn.name, []).append(set(fields))
-
-                # ── consumer ──────────────────────────────────────────
-                args = [a.arg for a in fn.args.args if a.arg not in ("self", "cls")]
-                if not args:
-                    continue
-                payload = args[0]
-                keys: set[str] = set()
-                for n in stdlib_ast.walk(fn):
-                    if (
-                        isinstance(n, stdlib_ast.Subscript)
-                        and isinstance(n.value, stdlib_ast.Name)
-                        and n.value.id == payload
-                        and isinstance(n.slice, stdlib_ast.Constant)
-                        and isinstance(n.slice.value, str)
-                    ):
-                        keys.add(n.slice.value)
-                    if (
-                        isinstance(n, stdlib_ast.Call)
-                        and isinstance(n.func, stdlib_ast.Attribute)
-                        and n.func.attr == "get"
-                        and isinstance(n.func.value, stdlib_ast.Name)
-                        and n.func.value.id == payload
-                        and n.args
-                        and isinstance(n.args[0], stdlib_ast.Constant)
-                        and isinstance(n.args[0].value, str)
-                    ):
-                        keys.add(n.args[0].value)
-                if keys:
-                    consumers.setdefault(fn.name, set()).update(keys)
-                    _cons_sets.setdefault(fn.name, []).append(set(keys))
-
-    # AMBIGUOUS NAMES ARE DROPPED, NOT UNIONED. Both maps are keyed by bare
-    # method name because a call site like `self.to_dict()` names no class.
-    # When two classes each define one — Game.to_dict returning
-    # {"player", "rooms"} and Player.to_dict returning the player's own
-    # fields — unioning them makes the INNER keys look written at the TOP
-    # level, where nothing reads them. Measured on a frontier artifact that
-    # does exactly this: 12 keys reported written-and-never-read against a
-    # loader that reads every one of them through Player.from_dict.
-    # A name that means two things cannot be resolved from the call site, so
-    # the honest answer is silence.
-    for table, seen in ((producers, _prod_sets), (consumers, _cons_sets)):
-        for name, sets in seen.items():
-            if len({frozenset(s) for s in sets}) > 1:
-                table.pop(name, None)
-
-    return producers, consumers
-
-
-def _ambiguous_payload_names(sources: dict[str, str]) -> set[str]:
-    """Method names `_payload_methods` had to drop as ambiguous.
-
-    ASYMMETRIC DROPS PRODUCE FALSE SPECIFIC CLAIMS. When `to_dict` is defined
-    once but `from_dict` is defined by two classes, only the consumer side is
-    dropped: `written` stays populated, `read` goes empty, and the check
-    reports named keys as "written and never read back" about a loader that
-    calls the very consumer it discarded. Measured live on a finished
-    artifact whose loader is `GameState.from_dict(json.load(f))`, where
-    `Item.from_dict` also exists.
-
-    A dropped name means the round trip is UNVERIFIABLE, not broken.
-    """
-    import ast as stdlib_ast
-
-    per_name: dict[str, list[frozenset[str]]] = {}
-    for src in sources.values():
-        try:
-            tree = stdlib_ast.parse(src)
-        except SyntaxError:
-            continue
-        for cls in stdlib_ast.walk(tree):
-            if not isinstance(cls, stdlib_ast.ClassDef):
-                continue
-            for fn in cls.body:
-                if isinstance(
-                    fn, (stdlib_ast.FunctionDef, stdlib_ast.AsyncFunctionDef)
-                ):
-                    per_name.setdefault(fn.name, []).append(frozenset())
-    return {n for n, seen in per_name.items() if len(seen) > 1}
-
-
-def _serializer_functions(sources: dict[str, str]) -> tuple[set[str], set[str]]:
-    """(writer_names, reader_names) — functions that json.dump / json.load.
-
-    Bare names, because that is how they are imported and called
-    (`from save_load import save_state, load_state`). A function is a writer
-    if its body reaches `json.dump(s)`, a reader if it reaches `json.load(s)`.
-    """
-    import ast as stdlib_ast
-
-    writers: set[str] = set()
-    readers: set[str] = set()
-    for src in sources.values():
-        try:
-            tree = stdlib_ast.parse(src)
-        except SyntaxError:
-            continue
-        for fn in stdlib_ast.walk(tree):
-            if not isinstance(
-                fn, (stdlib_ast.FunctionDef, stdlib_ast.AsyncFunctionDef)
-            ):
-                continue
-            for n in stdlib_ast.walk(fn):
-                f = getattr(n, "func", None)
-                if (
-                    isinstance(n, stdlib_ast.Call)
-                    and isinstance(f, stdlib_ast.Attribute)
-                    and isinstance(f.value, stdlib_ast.Name)
-                    and f.value.id == "json"
-                ):
-                    if f.attr in ("dump", "dumps"):
-                        writers.add(fn.name)
-                    elif f.attr in ("load", "loads"):
-                        readers.add(fn.name)
-    return writers, readers
-
-
-def _roundtrip_keys(
-    src: str,
-    writers: set[str],
-    readers: set[str],
-    producers: dict[str, set[str]] | None = None,
-    consumers: dict[str, set[str]] | None = None,
-) -> tuple[set[str], set[str]]:
-    """(written, read) payload keys in ONE module, following both hops.
-
-    Hop one: `state = {...}` then `save_state(state)` — the payload is built
-    here and serialized elsewhere. Hop two: `state = load_state()` then
-    `state["k"]` — the payload is deserialized elsewhere and consumed here.
-    Also covers the direct shape, where the same function both builds the dict
-    and calls json.dump on it.
-    """
-    import ast as stdlib_ast
-
-    producers = producers or {}
-    consumers = consumers or {}
-
-    def _produced(node: Any) -> set[str]:
-        """Keys of `x.to_dict()` / `to_dict()` used as a payload argument."""
-        if not isinstance(node, stdlib_ast.Call):
-            return set()
-        f = node.func
-        name = (
-            f.attr
-            if isinstance(f, stdlib_ast.Attribute)
-            else (f.id if isinstance(f, stdlib_ast.Name) else "")
-        )
-        return set(producers.get(name) or ())
-
-    try:
-        tree = stdlib_ast.parse(src)
-    except SyntaxError:
-        return set(), set()
-
-    written: set[str] = set()
-    read: set[str] = set()
-
-    for fn in stdlib_ast.walk(tree):
-        if not isinstance(fn, (stdlib_ast.FunctionDef, stdlib_ast.AsyncFunctionDef)):
-            continue
-        dict_vars: dict[str, set[str]] = {}
-        payload_vars: set[str] = set()
-        # A function whose own body calls json.load: the payload it hands to a
-        # consumer method never passes through a reader-function variable, so
-        # the payload_vars path below cannot see it. load_game is exactly this.
-        direct_read = fn.name in readers
-        direct_write = any(
-            isinstance(n, stdlib_ast.Call)
-            and isinstance(n.func, stdlib_ast.Attribute)
-            and isinstance(n.func.value, stdlib_ast.Name)
-            and n.func.value.id == "json"
-            and n.func.attr in ("dump", "dumps")
-            for n in stdlib_ast.walk(fn)
-        )
-
-        # TUPLE UNPACKING. `player, save_data = load_save(path, world)` is
-        # the shape a loader that returns BOTH a reconstructed object and the
-        # raw payload takes, and it is common precisely because the caller
-        # needs the top-level keys the object does not carry. A Name-target
-        # walk never registers save_data, so every `save_data.get("k")` in
-        # the caller went uncounted and the keys read as never-read.
-        for n in stdlib_ast.walk(fn):
-            if not (isinstance(n, stdlib_ast.Assign) and len(n.targets) == 1):
-                continue
-            tgt = n.targets[0]
-            if not isinstance(tgt, (stdlib_ast.Tuple, stdlib_ast.List)):
-                continue
-            v = n.value
-            is_payload_src = isinstance(v, stdlib_ast.Call) and (
-                (isinstance(v.func, stdlib_ast.Name) and v.func.id in readers)
-                or (isinstance(v.func, stdlib_ast.Attribute) and v.func.attr in readers)
-            )
-            if is_payload_src:
-                for el in tgt.elts:
-                    if isinstance(el, stdlib_ast.Name):
-                        payload_vars.add(el.id)
-
-        for n in stdlib_ast.walk(fn):
-            # AnnAssign as well as Assign. `save_data: dict = json.load(f)` is
-            # an AnnAssign, so an Assign-only walk cannot see the payload at
-            # all — and annotating it is the IDIOMATIC style, which made this
-            # blind spot fire on typed loaders specifically. Measured against
-            # 64 finished artifacts it produced a confident "player is written
-            # and never read back" about a loader whose next line was
-            # `player_dict = save_data["player"]`.
-            if isinstance(n, (stdlib_ast.Assign, stdlib_ast.AnnAssign)):
-                if isinstance(n, stdlib_ast.AnnAssign):
-                    tgt = n.target
-                    if n.value is None:
-                        continue
-                    n = stdlib_ast.Assign(targets=[tgt], value=n.value)
-                elif len(n.targets) == 1:
-                    tgt = n.targets[0]
-                else:
-                    continue
-                if not isinstance(tgt, stdlib_ast.Name):
-                    continue
-                keys = _dict_keys(n.value)
-                if keys is not None:
-                    dict_vars[tgt.id] = keys
-                elif (
-                    isinstance(n.value, stdlib_ast.Call)
-                    and isinstance(n.value.func, stdlib_ast.Name)
-                    and n.value.func.id in readers
-                ):
-                    payload_vars.add(tgt.id)
-                # THE MIRROR OF direct_write, and the shape that produced a
-                # LIVE FALSE POSITIVE: `data = json.load(f)` in the same
-                # method that then subscripts it. The assignment is an
-                # Attribute call, not a bare reader Name, so the branch above
-                # never fired and every `data["k"]` went uncounted — the
-                # commonest loader in Python read as "no reader consumes the
-                # loaded payload at all". It cost three repair turns against
-                # a save/load pair that was already symmetric.
-                elif (
-                    isinstance(n.value, stdlib_ast.Call)
-                    and isinstance(n.value.func, stdlib_ast.Attribute)
-                    and isinstance(n.value.func.value, stdlib_ast.Name)
-                    and n.value.func.value.id == "json"
-                    and n.value.func.attr in ("load", "loads")
-                ):
-                    payload_vars.add(tgt.id)
-
-        # Two passes to a fixed point. `p = data["player"]` makes p a payload
-        # too — the writer unions every dict it built (direct_write), so the
-        # INNER keys of a nested payload are all in `written`, and the reader
-        # reaches them one subscript deeper. Without this the commonest
-        # grouped-save shape reports its whole player block unread. Source
-        # order is not walk order, so `data` may be registered after `p` is
-        # examined; iterate until stable rather than assuming.
-        for _pass in range(3):
-            before = len(payload_vars)
-            for n in stdlib_ast.walk(fn):
-                tgt_v = None
-                if isinstance(n, stdlib_ast.Assign) and len(n.targets) == 1:
-                    tgt_v, val = n.targets[0], n.value
-                elif isinstance(n, stdlib_ast.AnnAssign) and n.value is not None:
-                    tgt_v, val = n.target, n.value
-                if (
-                    isinstance(tgt_v, stdlib_ast.Name)
-                    and isinstance(val, stdlib_ast.Subscript)
-                    and isinstance(val.value, stdlib_ast.Name)
-                    and val.value.id in payload_vars
-                ):
-                    payload_vars.add(tgt_v.id)
-            if len(payload_vars) == before:
-                break
-
-        for n in stdlib_ast.walk(fn):
-            # writer_fn(payload) — the cross-module hop
-            if (
-                isinstance(n, stdlib_ast.Call)
-                and isinstance(n.func, stdlib_ast.Name)
-                and n.func.id in writers
-                and n.args
-            ):
-                a = n.args[0]
-                if isinstance(a, stdlib_ast.Name) and a.id in dict_vars:
-                    written |= dict_vars[a.id]
-                else:
-                    lit = _dict_keys(a)
-                    if lit:
-                        written |= lit
-                    else:
-                        written |= _produced(a)
-            # json.dump(state.to_dict(), f) — producer straight into the dump
-            if (
-                isinstance(n, stdlib_ast.Call)
-                and isinstance(n.func, stdlib_ast.Attribute)
-                and isinstance(n.func.value, stdlib_ast.Name)
-                and n.func.value.id == "json"
-                and n.func.attr in ("dump", "dumps")
-                and n.args
-            ):
-                written |= _produced(n.args[0])
-            # GameState.from_dict(data) — consumer method inside the reader
-            if isinstance(n, stdlib_ast.Call) and n.args:
-                f = n.func
-                cname = (
-                    f.attr
-                    if isinstance(f, stdlib_ast.Attribute)
-                    else (f.id if isinstance(f, stdlib_ast.Name) else "")
-                )
-                if cname in consumers:
-                    arg0 = n.args[0]
-                    if direct_read or (
-                        isinstance(arg0, stdlib_ast.Name) and arg0.id in payload_vars
-                    ):
-                        read |= consumers[cname]
-            # payload["k"] / payload.get("k") — the consumer hop
-            if isinstance(n, stdlib_ast.Subscript) and isinstance(
-                n.value, stdlib_ast.Name
-            ):
-                s = n.slice
-                if (
-                    n.value.id in payload_vars
-                    and isinstance(s, stdlib_ast.Constant)
-                    and isinstance(s.value, str)
-                ):
-                    read.add(s.value)
-            if (
-                isinstance(n, stdlib_ast.Call)
-                and isinstance(n.func, stdlib_ast.Attribute)
-                and n.func.attr == "get"
-                and isinstance(n.func.value, stdlib_ast.Name)
-                and n.func.value.id in payload_vars
-                and n.args
-                and isinstance(n.args[0], stdlib_ast.Constant)
-                and isinstance(n.args[0].value, str)
-            ):
-                read.add(n.args[0].value)
-            # `if "player" not in save_data: raise` — a guard IS a read, and
-            # it is often the only mention before the value is handed to a
-            # from_dict. Missing it made a validated loader look negligent.
-            if isinstance(n, stdlib_ast.Compare) and isinstance(
-                n.left, stdlib_ast.Constant
-            ):
-                if isinstance(n.left.value, str) and any(
-                    isinstance(op, (stdlib_ast.In, stdlib_ast.NotIn)) for op in n.ops
-                ):
-                    for comp in n.comparators:
-                        if (
-                            isinstance(comp, stdlib_ast.Name)
-                            and comp.id in payload_vars
-                        ):
-                            read.add(n.left.value)
-
-        if direct_write:
-            for keys in dict_vars.values():
-                written |= keys
-
-    return written, read
-
-
 def _implicated_file(message: str, written: list[str]) -> str:
-    """The written file a cross-file violation actually names, if any.
+    """The written file a cross-file violation names first, if any.
 
-    Violation text carries its own provenance — "(game.py, save_load.py)" —
-    so the owner is recoverable without restructuring the checks' return
-    type.
-
-    THE READER OWNS A ROUND-TRIP DEFECT. When keys are written and never
-    read, the writer is doing its job and the loader is dropping state —
-    "a save whose loader ignores what the writer stored", as the message
-    says. So the `never read back (...)` clause wins when present, and only
-    then does the leftmost-mentioned file apply. Picking by string length
-    got this right once by accident and would have got it wrong the moment
-    the writer had the longer path.
+    Violation text carries its own provenance ("entity registry: data/world.yaml
+    was to define …"), so the owner is recoverable without restructuring the
+    checks' return type. The round-trip check does not come through here — it
+    returns the file to fix alongside each message.
     """
-    import re as stdlib_re
-
-    clause = stdlib_re.search(r"never read back \(([^)]*)\)", message)
-    if clause:
-        named = clause.group(1)
-        for path in sorted(written, key=len, reverse=True):
-            if path and path in named:
-                return path
-
     best, best_pos = "", len(message) + 1
     for path in written:
         if not path:
@@ -542,121 +78,6 @@ def _implicated_file(message: str, written: list[str]) -> str:
         if i >= 0 and i < best_pos:
             best, best_pos = path, i
     return best
-
-
-def _serialized_roundtrip_violations(sources: dict[str, str]) -> list[str]:
-    """Keys written to a serialized payload that nothing ever reads back.
-
-    THE CHECK THAT WOULD HAVE CAUGHT THE SHIPPED SEAM. `handle_save`
-    serialized four world tables; `handle_load` read none of them. Both sides
-    were valid Python, both agreed on every call shape, and `save_load.py`
-    typed the payload `Dict[str, Any]` — the seam lived entirely inside the
-    `Any`, so every existing gate passed it. The save FILE was correct; the
-    reader ignored it.
-
-    IT MUST FOLLOW TWO HOPS. The first version of this check looked for the
-    dict literals in the same module as the `json` call and found nothing on
-    the very artifact it was written for — because `game.py` builds the
-    payload and `save_load.py` does the I/O. That indirection is precisely
-    what defeats `_transfer_shape_violations`, so reproducing it would have
-    shipped a check that passes its own motivating case.
-
-    IT MUST FOLLOW THREE. The two-hop version then reported "0 violations" on
-    a real artifact whose save/load pair it had read ZERO keys from, because
-    that pair used the idiomatic `json.dump(state.to_dict(), f)` /
-    `GameState.from_dict(json.load(f))` — keys in neither a literal nor a
-    subscript. See `_payload_methods`. A check whose clean verdict and whose
-    blind verdict are the same string is not a check, so the vacuous case is
-    now reported instead of silently passing.
-
-    Reported one-way only (written-never-read). The reverse is a legitimate
-    shape for optional keys with defaults.
-    """
-    py = {p: s for p, s in sources.items() if p.endswith(".py")}
-    if len(py) < 2:
-        return []
-    writers, readers = _serializer_functions(py)
-    if not writers or not readers:
-        return []
-    producers, consumers = _payload_methods(py)
-
-    written: set[str] = set()
-    read: set[str] = set()
-    writer_files: list[str] = []
-    reader_files: list[str] = []
-    for path, src in py.items():
-        w, r = _roundtrip_keys(src, writers, readers, producers, consumers)
-        if w:
-            written |= w
-            writer_files.append(path)
-        if r:
-            read |= r
-            reader_files.append(path)
-
-    # An ambiguous name dropped on EITHER side makes the comparison unsound:
-    # written stays populated while read goes empty, and the check would name
-    # keys as unread about a loader that calls the consumer it discarded.
-    ambiguous = _ambiguous_payload_names(py)
-    pair_unsound = bool(
-        ambiguous & {"to_dict", "from_dict", "serialize", "deserialize"}
-    )
-
-    # THE VACUOUS PASS IS A REPORTABLE STATE. A serializer pair exists — the
-    # project saves and loads — yet no key was recoverable from either side,
-    # so this check has no opinion and must not be counted as a clean one.
-    # Returning [] here is what let a two-hop check certify an artifact it had
-    # read nothing of. Surfaced as a violation, an unparseable round trip gets
-    # looked at; surfaced as [], it reads as proof.
-    if not written and not read:
-        return [
-            "serialized round trip: this project saves and loads "
-            f"({', '.join(sorted(writers)[:3])} / {', '.join(sorted(readers)[:3])}) "
-            "but the payload keys could not be read from either side, so the "
-            "round trip is UNVERIFIED — not confirmed symmetric. Build the "
-            "payload where it is serialized, or through a to_dict/from_dict "
-            "pair, so the two halves can be compared."
-        ]
-
-    # Audit fields are written for humans and future migrations, not read
-    # back by the loader. Flagging them is technically true and practically
-    # noise — and because this check DRIVES REPAIRS, noise costs rewrites of
-    # correct code. Two of ten findings across 64 artifacts were this class.
-    _AUDIT_FIELDS = {
-        "version",
-        "schema_version",
-        "save_version",
-        "game_version",
-        "format_version",
-        "timestamp",
-        "save_timestamp",
-        "saved_at",
-        "created_at",
-        "generated_at",
-    }
-    if pair_unsound and (written - read):
-        return [
-            "serialized round trip: UNVERIFIED — this project saves and loads, "
-            f"but a payload method name ({', '.join(sorted(ambiguous & {'to_dict', 'from_dict', 'serialize', 'deserialize'}))}) "
-            "is defined by more than one class, so which keys belong to which "
-            "half cannot be resolved from the call sites. Not confirmed "
-            "symmetric and NOT confirmed broken."
-        ]
-
-    orphaned = sorted(
-        k
-        for k in written - read
-        if not k.startswith("_") and k.lower() not in _AUDIT_FIELDS
-    )
-    if not orphaned or not writer_files:
-        return []
-    return [
-        f"serialized round trip: {', '.join(orphaned[:12])} "
-        f"{'is' if len(orphaned) == 1 else 'are'} written into the saved "
-        f"payload ({', '.join(sorted(writer_files)[:3])}) and never read back "
-        f"({', '.join(sorted(reader_files)[:3]) or 'no reader consumes the '
-          'loaded payload at all'}). A save whose loader ignores what the "
-        f"writer stored restores an incomplete world."
-    ]
 
 
 def _data_registry_violations(
@@ -700,7 +121,7 @@ def _data_registry_violations(
         if missing:
             out.append(
                 f"entity registry: {path} was to define "
-                f"{', '.join(missing[:10])} — not present in the file as "
+                f"{', '.join(missing)} — not present in the file as "
                 f"written. Siblings are being told to reference these ids."
             )
         for sibling, ids in (entry.get("references") or {}).items():
@@ -710,7 +131,7 @@ def _data_registry_violations(
             if dangling:
                 out.append(
                     f"entity registry: {path} references "
-                    f"{', '.join(dangling[:10])} in {sibling}, which does not "
+                    f"{', '.join(dangling)} in {sibling}, which does not "
                     f"define them."
                 )
     return out
@@ -752,7 +173,7 @@ def _observed_symbols(sources: dict[str, str]) -> str:
             label = f"{parent}.{name}" if parent else name
             sigs.append(sig if sig else label)
         if sigs:
-            lines.append(f"### {path}\n" + "\n".join(f"  {s}" for s in sigs[:40]))
+            lines.append(f"### {path}\n" + "\n".join(f"  {s}" for s in sigs))
     return "\n".join(lines)
 
 
@@ -789,7 +210,7 @@ def _observed_ids(data_sources: dict[str, str]) -> str:
             if i not in seen:
                 seen.append(i)
         if seen:
-            lines.append(f"{path} defines: {', '.join(seen[:40])}")
+            lines.append(f"{path} defines: {', '.join(seen)}")
     return "\n".join(lines)
 
 
@@ -844,10 +265,14 @@ def _binding_vocabulary(
 
     if not parts:
         return ""
-    block = "\n\n".join(parts)
-    if len(block) > _VOCAB_CHAR_CAP:
-        block = block[:_VOCAB_CHAR_CAP].rstrip() + "\n… (truncated)"
-    return block
+    # NO length cap. There was one (4,000 chars, cut from the END), and the
+    # contracts come first — on 2026-09-22 they filled it, and the "Already
+    # written" index, the only deterministic account of what is ON DISK, was
+    # cut whole. The repair turn that most needed save.py's real names
+    # (state_to_dict/save_game/load_game) got none of them, argued from recall
+    # against a prompt that said the finding was fact, and shipped 330 dead
+    # lines. Evidence is not trimmed to fit a budget.
+    return "\n\n".join(parts)
 
 
 def _ext(path: str) -> str:
@@ -984,11 +409,13 @@ async def action_session_next_file(step_input: StepInput) -> StepOutput:
 
         arch = getattr(mission, "architecture", None)
         declared = list(_get_sweep_files(arch)) if arch is not None else []
+        truncated_files = list(ctx.get("session_truncated_files") or [])
         manifest = {
             "written": list(written_paths),
             "missing": [f for f in declared if f not in written_paths],
             "extra": [],
-            "truncated": False,
+            "truncated": bool(truncated_files),
+            "truncated_files": truncated_files,
             "salvaged": False,
             "deliberation_chars": 0,
             "attempts": 1,
@@ -1066,11 +493,22 @@ async def action_write_session_file(step_input: StepInput) -> StepOutput:
     raw = str(ctx.get("inference_response") or "")
     written_paths = list(ctx.get("session_files_written") or [])
     changed = list(ctx.get("files_changed") or [])
+    # Turns the ENGINE cut (budget or context ceiling). Recorded for the
+    # manifest, which hardcoded truncated=False and so reported a walk whose
+    # keystone turn died at the context ceiling as an ordinary one.
+    truncated_files = list(ctx.get("session_truncated_files") or [])
+    if ctx.get("inference_truncated") and current and current not in truncated_files:
+        truncated_files.append(current)
+        logger.warning(
+            "session write: the %s turn was TRUNCATED by the engine", current
+        )
+    bookkeeping = {"session_truncated_files": truncated_files}
 
     if not current or not effects:
         return StepOutput(
             result={"write_success": False},
             observations="session write: no target file or effects",
+            context_updates=bookkeeping,
         )
 
     # fallback_path makes this a single-file site, which it is by contract —
@@ -1103,6 +541,7 @@ async def action_write_session_file(step_input: StepInput) -> StepOutput:
                 f"session write: the turn produced no block for {current}"
                 + (f" (saw {', '.join(extra[:4])})" if extra else "")
             ),
+            context_updates=bookkeeping,
         )
 
     ok, err = await guarded_write_file(effects, current, body)
@@ -1110,6 +549,7 @@ async def action_write_session_file(step_input: StepInput) -> StepOutput:
         return StepOutput(
             result={"write_success": False},
             observations=f"session write: {current} refused — {err or 'guard'}",
+            context_updates=bookkeeping,
         )
     if extra:
         logger.info(
@@ -1129,7 +569,42 @@ async def action_write_session_file(step_input: StepInput) -> StepOutput:
             "files_changed": changed,
             "session_files_written": written_paths,
             "file_written": current,
+            **bookkeeping,
         },
+    )
+
+
+async def action_rewind_session_turn(step_input: StepInput) -> StepOutput:
+    """Take the walk's last turn back out of the session (llmvp
+    rewindSessionTurn) when it left nothing usable — no answer, or a block the
+    write refused.
+
+    Every later file's instruction calls the files above it FACTS that are on
+    disk; an abandoned attempt left in the context is neither, and each one
+    the walk keeps is paid for again by every turn after it. Skipped when the
+    turn never entered the context (the server rolls an answerless turn out at
+    commit) or the server predates turn ids. Always continues the walk.
+
+    Result: rewound.
+    """
+    effects = step_input.effects
+    ctx = step_input.context
+    session_id = ctx.get("structural_session_id")
+    turn_id = ctx.get("inference_session_turn_id")
+    current = ctx.get("current_file") or "?"
+    reason = "skipped"
+    if not ctx.get("inference_turn_committed", True):
+        reason = "already_absent (rolled out at commit)"
+    elif session_id and turn_id is not None and effects is not None:
+        rewind = getattr(effects, "rewind_inference_session_turn", None)
+        if rewind is not None:
+            outcome = await rewind(session_id, int(turn_id))
+            reason = str(outcome.get("reason", "?"))
+    rewound = reason in ("rolled_back", "history_truncated")
+    logger.info("session walk: unusable %s turn — rewind: %s", current, reason)
+    return StepOutput(
+        result={"rewound": rewound},
+        observations=f"session walk: {current} turn rewind — {reason}",
     )
 
 
@@ -1147,6 +622,10 @@ async def action_check_session_file(step_input: StepInput) -> StepOutput:
     """
     from agent.actions.batch_structural_actions import action_run_batch_file_checks
     from agent.actions.contract_swarm_actions import action_run_contract_typecheck
+    from agent.actions.roundtrip_contract import (
+        declared_persisted_contracts,
+        roundtrip_contract_findings,
+    )
 
     effects = step_input.effects
     ctx = step_input.context
@@ -1182,7 +661,6 @@ async def action_check_session_file(step_input: StepInput) -> StepOutput:
     results = dict(typed_out.context_updates.get("batch_check_results") or results)
 
     sources = await _read_written(effects, written_paths)
-    code = {p: s for p, s in sources.items() if p.endswith(".py")}
     data = {p: s for p, s in sources.items() if languages.is_data(_ext(p))}
 
     # ── FILESET CHECKS RUN ONCE, WHEN THE FILESET EXISTS ──────────────
@@ -1194,25 +672,31 @@ async def action_check_session_file(step_input: StepInput) -> StepOutput:
     # the consumer was still unwritten, and the model burned repair turns on
     # a condition it had no way to satisfy.
     pending = list(ctx.get("pending_files") or [])
-    cross: list[str] = []
+    # (file to fix, message). The round trip names its file itself; the
+    # registry's messages name theirs in the text.
+    cross: list[tuple[str, str]] = []
     if not pending:
-        cross.extend(_serialized_roundtrip_violations(code))
-        cross.extend(_data_registry_violations(data, ctx.get("data_registry") or []))
+        cross.extend(
+            roundtrip_contract_findings(
+                sources, declared_persisted_contracts(ctx.get("mission"))
+            )
+        )
+        for msg in _data_registry_violations(data, ctx.get("data_registry") or []):
+            cross.append((_implicated_file(msg, written_paths) or current, msg))
 
     entry = results.setdefault(
         current, {"passed": True, "checks_failed": [], "output": ""}
     )
     own = list(entry.get("checks_failed") or [])
-    violations = [f"{current}: {c}" for c in own] + cross
+    violations = [f"{current}: {c}" for c in own] + [msg for _, msg in cross]
 
     # ── ATTRIBUTE TO THE FILE THAT OWNS THE DEFECT ────────────────────
     # Booking a cross-file violation against whatever file happened to be
     # current is how a defect in game.py's save payload became a diagnosis
-    # aimed at data/world.yaml, which was then patched to satisfy it. The
-    # message names its writer files; book it there.
+    # aimed at data/world.yaml, which was then patched to satisfy it. Each
+    # finding carries the file that must change; book it there.
     current_implicated = False
-    for msg in cross:
-        target = _implicated_file(msg, written_paths) or current
+    for target, msg in cross:
         if target == current:
             current_implicated = True
         tgt_entry = results.setdefault(

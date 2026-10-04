@@ -224,12 +224,30 @@ _EXCLUDED_DIRS = frozenset(
     }
 )
 _MAX_FILE_SIZE = 256 * 1024  # skip files larger than this (data/binary, not source)
-_MAX_SCAN_FILES = 300  # cap the manifest; the rest is reachable via trace/grep
-_SIGNATURE_MAX_CHARS = (
-    1500  # byte-cap a per-file snippet (defeats minified one-liners).
-)
-# 1500 keeps a full docstring+imports+~20 defs for AST
-# files while trimming the plan_charter projection (was 2000)
+# Files whose signatures the scan READS. Past it a file still enters the
+# manifest, by name only (_NOT_SCANNED), so the listing names it and every
+# consumer of the manifest's keys sees it (2026-09-26; before, files past
+# the cap were absent and the model was expected to grep for them).
+_MAX_SCAN_FILES = 300
+_NOT_SCANNED = "(not scanned — trace it to read)"
+# Byte-cap for one LINE of a per-file signature — it defeats minified
+# one-liners, which is all it ever needed to do. Structured signatures (one
+# import or def per line) pass whole since 2026-09-26: applied to the whole
+# signature it silently re-imposed the entry caps the index had just lost,
+# and the listing that renders the manifest is sized to the window anyway.
+_SIGNATURE_MAX_CHARS = 1500
+
+
+def _bound_minified_lines(signature: str) -> str:
+    """Cap each LINE of a signature at _SIGNATURE_MAX_CHARS, with a marker.
+    A minified one-liner is the only shape this exists for; a structured
+    signature has no line near the cap and passes whole."""
+    out = []
+    for line in signature.splitlines():
+        if len(line) > _SIGNATURE_MAX_CHARS:
+            line = line[:_SIGNATURE_MAX_CHARS] + " …(line truncated)"
+        out.append(line)
+    return "\n".join(out)
 
 
 def _excluded(filepath: str) -> bool:
@@ -261,7 +279,7 @@ _ASR_SIDECAR_TIMEOUT_S = 1800
 def _sidecar_prompt(objective: str) -> str:
     """The AB-winning conditioned-digest prompt (dev/predigest_ab)."""
     return (
-        f'You are pre-reading an image for this task: "{(objective or "")[:400]}"\n'
+        f'You are pre-reading an image for this task: "{objective or ""}"\n'
         "Describe everything in the image relevant to answering it — transcribe "
         "exact text/numbers where visible. Do NOT answer the task; report what you see."
     )
@@ -344,14 +362,10 @@ async def _digest_modality_sidecars(
                 text = (result.stdout or "").strip()
                 if result.return_code == 0 and text:
                     await effects.write_file(sidecar, text)
-                    manifest[sidecar] = text[:_SIGNATURE_MAX_CHARS] + (
-                        "\n    # …(truncated)"
-                        if len(text) > _SIGNATURE_MAX_CHARS
-                        else ""
-                    )
+                    manifest[sidecar] = text  # whole: bounded by its own generation
                     notes.append(f"digested {path} -> {sidecar}")
                 else:
-                    err = (result.stderr or "")[-200:] or f"exit {result.return_code}"
+                    err = (result.stderr or "").strip() or f"exit {result.return_code}"
                     manifest[f"[{path}]"] = f"({kind} digestion failed: {err})"
                     notes.append(f"{kind} digestion FAILED for {path}: {err}")
             except (
@@ -404,6 +418,7 @@ async def action_scan_project(step_input: StepInput) -> StepOutput:
         if any(fnmatch.fnmatch(filepath, pat) for pat in include_patterns):
             matched_files.append(filepath)
     scan_omitted = max(0, len(matched_files) - _MAX_SCAN_FILES)
+    name_only = matched_files[_MAX_SCAN_FILES:]
     matched_files = matched_files[:_MAX_SCAN_FILES]
 
     # Extract signatures (each byte-capped so a minified one-liner can't blow up)
@@ -415,16 +430,13 @@ async def action_scan_project(step_input: StepInput) -> StepOutput:
                 signature = _extract_signature(
                     filepath, content.content, signature_depth
                 )
-                if len(signature) > _SIGNATURE_MAX_CHARS:
-                    signature = (
-                        signature[:_SIGNATURE_MAX_CHARS]
-                        + "\n    # …(signature truncated)"
-                    )
-                manifest[filepath] = signature
+                manifest[filepath] = _bound_minified_lines(signature)
             else:
                 manifest[filepath] = "(file not readable)"
         except Exception as e:
             manifest[filepath] = f"(error reading: {e})"
+    for filepath in name_only:
+        manifest[filepath] = _NOT_SCANNED
 
     # Modality sidecars: deterministic digestion at the scan position (never
     # model-elected). Local-effects only; gated on mission config + count caps.
@@ -442,9 +454,9 @@ async def action_scan_project(step_input: StepInput) -> StepOutput:
                 effects, listing.entries, mission, manifest
             )
 
-    obs = f"Scanned {len(manifest)} files in {root}"
+    obs = f"Scanned {len(matched_files)} files in {root}"
     if scan_omitted:
-        obs += f" ({scan_omitted} more matched, omitted past the {_MAX_SCAN_FILES}-file cap)"
+        obs += f" ({scan_omitted} more listed by name only, past {_MAX_SCAN_FILES})"
     if sidecar_notes:
         obs += " | sidecars: " + "; ".join(sidecar_notes[:4])
     return StepOutput(
@@ -486,17 +498,23 @@ def _extract_python_signature(lines: list[str], depth: str) -> str:
     """Extract Python file signature: docstring + imports + definitions."""
     parts = []
 
-    # Module docstring
+    # Module docstring — whole (2026-09-26; a 30-line scan cut a long one
+    # silently). Only a string that OPENS the module is one: the first
+    # non-blank, non-comment line must start it.
     in_docstring = False
     docstring_lines = []
-    for line in lines[:30]:
+    for line in lines:
         stripped = line.strip()
-        if not in_docstring and stripped.startswith('"""'):
+        if not in_docstring:
+            if not stripped or stripped.startswith("#"):
+                continue
+            if not stripped.startswith('"""'):
+                break
             in_docstring = True
             docstring_lines.append(stripped)
             if stripped.endswith('"""') and len(stripped) > 3:
                 break
-        elif in_docstring:
+        else:
             docstring_lines.append(stripped)
             if '"""' in stripped:
                 break
@@ -508,7 +526,7 @@ def _extract_python_signature(lines: list[str], depth: str) -> str:
         line.strip() for line in lines if line.strip().startswith(("import ", "from "))
     ]
     if imports:
-        parts.append("\n".join(imports[:15]))
+        parts.append("\n".join(imports))
 
     # Module-level string constants that name a FILE.
     #
@@ -544,7 +562,7 @@ def _extract_python_signature(lines: list[str], depth: str) -> str:
             ):
                 paths.append(f"{name} = {value}")
         if paths:
-            parts.append("\n".join(paths[:10]))
+            parts.append("\n".join(paths))
 
     # Class and function definitions
     if depth in ("imports_and_exports", "full"):
@@ -554,7 +572,7 @@ def _extract_python_signature(lines: list[str], depth: str) -> str:
             if stripped.startswith("class ") or stripped.startswith("def "):
                 defs.append(stripped.split(":", 1)[0] + ":")
         if defs:
-            parts.append("\n".join(defs[:20]))
+            parts.append("\n".join(defs))
 
     return "\n\n".join(parts) if parts else "(empty file)"
 
@@ -567,7 +585,7 @@ def _extract_yaml_signature(lines: list[str]) -> str:
             key = line.split(":")[0].strip()
             if key:
                 top_keys.append(key)
-    return "Top-level keys: " + ", ".join(top_keys[:10]) if top_keys else "(empty)"
+    return "Top-level keys: " + ", ".join(top_keys) if top_keys else "(empty)"
 
 
 def _extract_markdown_signature(lines: list[str]) -> str:
@@ -576,7 +594,7 @@ def _extract_markdown_signature(lines: list[str]) -> str:
     for line in lines:
         if line.startswith("#"):
             headings.append(line.strip())
-    return "\n".join(headings[:10]) if headings else "(empty)"
+    return "\n".join(headings) if headings else "(empty)"
 
 
 # ── extract_search_queries ────────────────────────────────────────────
@@ -920,7 +938,14 @@ async def action_run_validation_checks(step_input: StepInput) -> StepOutput:
             context_updates={"validation_results": []},
         )
 
-    checks = _parse_validation_strategy(strategy_raw, max_checks)
+    checks, dropped = _parse_validation_strategy(strategy_raw, max_checks)
+    if dropped:
+        logger.warning(
+            "Validation: %d proposed check(s) past the limit of %d not run: %s",
+            len(dropped),
+            max_checks,
+            "; ".join(str(c.get("command", "")) for c in dropped),
+        )
 
     if not checks:
         # ZERO CHECKS IS NOT A PASS. This returned all_required_passing=True,
@@ -987,28 +1012,39 @@ async def action_run_validation_checks(step_input: StepInput) -> StepOutput:
             "all_required_passing": all_required_passing,
             "checks_run": len(results),
             "checks_passed": sum(1 for r in results if r["passed"]),
+            "checks_not_run": len(dropped),
         },
-        observations="Ran {} checks: {}".format(
+        observations="Ran {} checks: {}{}".format(
             len(results),
             ", ".join(
                 f"{r['name']}={'PASS' if r['passed'] else 'FAIL'}" for r in results
+            ),
+            (
+                f" | {len(dropped)} proposed check(s) past the limit of "
+                f"{max_checks} not run: "
+                + "; ".join(str(c.get("name") or c.get("command")) for c in dropped)
+                if dropped
+                else ""
             ),
         ),
         context_updates={"validation_results": results},
     )
 
 
-def _parse_validation_strategy(raw: str, max_checks: int) -> list[dict]:
-    """Extract validation checks from LLM response (JSON object)."""
+def _parse_validation_strategy(
+    raw: str, max_checks: int
+) -> tuple[list[dict], list[dict]]:
+    """(checks to run, checks past ``max_checks``) from the LLM's strategy
+    (a JSON object). The second list is reported by the caller — a check
+    the model proposed is never dropped silently."""
     from agent.llm_json import parse_llm_json
 
     data = parse_llm_json(raw)
     if isinstance(data, dict):
         checks = data.get("checks", [])
-        return [c for c in checks if isinstance(c, dict) and "command" in c][
-            :max_checks
-        ]
-    return []
+        valid = [c for c in checks if isinstance(c, dict) and "command" in c]
+        return valid[:max_checks], valid[max_checks:]
+    return [], []
 
 
 # ── load_file_contents ────────────────────────────────────────────────
@@ -1047,9 +1083,9 @@ async def action_log_validation_notes(step_input: StepInput) -> StepOutput:
             stdout = check.get("stdout", "").strip()
             stderr = check.get("stderr", "").strip()
             if stdout:
-                warning_text += f"stdout: {stdout[:300]}\n"
+                warning_text += f"stdout: {stdout}\n"
             if stderr:
-                warning_text += f"stderr: {stderr[:300]}\n"
+                warning_text += f"stderr: {stderr}\n"
             warnings.append(warning_text)
 
     if not warnings or not effects:
@@ -1148,8 +1184,8 @@ async def action_execute_project_setup(step_input: StepInput) -> StepOutput:
                     "name": name,
                     "passed": passed,
                     "required": required,
-                    "stdout": cmd_result.stdout[:300],
-                    "stderr": cmd_result.stderr[:300],
+                    "stdout": cmd_result.stdout,
+                    "stderr": cmd_result.stderr,
                 }
             )
             if not passed and required:
@@ -1460,16 +1496,11 @@ def _parse_quality_summary(raw: str) -> dict:
                 task.setdefault("issue", text)
                 task["class"] = cls
                 task["repro"] = _normalize_repro(issue.get("repro"))
-                task["expected"] = str(issue.get("expected") or "")[:300]
+                task["expected"] = str(issue.get("expected") or "")
                 fix_tasks.append(task)
         parsed["fix_tasks"] = fix_tasks
 
     return parsed
-
-
-# Repro sequences longer than this are truncated — a defect that needs more
-# than 10 stdin lines to demonstrate is not a usable gate probe.
-_MAX_REPRO_COMMANDS = 10
 
 
 def _normalize_repro(raw: Any) -> list[str]:
@@ -1484,15 +1515,10 @@ def _normalize_repro(raw: Any) -> list[str]:
     if not isinstance(raw, list):
         return []
     lines = [str(item).strip() for item in raw]
-    lines = [ln for ln in lines if ln]
-    if len(lines) > _MAX_REPRO_COMMANDS:
-        logger.warning(
-            "Finding repro truncated from %d to %d lines",
-            len(lines),
-            _MAX_REPRO_COMMANDS,
-        )
-        lines = lines[:_MAX_REPRO_COMMANDS]
-    return lines
+    # Whole (2026-09-26): a defect deep in play needs more than 10 inputs
+    # to reach, and a repro cut short makes the probe stop before the
+    # defect — the judge then files a real finding as a false claim.
+    return [ln for ln in lines if ln]
 
 
 # ── validate_created_files ────────────────────────────────────────────

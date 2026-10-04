@@ -9,7 +9,9 @@ preserved corpus). Unlike the canary probe it needs NO inference instance, so
 the single-instance pool starvation that blinded the canary (1/171 probes) does
 not blind this — it reads the rate straight from the trace jsonl.
 
-Detection only: strictly read-only over .agent/traces/*.jsonl. The agent still
+Detection only: strictly read-only over the run's history store
+(.agent/history, read incrementally by run/seq) or, for an archive that
+predates it, the legacy .agent/traces JSONL. The agent still
 writes the stub to disk, so the contamination "shape" stays visible (by design
 — it's the indicator we want surfaced, not hidden).
 
@@ -35,6 +37,7 @@ from datetime import datetime, timezone
 # single-source-of-truth classifier rather than re-implementing it.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from agent.trace_health import is_stub  # noqa: E402
+from agent.history.reader import has_history, load_events  # noqa: E402
 
 # generate_rewrite with empty response_content (run lacked --trace-prompts) and
 # fewer than this many generated tokens is treated as a stub: corpus stubs were
@@ -47,11 +50,58 @@ def _isonow() -> str:
 
 
 def latest_trace(working_dir: str) -> str | None:
+    """The run's record: the ``.agent`` dir when it holds a history store,
+    else the newest legacy JSONL trace path. Feed it to ``tail_events``."""
+    agent_dir = os.path.join(working_dir, ".agent")
+    if has_history(agent_dir):
+        return agent_dir
     g = sorted(
         glob.glob(os.path.join(working_dir, ".agent/traces/*.jsonl")),
         key=os.path.getmtime,
     )
     return g[-1] if g else None
+
+
+def tail_events(source: str, cursor):
+    """Events past ``cursor`` from ``source`` (see latest_trace), plus the new
+    cursor. A store's cursor is the (run_id, seq) of the last event seen; a
+    legacy JSONL file's is a byte offset. ``None`` = from the start."""
+    if os.path.isdir(source):
+        events = load_events(source)
+        if cursor is not None:
+            idx = next(
+                (
+                    i
+                    for i, e in enumerate(events)
+                    if (e["_history"]["run_id"], e["_history"]["seq"]) == tuple(cursor)
+                ),
+                None,
+            )
+            if idx is not None:
+                events = events[idx + 1 :]
+        if events:
+            h = events[-1]["_history"]
+            cursor = (h["run_id"], h["seq"])
+        return events, cursor
+    offset = int(cursor or 0)
+    lines: list[str] = []
+    try:
+        with open(source) as fh:
+            fh.seek(offset)
+            lines = fh.readlines()
+            offset = fh.tell()
+    except Exception:
+        pass
+    out = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            out.append(json.loads(line))
+        except Exception:
+            continue
+    return out, offset
 
 
 def classify(ev: dict) -> str:
@@ -64,16 +114,20 @@ def classify(ev: dict) -> str:
     return "stub" if (0 < gen < STUB_TOKEN_PROXY) else "code"
 
 
-def iter_rewrites(lines):
-    """Yield (classification, event) for generate_rewrite inference_calls."""
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            e = json.loads(line)
-        except Exception:
-            continue
+def iter_rewrites(items):
+    """Yield (classification, event) for generate_rewrite inference_calls.
+    ``items`` are event dicts (from tail_events) or raw JSONL lines."""
+    for item in items:
+        if isinstance(item, str):
+            item = item.strip()
+            if not item:
+                continue
+            try:
+                e = json.loads(item)
+            except Exception:
+                continue
+        else:
+            e = item
         if (
             e.get("event_type") == "inference_call"
             and e.get("step") == "generate_rewrite"
@@ -101,13 +155,13 @@ def replay(working_dir: str) -> tuple[int, int]:
         return 0, 0
     n = stubs = 0
     heads = []
-    with open(T) as fh:
-        for cls, e in iter_rewrites(fh):
-            n += 1
-            if cls == "stub":
-                stubs += 1
-                if len(heads) < 3:
-                    heads.append((e.get("response_content") or "")[:80])
+    events, _ = tail_events(T, None)
+    for cls, e in iter_rewrites(events):
+        n += 1
+        if cls == "stub":
+            stubs += 1
+            if len(heads) < 3:
+                heads.append((e.get("response_content") or "")[:80])
     rate = stubs / max(n, 1)
     tripped = " <ALERT ≥ 25%>" if (rate >= 0.25 and n >= 8) else ""
     print(
@@ -121,7 +175,7 @@ def replay(working_dir: str) -> tuple[int, int]:
 def live(working_dir: str, interval: float, out: str, window: int) -> None:
     f = open(out, "a", buffering=1) if out else None
     seen_path = None
-    offset = 0
+    offset = None  # tail_events cursor: None = from the start
     win: deque[int] = deque(maxlen=window)
     cum_n = cum_stub = 0
     last_stub_head = ""
@@ -134,16 +188,10 @@ def live(working_dir: str, interval: float, out: str, window: int) -> None:
     while True:
         T = latest_trace(working_dir)
         if T and T != seen_path:
-            seen_path, offset = T, 0  # new run/file -> tail from its start
-        new_lines: list[str] = []
+            seen_path, offset = T, None  # new run/source -> tail from its start
+        new_lines: list = []
         if T:
-            try:
-                with open(T) as fh:
-                    fh.seek(offset)
-                    new_lines = fh.readlines()
-                    offset = fh.tell()
-            except Exception:
-                pass
+            new_lines, offset = tail_events(T, offset)
         fresh = 0
         for cls, e in iter_rewrites(new_lines):
             fresh += 1

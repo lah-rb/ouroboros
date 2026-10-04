@@ -129,3 +129,73 @@ async def test_scan_empty_when_no_access_pattern_in_diagnosis():
     )
     assert evidence == ""
     assert siblings == []
+
+
+# ── no file-count cap (2026-09-26) ─────────────────────────────────────
+
+_ROOT_CAUSE = (
+    "GameEngine.process_command was fixed to use command.action, but main() "
+    "still accesses command.name."
+)
+
+
+async def _scan(effects):
+    return await _find_systemic_access_sites(
+        effects,
+        ".",
+        _ROOT_CAUSE,
+        change_spec="Rename command.name to command.action at every dispatch site.",
+        target_file="engine.py",
+        target_symbol="GameEngine.process_command",
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_site_past_the_old_200_file_cap_is_found():
+    # Without grep (MockEffects does not answer it) every file is read and
+    # filtered; the old scan stopped at the 200th listed file.
+    files = {f"pkg/f{i:03d}.py": f"X_{i} = {i}\n" for i in range(250)}
+    files["pkg/z_late.py"] = MAIN_PY
+    files["engine.py"] = ENGINE_PY
+    _evidence, siblings = await _scan(MockEffects(files=files))
+    assert siblings == ["pkg/z_late.py:main"]
+
+
+class _Grep(MockEffects):
+    """Answers the prefilter grep with the files whose text mentions `.name`,
+    and records which files the scan then reads."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.grep_cmds: list[list[str]] = []
+        self.reads: list[str] = []
+
+    async def run_command(self, command, **kw):
+        from agent.effects.protocol import CommandResult
+
+        if command and command[0] == "grep":
+            self.grep_cmds.append(command)
+            hits = [p for p, c in self._files.items() if ".name" in c]
+            return CommandResult(
+                return_code=0 if hits else 1,
+                stdout="".join(f"./{p}\n" for p in hits),
+                stderr="",
+                command="grep",
+            )
+        return await super().run_command(command, **kw)
+
+    async def read_file(self, path):
+        self.reads.append(path)
+        return await super().read_file(path)
+
+
+@pytest.mark.asyncio
+async def test_grep_narrows_the_reads_and_skips_vendor_dirs():
+    files = {f"pkg/f{i:03d}.py": f"X_{i} = {i}\n" for i in range(300)}
+    files.update(FILES)
+    fx = _Grep(files=files)
+    _evidence, siblings = await _scan(fx)
+    assert siblings == ["main.py:main"]
+    assert set(fx.reads) <= {"main.py", "models.py", "engine.py"}  # not 300 reads
+    cmd = fx.grep_cmds[0]
+    assert "--exclude-dir=.venv" in cmd and "--include=*.py" in cmd

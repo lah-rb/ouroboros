@@ -10,7 +10,7 @@ and global access patterns.
 import logging
 import os
 from pathlib import Path
-from typing import Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -236,6 +236,22 @@ class ModelConfig(BaseModel):
         return v
 
     @model_validator(mode="after")
+    def _strip_spellings_agree(self):
+        # Two spellings of one policy: the legacy resident-only flag is an alias
+        # for strip_prior_reasoning. Both stated and different is a config that
+        # says two things — refuse it rather than pick one silently.
+        if (
+            self.strip_prior_reasoning is not None
+            and "resident_strip_reasoning" in self.model_fields_set
+            and bool(self.resident_strip_reasoning) != bool(self.strip_prior_reasoning)
+        ):
+            raise ValueError(
+                "resident_strip_reasoning and strip_prior_reasoning disagree — "
+                "state the policy once, as strip_prior_reasoning"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _thinking_requires_availability(self):
         # An unavailable model cannot be "on": force the policy off so the
         # config cannot claim behavior the model cannot deliver.
@@ -309,11 +325,31 @@ class ModelConfig(BaseModel):
     # never accumulates — the harmony-compliant multi-turn form (keep prior
     # answers, drop prior reasoning), and a large context-size reduction on deep
     # thinking sessions. Skips truncated turns (no clean answer to replay). No-op
-    # for non-thinking families. Off by default: legacy full_replay does NOT strip,
-    # so this is the opt-in correctness/efficiency upgrade the resident live seq
-    # uniquely enables crash-free (the splice path's strip overflowed save_state).
-    # Validated on gpt-oss (harmony); enable per-config after validating chatml.
+    # for non-thinking families. Validated on gpt-oss (harmony).
+    # Now the legacy spelling of strip_prior_reasoning (below), which also
+    # covers full-replay sessions on hybrids via turn rollback.
     resident_strip_reasoning: bool = False
+    # PRIOR-TURN REASONING STRIP, every session path (2026-09-22). None inherits
+    # resident_strip_reasoning (the older, resident-only spelling; setting both
+    # to different values is refused at load). True drops each finished turn's
+    # reasoning from the session's context and keeps its answer in the
+    # template's no-reasoning form. Resident sessions strip in place (tail rm +
+    # replay the answer); full-replay sessions on a hybrid/recurrent model strip
+    # by TURN ROLLBACK (inference/turn_checkpoint.py: restore the turn's
+    # recurrent checkpoint, replay the turn prompt + the answer) — never by
+    # re-prefilling the history. Inert on batched seats and on memories that
+    # refuse tail removal. Set it from the family's multi-turn convention
+    # (reference.yaml step 3c) or as an operator override recorded in the
+    # config header — qwen4exp's 2026-09-22 session walk reached 184k tokens by
+    # file 5 of 6 carrying every prior turn's thinking.
+    strip_prior_reasoning: Optional[bool] = None
+    # A turn that produced NO answer — a prefilled think that never closed (cut
+    # at the budget or the context ceiling) or a closed think with empty content
+    # — is rolled back out of a replay session's context instead of committed,
+    # where it would sit as a context-sized non-answer under every later turn.
+    # None = auto: on wherever turn rollback exists (backend turn_rollback mode
+    # partial/seq_rm); False keeps such turns.
+    drop_answerless_turns: Optional[bool] = None
     # Resident SESSION flow-fork (OPT-IN, default off). When a memoryful session is
     # started with a flow_key + static_prefix (an invariant per-flow preamble ABOVE
     # the global static — e.g. per-agent role/tool framing), turn 0 forks the pinned
@@ -1608,3 +1644,13 @@ except Exception:  # pragma: no cover
         "⚠️ Configuration initialization deferred. "
         "Call core.config.init_config() explicitly."
     )
+
+
+def strip_prior_reasoning_effective(model_cfg: Any) -> bool:
+    """The prior-turn reasoning strip policy, resolved across its two
+    spellings (strip_prior_reasoning, else the legacy resident_strip_reasoning).
+    Duck-typed so backend/test doubles without the new field keep working."""
+    v = getattr(model_cfg, "strip_prior_reasoning", None)
+    if v is None:
+        v = getattr(model_cfg, "resident_strip_reasoning", False)
+    return bool(v)

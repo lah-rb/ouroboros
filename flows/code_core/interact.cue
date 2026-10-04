@@ -145,8 +145,112 @@ interact: #FlowDefinition & {
 			params: context_budget: 6
 			resolver: {
 				type: "rule"
-				rules: [{condition: "true", transition: "choose_charter"}]
+				rules: [{condition: "true", transition: "size_world"}]
 			}
+		}
+
+		// The world's data files reach the charter author WHOLE, unless one
+		// does not fit the author's prompt by the whole-if-it-fits rule
+		// (agent/context_fit.py) — then it is shown as a pointer overview
+		// and the author pulls the entries it needs first (2026-09-26). The
+		// 4,000-char sampling this replaces left the author a world of
+		// "starting_room … (4 more items)", and nine goals of
+		// tier_20260924-191710 failed on routes and items it had to guess.
+		size_world: #StepDefinition & {
+			action:      "size_world_view"
+			description: "Show the world's data files whole when they fit, else as an index to pull from"
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.world_indexed == true", transition: "offer_world_menu"},
+					{condition: "true", transition: "choose_charter"},
+				]
+			}
+			publishes: [
+				"interaction_context_view",
+				"world_base_tokens",
+				"world_pulls",
+				"world_pulls_block",
+				"world_feedback",
+			]
+		}
+
+		// Drill-down: pull world entries by pointer until the author has what
+		// the test needs. No pick or correction cap — proceed ends the loop,
+		// and both default and no_answer proceed, so a mute model costs one
+		// turn.
+		offer_world_menu: #StepDefinition & {
+			action:      "inference"
+			description: "Pull the world entries the test needs before writing the charter"
+			context: optional: [
+				"interaction_context_view",
+				"world_pulls_block",
+				"world_feedback",
+				"world_pulls",
+			]
+			turn: #Turn & {
+				response_shape: "menu_compound"
+				sections: [
+					{type: "role", template:    "personas/charter_author"},
+					{type: "problem", template: "interact/test_objective_bounded"},
+					{type: "evidence",
+						ref:   {$ref: "context.world_brief"},
+						title: "The project and its world (large files as an index of entries)"},
+					{type: "evidence",
+						ref:   {$ref: "context.world_pulls_block"},
+						title: "Entries you pulled"},
+					{type: "evidence",
+						ref:   {$ref: "context.world_feedback"},
+						title: "Previous request"},
+					{type: "instruction", template: "interact/world_drilldown_instruction"},
+					{type: "options"},
+					{type: "envelope"},
+				]
+				response: {
+					options: {
+						pull_entry: #MenuOption & {
+							key:         "pull_entry"
+							description: "Read one world entry whole before writing the charter"
+							arg: {
+								name:        "entry_ref"
+								description: "file:/pointer — e.g. data.json:/entries/3"
+							}
+						}
+						proceed: #MenuOption & {
+							key:         "proceed"
+							description: "I have what the test needs — write the charter now"
+						}
+					}
+					publish_selection: "world_request"
+				}
+				transitions: {
+					options: {
+						pull_entry: "fetch_world_entry"
+						proceed:    "choose_charter"
+					}
+					default:   "choose_charter"
+					no_answer: "choose_charter"
+				}
+				// LOW: a context-selection menu whose payload is one pointer.
+				config: reasoning: "low"
+				config: temperature: "t*0.3"
+				retries: 2
+			}
+			pre_compute: [
+				{formatter: "render_interaction_context", output_key: "world_brief"
+					params: source:                                   {$ref: "context.interaction_context_view"}},
+			]
+		}
+
+		fetch_world_entry: #StepDefinition & {
+			action:      "fetch_world_entry"
+			description: "Read one world entry by pointer from the whole data file"
+			context: optional: ["world_request_arg", "world_pulls", "world_base_tokens"]
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "offer_world_menu"}]
+			}
+			publishes: ["world_pulls", "world_pulls_block", "world_feedback"]
 		}
 
 		// charter_mode="explore" (a not-yet-built capability) → the build-spec
@@ -169,7 +273,7 @@ interact: #FlowDefinition & {
 		plan_interaction: #StepDefinition & {
 			action:      "inference"
 			description: "Craft a test charter for the run_session sub-flow"
-			context: optional: ["project_manifest", "repo_map_formatted"]
+			context: optional: ["project_manifest", "repo_map_formatted", "interaction_context_view", "world_pulls_block"]
 			turn: #Turn & {
 				// MEDIUM: charter authoring — the literature's planning tier — dev/REASONING_DEPTH_POLICY_2026-08-16.md
 				config: reasoning: "medium"
@@ -184,6 +288,9 @@ interact: #FlowDefinition & {
 					// site hits the same "awkward under dependencies"
 					// pattern.
 					{type: "dependencies", ref:       {$ref: "context.interaction_brief"}},
+					{type: "evidence",
+						ref:   {$ref: "context.world_pulls_block"},
+						title: "World entries you pulled"},
 					// Function gate: directive, in-reach charter. Tests that the
 					// capability works once, minimal navigation, goal examples
 					// treated as illustrative (see charter_explore for the
@@ -201,7 +308,7 @@ interact: #FlowDefinition & {
 			}
 			pre_compute: [
 				{formatter: "render_interaction_context", output_key: "interaction_brief"
-					params: source:                                   {$ref: "input.interaction_context"}},
+					params: source:                                   {$ref: "context.interaction_context_view"}},
 				{formatter: "format_project_file_list", output_key: "project_file_list"
 					params: source:                                {$ref: "context.project_manifest"}},
 			]
@@ -215,7 +322,7 @@ interact: #FlowDefinition & {
 		plan_interaction_explore: #StepDefinition & {
 			action:      "inference"
 			description: "Craft an explore-and-build charter for a not-yet-built capability"
-			context: optional: ["project_manifest", "repo_map_formatted"]
+			context: optional: ["project_manifest", "repo_map_formatted", "interaction_context_view", "world_pulls_block"]
 			turn: #Turn & {
 				// MEDIUM: explore-and-build charter authoring — dev/REASONING_DEPTH_POLICY_2026-08-16.md
 				config: reasoning: "medium"
@@ -225,6 +332,9 @@ interact: #FlowDefinition & {
 					{type: "problem", template:       "interact/test_objective_bounded"},
 					{type: "context_files", template: "interact/project_and_code_structure"},
 					{type: "dependencies", ref:       {$ref: "context.interaction_brief"}},
+					{type: "evidence",
+						ref:   {$ref: "context.world_pulls_block"},
+						title: "World entries you pulled"},
 					{type: "instruction", template:   "interact/charter_explore"},
 					{type: "envelope"},
 				]
@@ -238,7 +348,7 @@ interact: #FlowDefinition & {
 			}
 			pre_compute: [
 				{formatter: "render_interaction_context", output_key: "interaction_brief"
-					params: source:                                   {$ref: "input.interaction_context"}},
+					params: source:                                   {$ref: "context.interaction_context_view"}},
 				{formatter: "format_project_file_list", output_key: "project_file_list"
 					params: source:                                {$ref: "context.project_manifest"}},
 			]
@@ -317,19 +427,38 @@ interact: #FlowDefinition & {
 		// Evaluation-mode router (operator, 2026-08-07): "the original
 		// behavior should be the default with bigger context models." The
 		// in-session evaluation (full transcript in KV, no re-prefill) runs
-		// when the serving model's real window (health.nCtxSeq) is >= 64k;
-		// the stateless bounded-tail fallback — which cannot lose a verdict
-		// to depth — runs below that, and whenever the window is unknown.
+		// when the verdict FITS in the tester's session — its occupancy + the
+		// evaluation prompt + the output reserve within the real window
+		// (2026-09-26; it was nCtxSeq >= 64k, which could not see a session
+		// that had filled a 262k window by itself). Otherwise, and whenever
+		// the occupancy or window is unknown, the stateless fallback runs
+		// over the fitted transcript.
 		choose_eval_mode: #StepDefinition & {
 			action:      "probe_eval_context"
-			description: "Pick in-session vs stateless evaluation from the model's real context window"
+			description: "Evaluate in the tester's session when the verdict fits there, else stateless"
+			context: optional: ["inference_session_id"]
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "result.big_context == true", transition: "evaluate_in_session"},
-					{condition: "true", transition: "evaluate_outcome"},
+					{condition: "result.in_session_fits == true", transition: "evaluate_in_session"},
+					{condition: "true", transition: "release_session_for_eval"},
 				]
 			}
+		}
+
+		// The stateless branch RELEASES the tester's session before it
+		// evaluates (2026-09-25). inference_session_id is ambient — it
+		// passes every step's context filter — so leaving it undeclared never
+		// made evaluate_outcome stateless: all 45 evaluations of
+		// tier_20260924-191710 ran in the tester's session with the tail
+		// copied on top. Ending the session clears the id (the evaluation
+		// routes stateless) and frees the instance it pinned — on a
+		// one-instance pool a stateless call beside an open session waits
+		// forever. end_eval_session_* then no-op on the cleared id.
+		release_session_for_eval: #StepDefinition & _templates.close_session & {
+			_next:       "evaluate_outcome"
+			description: "Release the tester's session so the evaluation runs stateless"
+			context: optional: ["inference_session_id"]
 		}
 
 		// The ORIGINAL evaluation: joins the tester's memoryful session so
@@ -417,9 +546,13 @@ interact: #FlowDefinition & {
 			// the evaluation errored, and the session's verdict was LOST —
 			// scored failed by overflow, not on the merits. Any session deep
 			// enough to pass the e2e finale would overflow its own verdict.
-			// inference_session_id is deliberately NOT declared (the context
-			// filter makes the turn stateless); the evidence is a BOUNDED
-			// session tail — the decisive late-game stretch always fits.
+			// Stateless because release_session_for_eval ended the session
+			// before this step (NOT because inference_session_id is left
+			// undeclared — it is ambient). The transcript is fitted to the
+			// serving window at render time (fit: "tail"): the rest of the
+			// prompt is measured, the output reserved, and the most recent
+			// stretch that fits is kept with a marker — the decisive
+			// late-game stretch always fits.
 			context: {
 				optional: ["terminal_output"]
 			}
@@ -427,7 +560,7 @@ interact: #FlowDefinition & {
 				response_shape: "json_document"
 				sections: [
 					{type: "role", template:        "personas/interact_evaluator"},
-					{type: "evidence", ref:         {$ref: "context.eval_session_tail"}},
+					{type: "evidence", ref:         {$ref: "context.eval_session_tail"}, fit: "tail"},
 					// The acceptance-check results are DELIBERATELY NOT shown
 					// here (removed 2026-08-06). They used to appear as an
 					// "Acceptance checks" evidence block, and the evaluator
@@ -475,12 +608,12 @@ interact: #FlowDefinition & {
 			pre_compute: [
 				{formatter: "strip_test_guidance", output_key: "eval_objective"
 					params: source:                              {$ref: "input.flow_directive"}},
-				// Bounded transcript for the stateless evaluation: 16k chars
-				// (~4-5k tokens) covers the decisive late-game stretch of
-				// even a 77-turn session with the whole prompt well under
-				// the 32k window.
+				// The whole transcript; the evidence section's fit: "tail"
+				// sizes it to the serving window. It replaces a fixed 16k-char
+				// cut sized for 32k windows (hy3, muse) that threw evidence
+				// away on bigger ones.
 				{formatter: "format_session_tail", output_key: "eval_session_tail"
-					params: {source: {$ref: "context.terminal_output"}, max_chars: 16000}},
+					params: {source: {$ref: "context.terminal_output"}}},
 			]
 			publishes: ["inference_response"]
 		}
@@ -571,6 +704,8 @@ interact: #FlowDefinition & {
 		// Derived AFTER a pass — the session is already closed, so this is a
 		// fresh stateless inference grounded purely in the passing transcript.
 		derive_acceptance: #StepDefinition & {
+			// Evidence sized to the serving window at render (agent/context_fit.py): whole beside the prompt, else the most recent part.
+			fit: {session_tail: "tail"}
 			action:      "inference"
 			description: "Derive the regression check grounded in the passing session"
 			context: optional: ["terminal_output"]
@@ -581,7 +716,7 @@ interact: #FlowDefinition & {
 			}
 			pre_compute: [
 				{formatter: "format_session_tail", output_key: "session_tail"
-					params: {source: {$ref: "context.terminal_output"}, max_chars: 3000}},
+					params: {source: {$ref: "context.terminal_output"}}},
 			]
 			// HIGH: writes the acceptance checks that gate goal_met — a badly
 			// derived check could permanently veto a correct pass (9819411);

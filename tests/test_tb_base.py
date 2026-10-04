@@ -61,13 +61,19 @@ def test_per_task_cap_fallback_and_floor():
     )  # floor
 
 
-def test_token_totals_sums_trace_jsonl(tmp_path):
-    tr = tmp_path / ".agent" / "traces"
-    tr.mkdir(parents=True)
-    (tr / "a.jsonl").write_text(
-        '{"tokens_in": 10, "tokens_out": 3}\n' "not json\n" '{"tokens_in": 5}\n'
-    )
+def test_token_totals_sums_the_history_turns(tmp_path):
+    import asyncio
+
+    from agent.history.store import HistoryStore
+    from agent.trace import InferenceCall
+
+    (tmp_path / ".agent").mkdir()
+    store = HistoryStore(str(tmp_path), "m1", "metrics")
+    store.ingest(InferenceCall(mission_id="m1", tokens_in=10, tokens_out=3))
+    store.ingest(InferenceCall(mission_id="m1", tokens_in=5))
+    asyncio.new_event_loop().run_until_complete(store.close())
     assert token_totals(str(tmp_path)) == (15, 3)
+    assert token_totals(str(tmp_path / "nowhere")) == (0, 0)
 
 
 def _self_calls_resolve(path: Path) -> set[str]:

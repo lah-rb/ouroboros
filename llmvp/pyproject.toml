@@ -43,7 +43,24 @@ dependencies = [
 # LLAMA_MAX_SEQ, llama_state_seq_get_size) still present. NOTE the MTP/nextn
 # symbols went missing (binding declares, vendor no longer exports) — MTP was
 # already NO-GO at 0-1% acceptance, but dev/mtp_spike.py will not run on this pin.
-llama-cpp-python = { git = "https://github.com/JamePeng/llama-cpp-python.git", rev = "8a3bcbfb" }
+# 0.4.0-Milestone / llama.cpp b11058 (was 8a3bcbfb = 0.3.46 / b10355). Bumped
+# 2026-09-20 for the `qwen4exp` arch (Qwen3.8 Flash Next) — a hybrid SSM +
+# sparse-attention-indexer MoE that b10355 cannot load at all (the arch string
+# is absent from libllama). Lands llama-memory-hybrid-idx, the indexer cache
+# backing it.
+# Validated in a throwaway venv first: 1119/1119 llmvp tests, and a signature
+# dump of every internal LLMVP drives (LlamaContext/LlamaBatch/LlamaModel,
+# memory_seq_cp/rm/add/pos_max, LLAMA_MAX_SEQ, llama_state_seq_*, the mtmd
+# surface) diffed ADDITIVE-ONLY across the major bump — 62/62 present.
+# THREE default changes ride along; only the third reaches us:
+#   - dry_penalty_last_n 0 -> 64: inert, we only set it when dry_multiplier>0.
+#   - a `presence_penalty` alias joins `present_penalty`: inert, we pass the
+#     real kwarg (a would-be silent no-op going live — cf. the dead-kwarg class).
+#   - load_mode MMAP -> AUTO, plus a new lazy_mode=AUTO (lazy for marked
+#     tensors >4 GiB, requires mmap). We pass neither, so this DOES reach us —
+#     and it is wanted here: qwen4exp's per_layer_token_embd is a 26.8 GiB
+#     sparse PLE table, exactly the tensor lazy loading is for.
+llama-cpp-python = { git = "https://github.com/JamePeng/llama-cpp-python.git", rev = "ea19e8d1" }
 
 [dependency-groups]
 dev = [

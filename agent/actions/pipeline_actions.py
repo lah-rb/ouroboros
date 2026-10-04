@@ -82,13 +82,16 @@ def extract_repair_terms_tiered(description: str) -> tuple[list[str], list[str]]
         if len(weak) >= 8:
             break
         _add(tok, weak)
-    return strong[:12], weak
+    # Every identifier (2026-09-26): the 13th can be the module name that
+    # drives the module-match ranking. The weak tier stays bounded — prose
+    # words are what polluted the grep, and they are only a fallback.
+    return strong, weak
 
 
 def extract_repair_terms(description: str) -> list[str]:
     """Flat view of the tiered extraction (strong first)."""
     strong, weak = extract_repair_terms_tiered(description)
-    return (strong + weak)[:12]
+    return strong + weak
 
 
 def _is_test_path(path: str) -> bool:
@@ -299,24 +302,11 @@ async def action_derive_repair_tests(step_input: StepInput) -> StepOutput:
     )
 
 
-def _cap_diagnostic(text: str, limit: int = 1200) -> str:
-    """Cap check/smoke output for storage, preserving a Python traceback's TAIL.
-
-    Tracebacks print "most recent call last" — the exception line and the
-    deepest frame (the actual fault site) are at the END. A plain head-cap
-    (``text[:500]``) therefore drops exactly the part the diagnose needs to
-    pick a fix target, leaving only the entry frames (e.g. ``main.py``), which
-    sends repair off chasing the wrong file. When a traceback is present, keep
-    the head (the marker + entry frames) AND the tail (deepest frames +
-    exception); otherwise fall back to a plain head-cap.
-    """
-    text = text or ""
-    if len(text) <= limit:
-        return text
-    if "Traceback (most recent call last):" in text:
-        head = limit // 3
-        return text[:head] + "\n…[frames truncated]…\n" + text[-(limit - head) :]
-    return text[:limit]
+# Check and smoke output is kept WHOLE (2026-09-26). _cap_diagnostic cut it
+# to 800-1,200 chars (a traceback kept head + tail); every prompt that
+# renders it now sizes it to the serving window at render time
+# (agent/context_fit.py) — the diagnosis seed, the escalation seed, and the
+# patch/rewrite validation-error sections.
 
 
 # Extensions that skip validation (non-code files)
@@ -671,6 +661,26 @@ def _uvize_install_commands(commands: list[str], env_config: dict) -> list[str]:
     return out
 
 
+def _module_name_for(file_path: str, working_dir: str | None) -> str:
+    """The dotted import name of a Python file ("" for anything else).
+
+    Derived from the path RELATIVE to the workspace — the import check runs
+    there. An absolute target (a diagnosis can name one) used to become
+    ``private.tmp.tier.<arm>.engine``: every import check on it failed, and
+    on 2026-09-22 a correct `take` handler was reported as a failed fix while
+    the follow-up diagnosis rightly blamed the validator. Real paths are
+    compared because /tmp is /private/tmp on macOS.
+    """
+    if not file_path.endswith(".py"):
+        return ""
+    path = file_path
+    if working_dir and os.path.isabs(path):
+        rel = os.path.relpath(os.path.realpath(path), os.path.realpath(working_dir))
+        if not rel.startswith(".."):
+            path = rel
+    return path[: -len(".py")].replace(os.sep, ".").replace("/", ".").lstrip(".")
+
+
 def _substitute_command(template, file_path: str, module_name: str) -> list | None:
     """Fill {file}/{module} placeholders in an env command template."""
     if isinstance(template, list):
@@ -718,12 +728,11 @@ async def action_run_validation_checks_from_env(
     syntax_failed = False
     has_issues = False
 
+    working_dir = getattr(effects, "working_directory", None) or step_input.context.get(
+        "working_directory"
+    )
     for file_path in files:
-        module_name = ""
-        if file_path.endswith(".py"):
-            module_name = file_path.replace("/", ".").replace(".py", "")
-            if module_name.startswith("."):
-                module_name = module_name[1:]
+        module_name = _module_name_for(file_path, working_dir)
 
         # ── Run formatter before validation (non-fatal) ──────────
         # If a formatter command is configured, run it to normalize
@@ -756,12 +765,8 @@ async def action_run_validation_checks_from_env(
                 "passed": passed,
                 "tier": tier,
                 "required": tier == "syntax",
-                "stdout": (
-                    _cap_diagnostic(result.stdout) if hasattr(result, "stdout") else ""
-                ),
-                "stderr": (
-                    _cap_diagnostic(result.stderr) if hasattr(result, "stderr") else ""
-                ),
+                "stdout": ((result.stdout) if hasattr(result, "stdout") else ""),
+                "stderr": ((result.stderr) if hasattr(result, "stderr") else ""),
             }
             results.append(check)
 
@@ -837,15 +842,15 @@ async def action_run_validation_checks_from_env(
                     "passed": passed,
                     "tier": "smoke",
                     "required": True,
-                    "stdout": _cap_diagnostic(getattr(smoke, "stdout", "")),
-                    "stderr": _cap_diagnostic(getattr(smoke, "stderr", "")),
+                    "stdout": (getattr(smoke, "stdout", "")),
+                    "stderr": (getattr(smoke, "stderr", "")),
                 }
             )
             if not passed:
                 smoke_failed = True
                 output_lines.append(f"[FAIL] smoke_boot: {smoke_cmd}")
                 if getattr(smoke, "stderr", ""):
-                    output_lines.append(f"  stderr: {_cap_diagnostic(smoke.stderr)}")
+                    output_lines.append(f"  stderr: {(smoke.stderr)}")
                 output_lines.append(
                     "  The program no longer starts after this edit — the edit "
                     "must be corrected."
@@ -970,7 +975,7 @@ async def action_check_data_file(step_input: StepInput) -> StepOutput:
         "tier": "syntax",
         "required": True,
         "stdout": "",
-        "stderr": "" if ok else detail[:500],
+        "stderr": "" if ok else detail,
     }
     status = "PASS" if ok else "FAIL"
     validation_output = f"[{status}] {check['name']}"
@@ -1146,7 +1151,7 @@ async def action_log_validation_notes(step_input: StepInput) -> StepOutput:
     # Format issues into a note
     lines = ["Validation issues (non-blocking):"]
     for issue in issues:
-        lines.append(f"  - {issue.get('name', '?')}: {issue.get('stderr', '')[:100]}")
+        lines.append(f"  - {issue.get('name', '?')}: {issue.get('stderr', '')}")
 
     note_content = "\n".join(lines)
 
@@ -1638,7 +1643,7 @@ async def action_check_declared_dependencies(step_input: StepInput) -> StepOutpu
         if not already:
             mission.notes.append(
                 NoteRecord(
-                    content=summary[:600],
+                    content=summary,
                     category="failure_analysis",
                     tags=["dependency_claim"],
                     source_flow="project_ops",
@@ -1750,7 +1755,7 @@ async def action_parse_dep_check_result(step_input: StepInput) -> StepOutput:
             f"(e.g. [dependency-groups] dev / uv add --dev), NOT in the "
             f"runtime dependencies list"
         )
-    for d in details[:10]:
+    for d in details:
         issue_lines.append(
             f"  {d.get('file', '?')}: imports '{d.get('import', '?')}' "
             f"→ package '{d.get('package', '?')}'"
@@ -1777,8 +1782,7 @@ async def action_parse_dep_check_result(step_input: StepInput) -> StepOutput:
             "gate_failure_reason": (
                 "undeclared dependencies — "
                 + ", ".join(
-                    [*missing[:6]]
-                    + [f"{m} (dev group — test-only)" for m in missing_dev[:6]]
+                    [*missing] + [f"{m} (dev group — test-only)" for m in missing_dev]
                 )
                 + (" are" if len(missing) + len(missing_dev) != 1 else " is")
                 + " imported but not in the manifest"

@@ -16,18 +16,22 @@ import re
 import signal
 import sys
 import time
+import warnings
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from agent.effects.inference import InferenceEffect
+from agent.history.store import HISTORY_MODES, HistoryStore
 from agent.trace import (
+    build_inference_call,
+    get_current_branch,
     HealthSample,
     CommandRun,
-    InferenceCall,
     McpToolCall,
     NotePushed,
+    PromptBackstop,
     RunSummary,
     SessionEnd,
     SessionSnapshot,
@@ -35,7 +39,6 @@ from agent.trace import (
     TraceEvent,
     _NOTE_PREVIEW_CHARS,
     _truncate_preview,
-    count_tokens,
     fold_event,
     finalize_ledger,
     get_step_context,
@@ -98,10 +101,14 @@ class LocalEffects:
         working_directory: str,
         llmvp_endpoint: str | None = None,
         model_default_temperature: float = 0.7,
-        trace_thinking: bool = False,
-        trace_prompts: bool = False,
+        trace_thinking: bool | None = None,
+        trace_prompts: bool | None = None,
         http_transport=None,
         llmvp_domains: dict | None = None,
+        history_mode: str = "full",
+        history_meta: dict | None = None,
+        history_snapshotter: Any = None,
+        history_snapshot: bool = True,
     ) -> None:
         self._working_dir = os.path.realpath(working_directory)
         if not os.path.isdir(self._working_dir):
@@ -129,6 +136,8 @@ class LocalEffects:
         # same host must share a client or they double the watchdog polling.
         self._inference_by_endpoint: dict[str, InferenceEffect] = {}
         self._model_default_temperature = model_default_temperature
+        # session_id -> tokens the session holds after its last turn.
+        self._session_tokens: dict[str, int] = {}
         # HTTP client — lazy; http_transport lets tests inject
         # httpx.MockTransport without monkeypatching.
         self._http_client = None
@@ -137,11 +146,29 @@ class LocalEffects:
         # to the same file so interleaved coroutines (overlap lanes, future
         # parallel flow branches) can never tear or drop lines.
         self._append_locks: dict[str, asyncio.Lock] = {}
-        # Trace buffer — flushed to JSONL at cycle boundaries
-        self._trace_buffer: list[TraceEvent] = []
+        # THE HISTORY STORE (agent/history): every trace event becomes a
+        # parquet row under .agent/history/ — the full prompt, response and
+        # thinking of every turn by default. Opened on the first event that
+        # names the mission (the id is not known at construction); "metrics"
+        # keeps the rows but blanks the content; "off" keeps only the
+        # in-memory ledger. Two processes on one workspace is an error the
+        # store's LOCK makes loud rather than a corruption it hides.
+        if history_mode not in HISTORY_MODES:
+            raise ValueError(
+                f"history_mode must be one of {HISTORY_MODES}, got {history_mode!r}"
+            )
+        self.history_mode: str = history_mode
+        self._history_meta: dict = dict(history_meta or {})
+        self._history_snapshotter = history_snapshotter
+        # Workspace tree snapshots (agent/history/snapshot.py) ride along by
+        # default; ContainerEffects turns them off (its workspace is in a
+        # container, the host dir holds only .agent).
+        self._history_snapshot = bool(history_snapshot)
+        self._history: HistoryStore | None = None
+        self._history_closed = False
+        self._history_run_start_pending = False
         self._health_sample_calls = 0
         self._health_sample_warned = False
-        self._trace_file_path: str | None = None
         # Finite time + token ledger (the "head"): folded incrementally in
         # emit_trace, serialized to <trace>.summary.json each flush. Run span
         # starts at the first emitted event. _traced_mission_id captures the
@@ -152,10 +179,137 @@ class LocalEffects:
         self._run_start_monotonic: float | None = None
         self._traced_mission_id: str = ""
         self._session_started_at: dict[str, float] = {}
-        # Chain-of-thought capture — only fetch when flag is set
-        self.trace_thinking: bool = trace_thinking
-        # Full prompt/response capture — only store when flag is set
-        self.trace_prompts: bool = trace_prompts
+        # --trace-thinking / --trace-prompts are retired: full capture is the
+        # default and history_mode is the opt-out. Accepted for one epoch so
+        # old constructors keep working; they change nothing.
+        if trace_thinking is not None or trace_prompts is not None:
+            warnings.warn(
+                "LocalEffects(trace_thinking=, trace_prompts=) are retired — "
+                "recording is on by default; use history_mode='metrics'|'off'",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
+    # ── History store ─────────────────────────────────────────────
+
+    @property
+    def capture_thinking(self) -> bool:
+        """Fetch chain-of-thought per call (one extra RPC) — full mode only."""
+        return self.history_mode == "full"
+
+    @property
+    def history(self) -> HistoryStore | None:
+        return self._history
+
+    def history_open(self, mission_id: str, **meta: Any) -> HistoryStore | None:
+        """Open the run's store explicitly (cmd_start does this once the
+        mission is loaded); emit_trace opens it lazily otherwise."""
+        if self.history_mode == "off" or self._history_closed:
+            return None
+        if self._history is None:
+            snapshotter = self._history_snapshotter
+            if snapshotter is None and self._history_snapshot:
+                from agent.history.snapshot import WorkspaceSnapshotter
+                from agent.history.store import REPO_DIR, history_dir
+
+                snapshotter = WorkspaceSnapshotter(
+                    self._working_dir,
+                    os.path.join(history_dir(self._working_dir), REPO_DIR),
+                    extra_excludes=tuple(
+                        self._history_meta.get("snapshot_excludes") or ()
+                    ),
+                )
+                self._history_snapshotter = snapshotter
+            self._history = HistoryStore.open_for_run(
+                self._working_dir,
+                mission_id or "unknown",
+                self.history_mode,
+                snapshotter=snapshotter,
+                meta={"endpoint": self._llmvp_endpoint, **self._history_meta, **meta},
+            )
+            # The first tree snapshot lands on the first awaited event.
+            self._history_run_start_pending = snapshotter is not None
+        return self._history
+
+    async def history_checkpoint(
+        self, source: str, trigger: str = "", ctx: dict | None = None
+    ) -> str | None:
+        """Snapshot the workspace tree into the history (a commits row when
+        it changed). None when history is off or no snapshotter is wired.
+        ``ctx`` names the step when the caller is outside its step_context
+        (the runtime's StepEnd sites); otherwise the bound context is used."""
+        if self._history is None:
+            return None
+        ctx = dict(ctx or get_step_context() or {})
+        ctx.setdefault("branch", get_current_branch())
+        return await self._history.checkpoint(source, trigger, ctx)
+
+    async def history_close(self, final_status: str = "ended") -> None:
+        """Finalize the ledger into the run's summary and close the store.
+        Called by drain_effects at teardown; events after this only fold
+        the in-memory ledger."""
+        self._history_closed = True
+        store, self._history = self._history, None
+        if store is None:
+            return
+        summary = None
+        if self._run_start_monotonic is not None:
+            total = (time.monotonic() - self._run_start_monotonic) * 1000
+            summary = finalize_ledger(self._ledger, total)
+        await store.close(final_status, summary)
+
+    async def _record_turn(
+        self,
+        result: Any,
+        *,
+        prompt: str,
+        wall_ms: float,
+        config_overrides: dict | None,
+        purpose: str,
+        session_id: str = "",
+        endpoint: str = "",
+        domain: str = "",
+        static_prefix: str | None = None,
+        flow_key: str | None = None,
+    ) -> None:
+        """Every inference call made from inside a flow becomes one turn row.
+
+        Emitted HERE, in the effect, so the 13 action modules that call
+        run_inference directly are recorded too — the runtime no longer emits
+        for the calls it originates. Outside a bound step context (tests,
+        tooling) nothing is recorded, as before. Best-effort: a telemetry
+        failure must never fail the inference that already succeeded.
+        """
+        if get_step_context() is None:
+            return
+        try:
+            thinking = ""
+            if self.capture_thinking and getattr(result, "text", None):
+                # Correlate on the session id for session turns and the
+                # client-minted request id for stateless calls; fall back to
+                # "the most recent generation" only when the id yields nothing.
+                key = session_id or str(getattr(result, "request_id", "") or "")
+                thinking = await self.fetch_thinking(key) if key else ""
+                if not thinking and not session_id:
+                    thinking = await self.fetch_thinking()
+            await self.emit_trace(
+                build_inference_call(
+                    result,
+                    prompt=prompt,
+                    response_text=getattr(result, "text", "") or "",
+                    thinking=thinking,
+                    wall_ms=wall_ms,
+                    config_overrides=config_overrides,
+                    purpose=purpose,
+                    session_id=session_id,
+                    endpoint=endpoint,
+                    domain=domain,
+                    static_prefix=static_prefix,
+                    flow_key=flow_key,
+                )
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("history: turn record failed", exc_info=True)
 
     @property
     def working_directory(self) -> str:
@@ -344,6 +498,7 @@ class LocalEffects:
                 "success",
                 start,
             )
+            await self.history_checkpoint("effects_write", trigger=path)
             return WriteResult(success=True, path=path, bytes_written=bytes_written)
 
         except PathTraversalError as e:
@@ -389,6 +544,7 @@ class LocalEffects:
                 "success",
                 start,
             )
+            await self.history_checkpoint("effects_write", trigger=path)
             return WriteResult(success=True, path=path, bytes_written=bytes_written)
 
         except PathTraversalError as e:
@@ -984,6 +1140,7 @@ class LocalEffects:
                     error=f"PDF is truncated (no %%EOF trailer in {written} bytes)",
                 )
             self._log_entry("http_download", url, f"{written}b -> {path}", start)
+            await self.history_checkpoint("effects_write", trigger=path)
             return DownloadResult(
                 success=True,
                 url=url,
@@ -1360,6 +1517,7 @@ class LocalEffects:
                     endpoint=self._llmvp_endpoint,
                     model_default_temperature=self._model_default_temperature,
                 )
+                self._inference.on_backstop = self._record_backstop
             return self._inference
 
         endpoint = str(route.get("endpoint") or self._llmvp_endpoint)
@@ -1372,9 +1530,48 @@ class LocalEffects:
                 model_default_temperature=self._model_default_temperature,
                 model=model,
             )
+            client.on_backstop = self._record_backstop
             self._inference_by_endpoint[key] = client
             logger.info("inference domain %r -> %s (model=%s)", domain, endpoint, model)
         return client
+
+    async def _record_backstop(self, fields: dict) -> None:
+        """A PromptBackstop row: the last-resort prompt guard fired, so an
+        upstream fit missed. Attributed to the step it fired in."""
+        from agent.trace import get_step_context
+
+        ctx = get_step_context() or {}
+        await self.emit_trace(
+            PromptBackstop(
+                mission_id=ctx.get("mission_id") or self._traced_mission_id,
+                cycle=int(ctx.get("cycle") or 0),
+                flow=str(ctx.get("flow") or ""),
+                step=str(ctx.get("step") or ""),
+                **fields,
+            )
+        )
+
+    def session_tokens(self, session_id: str) -> int:
+        """What a memoryful session holds after its last turn (prompt +
+        generated, as the server counted them); 0 before its first turn.
+        The "used" side of the whole-if-it-fits rule (agent/context_fit.py)
+        for reads that land in a session."""
+        return int(self._session_tokens.get(session_id, 0) or 0)
+
+    async def cache_health(self) -> dict:
+        """The serving model's cache/feature register (``health``: nCtxSeq,
+        decodeMode, …), or {} when the server will not say.
+
+        interact's evaluation-mode probe asked the effects for this from
+        2026-08-07, but only InferenceEffect had it: the probe read "unknown"
+        on every run, so every evaluation took the small-window branch — on
+        a 262k window (tier_20260924-191710, 45 of 45).
+        """
+        try:
+            return await self._get_inference().cache_health()
+        except Exception as e:  # noqa: BLE001 — a health read never fails a step
+            logger.debug("cache_health failed: %s", e)
+            return {}
 
     async def token_count(self, texts: list[str], model: str = "") -> list[int]:
         """Exact token counts from the serving model's own tokenizer.
@@ -1497,6 +1694,7 @@ class LocalEffects:
         result = await inference.run_inference(
             prompt, config_overrides, static_prefix=static_prefix, flow_key=flow_key
         )
+        wall_ms = (time.monotonic() - start) * 1000
 
         if result.error:
             self._log_entry(
@@ -1514,6 +1712,20 @@ class LocalEffects:
             )
 
         await self._maybe_sample_server_health()
+        await self._record_turn(
+            result,
+            prompt=prompt,
+            wall_ms=wall_ms,
+            config_overrides=config_overrides,
+            purpose="action_inference",
+            endpoint=str(
+                (self._llmvp_domains.get(domain) or {}).get("endpoint")
+                or self._llmvp_endpoint
+            ),
+            domain=domain,
+            static_prefix=static_prefix,
+            flow_key=flow_key,
+        )
         return result
 
     async def _maybe_sample_server_health(self) -> None:
@@ -1682,7 +1894,16 @@ class LocalEffects:
         start = time.monotonic()
         prompt_preview = prompt[:80] + "..." if len(prompt) > 80 else prompt
         inference = self._get_inference()
-        result = await inference.session_turn(session_id, prompt, config_overrides)
+        result = await inference.session_turn(
+            session_id,
+            prompt,
+            config_overrides,
+            session_used=self.session_tokens(session_id),
+        )
+        if not result.error:
+            self._session_tokens[session_id] = int(result.prompt_tokens or 0) + int(
+                result.generated_tokens or 0
+            )
 
         if result.error:
             self._log_entry(
@@ -1699,99 +1920,35 @@ class LocalEffects:
                 start,
             )
 
-        # Emit a trace event when called from inside a bound step
-        # context. See step_context docstring for why this uses
-        # contextvars rather than an explicit trace_context parameter.
-        ctx = get_step_context()
-        if ctx is not None:
-            # Cache-aware tokens: prefer real backend counts when LLMVP reports
-            # them; fall back to whitespace. cached_prefix for a session is the
-            # full restored KV occupancy (static + prior turns) — the tokens the
-            # model skipped prefilling this turn.
-            ws_in = count_tokens(prompt)
-            ws_out = count_tokens(result.text) if result.text else 0
-            gen = int(getattr(result, "generated_tokens", 0) or 0)
-            cp = int(getattr(result, "cached_prefix_tokens", 0) or 0)
-            fp = int(getattr(result, "fresh_prefill_tokens", 0) or 0)
-            tokens_in = (cp + fp) if (cp or fp) else ws_in
-            tokens_out = gen if gen else ws_out
-            prompt_content = ""
-            response_content = ""
-            if self.trace_prompts:
-                prompt_content = prompt
-                response_content = result.text or ""
-            # Capture chain-of-thought when tracing is enabled. The runtime
-            # does this for the stateless run_inference path, but session
-            # turns emit their OWN trace row here (the runtime deliberately
-            # skips emitting for session_id to avoid double-counting), so
-            # without this the entire diagnosis/AST-edit reasoning stream —
-            # the bulk of session inference — has an empty thinking_content.
-            # Gated on trace_thinking, independent of trace_prompts, exactly
-            # like the run_inference path.
-            thinking_content = ""
-            if self.trace_thinking:
-                try:
-                    # CORRELATE ON THE SESSION ID. Fetching with "" was
-                    # measured 0-for-2444 on the session path (93% of a run's
-                    # inference) while the stateless path captured fine, and
-                    # the reason is in the tracker's own branch order:
-                    #
-                    #   if s.active:
-                    #       if not request_id or request_id == s.request_id:
-                    #           return s.thinking_content   # reset to "" by start()
-                    #   if not request_id or request_id == self._last_request_id:
-                    #       return self._last_thinking      # the promoted text
-                    #
-                    # An empty id is falsy, so it ALWAYS matches the active
-                    # generation — and any generation that starts between this
-                    # turn's FSM extraction and this fetch shadows the promoted
-                    # content with an empty live buffer. promote_thinking() was
-                    # written to fix exactly this and could never be reached.
-                    #
-                    # Session generations are labelled with the SESSION ID (see
-                    # _request_identity in effects/inference.py: turns are
-                    # sequential and single-driver, so LLMVP uses the session id
-                    # rather than minting a second key), so it is the correct
-                    # correlation key here.
-                    thinking_content = await self.fetch_thinking(session_id)
-                except Exception:  # noqa: BLE001 - non-critical, never break inference
-                    thinking_content = ""
-            cfg = config_overrides or {}
-            try:
-                temperature_val = float(cfg.get("temperature", 0) or 0)
-            except (TypeError, ValueError):
-                temperature_val = 0.0
-            try:
-                max_tokens_val = int(cfg.get("max_tokens", 0) or 0)
-            except (TypeError, ValueError):
-                max_tokens_val = 0
-            await self.emit_trace(
-                InferenceCall(
-                    mission_id=ctx.get("mission_id", ""),
-                    cycle=ctx.get("cycle", 0),
-                    flow=ctx.get("flow", ""),
-                    step=ctx.get("step", ""),
-                    tokens_in=tokens_in,
-                    tokens_out=tokens_out,
-                    wall_ms=(time.monotonic() - start) * 1000,
-                    temperature=temperature_val,
-                    max_tokens=max_tokens_val,
-                    purpose="session_inference",
-                    thinking_content=thinking_content,
-                    prompt_content=prompt_content,
-                    response_content=response_content,
-                    truncated=getattr(result, "truncated", False),
-                    cached_prefix_tokens=cp,
-                    fresh_prefill_tokens=fp,
-                    generated_tokens=gen,
-                    cache_hit=bool(getattr(result, "cache_hit", False)),
-                    flow_key=str(getattr(result, "flow_key", "") or ""),
-                    prefill_ms=float(getattr(result, "prefill_ms", 0.0) or 0.0),
-                    decode_ms=float(getattr(result, "decode_ms", 0.0) or 0.0),
-                    reasoning=str(cfg.get("reasoning", "") or ""),
-                )
-            )
+        await self._record_turn(
+            result,
+            prompt=prompt,
+            wall_ms=(time.monotonic() - start) * 1000,
+            config_overrides=config_overrides,
+            purpose="session_inference",
+            session_id=session_id,
+            endpoint=self._llmvp_endpoint,
+        )
+        return result
 
+    async def rewind_inference_session_turn(
+        self, session_id: str, turn_id: int
+    ) -> dict:
+        """Take back the session's last turn (see the protocol). Same client
+        as session_inference — the server that holds the session."""
+        start = time.monotonic()
+        inference = self._get_inference()
+        rewind = getattr(inference, "rewind_session_turn", None)
+        if rewind is None:
+            result = {"ok": False, "reason": "client has no rewind"}
+        else:
+            result = await rewind(session_id, turn_id)
+        self._log_entry(
+            "rewind_inference_session_turn",
+            f"session={session_id}, turn={turn_id}",
+            f"{result.get('ok')} ({result.get('reason')})",
+            start,
+        )
         return result
 
     async def end_inference_session(self, session_id: str) -> bool:
@@ -1806,6 +1963,7 @@ class LocalEffects:
         start = time.monotonic()
         inference = self._get_inference()
         success = await inference.end_session(session_id)
+        self._session_tokens.pop(session_id, None)
         self._log_entry(
             "end_inference_session",
             f"session={session_id}",
@@ -2047,33 +2205,6 @@ class LocalEffects:
             )
         return success
 
-    async def save_artifact(self, artifact) -> bool:
-        start = time.monotonic()
-        pm = self._get_persistence()
-        success = pm.save_artifact(artifact)
-        self._log_entry(
-            "save_artifact", f"task={artifact.task_id}", str(success), start
-        )
-        return success
-
-    async def load_artifact(self, task_id: str):
-        start = time.monotonic()
-        pm = self._get_persistence()
-        result = pm.load_artifact(task_id)
-        self._log_entry(
-            "load_artifact", f"task={task_id}", f"found={result is not None}", start
-        )
-        return result
-
-    async def list_artifacts(self, filter_str: str | None = None) -> list[str]:
-        start = time.monotonic()
-        pm = self._get_persistence()
-        result = pm.list_artifacts(filter_str)
-        self._log_entry(
-            "list_artifacts", f"filter={filter_str!r}", f"{len(result)} files", start
-        )
-        return result
-
     async def read_state(self, key: str):
         start = time.monotonic()
         pm = self._get_persistence()
@@ -2093,32 +2224,65 @@ class LocalEffects:
     # ── Tracing ───────────────────────────────────────────────────
 
     async def emit_trace(self, event: TraceEvent) -> None:
-        """Append a trace event to the buffer and fold it into the ledger.
+        """Record a trace event: a row in the history store and a fold into
+        the ledger — from the SAME dict, so the two can never disagree.
 
-        The ledger is the single choke point for the finite breakdown — every
-        event passes through here, so no event-emit site needs to know about
-        the summary. The run span starts at the first event."""
+        The store opens on the first event (it needs a mission id). Turn rows
+        are flushed the moment they are recorded; events at unit-of-work
+        boundaries (step_end, cycle_end, flow_return). The run span starts at
+        the first event."""
         if self._run_start_monotonic is None:
             self._run_start_monotonic = time.monotonic()
         if not self._traced_mission_id and getattr(event, "mission_id", ""):
             self._traced_mission_id = event.mission_id
+        store = self.history_open(
+            self._traced_mission_id or getattr(event, "mission_id", "")
+        )
+        row: dict | None = None
+        if store is not None:
+            try:
+                row = store.ingest(event)
+            except Exception:  # noqa: BLE001
+                # Loud, not fatal: the ledger still gets the event.
+                logger.warning(
+                    "history: ingest failed for %r",
+                    getattr(event, "event_type", "?"),
+                    exc_info=True,
+                )
+                row = None
+        if row is None:
+            row = event.to_dict()
         try:
-            fold_event(self._ledger, event.to_dict())
+            fold_event(self._ledger, row)
         except Exception:
             # Telemetry must never break a run — a malformed event just
             # doesn't contribute to the ledger.
             logger.debug(
                 "ledger fold skipped for %r", getattr(event, "event_type", "?")
             )
-        self._trace_buffer.append(event)
+        if store is not None and self._history_run_start_pending:
+            self._history_run_start_pending = False
+            # Attribute the run's first tree to the event that opened the
+            # store (the loop's first cycle_start): checkpointed with no ctx,
+            # the run_start commit carried no cycle, flow or step at all.
+            await store.checkpoint(
+                "run_start",
+                ctx={
+                    "cycle": getattr(event, "cycle", None),
+                    "flow": getattr(event, "flow", "") or "",
+                    "step": getattr(event, "step", "") or "",
+                    "branch": getattr(event, "branch", "") or "",
+                },
+            )
+        if store is not None and store.wants_flush(event):
+            await store.flush(str(getattr(event, "event_type", "")))
 
     def _write_summary(self) -> None:
-        """Atomically (re)write the <trace>.summary.json companion — the
-        canonical machine-readable head. Rewritten each flush so the last one
-        is the final summary; trace_cli renders the markdown from it."""
-        import json
-
-        if self._trace_file_path is None or self._run_start_monotonic is None:
+        """Atomically (re)write the run's summary head
+        (``.agent/history/runs/<run_id>.summary.json``) — the canonical
+        machine-readable finite breakdown, rewritten each flush so the last
+        one is the final summary; trace_cli renders the markdown from it."""
+        if self._history is None or self._run_start_monotonic is None:
             return
         total_wall_ms = (time.monotonic() - self._run_start_monotonic) * 1000
         summary = finalize_ledger(self._ledger, total_wall_ms)
@@ -2127,50 +2291,18 @@ class LocalEffects:
             total_wall_ms=round(total_wall_ms, 1),
             summary=summary,
         )
-        path = self._trace_file_path[:-6] + ".summary.json"  # strip ".jsonl"
-        tmp = path + ".tmp"
-        try:
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(record.to_dict(), f, indent=2)
-            os.replace(tmp, path)
-        except Exception:
-            logger.debug("summary.json write skipped", exc_info=True)
+        self._history.write_summary(
+            {**record.to_dict(), "run_id": self._history.run_id}
+        )
 
     async def flush_traces(self) -> None:
-        """Write buffered trace events to JSONL, accumulate flush time, and
-        refresh the summary.json head.
-
-        File path is .agent/traces/{mission_id}_{timestamp}.jsonl. Append mode
-        so multiple flushes write to the same file per run. The mission_id is
-        the first non-empty one seen (not the first buffered event), so a
-        bootstrap event with an empty id doesn't strand the file as unknown_*.
-        """
-        import json
-
-        if not self._trace_buffer:
+        """Cycle-boundary flush: write buffered rows, fold this cycle's part
+        files into one, refresh the summary head. Flush time is attributed
+        to the ledger so it never lands in the residual."""
+        if self._history is None:
             return
-
         flush_start = time.monotonic()
-
-        # Determine file path on first flush (mission_id known by now).
-        if self._trace_file_path is None:
-            traces_dir = os.path.join(self._working_dir, ".agent", "traces")
-            os.makedirs(traces_dir, exist_ok=True)
-            mission_id = (
-                self._traced_mission_id or self._trace_buffer[0].mission_id or "unknown"
-            )
-            ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-            self._trace_file_path = os.path.join(traces_dir, f"{mission_id}_{ts}.jsonl")
-
-        with open(self._trace_file_path, "a", encoding="utf-8") as f:
-            for event in self._trace_buffer:
-                f.write(json.dumps(event.to_dict()) + "\n")
-
-        n = len(self._trace_buffer)
-        self._trace_buffer.clear()
-        # Self-time the flush (JSONL write) into the ledger before the summary
-        # recompute, so flush_ms is attributed rather than landing in residual.
+        await self._history.flush("cycle_end")
+        await self._history.compact("cycle")
         ledger_add_ms(self._ledger, "flush", (time.monotonic() - flush_start) * 1000)
         self._write_summary()
-
-        logger.debug("Flushed %d trace events to %s", n, self._trace_file_path)

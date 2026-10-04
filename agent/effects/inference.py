@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import logging
 import asyncio
+import inspect
+import time
 import os
 import re
 import uuid
@@ -35,10 +37,16 @@ def _reasoning_off() -> bool:
     return os.environ.get("OURO_REASONING_OFF", "") == "1"
 
 
-# GraphQL query for non-streaming completion
-COMPLETION_QUERY = """
-query Completion($request: CompletionRequest!) {
-    completion(request: $request) {
+# The sampling temperature LLMVP ACTUALLY used (llmvp 2026-09-26). LLMVP owns
+# the model's parameters — it floors, deepens and re-drives — so the number a
+# turn record should carry is the server's, not the one this client asked for.
+# A server that predates the field fails the whole query on it, so each call
+# path drops it once and remembers (InferenceEffect._temperature_field_supported),
+# independently of the session turn-id fields.
+_TEMPERATURE_FIELD = """
+        temperature"""
+
+_COMPLETION_FIELDS = """
         text
         tokensGenerated
         finished
@@ -51,10 +59,23 @@ query Completion($request: CompletionRequest!) {
         cacheHit
         flowKey
         prefillMs
-        decodeMs
-    }
-}
-"""
+        decodeMs"""
+
+
+def _completion_query(temperature: bool = True) -> str:
+    """The non-streaming completion query, with or without the temperature
+    field (an older LLMVP rejects it)."""
+    return (
+        "query Completion($request: CompletionRequest!) {\n"
+        "    completion(request: $request) {"
+        + _COMPLETION_FIELDS
+        + (_TEMPERATURE_FIELD if temperature else "")
+        + "\n    }\n}\n"
+    )
+
+
+# GraphQL query for non-streaming completion
+COMPLETION_QUERY = _completion_query()
 
 # Vision completion. A MUTATION, not a query, and a separate pipeline from
 # `completion`: the mtmd handler builds its own prompt from the model's chat
@@ -219,22 +240,39 @@ mutation PurgeSnapshot($key: String!) {
 }
 """
 
-SESSION_COMPLETION_QUERY = """
-query SessionCompletion($request: SessionTurnRequest!) {
-    sessionCompletion(request: $request) {
-        text
-        tokensGenerated
-        finished
-        truncated
-        promptTokens
-        cachedPrefixTokens
-        freshPrefillTokens
-        generatedTokens
-        reasoningTokens
-        cacheHit
-        flowKey
-        prefillMs
-        decodeMs
+_SESSION_COMPLETION_FIELDS = _COMPLETION_FIELDS
+# Turn identity + commit state (llmvp 2026-09-22). A server that predates them
+# fails the whole query on the unknown fields, so session_turn falls back to
+# the legacy field set once and remembers.
+_SESSION_TURN_FIELDS = """
+        sessionTurnId
+        turnCommitted
+        endReason"""
+
+
+def _session_query(turn_fields: bool = True, temperature: bool = True) -> str:
+    """The session-turn query. The turn-id fields and the temperature field
+    are dropped independently: an LLMVP can know one and not the other."""
+    return (
+        "query SessionCompletion($request: SessionTurnRequest!) {\n"
+        "    sessionCompletion(request: $request) {"
+        + _SESSION_COMPLETION_FIELDS
+        + (_SESSION_TURN_FIELDS if turn_fields else "")
+        + (_TEMPERATURE_FIELD if temperature else "")
+        + "\n    }\n}\n"
+    )
+
+
+SESSION_COMPLETION_QUERY = _session_query()
+SESSION_COMPLETION_QUERY_LEGACY = _session_query(turn_fields=False)
+
+REWIND_SESSION_TURN_MUTATION = """
+mutation RewindSessionTurn($sessionId: String!, $turnId: Int!) {
+    rewindSessionTurn(sessionId: $sessionId, turnId: $turnId) {
+        ok
+        reason
+        turnCount
+        tokens
     }
 }
 """
@@ -401,6 +439,20 @@ def _degenerate_reason(error_msg: str) -> str:
 _DEGENERATE_TOKENS = re.compile(r"aborted after (\d+) generated tokens")
 
 
+def _unknown_turn_fields(error: str | None) -> bool:
+    """A GraphQL validation error naming one of the session-turn fields — the
+    signature of an LLMVP that predates them."""
+    if not error or "Cannot query field" not in error:
+        return False
+    return any(f in error for f in ("sessionTurnId", "turnCommitted", "endReason"))
+
+
+def _unknown_temperature_field(error: str | None) -> bool:
+    """A GraphQL validation error naming the response's temperature field —
+    an LLMVP that predates reporting it."""
+    return bool(error) and "Cannot query field 'temperature'" in error
+
+
 def _degenerate_tokens(error_msg: str) -> int | None:
     m = _DEGENERATE_TOKENS.search(error_msg or "")
     return int(m.group(1)) if m else None
@@ -435,13 +487,19 @@ def _degenerate_tokens(error_msg: str) -> int | None:
 # never touches the tracker — which is the case they were written for anyway.
 SESSION_RUNAWAY_TOKEN_CEILING = 32768
 COMPLETION_RUNAWAY_TOKEN_CEILING = 49152
-# Guard G1 — last-resort prompt-size backstop (~120k tokens). The per-source
-# guards (scan skeleton G2, terminal/session bounds G3/G4) should keep every
-# prompt far under this; if one slips through, the dynamic prompt is bounded and
-# a LOUD warning is logged rather than crashing the server (the llama_decode
-# code -1 / 29M-token overflow). Conservative so it protects the smallest context
-# window (gpt-oss 131k); legitimate prompts never approach it after the guards.
+# Guard G1 — last-resort prompt-size backstop. The per-source fits
+# (agent/context_fit.py) keep every prompt inside the window; if one slips
+# through, the dynamic prompt is bounded, a LOUD warning is logged and a
+# PromptBackstop row is recorded, rather than crashing the server (the
+# llama_decode code -1 / 29M-token overflow). Since 2026-09-26 it is sized to
+# the SERVING window (health.nCtxSeq) less what the context already holds and
+# the turn's output reserve, and it covers session turns. This fixed character
+# ceiling is only the fallback when the server does not report a window, or
+# the call targets a named registry model the local health does not describe.
 PROMPT_CHAR_CEILING = 480_000
+# The serving window is re-read at most this often — it changes only when
+# the served model does.
+_WINDOW_TTL_S = 60.0
 
 
 _LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1", "[::1]")
@@ -492,6 +550,12 @@ class InferenceEffect:
         self._model_default_temperature = model_default_temperature
         self._model = model
         self._client: httpx.AsyncClient | None = None
+        # Serving window cache for the prompt backstop (see fit_prompt).
+        self._window: int = 0
+        self._window_at: float = 0.0
+        # Called with the PromptBackstop fields when the backstop fires;
+        # LocalEffects records it as a history event.
+        self.on_backstop: Any = None
         # Session ids this client currently holds open. A memoryful session
         # CHECKS OUT its backend instance and keeps it across turns (seq 0
         # stays resident so the next turn skips prefill) — see the checkout
@@ -499,6 +563,13 @@ class InferenceEffect:
         # non-empty we are holding a seat, and a "busy" verdict on any other
         # call may be us blocking ourselves. Used by _is_self_deadlock.
         self._open_sessions: set[str] = set()
+        # Whether the server answers the session query's turn fields
+        # (sessionTurnId/turnCommitted/endReason). None = not yet known; False
+        # = an older LLMVP, so session_turn sends the legacy field set.
+        self._session_turn_fields_supported: bool | None = None
+        # Whether the server reports the temperature it actually used. None =
+        # not yet known; False = an older LLMVP, so both query paths omit it.
+        self._temperature_field_supported: bool | None = None
         # Health-watchdog timing. INSTANCE attributes, not function-local
         # constants, so tests can shrink them (TESTING.md: "timing knobs used
         # by drains/settles should be instance attributes"). The watchdog is
@@ -779,6 +850,141 @@ class InferenceEffect:
             "this; re-query a narrower slice] …\n\n" + prompt[-tail:]
         )
 
+    async def _serving_window(self) -> int:
+        """The per-sequence window LLMVP reports (``health.nCtxSeq``), cached
+        for _WINDOW_TTL_S. 0 when the server does not say, or when this
+        effect targets a named registry model — the local health does not
+        describe a remote model's window."""
+        if self._model:
+            return 0
+        now = time.monotonic()
+        if self._window and now - self._window_at < _WINDOW_TTL_S:
+            return self._window
+        try:
+            n = int((await self.cache_health()).get("nCtxSeq") or 0)
+        except Exception:  # noqa: BLE001 — the guard never fails a call
+            n = 0
+        self._window, self._window_at = n, now
+        return n
+
+    async def fit_prompt(
+        self,
+        prompt: str,
+        static_prefix: str | None = None,
+        *,
+        used: int = 0,
+        config_overrides: dict | None = None,
+        session_id: str = "",
+    ) -> str:
+        """Guard G1 against the serving window. The prompt unchanged when it
+        fits beside ``used`` (what the context already holds — a session's
+        occupancy) and the output reserve (the turn's max_tokens, else
+        context_fit.OUTPUT_RESERVE); otherwise its dynamic part bounded
+        head + tail with an in-band marker, a loud warning, and a
+        PromptBackstop report. The static prefix is never cut (it is the
+        cacheable part). Unknown window → the fixed character ceiling.
+
+        Cheap on the common path: a token covers at least one character for
+        the tokenizers served, so a prompt with fewer characters (x the
+        chat-template margin) than free tokens fits without asking the
+        server to count."""
+        from agent.context_fit import (
+            OUTPUT_RESERVE,
+            UNKNOWN_WINDOW,
+            estimate_tokens,
+        )
+        from agent.scheduler.capacity_model import TOKENIZE_MARGIN
+
+        overrides = config_overrides or {}
+        mt = overrides.get("max_tokens")
+        reserve = int(mt) if mt else OUTPUT_RESERVE
+        static = static_prefix or ""
+        upper = (len(prompt) + len(static)) * TOKENIZE_MARGIN
+        # Fits even the smallest window any configured model serves: no need
+        # to ask the server which window this one is.
+        if upper + int(used or 0) + reserve <= UNKNOWN_WINDOW:
+            return prompt
+        window = 0 if overrides.get("model") else await self._serving_window()
+        if window <= 0:
+            return self._guard_prompt_size(prompt, static_prefix)
+        free = window - int(used or 0) - reserve
+        if upper <= free:
+            return prompt
+        counts = await self.token_count([static, prompt])
+        if len(counts) == 2:
+            static_tok = int(counts[0] * TOKENIZE_MARGIN)
+            prompt_tok = int(counts[1] * TOKENIZE_MARGIN)
+            how = "exact"
+        else:
+            static_tok, prompt_tok = estimate_tokens(static), estimate_tokens(prompt)
+            how = "estimated"
+        if static_tok + prompt_tok <= free:
+            return prompt
+        report = {
+            "session_id": session_id,
+            "window": window,
+            "used": int(used or 0),
+            "reserve": reserve,
+            "static_tokens": static_tok,
+            "prompt_tokens": prompt_tok,
+            "prompt_chars": len(prompt),
+            "how": how,
+        }
+        budget_tok = free - static_tok
+        if budget_tok <= 0:
+            logger.warning(
+                "PROMPT-SIZE BACKSTOP: the context is already full — %d used + "
+                "%d reserve + %d static of a %d window. Sending the %d-token "
+                "prompt as it is; the server will refuse it. An upstream fit "
+                "missed: investigate the source.",
+                int(used or 0),
+                reserve,
+                static_tok,
+                window,
+                prompt_tok,
+            )
+            await self._report_backstop(
+                {**report, "kept_chars": len(prompt), "bounded": False}
+            )
+            return prompt
+        marker_chars = 200
+        keep = max(0, int(len(prompt) * budget_tok / max(prompt_tok, 1)) - marker_chars)
+        head = int(keep * 0.6)
+        tail = keep - head
+        omitted = len(prompt) - head - tail
+        logger.warning(
+            "PROMPT-SIZE BACKSTOP fired: a %d-token prompt (%s) beside %d used, "
+            "%d static and %d reserve in a %d window — bounding %d chars of the "
+            "dynamic part. An upstream fit missed: investigate the source.",
+            prompt_tok,
+            how,
+            int(used or 0),
+            static_tok,
+            reserve,
+            window,
+            omitted,
+        )
+        bounded = prompt[
+            :head
+        ] + f"\n\n… [BACKSTOP: {omitted} chars bounded to fit the {window:,}-token " "window — an upstream fit missed this; re-query a narrower slice] …\n\n" + (
+            prompt[-tail:] if tail else ""
+        )
+        await self._report_backstop(
+            {**report, "kept_chars": head + tail, "bounded": True}
+        )
+        return bounded
+
+    async def _report_backstop(self, fields: dict) -> None:
+        cb = self.on_backstop
+        if cb is None:
+            return
+        try:
+            r = cb(fields)
+            if inspect.isawaitable(r):
+                await r
+        except Exception:  # noqa: BLE001 — a report never fails the call
+            logger.debug("backstop report failed", exc_info=True)
+
     async def run_inference(
         self,
         prompt: str,
@@ -804,9 +1010,12 @@ class InferenceEffect:
         """
         client = await self._get_client()
 
-        # Last-resort prompt-size backstop (Guard G1) — keep the static prefix
-        # intact, bound only the dynamic tail if an upstream guard missed.
-        prompt = self._guard_prompt_size(prompt, static_prefix)
+        # Last-resort prompt-size backstop (Guard G1), sized to the serving
+        # window — keep the static prefix intact, bound only the dynamic part
+        # if an upstream fit missed.
+        prompt = await self.fit_prompt(
+            prompt, static_prefix, config_overrides=config_overrides
+        )
 
         # Build the request variables
         request_vars: dict[str, Any] = {"prompt": prompt}
@@ -848,8 +1057,9 @@ class InferenceEffect:
         if model:
             request_vars["model"] = str(model)
 
+        with_temperature = self._temperature_field_supported is not False
         request_body = {
-            "query": COMPLETION_QUERY,
+            "query": _completion_query(with_temperature),
             "variables": {"request": request_vars},
         }
 
@@ -857,11 +1067,26 @@ class InferenceEffect:
         # completion ceiling is the FALLBACK bound for servers that cannot name
         # the request; where LLMVP can, its repetition and long-cycle guards
         # own runaways and the watchdog only checks liveness.
-        return await self._request_with_health_watchdog(
+        result = await self._request_with_health_watchdog(
             client,
             request_body,
             runaway_token_ceiling=COMPLETION_RUNAWAY_TOKEN_CEILING,
         )
+        if with_temperature and _unknown_temperature_field(result.error):
+            # Validation rejected the query before anything ran, so re-sending
+            # without the field is safe.
+            logger.warning(
+                "LLMVP predates reporting the temperature it used — not asking"
+            )
+            self._temperature_field_supported = False
+            request_body["query"] = _completion_query(False)
+            result = await self._request_with_health_watchdog(
+                client,
+                request_body,
+                runaway_token_ceiling=COMPLETION_RUNAWAY_TOKEN_CEILING,
+            )
+        result.temperature_sent = request_vars.get("temperature")
+        return result
 
     async def run_vision(
         self,
@@ -1119,6 +1344,10 @@ class InferenceEffect:
                     flow_key=completion.get("flowKey", "") or "",
                     prefill_ms=completion.get("prefillMs", 0.0) or 0.0,
                     decode_ms=completion.get("decodeMs", 0.0) or 0.0,
+                    session_turn_id=completion.get("sessionTurnId"),
+                    turn_committed=bool(completion.get("turnCommitted", True)),
+                    end_reason=completion.get("endReason", "") or "",
+                    temperature=completion.get("temperature"),
                 )
 
             except httpx.ConnectError as e:
@@ -1519,13 +1748,27 @@ class InferenceEffect:
         session_id: str,
         prompt: str,
         config_overrides: dict | None = None,
+        *,
+        session_used: int = 0,
     ) -> InferenceResult:
         """Run a turn within a memoryful session via GraphQL query.
+
+        ``session_used`` is what the session already holds (prompt +
+        generated after its last turn); the prompt backstop sizes the new
+        turn against what is left of the window. Session turns had no
+        backstop before 2026-09-26 — and the overflow that lost a verdict
+        (262,715 of a 262,144 window) was a session turn.
 
         Returns:
             InferenceResult with the model's response.
         """
         client = await self._get_client()
+        prompt = await self.fit_prompt(
+            prompt,
+            used=session_used,
+            config_overrides=config_overrides,
+            session_id=session_id,
+        )
 
         request_vars: dict[str, Any] = {
             "sessionId": session_id,
@@ -1555,8 +1798,10 @@ class InferenceEffect:
             if config_overrides.get("reasoning") and not _reasoning_off():
                 request_vars["reasoning"] = str(config_overrides["reasoning"])
 
+        legacy = self._session_turn_fields_supported is False
+        with_temperature = self._temperature_field_supported is not False
         request_body = {
-            "query": SESSION_COMPLETION_QUERY,
+            "query": _session_query(not legacy, with_temperature),
             "variables": {"request": request_vars},
         }
 
@@ -1575,6 +1820,32 @@ class InferenceEffect:
             response_key="sessionCompletion",
             runaway_token_ceiling=SESSION_RUNAWAY_TOKEN_CEILING,
         )
+        drop_turn = not legacy and _unknown_turn_fields(result.error)
+        drop_temperature = with_temperature and _unknown_temperature_field(result.error)
+        if drop_turn or drop_temperature:
+            # An older server: GraphQL validation rejected the query before
+            # anything ran, so re-sending without the unknown fields is safe.
+            if drop_turn:
+                logger.warning(
+                    "LLMVP predates session turn ids — using the legacy session query"
+                )
+                self._session_turn_fields_supported = False
+            if drop_temperature:
+                logger.warning(
+                    "LLMVP predates reporting the temperature it used — not asking"
+                )
+                self._temperature_field_supported = False
+            request_body["query"] = _session_query(
+                self._session_turn_fields_supported is not False,
+                self._temperature_field_supported is not False,
+            )
+            result = await self._request_with_health_watchdog(
+                client,
+                request_body,
+                response_key="sessionCompletion",
+                runaway_token_ceiling=SESSION_RUNAWAY_TOKEN_CEILING,
+            )
+        result.temperature_sent = request_vars.get("temperature")
         # STALENESS ESCAPE. A session can die server-side without anyone
         # calling end_session — expiry, an eviction, a server bounce. The seat
         # went with it, so a claim we still hold is a lie, and _is_self_deadlock
@@ -1585,6 +1856,36 @@ class InferenceEffect:
         if err and ("not found" in err or "expired" in err or "unknown session" in err):
             self._open_sessions.discard(session_id)
         return result
+
+    async def rewind_session_turn(self, session_id: str, turn_id: int) -> dict:
+        """Take back the session's last turn (by the id the turn returned).
+
+        Best-effort by contract: any failure — including a server without the
+        mutation — comes back as ``{"ok": False, "reason": ...}``, never an
+        exception, so a caller's retry proceeds exactly as it did before
+        rewinds existed."""
+        client = await self._get_client()
+        try:
+            response = await client.post(
+                self._endpoint,
+                json={
+                    "query": REWIND_SESSION_TURN_MUTATION,
+                    "variables": {"sessionId": session_id, "turnId": int(turn_id)},
+                },
+            )
+            response.raise_for_status()
+            data = response.json()
+            if "errors" in data:
+                return {"ok": False, "reason": f"errors: {data['errors']}"[:300]}
+            r = data["data"]["rewindSessionTurn"]
+            return {
+                "ok": bool(r.get("ok")),
+                "reason": str(r.get("reason", "")),
+                "turn_count": int(r.get("turnCount", 0) or 0),
+                "tokens": int(r.get("tokens", 0) or 0),
+            }
+        except Exception as e:  # noqa: BLE001 — best-effort by contract
+            return {"ok": False, "reason": f"error: {e}"[:300]}
 
     async def end_session(self, session_id: str) -> bool:
         """End a memoryful session via GraphQL mutation."""
