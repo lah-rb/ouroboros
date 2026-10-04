@@ -201,6 +201,17 @@ class LlamaCppBackend(BaseBackend):
     snapshotting of the static context.
     """
 
+    # LLMVP's own per-slot attributes, which a pool slot must not inherit from
+    # the primary it is shallow-copied from (_create_shared_instance): the
+    # slot's persona comes from its assignment, its static identity from its
+    # own warm-up, and a turn-checkpoint store is single-owner.
+    _SLOT_PRIVATE_ATTRS = (
+        "_persona",
+        "_static_len",
+        "_static_tokens",
+        "_turn_ckpt_store",
+    )
+
     # How often the JIT scaler checks for idle instances to tear down.
     # 60s (was 300): with one-per-tick LRU reaping gated on
     # instance_idle_ttl, decay is gradual — one instance per minute,
@@ -825,14 +836,30 @@ class LlamaCppBackend(BaseBackend):
         ``n_ctx_override`` shrinks this slot's context (the multi-persona
         memory knob — e.g. a 32k user-sim slot beside the 131k primary).
         """
-        import copy
-
         from llama_cpp import internals
 
         self._refuse_second_context_on_tensor_split("a pool seat")
 
-        # Shallow-copy the primary to inherit all config / metadata.
-        inst = copy.copy(primary)
+        # A REAL shallow copy of the primary, inheriting all config / metadata.
+        #
+        # copy.copy IS NOT ONE (found 2026-10-04): llama_cpp.Llama defines
+        # __getstate__/__setstate__, so copy.copy re-runs Llama.__init__ and
+        # LOADS THE MODEL AGAIN — every pool slot carried its own copy of the
+        # weights on `_model` while its context (below) was built on the
+        # primary's. Under the 0.3.46 fork's MMAP default the duplicate was
+        # mapped pages and went unnoticed; the 0.4.0 fork defaults load_mode to
+        # AUTO, the duplicates became private, and a 4-slot qwen3-next pool
+        # (46 GB of weights) built slots 1 and 2 as whole copies and failed on
+        # slot 3 — "Failed to load model from file" inside __setstate__, then a
+        # failed rollback (Mac, 2026-10-04). Same idiom as the vision instance:
+        # a new object over the primary's attributes, every per-instance one
+        # replaced below. The pickled path also never carried LLMVP's own
+        # per-slot attributes, so drop them: an inherited `_persona` would beat
+        # the slot's assignment, and a turn-checkpoint store is single-owner.
+        inst = object.__new__(type(primary))
+        inst.__dict__.update(primary.__dict__)
+        for attr in self._SLOT_PRIVATE_ATTRS:
+            inst.__dict__.pop(attr, None)
 
         # --- Replace mutable, per-instance objects ---
 
@@ -947,8 +974,9 @@ class LlamaCppBackend(BaseBackend):
         costs one small context plus the mmproj, never a second weight load.
 
         The handler is attached HERE and never to the primary: pool slots are
-        built with ``copy.copy(primary)``, which does not reset ``chat_handler``
-        — it would be aliased into every slot with a single-owner ``close()``.
+        shallow copies of the primary (``_create_shared_instance``), which do
+        not reset ``chat_handler`` — it would be aliased into every slot with a
+        single-owner ``close()``.
         """
         self._refuse_second_context_on_tensor_split("a vision context")
         from llama_cpp import internals
