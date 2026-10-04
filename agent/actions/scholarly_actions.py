@@ -674,6 +674,13 @@ EXTRACTION_OWNED_FIELDS = frozenset(
         # field absent from this set is dropped on write with no error.
         "content_bin",
         "content_priority",
+        # Chunk-level re-translation (agent/translation_rebank.py,
+        # 2026-10-04). `retranslate` is what makes the translate drain owe a
+        # finished translation a patch; dropped on write it would never run.
+        "retranslate",
+        "retranslate_failed",
+        "retranslate_info",
+        "rebank_info",
     }
 )
 

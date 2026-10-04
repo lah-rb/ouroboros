@@ -550,6 +550,50 @@ async def _load_parts(
     return parts
 
 
+async def _load_plan(effects, key: str, src: str) -> list[int] | None:
+    """The chunk PLAN banked for THIS source, or None.
+
+    Written by the re-bank (agent/translation_rebank.py) when a source
+    changed under banked or finished translation: the plan keeps the chunks
+    the carried parts were cut from, so only the changed spans are translated.
+    A plan line has no idx/n, so every parts reader skips it. Valid only for
+    the exact source it was made for (src_len) and when it tiles it."""
+    import json
+
+    from agent.translation_rebank import plan_fits
+
+    fc = await effects.read_file(_parts_path(key))
+    if not getattr(fc, "exists", False) or not fc.content.strip():
+        return None
+    plan = None
+    for line in fc.content.splitlines():
+        if '"plan"' not in line:
+            continue
+        try:
+            d = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        try:
+            if int(d.get("src_len", -1)) == len(src) and plan_fits(src, d.get("plan")):
+                plan = [int(x) for x in d["plan"]]
+        except (TypeError, ValueError):
+            continue
+    return plan
+
+
+def _retranslation_pending(record: dict) -> bool:
+    """A FINISHED translation the drain owes a patch: its source changed (an
+    OCR page repair) and the re-bank left the changed spans to translate.
+    The paper stays translated, with its current English, until the patch
+    books — curation, packing and export never see it as untranslated."""
+    return (
+        bool(record.get("retranslate"))
+        and bool(record.get("translated"))
+        and bool(record.get("md_path"))
+        and record.get("review_status") == "accepted"
+    )
+
+
 async def _load_all_parts(
     effects, key: str, n_chunks: int, src_len: int
 ) -> dict[int, list[str]]:
@@ -727,13 +771,17 @@ def select_translation_paper(databank: dict) -> str | None:
     eligible = [
         key
         for key, r in databank.items()
-        if _translation_pending(r) and key not in _TRANSLATE_CLAIMS
+        if (_translation_pending(r) or _retranslation_pending(r))
+        and key not in _TRANSLATE_CLAIMS
     ]
     if not eligible:
         return None
+    # Patches of finished translations go AFTER papers with no English at all:
+    # a first translation unlocks a pack, a patch only cleans text.
     return min(
         eligible,
         key=lambda k: (
+            _retranslation_pending(databank[k]),
             k in _TRANSLATE_DEFERRED,
             _tag_priority(databank[k]),
             _doc_size_hint(databank[k]),
@@ -774,13 +822,31 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
     if key is None:
         return _decline("nothing unclaimed pending")
     rec = dict(databank[key])
+    # A PATCH re-translates the changed spans of a finished translation
+    # (_retranslation_pending); it never un-books the English it replaces.
+    patch = _retranslation_pending(rec)
 
     md_rel = str(rec.get("md_path") or "")
     fc = await effects.read_file(md_rel)
     if not getattr(fc, "exists", False) or not fc.content.strip():
         return _decline(f"markdown unreadable: {md_rel}")
     src = fc.content
-    chunks = chunk_markdown(src)
+    # CHUNK PLAN (agent/translation_rebank.py): when the source changed under
+    # banked work, the re-bank recorded which spans the carried parts cover.
+    plan = await _load_plan(effects, key, src)
+    if plan:
+        from agent.translation_rebank import chunks_from_plan
+
+        chunks = chunks_from_plan(src, plan)
+    elif patch:
+        # The source moved again since the re-bank: a patch without its plan
+        # would re-translate the whole paper. Stand down; a re-bank re-arms it.
+        rec["retranslate"] = False
+        rec["retranslate_failed"] = "plan does not fit the current source; re-bank"
+        await append_extraction_records(effects, [rec])
+        return _decline(f"patch for {key} has no plan for its current source")
+    else:
+        chunks = chunk_markdown(src)
     # SOURCE-LOOP COLLAPSE (see _SOURCE_LOOP_WORDS) and TABLE DECORATION
     # (see _CELL_STYLE_RE): the prompt, the span checks, the salvage pieces
     # and the paper gate all see the cleaned chunk; n and len(src) — the
@@ -835,6 +901,14 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
         # decode loop or an omitted passage; temperature is the lever.
         temperature = 0.3 if attempts == 0 else 0.7
         sem = asyncio.Semaphore(_TRANSLATE_SEATS)
+
+        def _end_patch(why: str) -> str:
+            """A patch that cannot finish leaves the paper exactly as it was:
+            translated, its English on disk, its pack untouched. The bank
+            stays for inspection; the reason is recorded."""
+            rec["retranslate"] = False
+            rec["retranslate_failed"] = str(why)[:200]
+            return "patch_failed"
 
         # ROUND SLICE (the OCR drain's book-segment pattern). Papers over the
         # round budget make PROGRESS instead of blocking: translate up to
@@ -996,6 +1070,16 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
             attempts += 1
             rec["translate_attempts"] = attempts
             rec["translate_epoch"] = epoch
+            if patch and attempts >= TRANSLATE_MAX_ATTEMPTS:
+                _TRANSLATE_DEFERRED.discard(key)
+                status = _end_patch(f"no progress after {attempts} rounds: {what}")
+                await append_extraction_records(effects, [rec])
+                summary = {"paper": key, "chunks": n, "status": status, "reason": what}
+                return StepOutput(
+                    result=summary,
+                    observations=f"translate patch ended {key}: {what}",
+                    context_updates={"translate_summary": summary},
+                )
             if not done and attempts >= TRANSLATE_MAX_ATTEMPTS:
                 # Nothing of this paper has ever translated: retire it. The
                 # failures stay banked (parts file kept) for a repair pass.
@@ -1180,7 +1264,17 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
 
         rec["translate_attempts"] = attempts + 1  # an assembly is an attempt
         rec["translate_epoch"] = epoch
-        if gate["passed"] and not too_gappy:
+        if patch and (gaps or not gate["passed"]):
+            # A patch gets one assembly: its carried parts are bound to this
+            # epoch, and the warmer retry would re-translate the whole paper.
+            # Nor may it book a GAP: a source-language span where English
+            # stood is worse than the English it replaces. Either way the
+            # English already on disk stays.
+            status = _end_patch(
+                "; ".join(gate["problems"])
+                or f"{len(gaps)} of {n} chunks would be gaps"
+            )
+        elif gate["passed"] and not too_gappy:
             en_rel = (
                 md_rel[:-3] + ".en.md" if md_rel.endswith(".md") else md_rel + ".en"
             )
@@ -1200,7 +1294,20 @@ async def action_translate_drain_batch(step_input: StepInput) -> StepOutput:
             if not gaps:
                 # Nothing left to repair: reclaim the bank.
                 await effects.write_file(_parts_path(key), "")
-            await _book_pack_state_after_translation(effects, rec, "translated", "")
+            if patch:
+                # The pack was cut from the English this replaces; whether
+                # any of its values moved is a separate, targeted check —
+                # a patch never queues a whole repack on its own.
+                from datetime import datetime, timezone
+
+                rec["retranslate"] = False
+                rec["retranslate_failed"] = ""
+                rec["translation_quality"]["patched_at"] = datetime.now(
+                    timezone.utc
+                ).isoformat()
+                status = "patched"
+            else:
+                await _book_pack_state_after_translation(effects, rec, "translated", "")
         elif gate["passed"]:
             # Translated text is fine but too little of the paper is English.
             # Retired, with the bank and the gap list kept for repair.
