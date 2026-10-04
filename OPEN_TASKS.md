@@ -1240,3 +1240,72 @@ one-shot self-patch script, 413 lines of abandoned parallel implementation
 nothing imports, and invented `ruff.toml`/`pyproject.toml` keys. A
 dead-file/dead-config sweep at quality_gate (files no import reaches,
 config keys the tool would reject) is deterministic and needs no LLM.
+
+## 25. More swarm-capable models: fork 0.4.0 here, then a hybrid batched engine (operator, 2026-10-04)
+
+Scheduled in this ORDER (each step is the next one's prerequisite):
+
+**(a) Bring-up after the three-machine sync** — in progress 2026-10-04 (all
+three machines on one commit; see memory `three-machine-sync-2026-10-04`).
+
+**(b) Advance this machine and the 3060 box to the llama-cpp-python fork 0.4.0**
+(`ea19e8d1`, llama.cpp b11058 — the Mac's pin, `llmvp/pyproject.toml`). The Mac
+moved with no trouble (1,259 llmvp tests on Metal; API surface additive-only,
+62/62) and newer builds occasionally decode faster. Here it is a CUDA rebuild of
+the fork into llmvp's venv (never `uv sync`), then: muse's arch and mmproj
+(muse-glimmer is upstream since b10xxx), the DFlash hook (`_ctx.decode` patching,
+`inference/speculative_dflash.py`), batched vision, paddle and gemma/qwen3.5 on
+the box, the cuBLAS `LD_LIBRARY_PATH` pin. Watch the THREE default changes the
+Mac recorded in the pin comment — `load_mode` MMAP→AUTO is the one that bites:
+it is what exposed the pool slots' hidden weight reload (fixed c938664, a real
+shallow copy). Gate: both suites + a muse throughput spot-check against
+`muse-throughput-figures` / `muse-dflash-speculative-bench`.
+
+**(c) Hybrid batched engine, stateless subset — prototype and measure.**
+`decode_mode: batched` refuses every hybrid (`llama_cpp_backend.py`, "requires a
+plain-transformer model"), citing the 2026-07-02 matrix in
+`dev/archive/docs/CACHE_STATE.md`. But that matrix MEASURED qwen3-next (DeltaNet
+hybrid) as fully resident-capable: append-only residency and WHOLE-sequence
+`seq_cp` forks are clean, needle-verified; only per-turn state SURGERY corrupts
+recurrent state. The batched engine was validated on gpt-oss ten days later and
+excluded hybrids wholesale; nothing ever ran its loop on one. llama.cpp already
+hosts N recurrent sequences in one context (the qwen3-next pool load allocated
+12 recurrent cells for 12 seqs). What the engine does, per op
+(`inference/batched_engine.py`):
+
+| op | where | on hybrid memory |
+|---|---|---|
+| whole-seq rm + whole-seq cp (head fork into a seat, clear a seat, pin fork) | 1578, 1626, 1719, 1841 | SAFE (measured) |
+| tail rm `seq_rm(seq, pos, -1)` — `purge_to`, KV-pressure step-mark truncation | 271, 1134, 1195 | REFUSED — a recurrent state cannot be cut back |
+| window: middle rm + `seq_add` | 1659-1660 | untested and semantically wrong (state cannot forget the middle) |
+| partial pin `seq_cp(src, seq, 0, plen)` | 1707 | UNSAFE (no state stored at plen) |
+| head swap: `seq_rm(seq, 0, hlen)` + cp | 1873-1874 | IMPOSSIBLE (state absorbed the old head) |
+
+A stateless request (a translate chunk, a pack window) needs only the SAFE row.
+Design: a restricted batched mode for hybrids whose memory grants whole-seq ops
+(qwen3-next; check per arch): seats fork / append / clear; `purge_to` becomes a
+restore of a per-seat recurrent checkpoint taken at the head boundary — the
+Mac's turn rollback (`inference/turn_checkpoint.py`: `PARTIAL_ONLY` per-seq
+state, ~113 MiB on qwen4exp, flat in n_ctx; needs fork 0.4.0, hence (b)) per
+seq id instead of seq 0 — or a plain evict-and-readmit; KV pressure evicts and
+re-admits whole streams (per-step checkpoints would cost ~75 MiB per seat per
+step); windowing, partial pins and head swap are refused on hybrids (sessions
+stay on pool / replay). Risk to measure: llama.cpp splits ubatches EQUALLY
+across sequences for recurrent memory, which may tax chunked prefill beside
+decode streams. Validation, reusing the devstral harnesses
+(`dev/batched_parity.py`, `llmvp/tests/test_batched_engine.py`):
+batched(W=1) ≡ pool(1) byte-identical near-greedy; concurrent identical streams
+≡ each other ≡ reference; then a W 1→8 decode-scaling sweep on the Mac and the
+translate bench (`dev/bench_translate_models.py`, 34 seeded chunks) against the
+POOL baseline. Why it is worth it: on the M1 a 3-context pool ran gpt-oss at
+~16 tok/s aggregate with a latch death where the batched engine carried 86
+(CACHE_STATE, JIT contrast at 131k) — contexts are the expensive unit, seats are
+free — and a pool needs Metal residency sets off. Success: the qwen3-next
+translate lane on batched seats beats the pool's aggregate chunks/h at equal
+gate pass, and the engine admits a second hybrid family.
+
+**(d) The thinking-swap encore on hybrids** — the reasoning head swap (prefix
+replacement) cannot work on recurrent state, but stateless turns need no
+replacement: keep one head SEQUENCE per thinking level (as persona heads are) and
+fork the right one at request start; a mid-session switch is "rewind to the head
+boundary (checkpoint), fork the other head". Study after (c) lands.
