@@ -1,0 +1,41 @@
+# qwen3-next 80B-A3 on the Mac, POOLED — several requests at once (2026-10-04).
+#
+# The remote translate lane runs on ONE seat of this model (pool decode,
+# max_concurrent_requests 1: ~60 tok/s decode, 1,300 tok/s prefill; the bench
+# baseline read 60 chunks/h). The queue is about to grow (chunk-level patches of
+# ~200 translated papers, ~11 M source chars, plus the non-English papers of the
+# re-OCR'd failed pile). The question (operator) is what several requests at
+# once buy: aggregate chunks/h at 1, 2 and 4 (dev/bench_translate_models.py,
+# arm mac_pool).
+#
+# POOL, NOT BATCHED. A batched variant was tried first and LLMVP refused it at
+# load (2026-10-04 swap, rolled back): "decode_mode 'batched' requires a
+# plain-transformer model — hybrid/recurrent architectures cannot host N working
+# sequences". The pool is N full llama contexts over ONE copy of the weights
+# (each with its own KV and recurrent state), which a hybrid can host: an older
+# validation pooled this model 8-way. Four contexts of 65,536 cost what the one
+# 262,144 context costs now (24 KiB/token measured: 4 x 1.6 GB = 6.4 GB) beside
+# ~58 GB of weights; a translate turn is ~10-15k. Metal: a multi-context pool
+# auto-sets GGML_METAL_NO_RESIDENCY=1 (residency sets break multi-context with a
+# false OOM latch) — at BACKEND INIT, so if a hot swapModel shows decode faults,
+# the clean test is a server start on this config.
+#
+# THIS IS THE INSTRUCT MODEL, the same weights the remote lane runs today:
+# `extends` borrows SETTINGS only, and the weights are model.path below. The
+# instruct model translates better than the coder finetune (operator, public
+# benches). Inheritance is one level, and qwen3-next-80b-a3 itself extends the
+# coder root, so this does what qwen3-next-80b-a3 does — the root's settings
+# plus the instruct overrides. Keep the two in step.
+extends: qwen3-next-coder-80b-a3
+
+model:
+  name: "qwen3-next-80b-a3-pool"
+  path: /Users/lah-rb/.lmstudio/models/unsloth/Qwen3-Next-80B-A3B-Instruct-GGUF/Qwen3-Next-80B-A3B-Instruct-UD-Q4_K_XL.gguf
+  n_ctx: 65536
+
+knowledge:
+  tokens_bin: "./data/qwen3-next-80b-a3-pool.tokens.bin"
+
+resources:
+  decode_mode: pool
+  max_concurrent_requests: 4

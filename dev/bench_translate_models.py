@@ -10,9 +10,10 @@ all on ONE seat of qwen3-next 80B-A3 on the Mac (~60 tok/s). Two questions
      is unpredictable. Gate pass, numbers, English, speed, how much of its
      output is thinking, and — on a blind pairwise read — quality against
      qwen3-next on the same chunks.
-  2. qwen3-next is the hybrid LLMVP can BATCH (several sequences in one
-     context, like muse). Aggregate chunks/h at 1, 2 and 4 requests at once,
-     on a batched variant config (qwen3-next-80b-a3-batched).
+  2. qwen3-next can serve several requests at once. LLMVP refuses the batched
+     engine for any hybrid, so it is a POOL (N contexts over one copy of the
+     weights): aggregate chunks/h at 1, 2 and 4 requests at once, on
+     qwen3-next-80b-a3-pool.
 
 PRODUCTION PATH, nothing booked: the drain's prompt (_render_translate_prompt),
 its two-temperature per-span loop, image reinsertion and _span_problem; the
@@ -24,7 +25,7 @@ language, seeded; reference-section chunks skipped (they translate by rote).
 
     .venv/bin/python dev/bench_translate_models.py sample
     .venv/bin/python dev/bench_translate_models.py run --arm mac --concurrency 1
-    .venv/bin/python dev/bench_translate_models.py run --arm mac_batched --concurrency 4
+    .venv/bin/python dev/bench_translate_models.py run --arm mac_pool --concurrency 4
     .venv/bin/python dev/bench_translate_models.py run --arm qwen35 --concurrency 2
     .venv/bin/python dev/bench_translate_models.py report
 """
@@ -56,11 +57,11 @@ PER_LANG = int(os.environ.get("BENCH_PER_LANG", "5"))
 ARMS = {
     # the mission's own route for the remote translate lane
     "mac": ("curate_remote", None),
-    "mac_batched": (
-        "bench_mac_batched",
+    "mac_pool": (
+        "bench_mac_pool",
         {
             "endpoint": "http://192.168.1.209:8008/graphql",
-            "model": "qwen3-next-80b-a3-batched",
+            "model": "qwen3-next-80b-a3-pool",
         },
     ),
     "qwen35": (
