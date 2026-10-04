@@ -141,6 +141,116 @@ def test_gutter_detection_finds_the_margin_column(tmp_path):
     assert len(TOOL._gutter_spans(fitz.open(numbered)[0])) == len(_PROSE)
 
 
+@pytest.mark.parametrize("stamp", ["folio", "rotated"])
+def test_one_margin_item_cannot_widen_the_column(tmp_path, stamp):
+    """2026-10-04: the column ran from the min to the max x of EVERY non-digit
+    span, so a single corner folio or a rotated "Accepted Manuscript" stamp
+    stretched it to the page edge and let every line number back in — the
+    author manuscripts of the 2026-10-03 OCR run failed on exactly that."""
+    path = _make_pdf(tmp_path, line_numbers=True, name="s.pdf")
+    doc = fitz.open(path)
+    page = doc[0]
+    if stamp == "folio":
+        page.insert_text((8, 40), "Page 1 of 23", fontsize=8)
+    else:
+        page.insert_text((14, 700), "Accepted Manuscript", fontsize=12, rotate=90)
+    doc.saveIncr()
+    page = fitz.open(path)[0]
+    assert len(TOOL._gutter_spans(page)) >= len(_PROSE)
+    # The line numbers are gone; the folio's own "23" is the layout labels'
+    # job (_ignored_regions), not the gutter's.
+    truth = [n for n in _numbers(TOOL._prose_text(page)) if n != "23"]
+    plain = TOOL._prose_text(fitz.open(_make_pdf(tmp_path, name="p.pdf"))[0])
+    assert truth == _numbers(plain)
+
+
+# ── what the text layer flattens or the pipeline drops ────────────────
+
+
+def test_superscripts_are_not_truth(tmp_path):
+    """The text layer flattens 10^16 into "1016"; the markdown says 10^{16}.
+    The exponent is not a number the paper printed."""
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)
+    page.insert_htmlbox(
+        fitz.Rect(72, 100, 500, 140),
+        "The density rises to 10<sup>16</sup> cm-3 at 873 K.",
+    )
+    path = os.path.join(str(tmp_path), "sup.pdf")
+    doc.save(path)
+    truth = TOOL._prose_text(fitz.open(path)[0])
+    assert "1016" not in _numbers(truth)
+    assert "873" in _numbers(truth)
+    md = "The density rises to $10^{16}$ cm-3 at 873 K."
+    hit, total, _, _ = TOOL._verify_page(md + " " * 200, truth)
+    assert hit == total > 0
+
+
+def test_diagonal_watermark_is_not_truth(tmp_path):
+    path = _make_pdf(tmp_path, name="w.pdf")
+    doc = fitz.open(path)
+    doc[0].insert_text(
+        (150, 600),
+        "Preprint not peer reviewed 2024",
+        fontsize=30,
+        morph=(fitz.Point(150, 600), fitz.Matrix(45)),
+    )
+    doc.saveIncr()
+    truth = TOOL._norm(TOOL._prose_text(fitz.open(path)[0]))
+    assert "preprint" not in truth and "2024" not in truth
+    assert "1085" in truth
+
+
+def test_blocks_the_pipeline_leaves_out_are_not_truth(tmp_path):
+    """A footnote the region pipeline drops by its markdown_ignore_labels must
+    not be charged as a miss — and nothing outside the excluded block moves."""
+    path = _make_pdf(tmp_path, furniture="1 Smith 2019, p. 931; consulted 11 May 2025.")
+    page = fitz.open(path)[0]
+    full = _numbers(TOOL._prose_text(page))
+    assert "931" in full
+    foot = [b for b in page.get_text("blocks") if "Smith" in b[4]][0]
+    rect = [foot[0] - 1, foot[1] - 1, foot[2] + 1, foot[3] + 1, "footnote"]
+    kept = _numbers(TOOL._prose_text(page, exclude=[rect]))
+    assert "931" not in kept and "2025" not in kept
+    assert [n for n in full if n not in ("2019", "931", "11", "2025")] == kept
+
+
+def test_ignored_regions_round_trip_with_segment_parts(tmp_path):
+    """The sidecar is per document or per book segment; the reader merges."""
+    import json as _json
+
+    db = str(tmp_path)
+    for rng, page in ((None, 0), ((10, 20), 12), ((20, 30), 25)):
+        p = TOOL.ignored_regions_path(db, "k", rng)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w") as fh:
+            _json.dump({"pages": {str(page): [[1, 2, 3, 4, "number"]]}}, fh)
+    other = TOOL.ignored_regions_path(db, "k2")
+    with open(other, "w") as fh:
+        _json.dump({"pages": {"0": [[9, 9, 9, 9, "header"]]}}, fh)
+    got = TOOL.load_ignored_regions(db, "k")
+    assert sorted(got) == [0, 12, 25]
+    assert TOOL.load_ignored_regions(db, "missing") == {}
+
+
+def test_ignored_regions_reads_the_pipeline_result_shape():
+    class Blk:
+        def __init__(self, label, bbox):
+            self.label, self.bbox = label, bbox
+
+    res = {
+        "parsing_res_list": [
+            Blk("text", [0, 0, 160, 160]),
+            Blk("footnote", [0, 1600, 320, 1760]),
+            Blk("number", [600, 1800, 640, 1820]),
+        ]
+    }
+    got = TOOL._ignored_regions(res, TOOL._IGNORE_LABELS_DEFAULT, 160)
+    assert [r[4] for r in got] == ["footnote", "number"]
+    assert got[0][:4] == [0.0, 720.0, 144.0, 792.0]  # px at 160 dpi -> pt
+    assert TOOL._ignored_regions(object(), TOOL._IGNORE_LABELS_DEFAULT, 160) == []
+
+
 # ── publisher furniture ───────────────────────────────────────────────
 
 

@@ -127,6 +127,40 @@ def find_char_loops(text: str) -> list[dict]:
     return out
 
 
+# SCRIPT INJECTION (2026-10-04). paddle also drops a short run of CJK, Thai,
+# Tamil, Arabic or Cyrillic into LATIN prose and paraphrases the sentence
+# around it ("the data points in Figure 5 demonstrate the重要性 of the
+# model"; "Quantification starts by식"). 47 % of accepted Latin-script papers
+# carried at least one such paragraph (~2 % of words), and the numeric gate
+# cannot see it. The marker is a non-Latin run of 1-8 characters GLUED to a
+# Latin letter or a digit ("10%责 impotent"): a legitimately quoted name or
+# term is set off by a space or a bracket. Greek is excluded (δ, μ, Ω are
+# science). Precision on corpus samples: 40/40 letter-glued hits, and the
+# digit-glued ones were hallucinated CJK lists and dates in French prose.
+_NONLATIN = "Ѐ-ӿ֐-ۿऀ-෿฀-๿" "぀-ヿ㐀-鿿가-힯"
+_NONLATIN_RE = re.compile(f"[{_NONLATIN}]")
+_INJECTION_RE = re.compile(
+    rf"[A-Za-zÀ-ÿ0-9][^\sA-Za-zÀ-ÿ0-9]?[{_NONLATIN}]{{1,8}}(?=[\sA-Za-zÀ-ÿ.,;:)。、，]|$)"
+)
+# Above this share of letters the text IS non-Latin (a Chinese abstract, a
+# Russian reference block) and glued runs are its own writing, not injection.
+INJECTION_MAX_NONLATIN = 0.2
+
+
+def find_injections(text: str) -> list[str]:
+    """Each injected non-Latin run (with the Latin letter it is glued to) in
+    predominantly Latin text; [] for text that is itself non-Latin."""
+    if not text:
+        return []
+    letters = len(re.findall(r"[^\W\d_]", text))
+    if (
+        not letters
+        or len(_NONLATIN_RE.findall(text)) / letters > INJECTION_MAX_NONLATIN
+    ):
+        return []
+    return [m.group() for m in _INJECTION_RE.finditer(text)]
+
+
 def find_loops(text: str) -> list[dict]:
     """Merged spans with costs measured on the TEXT, not summed across
     detections: a loop of period 3 is also a loop of period 6, 9, … and the

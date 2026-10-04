@@ -119,6 +119,28 @@ _PROSE_DIGIT_FRAC = 0.5
 _PURE_DIGIT = re.compile(r"\d{1,4}")
 _MARGIN_PAD = 6.0  # pt of slack, so a hanging indent is not read as a margin
 _MIN_PROSE_SPANS = 5  # below this there is no column to measure against
+# A column EDGE is an x that several prose spans line up on: justified lines
+# share it exactly, ragged ones land near it. One span cannot make an edge, so
+# a margin stamp or a corner folio never stretches the column (_gutter_spans).
+_PROSE_SPAN_MIN_CHARS = 12  # labels and cells are shorter; prose lines are not
+_EDGE_SUPPORT = 3
+_EDGE_TOL = 12.0  # pt
+
+# Blocks the region pipeline reads and then LEAVES OUT of the markdown, when
+# the pipeline does not say (paddlex's own PaddleOCR-VL 1.5/1.6 default).
+# The live list is read from the pipeline itself — see _pipe_ignore_labels.
+# Warm redraws an injected region gets before its original answer stands.
+_INJECTION_RETRIES = 2
+
+_IGNORE_LABELS_DEFAULT = (
+    "number",
+    "footnote",
+    "header",
+    "header_image",
+    "footer",
+    "footer_image",
+    "aside_text",
+)
 
 # PUBLISHER FURNITURE. Every pattern must be one a body sentence cannot
 # plausibly contain, because this drops the whole LINE. Deliberately narrower
@@ -636,6 +658,44 @@ class _GraphQLVisionRecognizer:
         # LOOP GUARD counters (see _loop_guard); surfaced in the paper report.
         self.loop_retries = 0
         self.loop_collapses = 0
+        # INJECTION GUARD counters (see _injection_guard), likewise.
+        self.injection_retries = 0
+        self.injection_kept = 0
+
+    def _injection_guard(
+        self, text: str, data_uri: str, prompt: str, max_tokens: int, temperature: float
+    ) -> str:
+        """INJECTION GUARD (2026-10-04). paddle drops short runs of foreign
+        script into Latin prose and paraphrases the sentence around them
+        (ocr_loop_lib.find_injections). Greedy decoding halves it but keeps a
+        few deterministic cases ("Quantification starts by식"), and a warm
+        redraw read every one of those clean (3/3, dev/bench_ocr_sampling.py).
+        So, per region like the loop guard: an injected answer is asked again,
+        warmer, up to _INJECTION_RETRIES times; the first draw with neither an
+        injection nor a loop replaces it. When none is clean the original
+        stands — a term the page really prints in that script comes back in
+        every draw, and it is the page's, not the model's."""
+        if not _loops.find_injections(text):
+            return text
+        warm = min(1.0, max(float(temperature), 0.6) + 0.2)
+        for _ in range(_INJECTION_RETRIES):
+            try:
+                alt, _served = _vision_completion(
+                    self.base_url,
+                    self.model,
+                    data_uri,
+                    prompt,
+                    max_tokens,
+                    warm,
+                    strict=self.strict,
+                )
+            except Exception:  # noqa: BLE001 — the retry is best effort
+                break
+            if alt and not _loops.find_injections(alt) and not _loops.find_loops(alt):
+                self.injection_retries += 1
+                return alt
+        self.injection_kept += 1
+        return text
 
     def _loop_guard(
         self, text: str, data_uri: str, prompt: str, max_tokens: int, temperature: float
@@ -647,8 +707,8 @@ class _GraphQLVisionRecognizer:
         972 of 4,345 extracted markdowns carried loops of 40–200 words that a
         faithful translation reproduced and the text-side guard then killed,
         on every model. So the guard sits HERE, per region: a looping answer
-        is asked again once, warmer (the tool's default 0.8 is not greedy, so
-        a second draw is a real second chance), and what still loops is
+        is asked again once, warmer (0.8 from the greedy default, so a second
+        draw is a real second chance), and what still loops is
         collapsed to the extraction marker with one unit kept. Markup repeats
         (table cells, figure markers) are not loops — ocr_loop_lib.prose_unit."""
         if not _loops.find_loops(text):
@@ -717,7 +777,8 @@ class _GraphQLVisionRecognizer:
             )
         if served:
             self.last_vision_model = served
-        return self._loop_guard(text, data_uri, prompt, max_tokens, temperature)
+        text = self._loop_guard(text, data_uri, prompt, max_tokens, temperature)
+        return self._injection_guard(text, data_uri, prompt, max_tokens, temperature)
 
     def predict(self, items, **kw):
         from concurrent.futures import ThreadPoolExecutor
@@ -926,44 +987,138 @@ def _figure_regions(page) -> list:
     return rects
 
 
+def _column_edge(xs: list, *, left: bool) -> float:
+    """The outermost x that at least _EDGE_SUPPORT prose spans line up on
+    (within _EDGE_TOL); the extreme itself when no x has that support."""
+    pts = sorted(xs) if left else sorted(xs, reverse=True)
+    need = min(_EDGE_SUPPORT, len(pts))
+    for i, x in enumerate(pts):
+        n = 0
+        for y in pts[i:]:
+            if abs(y - x) > _EDGE_TOL:
+                break
+            n += 1
+        if n >= need:
+            return x
+    return pts[0]
+
+
 def _gutter_spans(page) -> set:
-    """Anchors of pure-digit spans lying OUTSIDE the page's prose column.
+    """Anchors of furniture spans lying OUTSIDE the page's prose column:
+    pure-digit spans (line numbers, folios) and rotated text (margin stamps).
 
     A manuscript's line-number column is such a span. PyMuPDF's "blocks"
     output merges it into the prose line beside it, so block-level reading
     cannot separate them and the number enters the truth as if it were
     content. Detection is geometric, never sequential: a pure-digit span
     outside the horizontal extent of the prose is furniture — a line number
-    or a folio — and never a measurement.
+    or a folio — and never a measurement. Rotated text out there is a stamp
+    ("Accepted Manuscript", an arXiv id up the margin); rotated text INSIDE
+    the column is a rotated table header or a landscape table, and stays.
+
+    THE COLUMN IS MEASURED FROM PROSE, AND ONE SPAN CANNOT MOVE IT
+    (2026-10-04). It used to run from the min to the max x of every non-digit
+    span on the page, so a single item in the margin stretched it to the page
+    edge and every line number then fell inside: a rotated "Accepted
+    Manuscript" stamp at x=-6, a "Page 1 of 23" folio at x=8, a "Preprint not
+    peer reviewed" watermark. Of the 20 OCR failures of the 2026-10-03 run,
+    the author manuscripts lost 85-94 % of their numeric misses to line
+    numbers let through this way (ggr.12577 0.52, 1361-6595 0.52, foodchem
+    0.59). Now only horizontal spans of at least _PROSE_SPAN_MIN_CHARS count
+    as prose, and each edge needs _EDGE_SUPPORT of them lined up on it.
     """
-    prose_x0, prose_x1, digits = [], [], []
+    prose_x0, prose_x1, cands = [], [], []
     try:
         for blk in page.get_text("dict")["blocks"]:
             for ln in blk.get("lines", []):
+                dx, dy = ln.get("dir", (1.0, 0.0))
+                horizontal = abs(dy) < 0.01 and dx > 0
                 for sp in ln["spans"]:
                     t = sp["text"].strip()
                     if not t:
                         continue
-                    if _PURE_DIGIT.fullmatch(t):
-                        digits.append(sp["bbox"])
-                    else:
+                    if _PURE_DIGIT.fullmatch(t) or not horizontal:
+                        cands.append(sp["bbox"])
+                    elif len(t) >= _PROSE_SPAN_MIN_CHARS:
                         prose_x0.append(sp["bbox"][0])
                         prose_x1.append(sp["bbox"][2])
     except Exception:  # noqa: BLE001 — verification must not break extraction
         return set()
     # Too little prose to establish a column: refuse to guess. Dropping digits
     # on a table-only page would delete the data we are trying to verify.
-    if not digits or len(prose_x0) < _MIN_PROSE_SPANS:
+    if not cands or len(prose_x0) < _MIN_PROSE_SPANS:
         return set()
-    left, right = min(prose_x0), max(prose_x1)
+    left = _column_edge(prose_x0, left=True)
+    right = _column_edge(prose_x1, left=False)
     return {
         (round(b[0], 1), round(b[1], 1))
-        for b in digits
+        for b in cands
         if b[2] < left - _MARGIN_PAD or b[0] > right + _MARGIN_PAD
     }
 
 
-def _prose_text(page) -> str:
+def _pipe_ignore_labels(pipe) -> tuple:
+    """The block labels this pipeline leaves out of its markdown — read from
+    the pipeline, so the oracle excludes exactly what the OCR excluded."""
+    inner = getattr(getattr(pipe, "paddlex_pipeline", None), "_pipeline", None)
+    labels = getattr(inner, "markdown_ignore_labels", None)
+    return tuple(labels) if labels else _IGNORE_LABELS_DEFAULT
+
+
+def _ignored_regions(res, labels, dpi: int) -> list:
+    """[x0, y0, x1, y1, label] in PDF points for every block of one region
+    result whose label the markdown leaves out. Never raises: a result shape
+    this does not know yields nothing to exclude, which is the old oracle."""
+    try:
+        blocks = res["parsing_res_list"] or []
+    except Exception:  # noqa: BLE001
+        return []
+    scale = 72.0 / float(dpi)
+    out = []
+    for b in blocks:
+        if isinstance(b, dict):
+            label, bbox = b.get("block_label"), b.get("block_bbox")
+        else:
+            label, bbox = getattr(b, "label", None), getattr(b, "bbox", None)
+        try:
+            if label in labels and bbox is not None and len(bbox) >= 4:
+                out.append(
+                    [round(float(v) * scale, 1) for v in list(bbox)[:4]] + [label]
+                )
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def ignored_regions_path(databank_dir: str, key: str, page_range=None) -> str:
+    """Sidecar of the ignored blocks per page, beside the markdown's own
+    naming (a book segment writes its own part file)."""
+    name = f"{key}.part_{page_range[0]:04d}.json" if page_range else f"{key}.json"
+    return os.path.join(databank_dir, "ocr_regions", name)
+
+
+def load_ignored_regions(databank_dir: str, key: str) -> dict:
+    """{page index: [[x0, y0, x1, y1, label], ...]} merged across the whole
+    document and its segment parts; {} when the OCR predates the sidecar."""
+    d = os.path.join(databank_dir, "ocr_regions")
+    out: dict = {}
+    if not os.path.isdir(d):
+        return out
+    for name in sorted(os.listdir(d)):
+        if name == f"{key}.json" or (
+            name.startswith(f"{key}.part_") and name.endswith(".json")
+        ):
+            try:
+                with open(os.path.join(d, name)) as fh:
+                    pages = json.load(fh).get("pages") or {}
+            except (OSError, ValueError):
+                continue
+            for i, rects in pages.items():
+                out[int(i)] = rects
+    return out
+
+
+def _prose_text(page, exclude: list | None = None) -> str:
     """Text-layer prose for verification — vector-figure text excluded.
 
     Publishers that draw figures as vector graphics (Nature's whole
@@ -1003,9 +1158,28 @@ def _prose_text(page) -> str:
     The figure-region test stays at BLOCK granularity on purpose. Moving it to
     spans would change a second thing at once, and the measurement that
     justified this could no longer attribute its own delta.
+
+    THREE MORE, 2026-10-04, from the OCR failed-pile audit (20 failures of
+    the 2026-10-03 run; 296 below-threshold papers in the pile):
+
+    - ``exclude``: rectangles (PDF points, [x0, y0, x1, y1, ...]) of blocks
+      the region pipeline read and then LEFT OUT of the markdown by its own
+      configuration (markdown_ignore_labels: page numbers, headers, footers,
+      footnotes, margin text). The truth kept them, so the gate charged the
+      OCR for a deliberate omission; footnote-heavy theses failed on it. A
+      span whose centre lies in one is not truth. Same source as the
+      pipeline's decision, so the two cannot drift — see _ignored_regions.
+    - SUPERSCRIPTS. The text layer flattens an exponent into the digits
+      beside it (10^16 reads "1016", the markdown says 10^{16}) and glues a
+      citation marker to its word ("demonstrated.16"). Neither is a number the
+      paper printed, so a superscript span (PyMuPDF flag bit 0) is not truth.
+    - DIAGONAL TEXT. A watermark set across the page ("Preprint not peer
+      reviewed") is never content; axis-aligned rotated text is kept here and
+      judged by position in _gutter_spans.
     """
     regions = _figure_regions(page)
     gutters = _gutter_spans(page)
+    excl = [r[:4] for r in (exclude or []) if len(r) >= 4]
     parts = []
     try:
         blocks = page.get_text("dict")["blocks"]
@@ -1021,9 +1195,19 @@ def _prose_text(page) -> str:
                 continue
         chunks = []
         for ln in blk["lines"]:
+            dx, dy = ln.get("dir", (1.0, 0.0))
+            if abs(dx) > 0.1 and abs(dy) > 0.1:
+                continue  # diagonal: a watermark
             for sp in ln["spans"]:
                 if (round(sp["bbox"][0], 1), round(sp["bbox"][1], 1)) in gutters:
                     continue
+                if sp.get("flags", 0) & 1:
+                    continue  # superscript
+                if excl:
+                    b = sp["bbox"]
+                    cx, cy = (b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0
+                    if any(r[0] <= cx <= r[2] and r[1] <= cy <= r[3] for r in excl):
+                        continue
                 chunks.append(sp["text"])
             chunks.append("\n")
         text = "".join(chunks)
@@ -1450,7 +1634,7 @@ def extract_paper(
     key: str,
     databank_dir: str,
     dpi: int,
-    temperature: float = 0.8,
+    temperature: float = 0.0,
     top_p: float = 0.95,
     page_range: tuple | None = None,
     text_mode: str = "region",
@@ -1530,6 +1714,9 @@ def extract_paper(
             return report
         page_mds: list[str] = []
         num_hit = num_total = span_hit = span_total = 0
+        ignore_labels = _pipe_ignore_labels(pipe)
+        regions_by_page: dict = {}
+        truth_chars = ignored_chars = 0
 
         with tempfile.TemporaryDirectory(prefix="pdfx_") as tmp:
             for i in page_indices:
@@ -1579,14 +1766,14 @@ def extract_paper(
                         report["page_mode_fallbacks"] += 1
                         route = "region"
 
+                ignored: list = []
                 if route == "region":
                     report["pages_region_mode"] += 1
                     parts = []
-                    # Explicit, every call: the client otherwise pins
-                    # temperature to 0 (greedy) for llama-cpp-server
-                    # backends, and greedy loops deterministically on some
-                    # pages. See --vl-temperature.
+                    # Explicit, every call — the recognizer's guards retry
+                    # warmer FROM this value. See --vl-temperature.
                     for res in pipe.predict(png, temperature=temperature, top_p=top_p):
+                        ignored += _ignored_regions(res, ignore_labels, dpi)
                         md = getattr(res, "markdown", None)
                         if isinstance(md, dict):
                             parts.append(md.get("markdown_texts") or "")
@@ -1605,6 +1792,16 @@ def extract_paper(
                             parts.append(str(md))
                     page_md = "\n".join(p for p in parts if p)
                 page_mds.append(page_md)
+
+                # What the pipeline left out by design is not truth (see
+                # _prose_text). Recorded per page so a re-verification without
+                # the layout model excludes the same blocks.
+                truth_chars += len(truth)
+                if ignored:
+                    regions_by_page[i] = ignored
+                    kept = _prose_text(page, exclude=ignored)
+                    ignored_chars += max(0, len(truth) - len(kept))
+                    truth = kept
 
                 if len(truth.strip()) >= 200 and page_md.strip():
                     nh, nt, sh, st = _verify_page(page_md, truth)
@@ -1651,6 +1848,25 @@ def extract_paper(
         with open(md_path, "w") as f:
             f.write(joined)
         report["md_path"] = os.path.relpath(md_path, databank_dir)
+        if regions_by_page:
+            reg_path = ignored_regions_path(databank_dir, key, page_range)
+            os.makedirs(os.path.dirname(reg_path), exist_ok=True)
+            with open(reg_path, "w") as f:
+                json.dump(
+                    {
+                        "dpi": dpi,
+                        "labels": list(ignore_labels),
+                        "pages": {str(i): r for i, r in regions_by_page.items()},
+                    },
+                    f,
+                )
+        # RECORDED, NOT GATED: the share of the text layer the pipeline left
+        # out by label. A layout model that files body text as a footnote
+        # drops it from the markdown AND from the oracle, so this is where
+        # that would show.
+        report["ignored_text_frac"] = (
+            round(ignored_chars / truth_chars, 4) if truth_chars else 0.0
+        )
         report["numeric_match_rate"] = num_hit / num_total if num_total else 1.0
         report["span_pass_rate"] = span_hit / span_total if span_total else 1.0
         report["script_profile"] = _script_profile(joined)
@@ -1674,6 +1890,8 @@ def extract_paper(
         if _rec is not None:
             report["loop_retries"] = int(getattr(_rec, "loop_retries", 0))
             report["loop_collapses"] = int(getattr(_rec, "loop_collapses", 0))
+            report["injection_retries"] = int(getattr(_rec, "injection_retries", 0))
+            report["injection_kept"] = int(getattr(_rec, "injection_kept", 0))
         served = getattr(
             getattr(pipe, "_ouro_recognizer", None), "last_vision_model", ""
         )
@@ -1743,12 +1961,25 @@ def main() -> int:
     # that. NOTE the historical corpus (through 2026-08-15) was extracted at
     # the client-pinned 0 — every quality figure predating these flags is a
     # greedy figure.
+    #
+    # BACK TO GREEDY (2026-10-04), because the hedge became a defect and the
+    # loop it hedged against has its own guard now. T=0.8 samples the tail of
+    # a small multilingual model, and paddle drops short runs of CJK/Thai/
+    # Tamil/Arabic script into Latin prose and paraphrases the sentence around
+    # them: 47 % of accepted Latin-script papers carry at least one such
+    # paragraph. The per-region loop guard (2026-09-19) retries a looping crop
+    # warmer, which is what the 0.8 was buying. Pre-registered A/B on 687
+    # production crops through the 3060's LLMVP (dev/bench_ocr_sampling.py):
+    # greedy injected on 0.44 % of crops vs 0.87 %, word recall 0.962 vs
+    # 0.946, numeric 0.963 vs 0.947, and 0 % still looping after the guard
+    # on both. The few greedy injections are deterministic and get their own
+    # retry (_injection_guard).
     ap.add_argument(
         "--vl-temperature",
         type=float,
-        default=0.8,
-        help="VL sampling temperature passed per predict() (0 = greedy, "
-        "which deterministically loops on some pages)",
+        default=0.0,
+        help="VL sampling temperature passed per predict() (0 = greedy, the "
+        "lab's default; looping and injected regions are retried warmer)",
     )
     ap.add_argument(
         "--vl-top-p",

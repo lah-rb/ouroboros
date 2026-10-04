@@ -340,7 +340,9 @@ def main() -> int:
     ap.add_argument("--scratch", default="")
     ap.add_argument("--concurrency", type=int, default=2)
     ap.add_argument("--dpi", type=int, default=160)
-    ap.add_argument("--temperature", type=float, default=0.8)
+    # Greedy, the tool's own default since 2026-10-04 (extract_batch
+    # --vl-temperature); the recognizer's guards retry warmer from it.
+    ap.add_argument("--temperature", type=float, default=0.0)
     ap.add_argument("--retry-temperature", type=float, default=1.0)
     ap.add_argument("--min-similarity", type=float, default=0.25)
     ap.add_argument(

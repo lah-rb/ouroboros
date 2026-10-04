@@ -185,9 +185,15 @@ generation:
   # --vl-temperature 0.8 / --vl-top-p 0.95 per predict() call — the lab's own
   # documented stochastic alternative to its greedy default. Validated
   # 2026-08-15: microc rep 3003 -> 20 with numeric/span 0.985/0.988, two
-  # known-good papers within noise of their greedy rates. This default
-  # matches, for any caller that sends nothing.
-  temperature_default: 0.8
+  # known-good papers within noise of their greedy rates.
+  #
+  # BACK TO GREEDY 2026-10-04: the tool's per-region loop guard (2026-09-19)
+  # now retries a looping crop warmer, and 0.8 turned out to inject short runs
+  # of foreign script into Latin prose (47 % of accepted Latin papers carry
+  # one). A/B on 687 crops through this server: greedy injects half as often
+  # and reads 1.6 points more words. extract_batch --vl-temperature is 0 now;
+  # this default matches it, for any caller that sends nothing.
+  temperature_default: 0.0
   top_p: 0.95
   top_k: 40
   min_p: 0.05

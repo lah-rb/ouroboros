@@ -45,6 +45,7 @@ from extract_batch import (  # noqa: E402
     _SPAN_WORDS,
     _SPANS_PER_PAGE,
     _TABLE_TOKEN_LEAK,
+    load_ignored_regions,
 )
 
 # Mirrors agent/actions/extraction_actions.py (tool venv can't import
@@ -77,7 +78,13 @@ def _is_truncated(rec: dict, pdf_pages: int) -> bool:
     return pdf_pages <= expected * _TRUNCATED_FRACTION
 
 
-def _rates(pdf_path: str, md: str) -> tuple[float, float, int, int]:
+def _rates(
+    pdf_path: str, md: str, regions: dict | None = None
+) -> tuple[float, float, int, int]:
+    """``regions``: {page index: ignored blocks} from the OCR's own sidecar
+    (load_ignored_regions) — the blocks the pipeline left out by label, so the
+    rescore excludes exactly what the extraction excluded."""
+    regions = regions or {}
     md_n = _norm(md)
     md_compact = re.sub(r"\s", "", md_n)
     md_words = set(md_n.split())
@@ -85,7 +92,7 @@ def _rates(pdf_path: str, md: str) -> tuple[float, float, int, int]:
     verified = unverified = 0
     doc = fitz.open(pdf_path)
     for page in doc:
-        truth = _norm(_prose_text(page))
+        truth = _norm(_prose_text(page, exclude=regions.get(page.number)))
         if len(truth.strip()) < 200:
             unverified += 1
             continue
@@ -178,7 +185,9 @@ def main() -> None:
         if not (os.path.isfile(md_path) and os.path.isfile(pdf_path)):
             continue
         md = open(md_path).read()
-        num, span, verified, unverified = _rates(pdf_path, md)
+        num, span, verified, unverified = _rates(
+            pdf_path, md, load_ignored_regions(databank, key)
+        )
         repeat = _max_repeat_words(md)
         truncated = _is_truncated(rec, verified + unverified)
         old_status = rec["extraction_status"]
