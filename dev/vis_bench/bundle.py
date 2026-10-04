@@ -34,6 +34,42 @@ BUNDLE.mkdir(parents=True, exist_ok=True)
 _THINK = re.compile(r"<think>.*?</think>\s*", re.S | re.I)
 _OPEN_THINK = re.compile(r"<think>.*\Z", re.S | re.I)
 
+# A NON-ANSWER IS NOT A BAD ANSWER, AND SCORING IT AS ONE IS A PIPELINE BUG.
+# Detecting only the EMPTY string caught one model's failure shape and missed
+# the other's, which is worse than catching neither because it looks like a
+# result. Measured 2026-08-23:
+#   * qwen3.8 fails by emitting a stop as its FIRST token -> empty string,
+#     caught by the retry policy in run.py.
+#   * muse fails by DELIBERATING IN PLAIN TEXT and ending the turn before the
+#     answer — no channel opened, so vision_text.clean has nothing to strip and
+#     returns the raw stream. 2 of 10 figures, at 1058 and 3569 tokens, both
+#     well under the 4096 cap: the model stopped, it was not truncated.
+# Scored as answers those came out 11/27 and 1/27, and one judge diagnosed it
+# unprompted — "unfinished rather than wrong ... the misses are all
+# non-statement, not error".
+_ECHO = "this is a figure from a scientific paper"
+_DELIB_TAIL = re.compile(
+    r"(let'?s (output|craft|write|produce|format)"
+    r"|provide (the )?answer"
+    r"|i'?ll (now )?(write|produce|output|summar))",
+    re.I,
+)
+
+
+def is_non_answer(text: str) -> bool:
+    """True when a response never delivered an answer.
+
+    Two signals, both structural: the response ECHOES the question back (a
+    deliberation habit, never how an answer opens), or its final stretch is
+    still planning the answer rather than being one.
+    """
+    t = (text or "").strip()
+    if not t:
+        return True
+    if t[:120].lower().lstrip().startswith(_ECHO):
+        return True
+    return bool(_DELIB_TAIL.search(t[-220:]))
+
 
 def _strip_reasoning(text: str) -> str:
     """Remove inline reasoning so every candidate is scored on its ANSWER.
@@ -58,42 +94,52 @@ def _strip_reasoning(text: str) -> str:
     return out.strip()
 
 
-rows: dict[str, dict[str, str]] = {}
-for line in ANSWERS.read_text().splitlines():
-    if not line.strip():
-        continue
-    r = json.loads(line)
-    if "answer" in r:
-        rows.setdefault(r["key"], {})[r["model"]] = _strip_reasoning(r["answer"])
+def main() -> None:
+    rows: dict[str, dict[str, str]] = {}
+    for line in ANSWERS.read_text().splitlines():
+        if not line.strip():
+            continue
+        r = json.loads(line)
+        if "answer" in r:
+            rows.setdefault(r["key"], {})[r["model"]] = _strip_reasoning(r["answer"])
 
-keymap: dict[str, dict[str, str]] = {}
-for item in SET:
-    key = item["key"]
-    ref_path = REF / f"{key}.md"
-    if not ref_path.is_file():
-        print(f"  SKIP {key}: no reference")
-        continue
-    answers = {m: a for m, a in rows.get(key, {}).items() if a}
-    if not answers:
-        print(f"  SKIP {key}: no model answers")
-        continue
-    # Deterministic per-figure shuffle: sort models by hash(key + model).
-    ordered = sorted(
-        answers, key=lambda m: hashlib.sha256(f"{key}:{m}".encode()).hexdigest()
-    )
-    letters = [chr(ord("A") + i) for i in range(len(ordered))]
-    keymap[key] = dict(zip(letters, ordered))
+    keymap: dict[str, dict[str, str]] = {}
+    for item in SET:
+        key = item["key"]
+        ref_path = REF / f"{key}.md"
+        if not ref_path.is_file():
+            print(f"  SKIP {key}: no reference")
+            continue
+        answers = {}
+        for m, a in rows.get(key, {}).items():
+            if is_non_answer(a):
+                print(f"  NON-ANSWER {key}: {m} — excluded, scores 0 on all facts")
+                continue
+            answers[m] = a
+        if not answers:
+            print(f"  SKIP {key}: no model answers")
+            continue
+        # Deterministic per-figure shuffle: sort models by hash(key + model).
+        ordered = sorted(
+            answers, key=lambda m: hashlib.sha256(f"{key}:{m}".encode()).hexdigest()
+        )
+        letters = [chr(ord("A") + i) for i in range(len(ordered))]
+        keymap[key] = dict(zip(letters, ordered))
 
-    parts = [
-        f"# Scoring bundle — figure `{key}`\n",
-        "## REFERENCE (ground truth, written blind from the image)\n",
-        ref_path.read_text(),
-        "\n\n---\n\n## CANDIDATE ANSWERS\n",
-    ]
-    for letter, model in zip(letters, ordered):
-        parts.append(f"\n### CANDIDATE {letter}\n\n{answers[model]}\n")
-    (BUNDLE / f"{key}.md").write_text("".join(parts))
-    print(f"  {key}: {len(ordered)} candidates -> {letters}")
+        parts = [
+            f"# Scoring bundle — figure `{key}`\n",
+            "## REFERENCE (ground truth, written blind from the image)\n",
+            ref_path.read_text(),
+            "\n\n---\n\n## CANDIDATE ANSWERS\n",
+        ]
+        for letter, model in zip(letters, ordered):
+            parts.append(f"\n### CANDIDATE {letter}\n\n{answers[model]}\n")
+        (BUNDLE / f"{key}.md").write_text("".join(parts))
+        print(f"  {key}: {len(ordered)} candidates -> {letters}")
 
-(BUNDLE / "_keymap.json").write_text(json.dumps(keymap, indent=1))
-print(f"\nkeymap written ({len(keymap)} figures) — NOT to be shown to any judge")
+    (BUNDLE / "_keymap.json").write_text(json.dumps(keymap, indent=1))
+    print(f"\nkeymap written ({len(keymap)} figures) — NOT to be shown to any judge")
+
+
+if __name__ == "__main__":
+    main()
