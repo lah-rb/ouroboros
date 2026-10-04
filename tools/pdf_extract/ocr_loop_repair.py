@@ -22,6 +22,18 @@ the similarity check, otherwise the old one. Figure references are the OLD
 page's (a scratch re-OCR numbers crops from fig_01): same count → substituted
 in order, otherwise the old tags are appended and the new ones dropped, so
 nothing dangles and nothing is lost.
+
+--target injections (2026-10-04). The same machinery repairs pages carrying
+paddle's SCRIPT INJECTION (ocr_loop_lib.find_injections: a run of CJK/Thai/
+Tamil/Arabic glued into Latin prose, the sentence around it paraphrased), read
+at the T=0.8 the tool used until then. The re-read is greedy with the
+recognizer's injection guard. Such a page is mostly GOOD, unlike a looped one,
+so the new page must earn its place: fewer injections than the old, similarity
+and, against the PDF text layer, numeric recall within 0.1 of the old page's
+and numeric+span recall no worse (0.02 slack); a page with no text layer to
+judge needs similarity of at least --min-similarity (0.5 for this target).
+Otherwise the old page stays as it was — nothing is collapsed. Denied papers
+are skipped. Backups go beside the report (its own run, its own originals).
 """
 
 from __future__ import annotations
@@ -65,12 +77,24 @@ def _abs(workspace: str, p: str) -> str:
     return p if os.path.isabs(p) else os.path.join(workspace, p)
 
 
-def build_worklist(recs: dict, workspace: str, keys: list[str] | None) -> list[dict]:
+def _page_cost(page: str, target: str) -> dict:
+    """What the target measures on one page: loop words/chars, or injections."""
+    if target == "injections":
+        n = len(L.find_injections(page))
+        return {"spans": n, "words": 0, "chars": n}
+    return L.loop_cost(page)
+
+
+def build_worklist(
+    recs: dict, workspace: str, keys: list[str] | None, target: str = "loops"
+) -> list[dict]:
     items = []
     for key, r in recs.items():
         if keys and key not in keys:
             continue
         if r.get("record_kind") == "supplement":
+            continue
+        if target == "injections" and r.get("review_status") == "denied":
             continue
         # retired translations count too: loops were part of why they retired
         if r.get("extraction_status") not in (
@@ -88,11 +112,13 @@ def build_worklist(recs: dict, workspace: str, keys: list[str] | None) -> list[d
                 text = fh.read()
         except OSError:
             continue
+        if target == "injections" and not L.latin_document(text):
+            continue  # written in that script: its glued runs are its own
         pages = L.split_pages(text)
         hits = []
         cost_w = cost_c = 0
         for i, p in enumerate(pages):
-            c = L.loop_cost(p)
+            c = _page_cost(p, target)
             if c["spans"]:
                 hits.append(i)
                 cost_w += c["words"]
@@ -111,6 +137,7 @@ def build_worklist(recs: dict, workspace: str, keys: list[str] | None) -> list[d
                 "pending_translation": r.get("extraction_status") == "extract_lingual"
                 and not r.get("translated"),
                 "language": r.get("language"),
+                "review_status": r.get("review_status") or "",
             }
         )
     # the translation queue first (its loops cost seat time tonight), then the worst
@@ -149,7 +176,12 @@ class Reocr:
         if not ok:
             raise SystemExit(f"LLMVP cannot serve {args.model}: {why}")
         self.pipe = X._build_pipe(
-            "llmvp", args.model, 0, args.concurrency, args.llmvp_url
+            "llmvp",
+            args.model,
+            0,
+            args.concurrency,
+            args.llmvp_url,
+            layout_url=args.layout_url,
         )
 
     def window(
@@ -195,6 +227,24 @@ def pdf_page_count(pdf: str) -> int:
 
     with fitz.open(pdf) as doc:
         return len(doc)
+
+
+def page_fidelity(X, pdf: str, i: int, old: str, new: str) -> dict | None:
+    """Numeric and span recall of the old and the new page against the PDF
+    text layer (the tool's own oracle, one truth for both); None when the page
+    has too little text layer to judge."""
+    import fitz
+
+    with fitz.open(pdf) as doc:
+        truth = X._prose_text(doc[i])
+    if len(truth.strip()) < 200:
+        return None
+    out = {}
+    for name, md in (("old", old), ("new", new)):
+        nh, nt, sh, st = X._verify_page(md, truth)
+        out[f"num_{name}"] = round(nh / nt, 3) if nt else 1.0
+        out[f"span_{name}"] = round(sh / st, 3) if st else 1.0
+    return out
 
 
 def repair_doc(item: dict, reocr: Reocr | None, args) -> dict:
@@ -284,6 +334,57 @@ def repair_doc(item: dict, reocr: Reocr | None, args) -> dict:
                         new, _ = L.collapse_loops(cand)
                         method = "reocr_collapsed"
                 sim = L.similarity(old, new)
+                if args.target == "injections":
+                    inj_old = len(L.find_injections(old))
+                    inj_new = len(L.find_injections(new))
+                    fid = page_fidelity(reocr.X, item["pdf"], i, old, new)
+                    # THE PDF DECIDES WHEN IT CAN. Similarity is recall of the
+                    # OLD page, and an injected old page is paraphrased, so a
+                    # correct re-read scores low exactly when it helps most
+                    # (live: 0.07 on a page whose numeric recall went 0.56 ->
+                    # 1.00). With a text layer the new page must not lose
+                    # numbers (0.1 slack) nor numbers+spans together; without
+                    # one, the similarity guard is all there is.
+                    why = ""
+                    if not new.strip():
+                        why = "empty"
+                    elif inj_new >= inj_old:
+                        why = f"injections {inj_old} -> {inj_new}"
+                    elif fid:
+                        if fid["num_new"] < fid["num_old"] - 0.1 or (
+                            fid["num_new"] + fid["span_new"]
+                            < fid["num_old"] + fid["span_old"] - 0.02
+                        ):
+                            why = "fidelity fell"
+                    elif sim < args.min_similarity:
+                        why = f"sim {sim:.2f}"
+                    if why:
+                        row["pages"].append(
+                            {
+                                "page": i,
+                                "method": "kept_old",
+                                "why": why,
+                                "sim": round(sim, 3),
+                                "inj_old": inj_old,
+                                "inj_new": inj_new,
+                                "fidelity": fid,
+                            }
+                        )
+                        continue
+                    new, note = L.remap_imgs(new, old_imgs[i])
+                    pages[i] = new
+                    row["pages"].append(
+                        {
+                            "page": i,
+                            "method": "reread",
+                            "sim": round(sim, 3),
+                            "inj_old": inj_old,
+                            "inj_new": inj_new,
+                            "fidelity": fid,
+                            "imgs": note,
+                        }
+                    )
+                    continue
                 if not new.strip() or sim < args.min_similarity:
                     collapse_old(i, f"new page rejected (sim {sim:.2f})", round(sim, 3))
                     continue
@@ -302,15 +403,16 @@ def repair_doc(item: dict, reocr: Reocr | None, args) -> dict:
 
     repaired = L.join_pages(pages)
     residual = L.loop_cost(repaired)
-    if residual["spans"] and not args.dry_run:
+    if residual["spans"] and not args.dry_run and args.target == "loops":
         repaired, _ = L.collapse_loops(repaired)
         row["residual_collapsed"] = residual
     row["after"] = L.loop_cost(repaired)
+    row["injections_after"] = len(L.find_injections(repaired))
     row["methods"] = {}
     for p in row["pages"]:
         row["methods"][p["method"]] = row["methods"].get(p["method"], 0) + 1
     if not args.dry_run and repaired != original:
-        bdir = os.path.join(args.databank_dir, "_loop_repair", "backup")
+        bdir = os.path.join(os.path.dirname(args.report), "backup")
         os.makedirs(bdir, exist_ok=True)
         backup = os.path.join(bdir, os.path.basename(item["md"]))
         if not os.path.exists(backup):
@@ -344,7 +446,21 @@ def main() -> int:
     # --vl-temperature); the recognizer's guards retry warmer from it.
     ap.add_argument("--temperature", type=float, default=0.0)
     ap.add_argument("--retry-temperature", type=float, default=1.0)
-    ap.add_argument("--min-similarity", type=float, default=0.25)
+    ap.add_argument("--target", choices=("loops", "injections"), default="loops")
+    ap.add_argument(
+        "--min-similarity",
+        type=float,
+        default=None,
+        help="new-page guard (default 0.25 for loops, 0.5 for injections)",
+    )
+    ap.add_argument(
+        "--layout-url",
+        default=os.environ.get("OUROBOROS_OCR_LAYOUT_URL", ""),
+        help="layout_server.py base URL (another box's GPU)",
+    )
+    ap.add_argument(
+        "--shard", default="", help="i/n: this process takes every n-th document"
+    )
     ap.add_argument(
         "--llmvp-url",
         default=os.environ.get("OUROBOROS_LLMVP_URL", "http://127.0.0.1:8008"),
@@ -353,17 +469,22 @@ def main() -> int:
         "--model", default=os.environ.get("OUROBOROS_LLMVP_VL_MODEL", "paddle-ocr-vl")
     )
     args = ap.parse_args()
+    if args.min_similarity is None:
+        args.min_similarity = 0.5 if args.target == "injections" else 0.25
     args.databank_dir = os.path.join(args.workspace, "databank")
+    run_dir = "_injection_repair" if args.target == "injections" else "_loop_repair"
     args.report = args.report or os.path.join(
-        args.databank_dir, "_loop_repair", "report.jsonl"
+        args.databank_dir, run_dir, "report.jsonl"
     )
     args.scratch = args.scratch or os.path.join(
-        args.databank_dir, "_loop_repair", "scratch"
+        args.databank_dir,
+        run_dir,
+        "scratch" + (f"_{args.shard.replace('/', 'of')}" if args.shard else ""),
     )
     os.makedirs(os.path.dirname(args.report), exist_ok=True)
 
     recs = read_databank(args.databank_dir)
-    work = build_worklist(recs, args.workspace, args.keys)
+    work = build_worklist(recs, args.workspace, args.keys, args.target)
     done = set()
     if args.resume and os.path.exists(args.report):
         for line in open(args.report, encoding="utf-8"):
@@ -372,6 +493,9 @@ def main() -> int:
             except Exception:  # noqa: BLE001
                 pass
     work = [w for w in work if w["key"] not in done]
+    if args.shard:
+        i, n = (int(x) for x in args.shard.split("/"))
+        work = work[i::n]
     if args.limit:
         work = work[: args.limit]
     total_cost = sum(w["cost"]["words"] + w["cost"]["chars"] for w in work)

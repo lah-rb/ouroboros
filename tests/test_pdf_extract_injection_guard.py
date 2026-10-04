@@ -127,3 +127,23 @@ def test_the_tool_decodes_greedy_by_default():
     assert (
         inspect.signature(_MOD.extract_paper).parameters["temperature"].default == 0.0
     )
+
+
+def test_documents_in_that_script_are_not_judged():
+    """Russian ordinals and a Japanese instrument model are the document's own
+    writing; only a Latin DOCUMENT is asked about injection."""
+    russian = "Гранитоиды 1-й фазы и 2-й фазы. " * 20 + "Table 1: SiO2 72.1, Al2O3 14.3"
+    assert not L.latin_document(russian)
+    assert L.latin_document("The band at 1085 cm-1 is assigned to the stretch. " * 20)
+    assert L.latin_document("")  # a scan: no text layer to say otherwise
+
+
+def test_guard_is_off_for_a_non_latin_document(monkeypatch):
+    calls: list[float] = []
+    monkeypatch.setattr(
+        _MOD, "_vision_completion", _fake(["日本分光102型 spectrometer"], calls)
+    )
+    rec = _recognizer()
+    rec.guard_injections = False
+    assert rec._one(_item(), 512, 0.0) == "日本分光102型 spectrometer"
+    assert calls == [0.0]

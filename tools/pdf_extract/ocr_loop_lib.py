@@ -145,18 +145,32 @@ _INJECTION_RE = re.compile(
 # Above this share of letters the text IS non-Latin (a Chinese abstract, a
 # Russian reference block) and glued runs are its own writing, not injection.
 INJECTION_MAX_NONLATIN = 0.2
+# A DOCUMENT above this share of non-Latin letters is written in that script,
+# and its Latin-heavy pages (tables, references) legitimately glue native
+# words to digits and letters: Russian ordinals "1-й", "日本分光102型", a
+# homoglyph-mixed "Kварц". Measured on the packs: every "suspect" value of the
+# top papers sat in such a document. Injection is judged in Latin documents
+# only — the census's own threshold.
+INJECTION_DOC_MAX_NONLATIN = 0.02
+
+
+def nonlatin_share(text: str) -> float:
+    """Share of letters in a non-Latin script (Greek excluded); 0.0 for none."""
+    letters = len(re.findall(r"[^\W\d_]", text or ""))
+    return len(_NONLATIN_RE.findall(text or "")) / letters if letters else 0.0
+
+
+def latin_document(text: str) -> bool:
+    """Is a whole document (markdown or text layer) Latin-script — the only
+    kind find_injections should be asked about?"""
+    return nonlatin_share(text) <= INJECTION_DOC_MAX_NONLATIN
 
 
 def find_injections(text: str) -> list[str]:
     """Each injected non-Latin run (with the Latin letter it is glued to) in
-    predominantly Latin text; [] for text that is itself non-Latin."""
-    if not text:
-        return []
-    letters = len(re.findall(r"[^\W\d_]", text))
-    if (
-        not letters
-        or len(_NONLATIN_RE.findall(text)) / letters > INJECTION_MAX_NONLATIN
-    ):
+    predominantly Latin text; [] for text that is itself non-Latin. Ask only
+    about a Latin DOCUMENT's text (latin_document)."""
+    if not text or nonlatin_share(text) > INJECTION_MAX_NONLATIN:
         return []
     return [m.group() for m in _INJECTION_RE.finditer(text)]
 

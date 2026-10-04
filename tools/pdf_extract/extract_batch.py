@@ -661,6 +661,9 @@ class _GraphQLVisionRecognizer:
         # INJECTION GUARD counters (see _injection_guard), likewise.
         self.injection_retries = 0
         self.injection_kept = 0
+        # Set per document by extract_paper from the text layer: injection is
+        # judged in Latin-script documents only (ocr_loop_lib.latin_document).
+        self.guard_injections = True
 
     def _injection_guard(
         self, text: str, data_uri: str, prompt: str, max_tokens: int, temperature: float
@@ -675,7 +678,7 @@ class _GraphQLVisionRecognizer:
         injection nor a loop replaces it. When none is clean the original
         stands — a term the page really prints in that script comes back in
         every draw, and it is the page's, not the model's."""
-        if not _loops.find_injections(text):
+        if not self.guard_injections or not _loops.find_injections(text):
             return text
         warm = min(1.0, max(float(temperature), 0.6) + 0.2)
         for _ in range(_INJECTION_RETRIES):
@@ -1717,6 +1720,14 @@ def extract_paper(
         ignore_labels = _pipe_ignore_labels(pipe)
         regions_by_page: dict = {}
         truth_chars = ignored_chars = 0
+        # A document written in a non-Latin script legitimately glues native
+        # words to digits and letters on its Latin-heavy pages ("1-й",
+        # "日本分光102型"); its text layer says which it is. No text layer (a
+        # scan) leaves the guard on — a non-Latin REGION is still exempt.
+        _rec = getattr(pipe, "_ouro_recognizer", None)
+        if _rec is not None:
+            sample = "".join(doc[j].get_text() for j in page_indices[:40])
+            _rec.guard_injections = _loops.latin_document(sample)
 
         with tempfile.TemporaryDirectory(prefix="pdfx_") as tmp:
             for i in page_indices:
